@@ -196,7 +196,15 @@ export interface Serving {
 /** What init offered of an installed tool: its steps and judges, its steps only, or nothing, with why not. */
 type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } | { runs: 'nothing'; reason: string };
 
-export function serve({ input, write, journal }: Serving): Promise<void> {
+export function serve({ input, write: emit, journal }: Serving): Promise<void> {
+  /** How many lines ended each op in this process: a request that throws ends its op only when nothing else did meanwhile. */
+  const ends = new Map<OpId, number>();
+
+  const write = (message: RuntimeMessage): void => {
+    if ('op' in message && 'event' in message && (message.event === 'finished' || message.event === 'failed' || message.event === 'cancelled')) ends.set(message.op, (ends.get(message.op) ?? 0) + 1);
+    emit(message);
+  };
+
   let daemon: Daemon | undefined;
   let mode: 'attended' | 'unattended' = 'attended';
   /** In recover mode, the daemon's url: the runtime connects to it only once a cancel or close needs it. */
@@ -302,8 +310,12 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     return following;
   };
 
-  /** Records how a prompt ended and tells teamai, once. */
-  const settle = (op: OpId, outcome: OpState): void => {
+  /**
+   * Records how a prompt ended and tells teamai, once. A prompt's own launch or follow, its `owner`, ends it only while it
+   * still holds it in `waiting`: a cancel that took it over ends it instead.
+   */
+  const settle = (op: OpId, outcome: OpState, owner?: Following): void => {
+    if (owner && waiting.get(op) !== owner) return;
     const record = journal.prompt(op);
 
     if (!record || record.kind === 'refused') return;
@@ -565,11 +577,11 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
    * Whether a prompt whose create is not sent yet goes on to send it: not once teamai went away, nor once it was
    * cancelled, here or by another process, or its place closes, which ends it cancelled with no agent.
    */
-  const goesOn = (op: OpId): boolean => {
-    if (closing) return false;
+  const goesOn = (op: OpId, following: Following): boolean => {
+    if (closing || waiting.get(op) !== following) return false;
 
     if (!journal.isCancelled(op)) return true;
-    settle(op, { op, state: 'cancelled' });
+    settle(op, { op, state: 'cancelled' }, following);
 
     return false;
   };
@@ -592,11 +604,11 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     const { op } = request;
     const models = await listModels(live, tool, following);
 
-    if (!goesOn(op) || models === 'stopped') return;
+    if (!goesOn(op, following) || models === 'stopped') return;
     const create = 'code' in models ? models : createFor(live, request, tool, models, how);
 
     if ('code' in create) {
-      settle(op, { op, state: 'failed', failure: create });
+      settle(op, { op, state: 'failed', failure: create }, following);
 
       return;
     }
@@ -604,7 +616,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: how.answer, cwd: how.cwd, create };
     journal.savePrompt(op, record);
 
-    if (!goesOn(op)) return;
+    if (!goesOn(op, following)) return;
     await follow(live, op, record, following);
   }
 
@@ -707,10 +719,10 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       if (!workspace) {
         const adopted = await Promise.race([adopt(live, request.handle, place, confined.dir), following.stopped]);
 
-        if (!goesOn(op) || adopted === 'stopped') return;
+        if (!goesOn(op, following) || adopted === 'stopped') return;
 
         if ('code' in adopted) {
-          settle(op, { op, state: 'failed', failure: adopted });
+          settle(op, { op, state: 'failed', failure: adopted }, following);
 
           return;
         }
@@ -801,7 +813,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
           failure: found === 'none'
             ? { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${cause}` }
             : { code: CANCEL_FAILED, message: `Paseo could not create the ${record.tool} agent ${create.agentId} (${cause}), and could not say whether it exists. It may still run in the worktree; stop it in the Paseo app.` },
-        });
+        }, following);
 
         return;
       }
@@ -816,13 +828,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     // A cancel that came to a runtime since killed is sent now that the agent exists; one this process reads stops it itself.
     if (journal.isCancelled(op) && !stopping.has(op)) {
       const refused = await cancelAgent(live, record);
-      settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' });
+      settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' }, following);
 
       return;
     }
 
     for (;;) {
-      if (closing) return;
+      // teamai went away, or a cancel took the prompt over and ended it.
+      if (closing || waiting.get(op) !== following) return;
 
       // Whoever runs the stop settles the prompt once it is confirmed or refused: this process, or another one, such as
       // a recover-mode cancel, whose outcome this one waits to read. A cancel marker alone proves nothing stopped.
@@ -831,7 +844,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         const ended = journal.prompt(op);
 
         if (ended?.kind === 'agent' && ended.outcome) {
-          settle(op, ended.outcome);
+          settle(op, ended.outcome, following);
 
           return;
         }
@@ -867,7 +880,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
                 code: refused ? 'cancel_failed' : 'tool_failed',
                 message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} in Paseo mode ${modeId}. A confined prompt only reads its directory, so it ends rather than ask.${refused ? ` ${refused.message}` : ''}`,
               },
-            });
+            }, following);
 
             return;
           }
@@ -885,13 +898,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
               code: refused ? 'cancel_failed' : 'tool_failed',
               message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} in Paseo mode ${modeId}, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.${refused ? ` ${refused.message}` : ''}`,
             },
-          });
+          }, following);
 
           return;
         }
 
         case 'error':
-          settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent failed in Paseo: ${end.error ?? 'no error given'}` } });
+          settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent failed in Paseo: ${end.error ?? 'no error given'}` } }, following);
 
           return;
         case 'idle': {
@@ -904,24 +917,24 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
               settle(op, {
                 op, state: 'failed',
                 failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent answered the confined prompt, before it replied. Run \`teamai workflow retry\` to ask again.` },
-              });
+              }, following);
 
               return;
             }
 
             if (output === undefined) {
-              settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } });
+              settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } }, following);
 
               return;
             }
 
             if (!session) {
-              settle(op, { op, state: 'failed', failure: noSession(record.tool) });
+              settle(op, { op, state: 'failed', failure: noSession(record.tool) }, following);
 
               return;
             }
 
-            settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result: { output }, confined: record.answer.kept });
+            settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -932,24 +945,24 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
             settle(op, {
               op, state: 'failed',
               failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent worked, before it wrote a workflow result. Its work is kept in the worktree; run \`teamai workflow retry\` to run the step again.` },
-            });
+            }, following);
 
             return;
           }
 
           if (!result) {
-            settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } });
+            settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } }, following);
 
             return;
           }
 
           if (!session) {
-            settle(op, { op, state: 'failed', failure: noSession(record.tool) });
+            settle(op, { op, state: 'failed', failure: noSession(record.tool) }, following);
 
             return;
           }
 
-          settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result });
+          settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result }, following);
 
           return;
         }
@@ -1230,6 +1243,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
+    const endsBefore = 'op' in request ? (ends.get(request.op) ?? 0) : 0;
+
     const answered = (async () => {
       try {
         await answer(request);
@@ -1240,7 +1255,12 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         // whose agent exists, or may, ends as an unconfirmed stop, since the agent may still run. A close that failed
         // keeps its place.
         if (request.type === 'prompt' || request.type === 'cancel') {
+          // Ended meanwhile, by this request or another: a second line would end it twice.
+          if ((ends.get(request.op) ?? 0) !== endsBefore) return;
+          // This line is the op's one end: its follow, taken from `waiting`, ends nothing after it.
+          const following = waiting.get(request.op);
           waiting.delete(request.op);
+          following?.stop();
           const agent = agentNamed(request.op);
           fail(request.op, agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message });
         } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
