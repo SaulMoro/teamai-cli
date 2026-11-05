@@ -51,6 +51,9 @@ export interface Model {
   efforts: string[];
 }
 
+/** How an agent create ended: created, failed before it was sent, or failed once sent, when its agent may still start. */
+export type Creation = { outcome: 'created' } | { outcome: 'unsent' | 'failed'; cause: string };
+
 export type WaitEnd = Awaited<ReturnType<DaemonClient['waitForFinish']>>;
 
 /** A tool installed on the daemon's host: one it can run, with its modes, or why it cannot, for a person to read. */
@@ -124,8 +127,11 @@ export interface Daemon {
   models(tool: PaseoTool): Promise<Model[]>;
   /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
-  /** Creates the agent in the workspace of `cwd`, or answers the one a repeated create made. */
-  create(cwd: string, create: AgentCreate): Promise<void>;
+  /**
+   * Creates the agent in the workspace of `cwd`, or answers the one a repeated create made. A create that failed says
+   * whether it was sent: one Paseo refused may still start its agent, and only one never sent proves none started.
+   */
+  create(cwd: string, create: AgentCreate): Promise<Creation>;
   agent(agentId: string): Promise<PaseoAgent | null>;
   /** Waits until the agent's turn ends or needs a person. */
   wait(agentId: string): Promise<WaitEnd>;
@@ -295,7 +301,21 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
     async create(cwd, create) {
       // Paseo keeps a create's env in plain text and applies it again on resume, so it carries no secret, only the run
       // directory's name: tools use the daemon host's own logins.
-      await (await api.workspaces.open({ cwd })).agents.create(create);
+      let workspace: Awaited<ReturnType<PaseoApi['workspaces']['open']>>;
+
+      try {
+        workspace = await api.workspaces.open({ cwd });
+      } catch (error) {
+        return { outcome: 'unsent', cause: error instanceof Error ? error.message : String(error) };
+      }
+
+      try {
+        await workspace.agents.create(create);
+
+        return { outcome: 'created' };
+      } catch (error) {
+        return { outcome: 'failed', cause: error instanceof Error ? error.message : String(error) };
+      }
     },
     async agent(agentId) {
       return (await client.fetchAgent(agentId))?.agent ?? null;
