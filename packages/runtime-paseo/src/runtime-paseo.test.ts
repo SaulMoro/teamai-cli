@@ -1174,6 +1174,19 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isAnswer(['alive', 'gone', 'failed']))).toMatchObject({ event: 'failed', handle, failure: { code: 'paseo_failed' } });
   });
 
+  it('refuses a repeated open of an attempt whose place record it cannot read, and keeps that record', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const record = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places', `${encodeURIComponent(handle)}.json`);
+    fs.writeFileSync(record, '{"kind":');
+
+    runtime.send(openRequest('op-0000000c', ATTEMPT));
+
+    expect(await runtime.next(isEnd('op-0000000c'))).toMatchObject({ event: 'failed', failure: { code: 'paseo_failed' } });
+    expect(fs.readFileSync(record, 'utf8')).toBe('{"kind":');
+  });
+
   it('answers and closes a healthy attempt though the record of another attempt\'s prompt cannot be read, and refuses its own unreadable one', async () => {
     behave({ output: { ok: true } });
     const runtime = start();

@@ -171,8 +171,12 @@ export function journal(root: string) {
       fs.mkdirSync(indexDir(handle), { recursive: true });
       write(placeFile(handle), place);
     },
-    /** The handle already opened for an attempt, so a repeated open opens no second place. */
-    handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places().find(({ place }) => place?.run === run && place.attempt === attempt)?.handle,
+    /**
+     * The handle already opened for an attempt, so a repeated open opens no second place. One whose record cannot be read
+     * is the attempt's when its name says so, so the open fails on it rather than write a fresh record over it.
+     */
+    handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places()
+      .find(({ handle, place }) => (place ? place.run === run && place.attempt === attempt : handle.endsWith(`/${run}/${attempt}`)))?.handle,
     /**
      * The handles open on a Paseo workspace, which the last of them archives when it closes: those Paseo opened it for,
      * and those still being opened on its `directory`, which Paseo will open it for.
