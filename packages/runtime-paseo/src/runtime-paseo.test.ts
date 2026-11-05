@@ -71,6 +71,22 @@ async function opened(runtime: Runtime, { attempt = ATTEMPT, op = 'op-0000000a' 
   return accepted.handle;
 }
 
+/** Every file the runtime's journal holds, by its path under the journal. */
+const journalFiles = (): string[] => {
+  const root = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo');
+
+  return fs.existsSync(root) ? fs.readdirSync(root, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => path.relative(root, path.join(entry.parentPath, entry.name))) : [];
+};
+
+/** The agents the fake daemon holds, by id. */
+const agentsOf = (): string[] => {
+  const file = path.join(daemonState, 'agents.json');
+
+  return fs.existsSync(file) ? Object.keys((JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown> }).agents) : [];
+};
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** The Paseo workspace the fake daemon opened on the worktree. */
 const worktreeWorkspace = (): string | undefined => (JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { workspaces: Record<string, string> }).workspaces[fs.realpathSync(worktree)];
 
@@ -337,7 +353,8 @@ describe('teamai-runtime-paseo', () => {
       op: 'op-0000000b', event: 'failed',
       failure: { code: 'model_unavailable', message: `The Paseo daemon at ${daemon.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` },
     });
-    expect(runtime.lines.filter(isOp('op-0000000b', 'accepted'))).toEqual([]);
+    // Accepted before Paseo lists the models, which may take long; the failure follows, with no agent created.
+    expect(runtime.lines.filter((line) => 'op' in line && line.op === 'op-0000000b').map((line) => ('event' in line ? line.event : ''))).toEqual(['accepted', 'failed']);
     expect(received()).toEqual([]);
   });
 
@@ -372,7 +389,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     const handle = await opened(runtime);
     runtime.send(promptRequest(handle, 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
 
@@ -388,7 +405,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     const handle = await opened(runtime);
     runtime.send(promptRequest(handle, 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
     const end = await runtime.next(isEnd('op-0000000b'));
@@ -497,7 +514,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     const handle = await opened(runtime);
     runtime.send(promptRequest(handle, 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
 
@@ -544,6 +561,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
     await runtime.next(isOp('op-0000000b', 'accepted'));
+    await expect.poll(() => received().map((request) => request.type)).toEqual(['agent.create.request']);
     const asked = Date.now();
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
@@ -602,7 +620,7 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
     const asked = Date.now();
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
@@ -672,7 +690,6 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
-    const agentsOf = (): string[] => Object.keys((JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, unknown> }).agents);
 
     await runtime.next(isOp('op-0000000b', 'accepted'));
     expect(agentsOf()).toEqual([]);
@@ -681,12 +698,90 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
   });
 
+  it('accepts a prompt before Paseo lists its models, and a cancel then ends it cancelled with no agent ever created', async () => {
+    behave({ output: { ok: true }, models_ms: 3_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    const asked = Date.now();
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    expect(Date.now() - asked).toBeLessThan(10_000);
+    // Past the listing: the agent is never created.
+    await delay(4_000);
+    expect(received()).toEqual([]);
+    expect(agentsOf()).toEqual([]);
+  });
+
+  it('closes an attempt whose prompt waits for its models, ending the prompt cancelled first, and creates no agent after', async () => {
+    behave({ output: { ok: true }, models_ms: 3_000 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    const events = runtime.lines.map((line) => ('event' in line ? `${'op' in line ? line.op : 'handle'} ${line.event}` : ''));
+    expect(events.indexOf('op-0000000b cancelled')).toBeGreaterThan(-1);
+    expect(events.indexOf('op-0000000b cancelled')).toBeLessThan(events.indexOf('handle closed'));
+    await delay(4_000);
+    expect(received().map((request) => request.type)).toEqual(['archive_workspace_request']);
+    expect(agentsOf()).toEqual([]);
+    expect(journalFiles()).toEqual([]);
+  });
+
+  it('ends cancelled, in recover mode, a prompt whose runtime was killed before it created the agent, and creates none', async () => {
+    behave({ output: { ok: true }, models_ms: 3_000 });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'accepted'));
+    await first.kill();
+
+    const recovering = start();
+    await ready(recovering, { mode: 'recover' });
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    recovering.send({ type: 'close', handle });
+    expect(await recovering.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().map((request) => request.type)).toEqual(['archive_workspace_request']);
+    expect(agentsOf()).toEqual([]);
+  });
+
+  it('runs a prompt resent after its runtime was killed before it created the agent, creating it once', async () => {
+    behave({ output: { ok: true }, models_ms: 2_000 });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'accepted'));
+    await first.kill();
+
+    const second = start();
+    await ready(second);
+    second.send({ type: 'reattach', handle });
+    expect(await second.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'running' }] });
+    second.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await second.next(isOp('op-0000000b', 'accepted'))).toEqual({ op: 'op-0000000b', event: 'accepted' });
+    expect(await second.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
+    expect(agentsOf()).toEqual([agentIdOf(OpIdSchema.parse('op-0000000b'))]);
+  });
+
   it('ends a cancelled prompt only once its agent stopped running, though Paseo answers the cancel before', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
 
@@ -699,7 +794,7 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
 
@@ -715,7 +810,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     const handle = await opened(runtime);
     runtime.send(promptRequest(handle, 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
 
     runtime.send({ type: 'close', handle });
 
@@ -832,8 +927,8 @@ describe('teamai-runtime-paseo', () => {
     const second = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
     runtime.send(promptRequest(first, 'op-0000000b'));
     runtime.send(promptRequest(second, 'op-0000000d'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
-    await runtime.next(isOp('op-0000000d', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+    await runtime.next(isOp('op-0000000d', 'display'));
 
     runtime.send({ type: 'close', handle: first });
 
@@ -854,7 +949,7 @@ describe('teamai-runtime-paseo', () => {
     const isClose = (handle: string) => (line: RuntimeMessage): boolean => 'event' in line && ['closed', 'close_failed'].includes(line.event) && 'handle' in line && line.handle === handle;
     const archives = (): unknown[] => received().filter((request) => request.type === 'archive_workspace_request');
     runtime.send(promptRequest(first, 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000b', 'display'));
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
     const agent = agentIdOf(OpIdSchema.parse('op-0000000b'));
@@ -1172,6 +1267,43 @@ describe('teamai-runtime-paseo', () => {
       expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
       expect(received().filter((request) => request.type === 'archive_workspace_request')).toHaveLength(1);
       expect(fs.readdirSync(evidence)).toEqual(['diff.patch']);
+    });
+
+    it('accepts a judge before Paseo opens its directory, and a cancel then ends it cancelled with no agent ever created', async () => {
+      behave({ reply: '{"label": "pass"}', open_ms: 3_000 });
+      const runtime = start();
+      await ready(runtime);
+      runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b'));
+      await runtime.next(isOp('op-0000000b', 'accepted'));
+      const asked = Date.now();
+
+      runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+      expect(Date.now() - asked).toBeLessThan(10_000);
+      await delay(4_000);
+      expect(received()).toEqual([]);
+      expect(agentsOf()).toEqual([]);
+    });
+
+    it('closes a judge\'s place while Paseo opens its directory only once the judge ended cancelled, archives that workspace, and keeps nothing', async () => {
+      behave({ reply: '{"label": "pass"}', open_ms: 3_000 });
+      const runtime = start();
+      await ready(runtime);
+      const handle = await openedConfined(runtime);
+      runtime.send(confinedRequest(handle, 'op-0000000b'));
+      await runtime.next(isOp('op-0000000b', 'accepted'));
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+      const events = runtime.lines.map((line) => ('event' in line ? `${'op' in line ? line.op : 'handle'} ${line.event}` : ''));
+      expect(events.indexOf('op-0000000b cancelled')).toBeGreaterThan(-1);
+      expect(events.indexOf('op-0000000b cancelled')).toBeLessThan(events.indexOf('handle closed'));
+      await delay(1_000);
+      expect(received().map((request) => request.type)).toEqual(['archive_workspace_request']);
+      expect(agentsOf()).toEqual([]);
+      expect(journalFiles()).toEqual([]);
     });
 
     it('refuses a plain prompt in a confined place, and a confined prompt in a worktree place', async () => {

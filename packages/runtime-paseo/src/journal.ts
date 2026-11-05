@@ -9,7 +9,7 @@ import { z } from 'zod';
 //
 //    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree once Paseo
 //                           opened it, or, for a confined prompt's place, the prompt's directory
-//    ops/<op>.json          a prompt: its handle, the agent create it sends, and once it ended, its outcome
+//    ops/<op>.json          a prompt: its handle, then the agent create it sends, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
 //    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
@@ -72,11 +72,13 @@ const AgentCreateSchema = z.object({
 export type AgentCreate = z.infer<typeof AgentCreateSchema>;
 
 /**
- * A prompt: refused before any agent was created (its model is not there), or run by an agent, with how it ended once
- * it did.
+ * A prompt: refused before it was accepted (its tool is not offered), accepted before Paseo was asked anything, or run
+ * by an agent, with how it ended once it did. A pending prompt never sent a create: its agent record is journaled before
+ * the create is sent, so a cancel that finds it pending ends it with no agent to stop.
  */
 const PromptRecordSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('refused'), handle: z.string(), outcome: OpStateSchema }),
+  z.object({ kind: z.literal('pending'), handle: z.string(), outcome: OpStateSchema.optional() }),
   z.object({
     kind: z.literal('agent'),
     handle: z.string(),
