@@ -214,8 +214,11 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     return reason === undefined ? undefined : { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}: ${reason}.` };
   };
 
-  /** The prompts this process follows, each with what stops its wait when teamai cancels it, once its agent exists. */
-  const waiting = new Map<OpId, { stop: () => void; created: boolean }>();
+  /**
+   * The prompts this process follows, each with what stops its wait when teamai cancels it, whether its agent exists,
+   * and the create that settles once Paseo answered it.
+   */
+  const waiting = new Map<OpId, { stop: () => void; created: boolean; creating: Promise<void> }>();
   /** The requests this process is answering. */
   const answering = new Set<Promise<void>>();
   /** teamai closed stdin: a prompt's agent goes on in Paseo, and this process stops following it. */
@@ -322,10 +325,17 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     ? { code: failure.code, message: `${failure.message} Until then teamai-runtime-paseo cannot ${cannot}; ${then}.` }
     : { code: 'daemon_unreachable', message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot ${cannot}. Start the daemon with \`paseo start\`, then ${then}.` });
 
-  /** Accepts a prompt whose agent exists, showing that agent. */
-  const accept = (op: OpId, record: AgentPrompt, live: Daemon): void => {
+  /** What the run's details show of a prompt's agent, once it exists. */
+  const shownOf = (record: AgentPrompt, live: Daemon): RuntimeDisplay | undefined => {
     const place = journal.place(record.handle);
-    write({ op, event: 'accepted', ...(place && { display: agentDisplay(record, place.workspace?.id, live) }) });
+
+    return place && agentDisplay(record, place.workspace?.id, live);
+  };
+
+  /** Accepts a prompt, showing its agent when that is known to exist; one still to be created is shown once it is. */
+  const accept = (op: OpId, record: AgentPrompt, live: Daemon, { exists }: { exists: boolean }): void => {
+    const display = exists && shownOf(record, live);
+    write({ op, event: 'accepted', ...(display && { display }) });
   };
 
   async function init(request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> {
@@ -590,7 +600,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
 
     if (known?.outcome || (known && waiting.has(op))) {
-      accept(op, known, live);
+      accept(op, known, live, { exists: Boolean(known.outcome) || waiting.get(op)?.created === true });
 
       if (known.outcome) send(op, known.outcome);
 
@@ -635,8 +645,16 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       stop = () => resolve('stopped');
     });
 
-    const following = { stop, created: false };
+    let created: () => void = () => {};
+
+    const creating = new Promise<void>((resolve) => {
+      created = resolve;
+    });
+
+    const following = { stop, created: false, creating };
     waiting.set(op, following);
+    // Accepted once the agent's create is journaled, before Paseo creates it, which may take long: teamai waits 15 s.
+    accept(op, record, live, { exists: false });
 
     try {
       // The agent of a repeated prompt is found by its id; a create a runtime died before sending is sent again.
@@ -646,9 +664,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       settle(op, { op, state: 'failed', failure: { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${error instanceof Error ? error.message : String(error)}` } });
 
       return;
+    } finally {
+      created();
     }
 
-    accept(op, record, live);
+    const display = shownOf(record, live);
+
+    if (display) write({ op, event: 'display', display });
 
     // A cancel that came before the agent existed, or to a runtime since killed, is sent now that it does.
     if (journal.isCancelled(op)) {
@@ -827,7 +849,20 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   async function stopPlace(live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | undefined> {
     // A confined prompt's place before its prompt came: no workspace, so no agent.
     if (!place.workspace) return undefined;
-    const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
+    const prompts = journal.promptsOf(handle);
+
+    // A prompt is accepted before Paseo creates its agent: one still being created is stopped once it exists.
+    const creating = prompts.flatMap(({ op }) => {
+      const following = waiting.get(op);
+
+      return following && !following.created ? [following.creating] : [];
+    });
+
+    if (creating.length > 0 && (await Promise.race([Promise.all(creating), late(deadline)])) === 'late') {
+      return { code: 'close_failed', message: `Paseo did not finish creating an agent of ${handle} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; close the attempt again.` };
+    }
+
+    const agents = prompts.flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
     if (!journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record, deadline)))).flatMap((failure) => (failure ? [failure.message] : []));
