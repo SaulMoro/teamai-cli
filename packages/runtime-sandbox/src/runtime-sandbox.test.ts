@@ -600,6 +600,54 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
   }, 60_000);
 
+  it('fails a cancel it cannot read the place record for with cancel_failed, naming the record, and keeps the container', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = await runForever(connection, at);
+    const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`)) ?? '';
+    const kept = fs.readFileSync(record, 'utf8');
+    fs.writeFileSync(record, '');
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await connection.next(ended(op), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(record) } });
+    expect(engine.containers()).toEqual([HANDLE]);
+    expect(engine.calls().filter(([, command]) => command === 'restart')).toEqual([]);
+    // Mended, the place closes as any other.
+    fs.writeFileSync(record, kept);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed' || (message.event === 'failed' && message.handle === HANDLE), 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  }, 60_000);
+
+  it('ends an exec resent after its runtime died once, with cancel_failed, when its cancel cannot read the place record', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const { op, pid } = await runTracked(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE });
+    second.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'exit 0'] });
+    await second.next((message) => message.op === op && message.event === 'accepted');
+    const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`) && file.endsWith('.json')) ?? '';
+    const kept = fs.readFileSync(record, 'utf8');
+    fs.writeFileSync(record, '');
+
+    second.send({ type: 'cancel', op });
+
+    expect(await second.next(ended(op), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(record) } });
+    fs.writeFileSync(record, kept);
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(second.messages.filter(ended(op))).toHaveLength(1);
+    await vi.waitFor(() => { expect(isRunning(pid)).toBe(false); }, { timeout: 5_000 });
+  }, 60_000);
+
   it('fails a cancel the engine could not stop for an exec a runtime teamai left still runs, and that exec is not kept again after close', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });
