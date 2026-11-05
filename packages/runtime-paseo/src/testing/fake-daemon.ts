@@ -76,6 +76,8 @@ const BehaviourSchema = z.object({
   stop_lag_ms: z.number().int().nonnegative().default(0),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
+  /** The daemon answers every agent lookup with this error. */
+  refuse_fetch: z.string().optional(),
   /** How long the daemon takes to list a provider's models, as a provider SDK that is slow to start does. */
   models_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to open a workspace, as a slow host does. */
@@ -498,7 +500,8 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
       case 'fetch_agent_request': {
         // As Paseo: an unknown agent is a null agent, not an error.
         const agent = kept.agents[message.agentId];
-        reply({ type: 'fetch_agent_response', payload: { requestId: message.requestId, agent: agent ? snapshot(agent) : null, project: null, error: null } });
+        const refused = behaviour().refuse_fetch;
+        reply({ type: 'fetch_agent_response', payload: { requestId: message.requestId, agent: agent && !refused ? snapshot(agent) : null, project: null, error: refused ?? null } });
 
         return;
       }
