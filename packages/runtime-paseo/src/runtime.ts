@@ -683,9 +683,22 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       if (!(await live.agent(create.agentId))) await live.create(record.cwd, create);
       following.created = true;
     } catch (error) {
-      settle(op, { op, state: 'failed', failure: { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${error instanceof Error ? error.message : String(error)}` } });
+      const cause = error instanceof Error ? error.message : String(error);
+      // Paseo may have created the agent though its answer was lost: only an agent it does not know proves none runs.
+      const found = await live.agent(create.agentId).then((agent) => (agent ? 'exists' : 'none'), () => 'unknown');
 
-      return;
+      if (found === 'exists') {
+        following.created = true;
+      } else {
+        settle(op, {
+          op, state: 'failed',
+          failure: found === 'none'
+            ? { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${cause}` }
+            : { code: CANCEL_FAILED, message: `Paseo could not create the ${record.tool} agent ${create.agentId} (${cause}), and could not say whether it exists. It may still run in the worktree; stop it in the Paseo app.` },
+        });
+
+        return;
+      }
     } finally {
       created();
     }
@@ -1063,6 +1076,17 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
   }
 
+  /** The agent a prompt journaled, named for a person, or undefined when it journaled none; one that cannot be read may exist. */
+  const agentNamed = (op: OpId): string | undefined => {
+    try {
+      const record = journal.prompt(op);
+
+      return record?.kind === 'agent' ? `The ${record.tool} agent ${record.create.agentId}` : undefined;
+    } catch {
+      return 'Its agent';
+    }
+  };
+
   const lines = readline.createInterface({ input });
 
   lines.on('line', (line) => {
@@ -1082,9 +1106,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       } catch (error) {
         const message = `Paseo failed: ${error instanceof Error ? error.message : String(error)}`;
 
-        // Each request gets its own failure, since an error line would fail every request teamai is waiting on. A close
-        // that failed keeps its place.
-        if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
+        // Each request gets its own failure, since an error line would fail every request teamai is waiting on. A prompt
+        // whose agent exists, or may, ends as an unconfirmed stop, since the agent may still run. A close that failed
+        // keeps its place.
+        if (request.type === 'prompt' || request.type === 'cancel') {
+          waiting.delete(request.op);
+          const agent = agentNamed(request.op);
+          fail(request.op, agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message });
+        } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
         else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
         else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });
         else write({ event: 'failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
