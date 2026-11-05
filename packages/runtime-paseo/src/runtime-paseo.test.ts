@@ -574,6 +574,29 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ event: 'alive', handle });
   }, 40_000);
 
+  it('follows the agent of a create whose answer was lost, rather than fail a prompt whose agent runs', async () => {
+    behave({ output: { ok: true }, lose_create_reply: true });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
+  });
+
+  it('ends a prompt that fails once its agent exists cancel_failed, naming the cause, since the agent may still run', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 1_500 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    fs.writeFileSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places', `${encodeURIComponent(handle)}.json`), '{"kind":');
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({
+      event: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/^Paseo failed: .*\. The claude agent .* may still run in the worktree; stop it in the Paseo app\.$/s) },
+    });
+  });
+
   it('ends a cancel Paseo does not answer cancel_failed within 10 s, inside the 15 s teamai gives it', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy', refuse_cancel_ms: 40_000 });
     const runtime = start();
