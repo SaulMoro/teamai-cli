@@ -404,7 +404,7 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 崩溃后的 `teamai workflow cancel` 会以 recover 模式打开运行时。它不检查登录，所以之后退出登录的工具不会妨碍它停止智能体；它只为取消智能体和关闭这次尝试而连接守护进程。守护进程停着时，取消会保留这次尝试和登录，并说明原因：
 
 ```text
-No Paseo daemon answers at ws://127.0.0.1:6767/ws (no answer in 10 s). Start it with `paseo start`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, which may still run in the worktree; cancel the run again.
+No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `paseo start`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, which may still run in the worktree; cancel the run again.
 ```
 
 启动守护进程，然后再运行一次 `teamai workflow cancel`。

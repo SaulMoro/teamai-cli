@@ -1158,6 +1158,40 @@ describe('teamai-runtime-paseo', () => {
     expect(received().map((request) => request.type)).toEqual(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request']);
   });
 
+  it('answers a recover-mode cancel and close within 10 s of reading them while the daemon is down, keeping the attempt', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'display'));
+    await first.kill();
+    const { url } = daemon;
+    await daemon.close();
+    const recovering = start();
+    await ready(recovering, { mode: 'recover', options: { url } });
+    let asked = Date.now();
+
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed',
+      failure: {
+        code: 'cancel_failed',
+        message: `No Paseo daemon answered at ${url} within 10 s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent ${agentIdOf(OpIdSchema.parse('op-0000000b'))}, which may still run in the worktree; cancel the run again.`,
+      },
+    });
+    const cancelMs = Date.now() - asked;
+    asked = Date.now();
+    recovering.send({ type: 'close', handle });
+    expect(await recovering.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toMatchObject({ event: 'close_failed', handle, failure: { code: 'daemon_unreachable' } });
+    const closeMs = Date.now() - asked;
+    process.stderr.write(`recover answers: cancel ${cancelMs} ms, close ${closeMs} ms\n`);
+    expect(cancelMs).toBeLessThan(10_500);
+    expect(closeMs).toBeLessThan(10_500);
+    daemon = await startFakeDaemon({ state: daemonState, port: 0 });
+  }, 40_000);
+
   it('refuses to close a place whose record it cannot read, and never calls it gone', async () => {
     const runtime = start();
     await ready(runtime);
