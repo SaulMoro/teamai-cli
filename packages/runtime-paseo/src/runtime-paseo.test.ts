@@ -741,16 +741,37 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     const handle = await opened(runtime);
+    await runtime.next(isOp('op-0000000a', 'ready'));
     const record = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places', `${encodeURIComponent(handle)}.json`);
     fs.writeFileSync(record, '{"kind":');
-    const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && [...events, 'error'].includes(line.event);
+    const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && !('op' in line) && [...events, 'error'].includes(line.event);
 
     runtime.send({ type: 'close', handle });
 
     expect(await runtime.next(isAnswer(['closed', 'close_failed']))).toMatchObject({ event: 'close_failed', handle, failure: { code: 'paseo_failed' } });
     expect(fs.readFileSync(record, 'utf8')).toBe('{"kind":');
     runtime.send({ type: 'reattach', handle });
-    expect(await runtime.next(isAnswer(['alive', 'gone']))).toMatchObject({ event: 'error' });
+    expect(await runtime.next(isAnswer(['alive', 'gone', 'failed']))).toMatchObject({ event: 'failed', handle, failure: { code: 'paseo_failed' } });
+  });
+
+  it('answers an open or a prompt it cannot run, before a successful init or in recover mode, with its own failure, never an error line', async () => {
+    const { url } = daemon;
+    await daemon.close();
+    const isAnswer = (op: string) => (line: RuntimeMessage): boolean => 'event' in line && (line.event === 'error' || ('op' in line && line.op === op));
+
+    const unstarted = start();
+    expect(await ready(unstarted, { options: { url } })).toMatchObject({ ok: false, error: { code: 'daemon_unreachable' } });
+    unstarted.send({ type: 'open', op: 'op-0000000a', run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } });
+    expect(await unstarted.next(isAnswer('op-0000000a'))).toEqual({
+      op: 'op-0000000a', event: 'failed', failure: { code: 'not_started', message: 'teamai-runtime-paseo got open before a successful init.' },
+    });
+
+    const recovering = start();
+    await ready(recovering, { mode: 'recover', options: { url } });
+    recovering.send(promptRequest('worktree/r/a', 'op-0000000b'));
+    expect(await recovering.next(isAnswer('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed', failure: { code: 'not_started', message: 'teamai-runtime-paseo opened in recover mode only stops what it ran: it got prompt.' },
+    });
   });
 
   it.each([
