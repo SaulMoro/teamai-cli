@@ -39,18 +39,17 @@ const PlaceRecordSchema = z.object({
 
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;
 
-/** A record, or undefined when there is none. A record that cannot be read or parsed is an error, never taken as absent. */
+/**
+ * A record, or undefined when there is none. A record that cannot be read or parsed is an error naming the file, never
+ * taken as absent.
+ */
 function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
-  let text: string;
-
   try {
-    text = fs.readFileSync(file, 'utf8');
+    return schema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
-    throw error;
+    throw new Error(`Its record ${file} cannot be read (${error instanceof Error ? error.message : String(error)}), so the attempt's sandbox is kept until it can. Repair that file, then try again.`, { cause: error });
   }
-
-  return schema.parse(JSON.parse(text));
 }
 
 function write(file: string, value: PlaceRecord | ExecRecord): void {
