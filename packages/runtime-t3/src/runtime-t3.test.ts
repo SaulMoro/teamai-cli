@@ -1477,6 +1477,24 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['event'] === 'error')).toEqual([]);
     });
 
+    // teamai fails every request it waits on for an uncorrelated error, so only a line that names no request gets one.
+    it('fails a malformed request that still names its op or handle on its own, and answers a line that names none with an error', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000073'));
+      await runtime.next((line) => line['op'] === 'op-00000073' && line['event'] === 'display');
+
+      runtime.send({ type: 'prompt', op: 'op-00000074', handle });
+      expect(await runtime.next((line) => line['op'] === 'op-00000074')).toEqual({ op: 'op-00000074', event: 'failed', failure: { code: 'runtime_protocol', message: expect.stringMatching(/^Not a protocol 1 request: /) } });
+      runtime.send({ type: 'settle', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'failed', handle, failure: { code: 'runtime_protocol', message: expect.stringMatching(/^Not a protocol 1 request: /) } });
+      runtime.send({ type: 'close' });
+      expect(await runtime.next((line) => line['event'] === 'error')).toEqual({ event: 'error', message: expect.stringMatching(/^Not a protocol 1 request: /) });
+
+      expect(runtime.lines.filter((line) => line['event'] === 'error')).toHaveLength(1);
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000073').map((line) => line['event'])).toEqual(['accepted', 'display']);
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
