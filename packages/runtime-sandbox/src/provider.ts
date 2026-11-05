@@ -11,6 +11,12 @@ import type { Can, PlaceView, RuntimeDisplay, RuntimeFailure } from '@teamai/run
 //  judge (a confined prompt) gets a sandbox of its own that sees only its directory.
 //
 
+/**
+ * The longest a provider's stop takes. teamai ends a live exec whose cancel has no outcome 15 s after it sent the
+ * cancel, so the stop and the wait for the exec's process to end (runtime.ts) fit inside that.
+ */
+export const STOP_MS = 9_000;
+
 /** The attempt a sandbox belongs to, which names it and finds it again. */
 export interface PlaceKey {
   run: string;
@@ -77,7 +83,10 @@ export interface Provider {
   judges?: Judges;
   /** Runs one process in the sandbox, streaming its output, until it ends. */
   exec(id: string, spec: ExecSpec, onOutput: (stream: 'stdout' | 'stderr', data: string) => void): Promise<ExecEnd>;
-  /** Stops every process running in the sandbox; the sandbox stays, ready for the next exec. Ok only once they are gone. */
+  /**
+   * Stops every process running in the sandbox; the sandbox stays, ready for the next exec. Ok only once they are gone.
+   * It answers within STOP_MS, failing with how to remove the sandbox when the technology does not answer by then.
+   */
   stop(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   destroy(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   display(key: PlaceKey): RuntimeDisplay;

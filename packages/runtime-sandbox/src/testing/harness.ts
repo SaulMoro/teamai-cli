@@ -45,6 +45,8 @@ export interface FakeEngine {
   failRemove(shouldFail: boolean): void;
   /** Makes an exec whose process a stop or remove killed end `ms` after the command that killed it returned. */
   stopLag(ms: number): void;
+  /** Makes a stop wait `ms` before it stops anything, as a daemon slow to answer. */
+  stopDelay(ms: number): void;
   /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
@@ -85,6 +87,9 @@ export function fakeEngine(dir: string): FakeEngine {
     },
     stopLag(ms) {
       fs.writeFileSync(path.join(state, 'stop-lag'), String(ms));
+    },
+    stopDelay(ms) {
+      fs.writeFileSync(path.join(state, 'stop-delay'), String(ms));
     },
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
