@@ -1421,8 +1421,11 @@ export function serve(options: ServeOptions): Promise<void> {
           // Not JSON: it names nothing.
         }
 
-        // teamai fails every request it waits on for an error line, so one is written only for a line that names none.
-        if (named.op !== undefined) fail(named.op, { code: named.type === 'cancel' ? CANCEL_FAILED : 'runtime_protocol', message });
+        // teamai fails every request it waits on for an error line, so one is written only for a line that names none. An
+        // op this process saw, or one a record holds or may hold, already has its outcome or gets it from what runs it.
+        if (named.op !== undefined && (handleOf.has(named.op) || running.has(named.op) || cancelledEarly.has(named.op) || journal.placeOf(named.op).kind !== 'missing')) {
+          process.stderr.write(`Dropped a line that names ${named.op}, which runtime t3 already runs or answered: ${message}\n`);
+        } else if (named.op !== undefined) fail(named.op, { code: named.type === 'cancel' ? CANCEL_FAILED : 'runtime_protocol', message });
         else if (named.handle !== undefined) write({ event: 'failed', handle: named.handle, failure: { code: 'runtime_protocol', message } });
         else if (named.type === 'init') write({ type: 'init', ok: false, error: { code: 'runtime_protocol', message } });
         else write({ event: 'error', message });
