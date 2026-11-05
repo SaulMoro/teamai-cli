@@ -624,7 +624,15 @@ function failedReply(request, error) {
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (line.trim() === '') return;
-  const parsed = RuntimeRequestSchema.safeParse(JSON.parse(line));
+  const raw = JSON.parse(line);
+
+  if (raw?.type === 'init' && raw.protocol !== 1) {
+    send({ type: 'init', ok: false, error: { code: 'bad_protocol', key: 'protocol', message: `The toy runtime speaks protocol 1, and was sent protocol ${JSON.stringify(raw.protocol)}.` } });
+
+    return;
+  }
+
+  const parsed = RuntimeRequestSchema.safeParse(raw);
 
   if (!parsed.success) {
     send({ event: 'error', message: `The toy runtime does not know request ${line.slice(0, 200)}: ${parsed.error.issues[0]?.message}` });

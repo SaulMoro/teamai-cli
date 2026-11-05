@@ -404,42 +404,42 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * `confinedPrompt: true` says it answers a `prompt` with `confined`; without it, teamai drops `can.confined`.
    */
   const InitReply = z.discriminatedUnion('ok', [
-    z.object({ type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional() }),
-    z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }),
+    z.object({ type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional() }).strict(),
+    z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }).strict(),
   ]);
 
   const OpEvent = z.discriminatedUnion('event', [
     /** `display` on an exec's or prompt's acceptance: what the runtime shows once that operation exists, such as an agent's thread. */
-    z.object({ op: OpIdSchema, event: z.literal('accepted'), handle: RuntimeHandleSchema.optional(), display }),
-    z.object({ op: OpIdSchema, event: z.literal('ready'), display }),
+    z.object({ op: OpIdSchema, event: z.literal('accepted'), handle: RuntimeHandleSchema.optional(), display }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('ready'), display }).strict(),
     /**
      * What the runtime shows of an exec or prompt once it exists, such as the agent it launched after it accepted the
      * prompt. It neither accepts the operation nor ends it; the latest display given is shown.
      */
-    z.object({ op: OpIdSchema, event: z.literal('display'), display: display.nonoptional() }),
-    z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }),
-    z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }),
-    z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
-    z.object({ op: OpIdSchema, event: z.literal('finished'), ...finishedPrompt }),
-    z.object({ op: OpIdSchema, event: z.literal('cancelled') }),
+    z.object({ op: OpIdSchema, event: z.literal('display'), display: display.nonoptional() }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('finished'), ...finishedPrompt }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('cancelled') }).strict(),
   ]);
 
   const HandleEvent = z.discriminatedUnion('event', [
-    z.object({ event: z.literal('collected'), handle: RuntimeHandleSchema }),
-    z.object({ event: z.literal('collect_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
-    z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema), display }),
-    z.object({ event: z.literal('gone'), handle: RuntimeHandleSchema }),
-    z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema }),
+    z.object({ event: z.literal('collected'), handle: RuntimeHandleSchema }).strict(),
+    z.object({ event: z.literal('collect_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
+    z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema), display }).strict(),
+    z.object({ event: z.literal('gone'), handle: RuntimeHandleSchema }).strict(),
+    z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema }).strict(),
     /** The runtime could not end the place, so what it started there may still run. */
-    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
+    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
     /**
      * The runtime could not answer a `reattach`, `collect` or `close` of the handle, such as when its journal cannot be
      * read or its provider cannot be reached: never `gone` for that, since the place may still be there.
      */
-    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
+    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
   ]);
 
-  return { OpEvent, HandleEvent, Message: z.union([InitReply, OpEvent, HandleEvent, z.object({ event: z.literal('error'), message: z.string() })]) };
+  return { OpEvent, HandleEvent, Message: z.union([InitReply, OpEvent, HandleEvent, z.object({ event: z.literal('error'), message: z.string() }).strict()]) };
 }
 
 /** What a runtime may write, display and offer included: a check for its own output. */
