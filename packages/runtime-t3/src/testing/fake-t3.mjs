@@ -15,6 +15,7 @@
 //                               launchInvalid: a new launch's check refuses every launch, a repeated one too, with invalid_request
 //                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
 //                               decisionRefused: T3 refuses every sign-in decision; decisionNoCode: a decision redirects with no code
+//                               decisionMs: a sign-in decision answers this long after it was posted
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -381,6 +382,7 @@ async function route(req, res) {
     // T3's sign-in page posts here; a pairing-code decision needs a code the `t3` command minted for this server's
     // data directory, carrying the scopes the access level needs, and each code approves once.
     const { authorization, decision } = JSON.parse(await readBody(req));
+    await sleep(config().decisionMs ?? 0);
     const pairing = pairings().find((minted) => minted.credential === decision.code && minted.base === T3_HOME && !spent.has(minted.credential));
     const needed = decision.access === 'full-access' ? ['orchestration:read', 'orchestration:operate', 'settings:write', 'source-control:write'] : ['orchestration:read', 'orchestration:operate'];
 
