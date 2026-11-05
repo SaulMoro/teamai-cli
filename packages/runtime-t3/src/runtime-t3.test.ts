@@ -124,6 +124,19 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 'login_required' } });
     });
 
+    // teamai gives init 15 s, so a T3 Code that does not answer fails init well before, saying so.
+    it('fails init t3_unavailable within its bound when T3 Code does not answer what it runs', async () => {
+      signIn(t3);
+      t3.config({ environmentMs: 30_000 });
+      const runtime = start();
+      const sentAt = Date.now();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init', 20_000)).toEqual({ type: 'init', ok: false, error: { code: 't3_unavailable', message: 'T3 Code did not answer what it runs within 10 s. Check that T3 Code is open and responding, then start the workflow again.' } });
+      expect(Date.now() - sentAt).toBeLessThan(12_000);
+    }, 30_000);
+
     it('fails when T3 Code is not running, saying to open it', async () => {
       signIn(t3);
       await t3.stop();
