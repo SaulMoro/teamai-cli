@@ -14,7 +14,9 @@
 //                               it launched; launchReplyLost: a launch launches, then its reply never comes (an MCP error, not a refusal)
 //                               launchInvalid: a new launch's check refuses every launch, a repeated one too, with invalid_request
 //                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
+//                               decisionRefused: T3 refuses every sign-in decision; decisionNoCode: a decision redirects with no code
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
+//   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
 //   T3CODE_HOME/scratch/        a scratch thread's new folder, as T3 makes one for a launch with `scratch: true`
@@ -319,6 +321,15 @@ function mcpServer(bearer) {
 
 const codes = new Map();
 
+/** The pairing codes the fake `t3` command minted, each with its scopes and the data directory it was minted for. */
+const pairings = () => {
+  const file = path.join(STATE, 'pairings.jsonl');
+
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => JSON.parse(line)) : [];
+};
+
+const spent = new Set();
+
 const json = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'content-type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
@@ -364,6 +375,33 @@ async function route(req, res) {
     res.writeHead(302, { location: back.toString() });
 
     return res.end();
+  }
+
+  if (url.pathname === '/oauth/mcp/decision') {
+    // T3's sign-in page posts here; a pairing-code decision needs a code the `t3` command minted for this server's
+    // data directory, carrying the scopes the access level needs, and each code approves once.
+    const { authorization, decision } = JSON.parse(await readBody(req));
+    const pairing = pairings().find((minted) => minted.credential === decision.code && minted.base === T3_HOME && !spent.has(minted.credential));
+    const needed = decision.access === 'full-access' ? ['orchestration:read', 'orchestration:operate', 'settings:write', 'source-control:write'] : ['orchestration:read', 'orchestration:operate'];
+
+    if (config().decisionRefused || decision._tag !== 'pairing-code' || !pairing || !needed.every((scope) => pairing.scopes.includes(scope))) {
+      return json(res, 400, { _tag: 'AuthMcpApprovalError', message: 'That pairing code is not valid. Create a new one and try again.' });
+    }
+
+    spent.add(pairing.credential);
+    fs.appendFileSync(path.join(STATE, 'calls.jsonl'), `${JSON.stringify({ tool: 'oauth_decision', args: { access: decision.access }, bearer: 'none' })}\n`);
+    const back = new URL(authorization.redirect_uri);
+
+    if (config().decisionNoCode) back.searchParams.set('error', 'access_denied');
+    else {
+      const code = randomUUID();
+      codes.set(code, { challenge: authorization.code_challenge, redirect: authorization.redirect_uri });
+      back.searchParams.set('code', code);
+    }
+
+    if (authorization.state) back.searchParams.set('state', authorization.state);
+
+    return json(res, 200, { redirectTo: back.toString() });
   }
 
   if (url.pathname === '/oauth/mcp/token') {

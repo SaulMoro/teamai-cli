@@ -112,8 +112,11 @@ export interface ServeOptions {
   input: NodeJS.ReadableStream;
   write(message: RuntimeMessage): void;
   journal: Journal;
-  /** Connects to the environment for a run in `mode`; a failure names why and what the person does about it. */
-  connect(mode: WorkMode): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  /**
+   * Connects to the environment for a run in `mode`, signing in at `access` when it has no valid sign-in. `recover`
+   * signs in never: it only stops what an earlier run left. A failure names why and what the person does about it.
+   */
+  connect(how: { mode: WorkMode; access: StepMode } | { mode: 'recover' }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
 }
@@ -418,7 +421,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /** Connects in recover mode as an unattended run does: with the sign-in teamai keeps, never asking for one. */
   const connectToRecover = async (): Promise<Reach> => {
-    const connected = await options.connect('unattended');
+    const connected = await options.connect({ mode: 'recover' });
 
     if (!connected.ok) return { ok: false, failure: connected.error };
 
@@ -601,7 +604,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
     const answerBy = Date.now() + INIT_WAIT_MS;
-    const connecting = options.connect(request.mode);
+    const stepMode = parsed.data.runtime_mode ?? 'auto';
+    const connecting = options.connect({ mode: request.mode, access: stepMode });
     const reaching = request.mode === 'attended' ? { answered: true as const, value: await connecting } : await within(connecting, INIT_WAIT_MS);
 
     if (!reaching.answered) {
@@ -637,7 +641,7 @@ export function serve(options: ServeOptions): Promise<void> {
         return;
       }
 
-      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode: parsed.data.runtime_mode ?? 'auto', signIn: connected.signIn };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode, signIn: connected.signIn };
       const tools = [...instances.instances.keys()];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, signIn, type Connection, type FakeT3, type Line } from './testing/harness.js';
+import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, PATH_WITHOUT_T3, signIn, type Connection, type FakeT3, type Line } from './testing/harness.js';
 
 // teamai-runtime-t3 through its stdio entry, against a fake T3 Code server (testing/fake-t3.mjs).
 
@@ -71,9 +71,45 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
-    it('signs in through T3\'s page in an attended run, keeps the credential to itself, and a later unattended run reuses it', async () => {
+    // The `t3` command on this machine creates a pairing code, and teamai approves its own sign-in with it, as T3's page would.
+    it.each(['attended', 'unattended'] as const)('signs in with no page in an %s run, through a pairing code the t3 command creates, and keeps the credential to itself', async (mode) => {
       const browser = fakeBrowser(dir);
-      const attended = start({ PATH: `${browser.bin}${path.delimiter}${process.env['PATH'] ?? ''}` });
+      const runtime = start({ PATH: [t3.bin, browser.bin, PATH_WITHOUT_T3].join(path.delimiter) });
+
+      runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local' } });
+
+      const reply = await runtime.next((line) => line['type'] === 'init');
+      expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
+      expect(t3.commandRuns()).toEqual([[
+        'auth', 'pairing', 'create', '--json', '--base-dir', t3.t3Home, '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--ttl', '2m', '--label', 'teamai workflow',
+      ]]);
+      expect(t3.calls().map((call) => call.tool).filter((tool) => tool.startsWith('oauth_'))).toEqual(['oauth_decision', 'oauth_token']);
+      expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'auto' });
+      expect(browser.visits()).toEqual([]);
+      expect(runtime.stderr()).toBe('');
+      expect(fs.statSync(credentialsFile(t3.home)).mode & 0o777).toBe(0o600);
+      await runtime.close();
+
+      const later = start();
+      later.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+      expect(await later.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      expect(t3.commandRuns()).toHaveLength(1);
+      expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
+    });
+
+    it('approves its silent sign-in at the run\'s runtime_mode', async () => {
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'approval-required' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'approval-required' });
+    });
+
+    it('signs in through T3\'s page in an attended run with no t3 command, keeps the credential to itself, and a later unattended run reuses it', async () => {
+      const browser = fakeBrowser(dir);
+      const attended = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
 
       attended.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
 
@@ -91,8 +127,8 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
     });
 
-    it('fails an unattended run with no sign-in, saying how to sign in, and asks T3 for none', async () => {
-      const runtime = start();
+    it('fails an unattended run with no sign-in and no t3 command, saying how to sign in, and asks T3 for none', async () => {
+      const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
       runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
 
@@ -106,18 +142,19 @@ describe('teamai-runtime-t3', () => {
     // teamai opens a runtime in recover mode only to stop and close what it recorded, so a stop works whatever the sign-in.
     it('opens in recover mode with no sign-in, asking T3 nothing and offering nothing', async () => {
       const browser = fakeBrowser(dir);
-      const runtime = start({ PATH: `${browser.bin}${path.delimiter}${process.env['PATH'] ?? ''}` });
+      const runtime = start({ PATH: [t3.bin, browser.bin, PATH_WITHOUT_T3].join(path.delimiter) });
 
       runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
       expect(browser.visits()).toEqual([]);
       expect(t3.calls()).toEqual([]);
+      expect(t3.commandRuns()).toEqual([]);
     });
 
-    it('fails an unattended run whose sign-in has expired', async () => {
+    it('fails an unattended run whose sign-in has expired, with no t3 command', async () => {
       signIn(t3, undefined, 60);
-      const runtime = start();
+      const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
       runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
 
