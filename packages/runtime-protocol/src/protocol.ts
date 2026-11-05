@@ -392,7 +392,7 @@ export const OpStateSchema = z.discriminatedUnion('state', [
 export type OpState = z.infer<typeof OpStateSchema>;
 
 /**
- * The lines a runtime writes, with `display` (on `ready`, on an exec's or prompt's `accepted`, on a `display` event, and on `alive`) and the init reply's `can` read by the schemas
+ * The lines a runtime writes, with `display` (on `ready`, on an exec's or prompt's `accepted` or `display` event, and on `alive`) and the init reply's `can` read by the schemas
  * given. A runtime checks what it writes against `RuntimeMessageSchema`; teamai reads a display apart from its event,
  * so a runtime that gets it wrong loses only its display, and reads `can` as its own driver offer.
  */

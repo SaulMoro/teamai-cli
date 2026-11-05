@@ -1792,7 +1792,7 @@ Step runtime "acme" could not close the place of attempt a1, so what ran there m
 
 Every request and reply is defined as a zod schema in `packages/runtime-protocol` of the teamai repository: `RuntimeRequestSchema` for what teamai sends, `RuntimeMessageSchema` for what a runtime writes.
 
-`display`, on `ready`, on an exec's or prompt's `accepted`, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, then the agent with the prompt's `accepted`.
+`display`, on `ready`, on an exec's or prompt's `accepted` or `display` event, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, accepts the prompt at once, and sends the agent's link once the agent exists, as in the example below. A `display` event neither accepts nor ends its operation: it is not the answer teamai waits 15 s for, nor the outcome of a `cancel`.
 
 `open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
 
@@ -1822,7 +1822,8 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
    "lease":{"step":"review","tool":"claude","model":{"name":"claude-opus-5-5"},"permissions":"approval-required","interactive":false,
             "prompt":"Review the change.\n\nWrite the workflow result as JSON to /repo/.teamai/…/attempts/a3f0…/out/result.json. …",
             "result":"/repo/.teamai/…/attempts/a3f0…/out/result.json"}}
-← {"op":"op-83bf2a9d01e4","event":"accepted","display":{"label":"Review the change","url":"t3://thread/5e1c","fields":{"agent":"claude"}}}
+← {"op":"op-83bf2a9d01e4","event":"accepted"}
+← {"op":"op-83bf2a9d01e4","event":"display","display":{"label":"Review the change","url":"t3://thread/5e1c","fields":{"agent":"claude"}}}
 ← {"op":"op-83bf2a9d01e4","event":"finished","session":{"tool":"claude","id":"cef86f52-1d0b-4c55-9a40-7e3d3a8b1f02"},"result":{"output":{"verdict":"approve"}},"usage":{"input":18240,"output":2310}}
 ```
 
