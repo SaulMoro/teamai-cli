@@ -5,7 +5,7 @@ import path from 'node:path';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, PATH_WITHOUT_T3, signIn, type Connection, type FakeT3, type Line } from './testing/harness.js';
+import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, PATH_WITHOUT_T3, signIn, type Connection, type FakeT3, type FakeT3Config, type Line } from './testing/harness.js';
 
 // teamai-runtime-t3 through its stdio entry, against a fake T3 Code server (testing/fake-t3.mjs).
 
@@ -128,7 +128,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     describe('when the silent sign-in fails', () => {
-      const failures: Array<{ failure: string; path?: () => string; config?: Parameters<FakeT3['config']>[0]; reason: string }> = [
+      const failures: Array<{ failure: string; path?: () => string; config?: Partial<FakeT3Config>; reason: string }> = [
         { failure: 'there is no t3 command', path: () => PATH_WITHOUT_T3, reason: 'there is no t3 command on PATH' },
         { failure: 'the t3 command fails', config: { commandFails: 3 }, reason: 't3 auth pairing create exited with status 3: Could not reach the T3 Code server' },
         { failure: 'T3 refuses the pairing code', config: { decisionRefused: true }, reason: 'T3 Code refused the pairing code with HTTP 400: That pairing code is not valid. Create a new one and try again' },
@@ -210,7 +210,9 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       expect(t3.commandRuns()).toHaveLength(1);
       expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
-      expect(fs.readFileSync(credentialsFile(t3.home), 'utf8')).not.toContain('fake-t3-token-expired-0000000000');
+      const kept = fs.readFileSync(credentialsFile(t3.home), 'utf8');
+      expect(kept).not.toContain('fake-t3-token-expired-0000000000');
+      expect(kept).toContain('fake-t3-token-0123456789');
       expect(fs.statSync(credentialsFile(t3.home)).mode & 0o777).toBe(0o600);
     });
 

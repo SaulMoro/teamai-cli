@@ -419,7 +419,7 @@ export function serve(options: ServeOptions): Promise<void> {
     return read.kind === 'found' ? read.place : undefined;
   };
 
-  /** Connects in recover mode as an unattended run does: with the sign-in teamai keeps, never asking for one. */
+  /** Connects in recover mode: with the sign-in teamai keeps, never signing in, since it only stops what an earlier run left. */
   const connectToRecover = async (): Promise<Reach> => {
     const connected = await options.connect({ mode: 'recover' });
 
