@@ -969,6 +969,29 @@ describe('teamai-runtime-paseo', () => {
     expect(stopped()).toEqual([{ agentId: String(received()[0]?.agentId), status: 'closed' }]);
   });
 
+  it.each([
+    ['while Paseo creates its agent', 'create'],
+    ['while its agent waits on a permission nobody answered', 'display'],
+  ] as const)('ends a prompt cancelled, once, before its place closes %s', async (_, reached) => {
+    behave({ create_ms: 1_000, ask_permission: true, hold_ms: 60_000, archive_ms: 100 });
+    const runtime = start();
+    await ready(runtime, { mode: 'attended' });
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+
+    if (reached === 'create') await expect.poll(() => received().map((request) => request.type)).toEqual(['agent.create.request']);
+    else await runtime.next(isOp('op-0000000b', 'display'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    await delay(2_000);
+    expect(runtime.lines.filter(isEnd('op-0000000b'))).toEqual([{ op: 'op-0000000b', event: 'cancelled' }]);
+    const events = runtime.lines.map((line) => ('event' in line ? `${'op' in line ? line.op : 'handle'} ${line.event}` : ''));
+    expect(events.indexOf('op-0000000b cancelled')).toBeLessThan(events.indexOf('handle closed'));
+    expect(journalFiles()).toEqual([]);
+  });
+
   it('archives the Paseo workspace when teamai closes the attempt, and keeps nothing of it', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
@@ -1556,6 +1579,9 @@ describe('teamai-runtime-paseo', () => {
 
       expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
       await delay(4_000);
+      // The judge ended once, before its place closed.
+      expect(runtime.lines.filter(isEnd('op-0000000b'))).toHaveLength(1);
+      expect(runtime.lines.findIndex(isEnd('op-0000000b'))).toBeLessThan(runtime.lines.findIndex((line) => 'event' in line && line.event === 'closed'));
       expect(received().slice(sent).map((request) => request.type)).toEqual(requests);
       const kept = JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { status: string }> };
       expect(Object.values(kept.agents).filter((agent) => agent.status === 'running')).toEqual([]);
