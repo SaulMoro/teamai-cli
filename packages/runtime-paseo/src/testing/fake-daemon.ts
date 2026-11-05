@@ -76,6 +76,10 @@ const BehaviourSchema = z.object({
   stop_lag_ms: z.number().int().nonnegative().default(0),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
+  /** How long the daemon takes to open a workspace, as a slow host does. */
+  open_ms: z.number().int().nonnegative().default(0),
+  /** How long the daemon takes to create an agent, as a provider that is slow to start does. */
+  create_ms: z.number().int().nonnegative().default(0),
 });
 
 export type Behaviour = z.input<typeof BehaviourSchema>;
@@ -326,7 +330,20 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
     fs.appendFileSync(path.join(state, 'requests.jsonl'), `${JSON.stringify(message)}\n`);
   };
 
+  /** The requests already held for the delay `open_ms` or `create_ms` gives them. */
+  const held = new WeakSet<Inbound>();
+
   function handle(message: Inbound, reply: (message: Reply) => void): void {
+    const { open_ms: opening, create_ms: creating } = behaviour();
+    const hold = message.type === 'open_project_request' ? opening : message.type === 'agent.create.request' ? creating : 0;
+
+    if (hold > 0 && !held.has(message)) {
+      held.add(message);
+      timers.add(setTimeout(() => handle(message, reply), hold));
+
+      return;
+    }
+
     switch (message.type) {
       case 'list_available_providers_request': {
         const offered = behaviour().models;
