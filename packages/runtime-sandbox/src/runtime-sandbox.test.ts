@@ -575,6 +575,31 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   }, 60_000);
 
+  it('answers an exec resent while its cancel is retried with its running state, never the failure the cancel before left, then cancelled', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = await runForever(connection, at);
+    engine.daemon(false);
+    connection.send({ type: 'cancel', op });
+    expect(await connection.next(ended(op), 15_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed' } });
+    engine.daemon(true);
+    engine.stopDelay(1_500);
+    const before = connection.messages.length;
+
+    connection.send({ type: 'cancel', op });
+    connection.send({ type: 'reattach', handle: HANDLE });
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; while :; do sleep 1; done'] });
+
+    expect(await connection.next((message) => message.event === 'alive', 5_000)).toMatchObject({ ops: [{ op, state: 'running' }] });
+    expect(await connection.next((message) => connection.messages.indexOf(message) >= before && ended(op)(message), 15_000)).toEqual({ op, event: 'cancelled' });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(connection.messages.slice(before).filter(ended(op))).toEqual([{ op, event: 'cancelled' }]);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  }, 60_000);
+
   it('fails a cancel the engine could not stop for an exec a runtime teamai left still runs, and that exec is not kept again after close', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });

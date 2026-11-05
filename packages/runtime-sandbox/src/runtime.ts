@@ -104,7 +104,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
-  /** The ops whose stop this process asked for and has not confirmed or failed yet: each still runs, as far as it knows. */
+  /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
   const pendingStops = new Set<OpId>();
   /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
   const followers = new Map<OpId, { handle: string; end: (outcome: Outcome) => void }>();
@@ -143,11 +143,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
    * in the sandbox may still run (#1717: only `running`, or `failed` with `cancel_failed`, may still run). Only a stop the
    * provider confirmed ends it.
    */
-  const stateOf = (exec: Journaled): OpState => {
-    if (pendingStops.has(exec.op)) return { op: exec.op, state: 'running' };
-
-    return exec.outcome ? { op: exec.op, ...exec.outcome } : { op: exec.op, state: 'running' };
-  };
+  const stateOf = (exec: Journaled): OpState => (exec.outcome ? { op: exec.op, ...exec.outcome } : { op: exec.op, state: 'running' });
 
   /** Writes the end of an op this process does not run: through its follower here when it has one. */
   const conclude = (op: OpId, outcome: Outcome): void => {
@@ -462,7 +458,10 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
 
     if (!record || (record.outcome !== undefined && !isRetried) || pendingStops.has(op)) return;
     journal.cancel(op);
-    // Until this stop is confirmed or fails, reattach reports the op running, never what a cancel before it left.
+
+    // A retried stop clears the failure the stop before it left, before anything else is read: until it is confirmed or
+    // fails, a reattach or a resent id reads the op running, in this process or any other, never that old failure.
+    if (isRetried) journal.saveExec(op, { handle: record.handle, runner: record.runner });
     pendingStops.add(op);
 
     try {
@@ -479,8 +478,10 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
           return;
         }
 
-        // A first cancel of an exec that ended on its own meanwhile leaves that end.
-        if (!isRetried && journal.exec(op)?.outcome !== undefined) return;
+        // An exec that ended on its own meanwhile keeps that end, and one a close forgot is not kept again.
+        const now = journal.exec(op);
+
+        if (now === undefined || now.outcome !== undefined) return;
         journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
         conclude(op, outcome);
 
@@ -488,10 +489,10 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       }
 
       // The engine confirmed the stop, so whatever ran is gone: an exec this process ran has ended cancelled already, and
-      // any other ends cancelled here, a retried stop replacing the failure the stop before it left.
+      // any other ends cancelled here.
       const now = journal.exec(op);
 
-      if (now === undefined || (now.outcome !== undefined && !isRetried)) return;
+      if (now === undefined || now.outcome !== undefined) return;
       journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome: { state: 'cancelled' } });
       conclude(op, { state: 'cancelled' });
     } finally {
