@@ -23,19 +23,20 @@ npm install -g --prefix ~/.paseo-cli @getpaseo/cli
 export PASEO_CLIENT_PATH=~/.paseo-cli/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/client
 ```
 
-Add a definition that sends prompt steps to Paseo and everything else to this machine, in the team repo or in `~/.teamai/drivers/`:
+teamai ships a definition that sends prompt steps to the daemon on this machine and everything else to this machine. `--driver paseo` uses it:
 
 ```yaml
-# drivers/paseo.yaml
+# drivers/teamai-paseo.yaml, shipped with teamai
 schemaVersion: v1alpha1
-name: paseo
-description: Run prompt steps as agents of the local Paseo daemon, and the rest here.
+name: teamai-paseo
+description: Run each prompt step as an agent of the Paseo daemon on this machine, in a worktree teamai prepares, and every other step on this machine.
 runtimes:
   - use: paseo
-    options:
-      max_parallel: 4
+    options: { url: ws://127.0.0.1:6767/ws, max_parallel: 4 }
   - use: local
 ```
+
+For a daemon at another address, or other options, add a definition of your own in the team repo or in `~/.teamai/drivers/`, as the examples below do.
 
 A workflow needs nothing Paseo-specific:
 
