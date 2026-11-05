@@ -792,6 +792,24 @@ describe('a prompt attempt in a container', () => {
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
   });
 
+  it('ends an exec it cannot record the end of once, failed and naming the record, never first as exited', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; while [ ! -f release ]; do sleep 0.05; done; echo finished'] });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
+    fs.writeFileSync(record, '{"handle":');
+    fs.writeFileSync(path.join(at.worktree, 'release'), '');
+
+    expect(await connection.next(ended(op), 10_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(connection.messages.filter(ended(op))).toHaveLength(1);
+  });
+
   it('collects with the work already at its host path, and close removes the container', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
