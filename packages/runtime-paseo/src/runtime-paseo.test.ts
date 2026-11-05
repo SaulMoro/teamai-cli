@@ -538,6 +538,42 @@ describe('teamai-runtime-paseo', () => {
     expect(await restarted.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
   });
 
+  it('answers a cancel that comes while Paseo still creates the agent within 15 s of reading it, cancel_failed, since the agent may still start', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 30_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    const asked = Date.now();
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed',
+      failure: { code: 'cancel_failed', message: `Paseo did not finish creating the claude agent ${agentIdOf(OpIdSchema.parse('op-0000000b'))} within 10 s, so it may still start in the worktree; cancel the run again.` },
+    });
+    expect(Date.now() - asked).toBeLessThan(15_000);
+  }, 40_000);
+
+  it('answers a close whose archive Paseo does not answer close_failed within 10 s, and keeps the attempt to close again', async () => {
+    behave({ archive_ms: 30_000 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const workspace = worktreeWorkspace();
+    const asked = Date.now();
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({
+      event: 'close_failed', handle,
+      failure: { code: 'close_failed', message: `Paseo did not answer the archive of workspace worktree (${String(workspace)}) within 10 s. Its agents may still run; archive it in the Paseo app.` },
+    });
+    expect(Date.now() - asked).toBeLessThan(12_000);
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ event: 'alive', handle });
+  }, 40_000);
+
   it('ends a cancel Paseo does not answer cancel_failed within 10 s, inside the 15 s teamai gives it', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy', refuse_cancel_ms: 40_000 });
     const runtime = start();
