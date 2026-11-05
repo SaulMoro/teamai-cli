@@ -689,6 +689,9 @@ describe('teamai-runtime-t3', () => {
 
       expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted')).toEqual({ event: 'closed', handle });
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      // The prompt it stopped ends once, before the place is forgotten.
+      const events = runtime.lines.filter((line) => line['op'] === 'op-0000001f' || line['event'] === 'closed').map((line) => line['event']);
+      expect(events).toEqual(['accepted', 'display', 'cancelled', 'closed']);
     });
 
     it('stops every thread of the place at once when teamai closes it, within the close bound', async () => {
