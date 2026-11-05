@@ -79,7 +79,7 @@ export interface StepRuntime {
    * names of the `credentials` its definition gives it. In `recover` mode it only answers for the handles it recorded.
    */
   init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials }): Promise<Initialized>;
-  /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it. */
+  /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open` rejects with its error. */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
   /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */

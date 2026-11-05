@@ -247,6 +247,21 @@ function exec(request) {
     return;
   }
 
+  // An exec a toy before this one started is answered from its record when its group ends, never run again. A cancel
+  // of it says it ended.
+  if (record?.pgid !== undefined) {
+    send({ op: request.op, event: 'accepted' });
+    const wait = setInterval(() => {
+      if (groupAlive(record.pgid)) return;
+      clearInterval(wait);
+
+      if (fs.existsSync(file('cancel', request.op))) return;
+      send({ op: request.op, event: 'failed', failure: { code: 'runtime_lost', message: `The toy lost exec ${request.op}.` } });
+    }, 25);
+
+    return;
+  }
+
   noteCredentials(request, request.handle);
   // `path` is a directory of the toy's own tools, first on the PATH of what it runs, as an image that ships its tools.
   const env = { ...process.env, ...(options.path && { PATH: `${options.path}${path.delimiter}${process.env.PATH ?? ''}` }), ...request.env, ...request.credentials };
