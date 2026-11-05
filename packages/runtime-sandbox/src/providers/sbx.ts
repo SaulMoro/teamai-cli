@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
-import { sandboxName, STOP_MS, type ExecEnd, type Provider } from '../provider.js';
+import { COMMAND_MS, sandboxName, type ExecEnd, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
@@ -56,7 +56,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
   const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
 
   const find: Provider['find'] = async (key) => {
-    const ran = await cli(['ls', '--json']);
+    const ran = await cli(['ls', '--json'], { timeoutMs: COMMAND_MS });
     const name = sandboxName(key);
     const names = ran.kind === 'ran' && ran.code === 0 ? namesListed(ran.stdout) : undefined;
 
@@ -66,7 +66,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
   };
 
   const remove = async (name: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
-    const removed = await cli(['rm', '--force', name]);
+    const removed = await cli(['rm', '--force', name], { timeoutMs: COMMAND_MS });
 
     if (removed.kind === 'ran' && (removed.code === 0 || /not found/i.test(removed.stderr))) return { ok: true };
 
@@ -153,7 +153,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
     },
 
     async stop(id) {
-      const stopped = await cli(['stop', id], { timeoutMs: STOP_MS });
+      const stopped = await cli(['stop', id], { timeoutMs: COMMAND_MS });
 
       if (stopped.kind === 'ran' && stopped.code === 0) return { ok: true };
 
@@ -163,5 +163,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
     destroy: remove,
 
     display: (key) => ({ label: `${sandboxName(key)} (sbx)`, fields: { sandbox: sandboxName(key), agent: path.basename(agent) } }),
+
+    removal: (place) => `remove it with \`sbx rm --force ${sandboxName(place)}\``,
   };
 }
