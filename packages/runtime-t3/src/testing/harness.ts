@@ -102,6 +102,8 @@ export interface FakeT3Config {
   decisionRefused?: boolean;
   /** T3 answers a sign-in decision with a redirect that carries no code. */
   decisionNoCode?: boolean;
+  /** How long a sign-in decision takes to answer, in ms. */
+  decisionMs?: number;
   /** The `t3` command fails with this exit status, saying why on stderr. */
   commandFails?: number;
 }
