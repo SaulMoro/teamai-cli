@@ -1496,6 +1496,23 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toHaveLength(1);
     });
 
+    // teamai may close a place it opened before the open answered: close waits for the open, then removes what it made.
+    it('closes a place only once its open finished, leaving no record of it', async () => {
+      t3.config({ projectsMs: 2_000 });
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await runtime.next((line) => line['type'] === 'init');
+      runtime.send({ type: 'open', op: 'op-00000072', run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      const handle = z.string().parse((await runtime.next((line) => line['op'] === 'op-00000072'))['handle']);
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted', 15_000)).toEqual({ event: 'closed', handle });
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000072').map((line) => line['event'])).toEqual(['accepted', 'ready']);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'gone', handle });
+    });
+
     it('answers reattach of a closed place gone', async () => {
       const { runtime, handle } = await opened();
       runtime.send({ type: 'collect', handle });
@@ -1669,6 +1686,23 @@ describe('teamai-runtime-t3', () => {
       expect(fs.existsSync(copy)).toBe(false);
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
+
+    // A close that comes while T3 launches the judge's thread waits for the launch, then stops what it started.
+    it('stops a judge whose launch was still under way when teamai closed its place, and leaves no thread running', async () => {
+      t3.config({ agent: { hold: true, reply: JSON.stringify(REPLY) }, launchMs: 3_000 });
+      const { runtime, handle } = await opened();
+      runtime.send(judge(handle, 'op-000000a9'));
+      await runtime.next((line) => line['op'] === 'op-000000a9' && line['event'] === 'accepted');
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle, 15_000)).toEqual({ event: 'closed', handle });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(t3.threads()).toHaveLength(1);
+      expect(t3.threads()[0]?.status).not.toBe('running');
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'gone', handle });
+    }, 30_000);
 
     it('fails a judge whose reply is not JSON, naming its thread by its link', async () => {
       t3.config({ agent: { reply: 'I think it passes.' } });

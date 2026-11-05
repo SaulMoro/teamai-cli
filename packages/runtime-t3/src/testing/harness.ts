@@ -92,6 +92,8 @@ export interface FakeT3Config {
   launchMs?: number;
   /** A launch launches its thread, then its reply never comes: the call fails as a lost connection does, not as a refusal. */
   launchReplyLost?: boolean;
+  /** How long the project list takes to answer, in ms. */
+  projectsMs?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
