@@ -23,12 +23,15 @@ type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
 //  teamai's worktree, so a person sees and steers it in Paseo. It runs no command (`can.exec: false`): command steps
 //  and setup go to the next runtime in the definition. teamai keeps the result file, the commit, the push and scoring.
 //
-//    open      workspaces.open(worktree), once per attempt            handle: <workspace id>/<attempt>
-//    prompt    agents.create({ agentId: uuid(op), idempotencyKey: op, tool's default mode, teamai's prompt })
-//              then wait: idle → the result file and the tool's session id, permission → a person answers it in the
+//    open      accepted at once, handle: worktree/<run>/<attempt>; then workspaces.open(worktree), once per attempt,
+//              and ready with the workspace
+//    prompt    accepted once journaled, then agents.create({ agentId: uuid(op), idempotencyKey: op, tool's default mode,
+//              teamai's prompt }), and a display event with the agent once it exists; then wait: idle → the result file and the tool's session id, permission → a person answers it in the
 //              app (attended) or the step fails naming the mode (unattended), closed without a result → the daemon
 //              restarted, and the attempt fails with its work kept
-//    cancel    recorded first, then the agent is cancelled: Paseo reports a cancelled agent as idle
+//    cancel    recorded first, then the agent is cancelled: Paseo reports a cancelled agent as idle. A stop it cannot
+//              confirm within 10 s ends cancel_failed, which a later cancel tries again
+//    recover   init only to stop what it ran: no sign-in or tool check, and the daemon reached only for a cancel or close
 //    confined  a judge: a fresh agent whose cwd is the prompt's directory, briefed to read only it, in a mode that asks
 //              before it edits or runs anything; any request for permission ends it. Its answer is its last message,
 //              reported best-effort: nothing stops a read outside the directory
