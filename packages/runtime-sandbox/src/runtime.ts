@@ -674,8 +674,9 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
       return;
     }
 
-    // The sandbox is gone, so an op answered here but run by no live process ended with it.
-    for (const follower of followers.values()) if (follower.handle === handle) follower.end({ state: 'cancelled' });
+    // The sandbox is gone, so an op answered here but run by no live process ended with it, unless its runner recorded
+    // its own end since this process last looked.
+    for (const [op, follower] of followers) if (follower.handle === handle) follower.end(journal.exec(op)?.outcome ?? { state: 'cancelled' });
     journal.forget(handle);
     write({ event: 'closed', handle });
   };
