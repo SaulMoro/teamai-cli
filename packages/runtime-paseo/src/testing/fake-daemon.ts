@@ -76,6 +76,8 @@ const BehaviourSchema = z.object({
   stop_lag_ms: z.number().int().nonnegative().default(0),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
+  /** How long the daemon takes to list a provider's models, as a provider SDK that is slow to start does. */
+  models_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to open a workspace, as a slow host does. */
   open_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to create an agent, as a provider that is slow to start does. */
@@ -334,13 +336,19 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
     fs.appendFileSync(path.join(state, 'requests.jsonl'), `${JSON.stringify(message)}\n`);
   };
 
-  /** The requests already held for the delay `open_ms` or `create_ms` gives them. */
+  /** The requests `requests.jsonl` keeps. */
+  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request']);
+
+  /** The requests already held for the delay `models_ms`, `open_ms`, `create_ms` or `archive_ms` gives them. */
   const held = new WeakSet<Inbound>();
 
   function handle(message: Inbound, reply: (message: Reply) => void): void {
-    const { open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
-    const holds: Partial<Record<Inbound['type'], number>> = { open_project_request: opening, 'agent.create.request': creating, archive_workspace_request: archiving };
+    const { models_ms: listing, open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
+    const holds: Partial<Record<Inbound['type'], number>> = { list_provider_models_request: listing, open_project_request: opening, 'agent.create.request': creating, archive_workspace_request: archiving };
     const hold = holds[message.type] ?? 0;
+
+    // Recorded as it arrives, so a test sees a create the daemon still holds.
+    if (!held.has(message) && RECORDED.has(message.type)) record(message);
 
     if (hold > 0 && !held.has(message)) {
       held.add(message);
@@ -411,7 +419,6 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
       }
 
       case 'agent.create.request': {
-        record(message);
         const { requestId: _requestId, ...intent } = message;
         const fingerprint = JSON.stringify(intent);
         const key = message.idempotencyKey;
@@ -509,7 +516,6 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
       }
 
       case 'cancel_agent_request': {
-        record(message);
         const agent = kept.agents[message.agentId];
         const { refuse_cancel: refused, refuse_cancel_ms: refusing } = behaviour();
 
@@ -527,7 +533,6 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
       }
 
       case 'archive_workspace_request': {
-        record(message);
         const refused = behaviour().refuse_archive;
 
         // Paseo deletes only worktrees it created, so archiving teamai's leaves the directory in place.

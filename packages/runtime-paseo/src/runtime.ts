@@ -9,13 +9,36 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
-import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type Model, type PaseoTool } from './daemon.js';
+import type { AgentCreate, AgentPrompt, Journal, Place, PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
 type WorktreePlace = Extract<Place, { kind: 'worktree' }> & { workspace: NonNullable<Place['workspace']> };
 
 type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
+
+/**
+ * A prompt this process follows: what wakes its waits when teamai stops it, whether its agent exists, and its create,
+ * which `landed` settles once no create of it can still be sent.
+ */
+interface Following {
+  stop: () => void;
+  stopped: Promise<'stopped'>;
+  created: boolean;
+  creating: Promise<void>;
+  landed: () => void;
+}
+
+/** How a prompt's agent is launched: in which place and mode, with what prompt and options, and where its answer comes from. */
+interface Launch {
+  place: Place;
+  modeId: string;
+  prompt: string;
+  options?: AgentCreate['config']['options'];
+  env?: AgentCreate['env'];
+  answer: AgentPrompt['answer'];
+  cwd: string;
+}
 
 // ─── teamai-runtime-paseo ────────────────────────────────
 //
@@ -25,7 +48,8 @@ type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
 //
 //    open      accepted at once, handle: worktree/<run>/<attempt>; then workspaces.open(worktree), once per attempt,
 //              and ready with the workspace
-//    prompt    accepted once journaled, then agents.create({ agentId: uuid(op), idempotencyKey: op, tool's default mode,
+//    prompt    accepted once journaled pending, before Paseo is asked anything; then the tool's models, a judge's
+//              workspace, and agents.create({ agentId: uuid(op), idempotencyKey: op, tool's default mode,
 //              teamai's prompt }), and a display event with the agent once it exists; then wait: idle → the result file and the tool's session id, permission → a person answers it in the
 //              app (attended) or the step fails naming the mode (unattended), closed without a result → the daemon
 //              restarted, and the attempt fails with its work kept
@@ -219,10 +243,10 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   };
 
   /**
-   * The prompts this process follows, each with what stops its wait when teamai cancels it, whether its agent exists,
-   * and the create that settles once Paseo answered it.
+   * The prompts this process follows from their acceptance, each with what wakes its waits when teamai stops it, whether
+   * its agent exists, and its create, which settles once no create of it can still be sent.
    */
-  const waiting = new Map<OpId, { stop: () => void; created: boolean; creating: Promise<void> }>();
+  const waiting = new Map<OpId, Following>();
   /** The prompts whose stop this process runs, and settles; one another process stops is settled when it journals the end. */
   const stopping = new Set<OpId>();
   /** The worktrees this process is opening as Paseo workspaces, by handle: a close waits for its open to end. */
@@ -258,11 +282,31 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
   };
 
+  /** Follows a prompt from here on: a cancel and a close find it, and wait for its create. */
+  const track = (op: OpId): Following => {
+    let stop = (): void => {};
+
+    const stopped = new Promise<'stopped'>((resolve) => {
+      stop = () => resolve('stopped');
+    });
+
+    let landed = (): void => {};
+
+    const creating = new Promise<void>((resolve) => {
+      landed = resolve;
+    });
+
+    const following: Following = { stop, stopped, created: false, creating, landed };
+    waiting.set(op, following);
+
+    return following;
+  };
+
   /** Records how a prompt ended and tells teamai, once. */
   const settle = (op: OpId, outcome: OpState): void => {
     const record = journal.prompt(op);
 
-    if (record?.kind !== 'agent') return;
+    if (!record || record.kind === 'refused') return;
 
     // Another process ended it first, as a recover-mode cancel does: a prompt this one follows ends as that one recorded.
     if (record.outcome) {
@@ -352,8 +396,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   };
 
   /** Accepts a prompt, showing its agent when that is known to exist; one still to be created is shown once it is. */
-  const accept = (op: OpId, record: AgentPrompt, live: Daemon, { exists }: { exists: boolean }): void => {
-    const display = exists && shownOf(record, live);
+  const accept = (op: OpId, record: PromptRecord, live: Daemon, { exists }: { exists: boolean }): void => {
+    const display = exists && record.kind === 'agent' && shownOf(record, live);
     write({ op, event: 'accepted', ...(display && { display }) });
   };
 
@@ -475,16 +519,10 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     write({ op, event: 'ready', ...(display && { display }) });
   }
 
-  /** The create a new prompt sends, in `launch`'s mode with its prompt and options, or the failure that keeps it from being sent. */
-  async function createFor(
-    live: Daemon,
-    request: Extract<RuntimeRequest, { type: 'prompt' }>,
-    tool: PaseoTool,
-    launch: { place: Place; modeId: string; prompt: string; options?: AgentCreate['config']['options']; env?: AgentCreate['env'] },
-  ): Promise<AgentCreate | RuntimeFailure> {
-    const { place } = launch;
+  /** The create a new prompt sends, on one of `models`, in `how`'s mode with its prompt and options, or the failure that keeps it from being sent. */
+  function createFor(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, tool: PaseoTool, models: Model[], how: Launch): AgentCreate | RuntimeFailure {
+    const { place } = how;
     const { lease } = request;
-    const models = await live.models(tool);
     const offered = models.map((candidate) => candidate.id).join(', ') || 'none';
     // The step's model, or the agent definition's, which teamai sends as the lease's; else the tool's default. A step that
     // names a model runs on it, or fails: it never runs on the default instead.
@@ -504,11 +542,70 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       agentId: agentIdOf(request.op),
       idempotencyKey: request.op,
       title: `teamai ${lease.step} · ${place.run}`,
-      prompt: launch.prompt,
+      prompt: how.prompt,
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}` },
-      ...(launch.env && { env: launch.env }),
-      config: { provider: `${tool}/${model.id}`, modeId: launch.modeId, ...(effort && { thinkingOptionId: effort }), ...(launch.options && { options: launch.options }) },
+      ...(how.env && { env: how.env }),
+      config: { provider: `${tool}/${model.id}`, modeId: how.modeId, ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
     };
+  }
+
+  /**
+   * Accepts a new prompt before Paseo is asked anything, which may take long: a model listing alone may take 90 s, and
+   * teamai waits 15 s for the acceptance. It is journaled pending and followed from here, so a cancel or a close finds it.
+   */
+  const begin = (op: OpId, handle: string): Following => {
+    journal.savePrompt(op, { kind: 'pending', handle });
+    const following = track(op);
+    write({ op, event: 'accepted' });
+
+    return following;
+  };
+
+  /**
+   * Whether a prompt whose create is not sent yet goes on to send it: not once teamai went away, nor once it was
+   * cancelled, here or by another process, or its place closes, which ends it cancelled with no agent.
+   */
+  const goesOn = (op: OpId): boolean => {
+    if (closing) return false;
+
+    if (!journal.isCancelled(op)) return true;
+    settle(op, { op, state: 'cancelled' });
+
+    return false;
+  };
+
+  /** The tool's models, or why Paseo did not list them, or `stopped` once the prompt is stopped: a listing changes nothing in Paseo, so no stop waits for it. */
+  const listModels = async (live: Daemon, tool: PaseoTool, following: Following): Promise<Model[] | RuntimeFailure | 'stopped'> => {
+    try {
+      return await Promise.race([live.models(tool), following.stopped]);
+    } catch (error) {
+      return { code: 'paseo_failed', message: `Paseo failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  };
+
+  /**
+   * Creates a pending prompt's agent on one of the tool's models, and follows it. Its agent record is journaled before
+   * the cancel marker is read, so a cancel, here or in another process, either finds that record and stops the agent, or
+   * is seen here, and no create is sent.
+   */
+  async function launch(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, following: Following, tool: PaseoTool, how: Launch): Promise<void> {
+    const { op } = request;
+    const models = await listModels(live, tool, following);
+
+    if (!goesOn(op) || models === 'stopped') return;
+    const create = 'code' in models ? models : createFor(live, request, tool, models, how);
+
+    if ('code' in create) {
+      settle(op, { op, state: 'failed', failure: create });
+
+      return;
+    }
+
+    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: how.answer, cwd: how.cwd, create };
+    journal.savePrompt(op, record);
+
+    if (!goesOn(op)) return;
+    await follow(live, op, record, following);
   }
 
   /** Records a prompt refused before any agent was created, so a repeated id ends the same, and says why. */
@@ -536,21 +633,42 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    const create = await createFor(live, request, tool, {
-      place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
-      options: stepGrant(tool, lease.result, place.runDir),
+    const following = begin(op, request.handle);
+
+    try {
+      await launch(live, request, following, tool, {
+        place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
+        options: stepGrant(tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result }, cwd: place.cwd,
+      });
+    } finally {
+      following.landed();
+    }
+  }
+
+  /**
+   * Opens a confined prompt's directory as its place's workspace, and journals it there. It is kept with the worktree
+   * opens, so a close waits for it and archives the workspace, though the prompt that asked for it was stopped.
+   */
+  const adopt = (live: Daemon, handle: string, place: ConfinedPlace, dir: string): Promise<Awaited<ReturnType<Daemon['workspace']>> | RuntimeFailure> => {
+    const adopting = (async () => {
+      try {
+        const workspace = await live.workspace(dir);
+        journal.savePlace(handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
+
+        return workspace;
+      } catch (error) {
+        return { code: 'workspace_failed', message: `Paseo could not open the confined prompt's directory as a workspace: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    })();
+
+    const settled = adopting.then(() => undefined);
+    opens.set(handle, settled);
+    void settled.then(() => {
+      if (opens.get(handle) === settled) opens.delete(handle);
     });
 
-    if ('code' in create) {
-      refuse(op, request.handle, create);
-
-      return;
-    }
-
-    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: { kind: 'result-file', file: lease.result }, cwd: place.cwd, create };
-    journal.savePrompt(op, record);
-    await follow(live, op, record);
-  }
+    return adopting;
+  };
 
   /** A confined prompt: a fresh agent whose cwd is its directory, briefed to read only it, that answers in its last message. */
   async function judge(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, confined: ConfinedPrompt, place: ConfinedPlace): Promise<void> {
@@ -581,33 +699,32 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    const modeId = CONFINED_MODES[tool];
+    const following = begin(op, request.handle);
 
-    let workspace = place.workspace && { ...place.workspace, directory: confined.dir };
+    try {
+      let workspace = place.workspace && { ...place.workspace, directory: confined.dir };
 
-    if (!workspace) {
-      try {
-        workspace = await live.workspace(confined.dir);
-      } catch (error) {
-        refuse(op, request.handle, { code: 'workspace_failed', message: `Paseo could not open the confined prompt's directory as a workspace: ${error instanceof Error ? error.message : String(error)}` });
+      if (!workspace) {
+        const adopted = await Promise.race([adopt(live, request.handle, place, confined.dir), following.stopped]);
 
-        return;
+        if (!goesOn(op) || adopted === 'stopped') return;
+
+        if ('code' in adopted) {
+          settle(op, { op, state: 'failed', failure: adopted });
+
+          return;
+        }
+
+        workspace = adopted;
       }
 
-      journal.savePlace(request.handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
+      await launch(live, request, following, tool, {
+        place, modeId: CONFINED_MODES[tool], prompt: confinedBrief(tool, confined, lease.prompt), options: CONFINED_OPTIONS[tool],
+        answer: { kind: 'reply', kept: CONFINED_KEPT }, cwd: workspace.directory,
+      });
+    } finally {
+      following.landed();
     }
-
-    const create = await createFor(live, request, tool, { place, modeId, prompt: confinedBrief(tool, confined, lease.prompt), options: CONFINED_OPTIONS[tool] });
-
-    if ('code' in create) {
-      refuse(op, request.handle, create);
-
-      return;
-    }
-
-    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: { kind: 'reply', kept: CONFINED_KEPT }, cwd: workspace.directory, create };
-    journal.savePrompt(op, record);
-    await follow(live, op, record);
   }
 
   async function prompt(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>): Promise<void> {
@@ -629,11 +746,15 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    if (known) {
-      await follow(live, op, known);
+    if (known?.kind === 'agent') {
+      const following = track(op);
+      accept(op, known, live, { exists: false });
+      await follow(live, op, known, following);
 
       return;
     }
+
+    // New, or pending in a runtime that died before it sent a create: launched from the start.
 
     const place = journal.place(request.handle);
     const { confined } = request;
@@ -659,24 +780,9 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   }
 
   /** Makes sure the prompt's agent exists, then waits for it to end, and settles the prompt. */
-  async function follow(live: Daemon, op: OpId, record: AgentPrompt): Promise<void> {
+  async function follow(live: Daemon, op: OpId, record: AgentPrompt, following: Following): Promise<void> {
     const { create } = record;
-    let stop: () => void = () => {};
-
-    const stopped = new Promise<'stopped'>((resolve) => {
-      stop = () => resolve('stopped');
-    });
-
-    let created: () => void = () => {};
-
-    const creating = new Promise<void>((resolve) => {
-      created = resolve;
-    });
-
-    const following = { stop, created: false, creating };
-    waiting.set(op, following);
-    // Accepted once the agent's create is journaled, before Paseo creates it, which may take long: teamai waits 15 s.
-    accept(op, record, live, { exists: false });
+    const { stopped } = following;
 
     try {
       // The agent of a repeated prompt is found by its id; a create a runtime died before sending is sent again.
@@ -700,7 +806,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         return;
       }
     } finally {
-      created();
+      following.landed();
     }
 
     const display = shownOf(record, live);
@@ -860,21 +966,35 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     const deadline = Date.now() + STOP_SETTLE_MS;
     const found = journal.prompt(op);
 
-    if (found?.kind !== 'agent') return;
-    const { outcome, ...record } = found;
+    if (!found || found.kind === 'refused') return;
+    const { outcome } = found;
 
     // Only a stop that failed is tried again; until it is confirmed or fails again, reattach reports the prompt running.
     if (outcome && !(outcome.state === 'failed' && outcome.failure.code === CANCEL_FAILED)) return;
 
-    if (outcome) journal.savePrompt(op, record);
+    if (outcome) journal.savePrompt(op, { ...found, outcome: undefined });
     journal.cancel(op);
     const following = waiting.get(op);
     stopping.add(op);
 
     try {
-      // A prompt whose agent is still being created is stopped once it exists, within the same deadline: past it, the
-      // agent may still start.
-      if (following && !following.created && (await Promise.race([following.creating, late(deadline)])) === 'late') {
+      // A prompt that has not sent its create sees the cancel, and sends none. One whose agent is still being created is
+      // stopped once it exists, within the same deadline: past it, the agent may still start.
+      following?.stop();
+      const joined = following && !following.created ? await Promise.race([following.creating, late(deadline)]) : undefined;
+      const record = journal.prompt(op);
+
+      // It ended meanwhile: a create Paseo refused, or a prompt that saw the cancel before it sent a create.
+      if (!record || record.kind === 'refused' || record.outcome) return;
+
+      // No create was sent, and none will be: whoever launches it reads the cancel after it journals the agent.
+      if (record.kind === 'pending') {
+        settle(op, { op, state: 'cancelled' });
+
+        return;
+      }
+
+      if (joined === 'late') {
         settle(op, {
           op, state: 'failed',
           failure: { code: CANCEL_FAILED, message: `Paseo did not finish creating the ${record.tool} agent ${record.create.agentId} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; cancel the run again.` },
@@ -883,8 +1003,6 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         return;
       }
 
-      // A create Paseo refused ended the prompt with no agent to stop.
-      if (journal.prompt(op)?.outcome) return;
       const live = await reach();
 
       const refused = live && !('code' in live)
@@ -914,20 +1032,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   async function stopPlace(live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | undefined> {
     // A confined prompt's place before its prompt came: no workspace, so no agent.
     if (!place.workspace) return undefined;
-    const prompts = journal.promptsOf(handle);
-
-    // A prompt is accepted before Paseo creates its agent: one still being created is stopped once it exists.
-    const creating = prompts.flatMap(({ op }) => {
-      const following = waiting.get(op);
-
-      return following && !following.created ? [following.creating] : [];
-    });
-
-    if (creating.length > 0 && (await Promise.race([Promise.all(creating), late(deadline)])) === 'late') {
-      return { code: 'close_failed', message: `Paseo did not finish creating an agent of ${handle} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; close the attempt again.` };
-    }
-
-    const agents = prompts.flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
+    const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
     if (!journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record, deadline)))).flatMap((failure) => (failure ? [failure.message] : []));
@@ -973,11 +1078,36 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
    */
   async function closePlace(handle: string): Promise<void> {
     const deadline = Date.now() + STOP_SETTLE_MS;
+    const prompts = journal.promptsOf(handle);
+
+    // A prompt that has not sent its create yet ends cancelled, and never sends it: the place it would run in closes.
+    for (const { op, record } of prompts) {
+      if (record.kind === 'pending' && !record.outcome) {
+        journal.cancel(op);
+        waiting.get(op)?.stop();
+      }
+    }
+
     const opening = opens.get(handle);
 
-    // A place whose worktree Paseo is still opening is closed once its workspace is known, so the workspace is archived.
+    // A place whose worktree, or judge's directory, Paseo is still opening is closed once its workspace is known, so the
+    // workspace is archived.
     if (opening && (await Promise.race([opening, late(deadline)])) === 'late') {
       write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: `Paseo did not open the worktree of ${handle} as a workspace within ${STOP_SETTLE_MS / 1000} s; close the attempt again.` } });
+
+      return;
+    }
+
+    // A prompt is accepted before Paseo creates its agent: the close waits until none can still send a create, so one
+    // being created is stopped once it exists.
+    const creating = prompts.flatMap(({ op }) => {
+      const following = waiting.get(op);
+
+      return following && !following.created ? [following.creating] : [];
+    });
+
+    if (creating.length > 0 && (await Promise.race([Promise.all(creating), late(deadline)])) === 'late') {
+      write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: `Paseo did not finish creating an agent of ${handle} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; close the attempt again.` } });
 
       return;
     }
