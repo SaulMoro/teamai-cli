@@ -8,12 +8,13 @@ import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
 //  What this runtime keeps across its own restarts, in a directory on the host:
 //
 //    places/<handle>.json   the attempt a handle opened and its sandbox id
+//    places/<handle>/<op>   one empty file per op of the handle, so a handle's ops are found without reading another's
 //    ops/<op>.json          an exec or a judge's prompt: its handle, the runtime process running it, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the sandbox is stopped
 //
 //  A runtime outlives its stdin while an exec runs, so an exec that ends while teamai is down still records its
-//  outcome; a runtime started again answers a repeated id and a reattach from these files. Each is written to a
-//  temporary path and renamed into place. `close` removes a handle's files.
+//  outcome; a runtime started again answers a repeated id and a reattach from these files. Each is written to
+//  `<record>.<pid>.tmp` and renamed into place. `close` removes a handle's files, a write a crash left unrenamed included.
 //
 
 const [, exited, finished, cancelled, failed] = OpStateSchema.options;
@@ -61,40 +62,60 @@ function write(file: string, value: PlaceRecord | ExecRecord): void {
 
 export function journal(root: string) {
   const placeFile = (handle: string): string => path.join(root, 'places', `${encodeURIComponent(handle)}.json`);
+  const indexDir = (handle: string): string => path.join(root, 'places', encodeURIComponent(handle));
   const opFile = (op: string): string => path.join(root, 'ops', `${op}.json`);
   const cancelFile = (op: string): string => path.join(root, 'ops', `${op}.cancel`);
 
-  const opsOf = (handle: string): Array<{ op: OpId; record: ExecRecord }> => {
-    const dir = path.join(root, 'ops');
-    const names = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  /** The ops the handle's index names: only their records are read, so another attempt's damaged one never blocks it. */
+  const indexed = (handle: string): OpId[] => {
+    const dir = indexDir(handle);
 
-    return names.sort().flatMap((name) => {
-      const op = OpIdSchema.safeParse(name.replace(/\.json$/, ''));
-      const record = name.endsWith('.json') && op.success ? read(path.join(dir, name), ExecRecordSchema) : undefined;
+    return (fs.existsSync(dir) ? fs.readdirSync(dir) : []).sort().flatMap((name) => {
+      const op = OpIdSchema.safeParse(name);
 
-      return op.success && record?.handle === handle ? [{ op: op.data, record }] : [];
+      return op.success ? [op.data] : [];
     });
+  };
+
+  /** The handle's ops with their records; a record of the handle that cannot be read fails, never taken as absent. */
+  const opsOf = (handle: string): Array<{ op: OpId; record: ExecRecord }> => indexed(handle).flatMap((op) => {
+    const record = read(opFile(op), ExecRecordSchema);
+
+    return record?.handle === handle ? [{ op, record }] : [];
+  });
+
+  /** Removes `files`, and each one's `<file>.<pid>.tmp` a crash left before its rename. */
+  const remove = (files: string[]): void => {
+    for (const dir of new Set(files.map((file) => path.dirname(file)))) {
+      for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+        const file = path.join(dir, name);
+
+        if (files.includes(file.replace(/\.\d+\.tmp$/, ''))) fs.rmSync(file, { force: true });
+      }
+    }
   };
 
   return {
     place: (handle: string): PlaceRecord | undefined => read(placeFile(handle), PlaceRecordSchema),
     savePlace: (handle: string, place: PlaceRecord): void => write(placeFile(handle), place),
     exec: (op: OpId): ExecRecord | undefined => read(opFile(op), ExecRecordSchema),
-    saveExec: (op: OpId, record: ExecRecord): void => write(opFile(op), record),
+    saveExec: (op: OpId, record: ExecRecord): void => {
+      // Indexed before it is written, so no record of the handle is ever left out of its index.
+      fs.mkdirSync(indexDir(record.handle), { recursive: true });
+      fs.writeFileSync(path.join(indexDir(record.handle), op), '');
+      write(opFile(op), record);
+    },
     opsOf,
     cancel: (op: OpId): void => {
       fs.mkdirSync(path.dirname(cancelFile(op)), { recursive: true });
       fs.writeFileSync(cancelFile(op), '');
     },
     isCancelled: (op: OpId): boolean => fs.existsSync(cancelFile(op)),
-    /** Removes everything kept for `handle`. */
+    /** Removes everything kept for `handle`, its place last, so a close a crash interrupted is made again. */
     forget(handle: string): void {
-      for (const { op } of opsOf(handle)) {
-        fs.rmSync(opFile(op), { force: true });
-        fs.rmSync(cancelFile(op), { force: true });
-      }
-
-      fs.rmSync(placeFile(handle), { force: true });
+      remove(indexed(handle).flatMap((op) => [opFile(op), cancelFile(op)]));
+      fs.rmSync(indexDir(handle), { recursive: true, force: true });
+      remove([placeFile(handle)]);
     },
   };
 }
