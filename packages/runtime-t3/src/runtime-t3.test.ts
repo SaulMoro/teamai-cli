@@ -1446,6 +1446,20 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.status).toBe('running');
     });
 
+    // The record it cannot read may be another place's: the cancel still stands, so the prompt it cancelled launches nothing.
+    it('launches nothing for a prompt teamai cancelled while another place\'s record could not be read', async () => {
+      const { runtime, handle } = await opened();
+      const other = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', 't3-rother-a0000000.json');
+      fs.writeFileSync(other, '{broken');
+
+      runtime.send({ type: 'cancel', op: 'op-00000076' });
+      expect(await runtime.next((line) => line['op'] === 'op-00000076')).toEqual({ op: 'op-00000076', event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(other) } });
+      runtime.send(prompt(handle, 'op-00000076'));
+
+      expect(await ended(runtime, 'op-00000076')).toEqual({ op: 'op-00000076', event: 'cancelled' });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+    });
+
     // Only a confirmed stop ends an op cancelled, never a mark that teamai cancelled it before the runtime saw its prompt.
     it('stops the thread a record names before it ends cancelled a prompt teamai cancelled while that record was missing', async () => {
       t3.config({ agent: { hold: true, output: {} } });
