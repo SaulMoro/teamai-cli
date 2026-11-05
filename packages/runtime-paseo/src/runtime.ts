@@ -1141,15 +1141,15 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   /**
    * Why a close keeps a place: a create it sent that Paseo has not shown the agent of, as when the create failed, may still
    * start that agent. A lookup that finds the agent confirms it, so the close stops it; one that finds none, fails or
-   * comes late proves nothing.
+   * comes late proves nothing. Only the person can tell a create Paseo refused, so the failure names the record to delete.
    */
-  const unseen = async (live: Daemon, handle: string, deadline: number): Promise<RuntimeFailure | undefined> => {
+  const unseen = async (live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | undefined> => {
     const sent = journal.promptsOf(handle).flatMap(({ op, record }) => (record.kind === 'agent' && record.dispatched === 'unconfirmed' ? [{ op, record }] : []));
 
     const missing = (await Promise.all(sent.map(async ({ op, record }) => {
       const agent = await Promise.race([live.agent(record.create.agentId).catch(() => undefined), late(deadline)]);
 
-      if (!agent || agent === 'late') return [record];
+      if (!agent || agent === 'late') return [{ op, record }];
       dispatch(op, 'confirmed');
 
       return [];
@@ -1159,7 +1159,11 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     return {
       code: 'close_failed',
-      message: `${missing.map((record) => `Paseo does not show the ${record.tool} agent ${record.create.agentId}, though its create was sent, so that create may still start it in the worktree.`).join(' ')} Look for the agent in the Paseo app and stop it if it runs, then close the attempt again: teamai keeps the attempt until Paseo shows the agent.`,
+      message: missing.map(({ op, record }) => [
+        `Paseo does not show the ${record.tool} agent ${record.create.agentId} yet, though its create was sent, so it may still start in the worktree.`,
+        `Once it appears, run teamai workflow cancel ${place.run} again, which stops it.`,
+        `If it never appears in Paseo, the create was refused: delete ${journal.promptFile(op)} and run teamai workflow cancel ${place.run} again.`,
+      ].join(' ')).join(' '),
     };
   };
 
@@ -1204,7 +1208,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const live = place?.workspace && (await reachBy(deadline));
 
     const failure = place?.workspace && (live && !('code' in live)
-      ? (await unseen(live, handle, deadline)) ?? (await stopPlace(live, handle, place, deadline))
+      ? (await unseen(live, handle, place, deadline)) ?? (await stopPlace(live, handle, place, deadline))
       : withoutDaemon(live, `stop the agents of ${handle} or archive its workspace`, 'close the attempt again'));
 
     if (failure) {
