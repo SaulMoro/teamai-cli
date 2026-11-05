@@ -80,9 +80,6 @@ export const STEP_MODES = ['auto', 'auto-accept-edits', 'approval-required'] as 
 
 export type StepMode = (typeof STEP_MODES)[number];
 
-/** What T3's pages call each mode. */
-export const STEP_MODE_LABELS: Record<StepMode, string> = { auto: 'Auto', 'auto-accept-edits': 'Auto-accept edits', 'approval-required': 'Supervised' };
-
 /** What every thread the runtime launches sets. */
 export interface NewThread {
   title: string;
