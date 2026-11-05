@@ -14,7 +14,8 @@
 //                       milliseconds makes an `exec` whose process was stopped end that much later, as a real exec
 //                       client notices its container stopped only after the stop command returns; a file
 //                       `stop-delay` holding a number of milliseconds makes `restart` (sbx: `stop`) wait that long
-//                       before it stops anything, as a daemon that is slow to answer
+//                       before it stops anything, as a daemon that is slow to answer; a file `delay-<command>`
+//                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first
 //   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
@@ -135,6 +136,9 @@ function delayStop() {
 }
 
 const [command, ...rest] = args;
+const commandDelay = path.join(state, `delay-${command}`);
+
+if (fs.existsSync(commandDelay)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(commandDelay, 'utf8')));
 
 if (command === '--version' || command === 'version') {
   process.stdout.write(`${engine} version 0.0.0-fake\n`);

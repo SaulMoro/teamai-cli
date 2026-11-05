@@ -113,6 +113,8 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
   const pendingStops = new Set<OpId>();
   /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
   const followers = new Map<OpId, { handle: string; end: (outcome: Outcome) => void }>();
+  /** The judges' prompts whose container this process is creating, each with what settles once that creation did. */
+  const creating = new Map<OpId, Promise<unknown>>();
   /** How many ends of each op this process wrote, so a request that throws tells whether it was already answered. */
   const endsWritten = new Map<OpId, number>();
 
@@ -395,21 +397,33 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     // as `1` leaves a reply's numbers as they are.
     const settle = (outcome: Outcome): void => finish(op, handle, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, request.credentials)) } : outcome);
 
-    const created = await judges.create(place, { dir: confined.dir, hosts: judge.hosts });
+    /** The judge's container, or undefined once the prompt settled: its creation failed, or a cancel came meanwhile. */
+    const create = async (): Promise<string | undefined> => {
+      const created = await judges.create(place, { dir: confined.dir, hosts: judge.hosts });
 
-    if (!created.ok) {
-      settle(journal.isCancelled(op) ? { state: 'cancelled' } : { state: 'failed', failure: created.failure });
+      if (!created.ok) {
+        settle(journal.isCancelled(op) ? { state: 'cancelled' } : { state: 'failed', failure: created.failure });
 
-      return;
-    }
+        return undefined;
+      }
 
-    journal.savePlace(handle, { ...place, id: created.id });
+      journal.savePlace(handle, { ...place, id: created.id });
 
-    if (journal.isCancelled(op)) {
-      settle({ state: 'cancelled' });
+      if (!journal.isCancelled(op)) return created.id;
+      // A creation a cancel or a close overtook removes the container it made before it settles; the filter and the
+      // network stay for close.
+      const removed = await provider.destroy(created.id);
+      settle(removed.ok ? { state: 'cancelled' } : { state: 'failed', failure: { code: CANCEL_FAILED, message: removed.failure.message } });
 
-      return;
-    }
+      return undefined;
+    };
+
+    // A close waits for this to settle, however it does, so the removal after it finds whatever the creation made.
+    const creation = create();
+    creating.set(op, creation.catch(() => undefined));
+    const id = await creation.finally(() => creating.delete(op));
+
+    if (id === undefined) return;
 
     const launch = judge.tool.launch({ ...lease, prompt: inEvidenceDir(lease.prompt, confined.dir) }, confined);
     // Only the credentials the judge's own tool reads, less any the prompt withholds.
@@ -417,7 +431,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     let stdout = '';
     let stderr = '';
 
-    const end = await provider.exec(created.id, { argv: launch.argv, env: { ...scoped, ...launch.env, ...request.env }, unset: request.unset, cwd: EVIDENCE_DIR }, (stream, data) => {
+    const end = await provider.exec(id, { argv: launch.argv, env: { ...scoped, ...launch.env, ...request.env }, unset: request.unset, cwd: EVIDENCE_DIR }, (stream, data) => {
       if (stream === 'stdout') stdout += data;
       else stderr = `${stderr}${data}`.slice(-4000);
     });
@@ -543,10 +557,10 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
   };
 
   const close = async (handle: string, provider: Provider): Promise<void> => {
-    const place = journal.place(handle);
+    const ops = journal.opsOf(handle);
 
     // What still runs there is stopped with the sandbox, and ends as cancelled before the place is answered closed.
-    const stopping = journal.opsOf(handle).flatMap(({ op }) => {
+    const stopping = ops.flatMap(({ op }) => {
       const run = running.get(op);
 
       if (run === undefined) return [];
@@ -555,6 +569,9 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
       return [run.ended];
     });
 
+    // A judge's container still being created is waited for first, so the removal finds whatever that creation made.
+    await Promise.all(ops.flatMap(({ op }) => creating.get(op) ?? []));
+    const place = journal.place(handle);
     const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
     const destroyed = !found.ok ? found : found.id === undefined ? { ok: true as const } : await provider.destroy(found.id);
     const removed = destroyed.ok && place?.confined && provider.judges ? await provider.judges.release(place) : destroyed;
