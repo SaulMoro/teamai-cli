@@ -354,11 +354,13 @@ In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so t
 teamai workflow cancel r144a3913136e7b62
 ```
 
-Paseo may answer the cancel before the agent's turn ends, so the step ends `cancelled` only once Paseo reports the agent no longer running. An agent that still runs 10 s later fails the step `cancel_failed` instead:
+Paseo may answer the cancel before the agent's turn ends, so the step ends `cancelled` only once Paseo reports the agent no longer running. An agent that still runs 10 s after the cancel, or a cancel Paseo does not answer in that time, fails the step `cancel_failed` instead, and teamai keeps the attempt and the login:
 
 ```text
 Paseo cancelled the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
+
+Once the agent can stop, run `teamai workflow cancel` again: the runtime tries the stop again, and the step ends `cancelled`.
 
 A teamai killed while an agent works leaves the agent running. `resume` reconnects to the same agent; it does not start a second one:
 
@@ -398,11 +400,13 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 
-A runtime that starts again while the daemon is down still answers for the attempt from what it recorded, and refuses to close it until it reaches the daemon:
+`teamai workflow cancel` after a crash opens the runtime in recover mode. It checks no sign-in, so a tool signed out since does not keep it from stopping the agent, and it reaches the daemon only to cancel the agent and close the attempt. While the daemon is down, the cancel keeps the attempt and the login, and says why:
 
 ```text
-teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of wks_6fb33a5b94531f79/a04485788 or archive its workspace. Start the daemon with `paseo start`, then close the attempt again.
+No Paseo daemon answers at ws://127.0.0.1:6767/ws (no answer in 10 s). Start it with `paseo start`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, which may still run in the worktree; cancel the run again.
 ```
+
+Start the daemon, then run `teamai workflow cancel` again.
 
 ## Errors at start
 
