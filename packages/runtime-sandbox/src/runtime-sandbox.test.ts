@@ -949,6 +949,32 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toEqual({ event: 'gone', handle: HANDLE });
   });
 
+  it('accepts an exec before it looks its sandbox up by its labels, after a runtime died before it kept the sandbox id', async () => {
+    engine.delay('run', 1_500);
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    first.send({ type: 'open', op: newOp(), run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    await first.next((message) => message.event === 'accepted');
+    await vi.waitFor(() => { expect(engine.calls().some(([, command, ...rest]) => command === 'run' && rest.includes(HANDLE))).toBe(true); }, { timeout: 10_000 });
+    // Killed while the engine creates its container: the container lands, and the journal never got its id.
+    first.child.kill('SIGKILL');
+    await first.end();
+    await vi.waitFor(() => { expect(engine.containers()).toEqual([HANDLE]); }, { timeout: 10_000 });
+    engine.delay('run', 0);
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE });
+    engine.delay('ps', 3_000);
+    const op = newOp();
+    const sent = Date.now();
+
+    second.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
+
+    await second.next((message) => message.op === op && message.event === 'accepted');
+    expect(Date.now() - sent).toBeLessThan(2_000);
+    expect(await second.next(ended(op), 30_000)).toEqual({ op, event: 'exited', code: 0, stdout: 'ran\n' });
+  }, 60_000);
+
   it('fails an open when the engine stopped since init, with what it said', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
