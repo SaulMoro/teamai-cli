@@ -1213,9 +1213,10 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    // Its agents stopped: a prompt that has not ended ends cancelled, once, before its record goes.
+    // Its agents stopped: a prompt that has not ended ends cancelled, once, before its record goes. One this process
+    // already ended, and no request of which is still answered, was ended by a failure its record could not keep.
     for (const { op, record } of journal.promptsOf(handle)) {
-      if (record.outcome) continue;
+      if (record.outcome || ((ends.get(op) ?? 0) > 0 && !inFlight.has(op))) continue;
       const following = waiting.get(op);
       settle(op, { op, state: 'cancelled' });
       following?.stop();
@@ -1313,8 +1314,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   };
 
   /**
-   * Records the outcome a failed cancel sends, so a reattach before the retry reports it, when the prompt's record can
-   * still be read and written. One that cannot is only sent, once.
+   * Records the outcome a failed prompt or cancel request sends, so a reattach or a repeated prompt reports it, when the
+   * prompt's record can still be read and written. One that cannot is only sent, once.
    */
   const keep = (op: OpId, outcome: OpState): void => {
     try {
@@ -1422,7 +1423,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           const agent = agentNamed(request.op);
           const failure = agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message };
 
-          if (request.type === 'cancel') keep(request.op, { op: request.op, state: 'failed', failure });
+          keep(request.op, { op: request.op, state: 'failed', failure });
           fail(request.op, failure);
         } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
         else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
