@@ -573,6 +573,28 @@ describe('teamai-runtime-paseo', () => {
     expect(Date.now() - asked).toBeLessThan(15_000);
   }, 40_000);
 
+  it('keeps waiting for a create a timed-out cancel left, so a retried cancel and a close stop its agent once it exists', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 25_000 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await expect.poll(() => received().map((request) => request.type)).toEqual(['agent.create.request']);
+    const stillCreating = { op: 'op-0000000b', event: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/^Paseo did not finish creating the claude agent /) } };
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual(stillCreating);
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual(stillCreating);
+    runtime.send({ type: 'close', handle });
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    const kept = JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { status: string }> };
+    // The agent was created after both cancels, and the close stopped it.
+    expect(Object.values(kept.agents)).toHaveLength(1);
+    expect(Object.values(kept.agents).filter((agent) => agent.status === 'running')).toEqual([]);
+  }, 60_000);
+
   it('answers a close whose archive Paseo does not answer close_failed within 10 s, and keeps the attempt to close again', async () => {
     behave({ archive_ms: 30_000 });
     const runtime = start();
