@@ -678,6 +678,22 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 
+    it('stops every thread of the place at once when teamai closes it, within the close bound', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000006d'));
+      runtime.send(prompt(handle, 'op-0000006e'));
+      await expect.poll(() => t3.threads().map((thread) => thread.status)).toEqual(['running', 'running']);
+      t3.config({ interruptMs: 6_000 });
+      const closedAt = Date.now();
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle, 20_000)).toEqual({ event: 'closed', handle });
+      expect(Date.now() - closedAt).toBeLessThan(10_000);
+      expect(t3.threads().map((thread) => thread.status)).toEqual(['interrupted', 'interrupted']);
+    }, 30_000);
+
     it('answers close_failed, keeping the place, when T3 will not stop a thread still running there', async () => {
       t3.config({ agent: { hold: true, output: {} } });
       const { runtime, handle } = await opened();
@@ -946,6 +962,37 @@ describe('teamai-runtime-t3', () => {
         expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       });
+
+      // A whole close fits 10 s, looking a lost launch up included; past that it keeps the place.
+      it('answers close_failed within the close bound, keeping the place, while T3 is slow to answer the repeated launch', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchMs: 30_000 });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-0000006c'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ launchMs: 16_000 });
+
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+        await runtime.next((line) => line['type'] === 'init');
+        const closedAt = Date.now();
+        runtime.send({ type: 'close', handle: first.handle });
+
+        expect(await runtime.next((line) => line['handle'] === first.handle, 20_000)).toMatchObject({
+          event: 'close_failed', handle: first.handle, failure: { code: 't3_unavailable', message: expect.stringContaining(`"review · teamai ${RUN}" and T3 Code never answered, so it may run, and T3 Code did not say within 10 s whether it launched it`) },
+        });
+        expect(Date.now() - closedAt).toBeLessThan(12_000);
+        runtime.send({ type: 'reattach', handle: first.handle });
+        expect(await runtime.next((line) => line['handle'] === first.handle)).toMatchObject({ event: 'alive', ops: [{ op: 'op-0000006c', state: 'running' }] });
+        expect(t3.threads()[0]?.status).toBe('running');
+
+        t3.config({ launchMs: 0 });
+        runtime.send({ type: 'close', handle: first.handle });
+
+        expect(await runtime.next((line) => line['handle'] === first.handle, 20_000)).toEqual({ event: 'closed', handle: first.handle });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      }, 60_000);
 
       it('keeps the place while T3 Code cannot be reached, and closes it once T3 Code is back', async () => {
         const { runtime, handle } = await recovering('op-00000061');
