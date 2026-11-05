@@ -687,6 +687,29 @@ describe('teamai-runtime-paseo', () => {
     expect(received()).toEqual([]);
   });
 
+  it('keeps an earlier runtime\'s create uncertain when the resent prompt cannot open its workspace, ending it cancel_failed', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 6_000 });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await expect.poll(() => received().map((request) => request.type)).toEqual(['agent.create.request']);
+    await first.kill();
+    // The worktree is away while the resent prompt opens it, so this runtime sends no create of its own.
+    const away = `${worktree}.away`;
+    fs.renameSync(worktree, away);
+    const second = start();
+    await ready(second);
+
+    second.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await second.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    fs.renameSync(away, worktree);
+    // The first runtime's create lands.
+    await expect.poll(agentsOf, { timeout: 15_000 }).toEqual([agentIdOf(OpIdSchema.parse('op-0000000b'))]);
+    expect(received().map((request) => request.type)).toEqual(['agent.create.request']);
+  }, 30_000);
+
   it('ends a prompt that fails once its agent exists cancel_failed, naming the cause, since the agent may still run', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 1_500 });
     const runtime = start();
