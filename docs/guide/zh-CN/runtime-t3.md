@@ -254,6 +254,7 @@ teamai workflow cancel r70d31098c8884803
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
 | `… (cancel_failed): The T3 thread t3code://threads/… ("review · teamai r70d…") still runs, and T3 Code did not stop it …` | teamai 取消了这个步骤，但 T3 没有在 10 秒内确认线程已停止。 | 从链接打开线程，用 Stop 按钮停止它，然后再次运行 `teamai workflow cancel <run>`。 |
+| `… (cancel_failed): teamai launched the T3 thread "review · teamai r70d…", and T3 Code did not confirm the launch …`，或 `… could not be followed, so it may still run …` | 步骤失败了，但它的线程可能仍在 T3 中运行：T3 Code 没有回复启动请求，或在步骤运行期间断开了。teamai 会保留位置，不提交任何内容。 | 打开 T3 Code，然后运行 `teamai workflow cancel <run>`：它会找到线程并停止它。 |
 | 运行详情里的 `Not closed: thread_still_runs …` | teamai 关闭步骤的位置时，它的线程或它委派的工作仍在运行，而 T3 没有停止它。 | 用链接打开线程，用它的 Stop 按钮停止它。 |
 | `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | 某个步骤的启动请求没有得到回复，而且无法连接 T3 Code 来查找那个线程。 | 打开 T3 Code，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | 某个步骤的启动请求没有得到回复，而你之后重新登录了 T3，所以 teamai 无法查找那个线程。 | 如果消息里提到的线程还在运行，在 T3 Code 里停止它，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |

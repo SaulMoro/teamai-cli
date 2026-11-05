@@ -300,14 +300,15 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000064')).toMatchObject({ event: 'finished' });
     });
 
-    // A failure after the acceptance ends the op once, with no second acceptance.
+    // A failure after the acceptance ends the op once, with no second acceptance. Only a check's refusal proves T3
+    // launched nothing, so this one leaves a thread that may run, and the op ends as a stop teamai could not confirm.
     it('accepts once a prompt whose launch T3 refuses after accepting it', async () => {
       t3.config({ launchFails: true });
       const { runtime, handle } = await opened();
 
       runtime.send(prompt(handle, 'op-00000065'));
 
-      expect(await ended(runtime, 'op-00000065')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed' } });
+      expect(await ended(runtime, 'op-00000065')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('T3 Code cannot launch threads now') } });
       expect(runtime.lines.filter((line) => line['op'] === 'op-00000065').map((line) => line['event'])).toEqual(['accepted', 'failed']);
     });
 
@@ -761,6 +762,20 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.stderr()).not.toContain('could not settle');
     });
 
+    // T3 Code went away mid-run: the thread may still run, so the op ends as a stop teamai could not confirm.
+    it('ends a prompt cancel_failed when it loses track of a thread that may still run', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000068'));
+      await runtime.next((line) => line['op'] === 'op-00000068' && line['event'] === 'display');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await t3.stop();
+
+      expect(await runtime.next((line) => line['op'] === 'op-00000068' && line['event'] !== 'accepted' && line['event'] !== 'display', 30_000)).toMatchObject({
+        event: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/could not be followed, so it may still run: .+ Run teamai workflow cancel r7f3a91c2 to stop it\.$/) },
+      });
+    }, 40_000);
+
     it('fails a step whose agent asks for an approval in an unattended run, and stops its thread', async () => {
       t3.config({ agent: { waits: true } });
       const { runtime, handle } = await opened('unattended');
@@ -964,10 +979,11 @@ describe('teamai-runtime-t3', () => {
         return { runtime, handle: first.handle };
       };
 
+      // Only a running op, or one failed cancel_failed, may still run, so the refusal rides in a cancel_failed.
       it('keeps the thread when T3 no longer offers the model: collect leaves it, and close stops it first', async () => {
         const { runtime, handle } = await resumed('op-00000045', () => t3.config({ providers: [{ ...CLAUDE, models: [{ id: 'claude-sonnet-5-5' }] }, CODEX] }));
 
-        expect(await ended(runtime, 'op-00000045')).toMatchObject({ event: 'failed', failure: { code: 'model_unavailable' } });
+        expect(await ended(runtime, 'op-00000045')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('has no model claude-opus-5-5') } });
         runtime.send({ type: 'collect', handle });
         expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'collected', handle });
         expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
@@ -1009,7 +1025,7 @@ describe('teamai-runtime-t3', () => {
         const { runtime, handle } = await opened();
         runtime.send(prompt(handle, 'op-00000047'));
 
-        expect(await ended(runtime, 'op-00000047')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed' } });
+        expect(await ended(runtime, 'op-00000047')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(`"review · teamai ${RUN}"`) } });
         await expect.poll(() => t3.threads()[0]?.status).toBe('running');
         runtime.send({ type: 'close', handle });
         expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({
@@ -1029,7 +1045,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ agent: { hold: true, output: {} }, launchReplyLost: true });
         const { runtime, handle } = await opened();
         runtime.send(prompt(handle, 'op-0000004a'));
-        expect(await ended(runtime, 'op-0000004a')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed' } });
+        expect(await ended(runtime, 'op-0000004a')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
         await expect.poll(() => t3.threads()[0]?.status).toBe('running');
         t3.config({ launchReplyLost: false, launchUnavailable: true });
 
@@ -1045,6 +1061,29 @@ describe('teamai-runtime-t3', () => {
         expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
         expect(t3.threads()).toHaveLength(1);
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+
+      // The op may still run, so it ends as a stop teamai could not confirm, which neither collect nor finishing may follow.
+      it('ends the prompt cancel_failed, and a later cancel finds and stops the thread', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchReplyLost: true });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-00000067'));
+
+        expect(await ended(runtime, 'op-00000067')).toEqual({
+          op: 'op-00000067', event: 'failed', failure: {
+            code: 'cancel_failed',
+            message: `teamai launched the T3 thread "review · teamai ${RUN}", and T3 Code did not confirm the launch, so it may run: MCP error -32603: The connection closed before T3 answered. Run teamai workflow cancel ${RUN} to find and stop it.`,
+          },
+        });
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_interrupt')).toEqual([]);
+
+        t3.config({ launchReplyLost: false });
+        runtime.send({ type: 'cancel', op: 'op-00000067' });
+
+        expect(await ended(runtime, 'op-00000067')).toEqual({ op: 'op-00000067', event: 'cancelled' });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]?.status).toBe('interrupted');
       });
 
       it('answers a cancel after a restart cancel_failed while T3 cannot complete the repeated launch, and cancelled once it can', async () => {
@@ -1152,7 +1191,7 @@ describe('teamai-runtime-t3', () => {
 
           runtime.send(prompt(handle, 'op-0000004e'));
 
-          expect(await ended(runtime, 'op-0000004e')).toEqual({ op: 'op-0000004e', event: 'failed', failure: unconfirmed(record) });
+          expect(await ended(runtime, 'op-0000004e')).toEqual({ op: 'op-0000004e', event: 'failed', failure: { ...unconfirmed(record), code: 'cancel_failed' } });
           expect(t3.threads()).toHaveLength(1);
         });
       });
