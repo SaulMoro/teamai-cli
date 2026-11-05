@@ -25,8 +25,8 @@ const EXPIRY_MARGIN_MS = 10 * 60_000;
 /** How long an attended sign-in waits for the person to approve it in T3's page. */
 const APPROVAL_TIMEOUT_MS = 5 * 60_000;
 
-/** How long the `t3` command may take to create a pairing code, well inside the 10 s an unattended init has. */
-const PAIRING_TIMEOUT_MS = 5_000;
+/** How long the silent sign-in may take, from the `t3` command to the token, inside the 10 s an unattended init has. */
+const SILENT_SIGN_IN_MS = 8_000;
 
 /** What teamai asks T3 for: reading and operating threads, the scopes T3 grants a sign-in at any mode a step runs in. */
 const SCOPES = ['orchestration:read', 'orchestration:operate'] as const;
@@ -205,17 +205,16 @@ const DecisionSchema = z.object({ redirectTo: z.url() });
 const AUTHORIZATION_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'resource'] as const;
 
 /** Creates a pairing code with the local `t3` command for the T3 server whose data directory is `t3Home`; never says the code. */
-function createPairingCode(t3Home: string): Promise<string> {
+function createPairingCode(t3Home: string, signal: AbortSignal): Promise<string> {
   const args = ['auth', 'pairing', 'create', '--json', '--base-dir', t3Home, ...SCOPES.flatMap((scope) => ['--scope', scope]), '--ttl', '2m', '--label', CLIENT_NAME];
 
   return new Promise((resolve, reject) => {
-    execFile('t3', args, { timeout: PAIRING_TIMEOUT_MS, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile('t3', args, { signal, encoding: 'utf8' }, (error, stdout, stderr) => {
       if (error) {
         const said = stderr.trim().split('\n').at(-1)?.slice(0, 200).replace(/\.$/, '');
 
         const why = 'code' in error && error.code === 'ENOENT' ? 'there is no t3 command on PATH'
-          : error.killed ? `t3 auth pairing create did not answer within ${PAIRING_TIMEOUT_MS / 1_000} s`
-            : `t3 auth pairing create exited with status ${String(error.code)}${said ? `: ${said}` : ''}`;
+          : `t3 auth pairing create exited with status ${String(error.code)}${said ? `: ${said}` : ''}`;
 
         reject(new Error(why));
 
@@ -235,8 +234,8 @@ function createPairingCode(t3Home: string): Promise<string> {
  * Approves the sign-in the SDK built `authorizationUrl` for with a pairing code, as T3's page posts it, and returns the
  * authorization code T3 redirects with. `access` is the broadest mode T3 lets the sign-in's threads run in.
  */
-async function approveWithPairingCode(authorizationUrl: URL, access: StepMode, t3Home: string): Promise<string> {
-  const code = await createPairingCode(t3Home);
+async function approveWithPairingCode(authorizationUrl: URL, { access, t3Home, signal }: { access: StepMode; t3Home: string; signal: AbortSignal }): Promise<string> {
+  const code = await createPairingCode(t3Home, signal);
 
   const authorization = Object.fromEntries(AUTHORIZATION_FIELDS.flatMap((field) => {
     const value = authorizationUrl.searchParams.get(field);
@@ -248,6 +247,7 @@ async function approveWithPairingCode(authorizationUrl: URL, access: StepMode, t
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ authorization, decision: { _tag: 'pairing-code', access, code } }),
+    signal,
   });
 
   const body: unknown = await reply.json().catch(() => undefined);
@@ -278,22 +278,27 @@ export type SilentSignIn = { ok: true } | { ok: false; reason: string };
  * file. A failure says why, in a few words, and names no code or token.
  */
 export async function signInSilently({ stateDir, resource, access, t3Home }: { stateDir: string; resource: URL; access: StepMode; t3Home: string }): Promise<SilentSignIn> {
+  // One deadline over every step, so a T3 Code that stops answering ends the attempt with a reason rather than holding init.
+  const signal = AbortSignal.timeout(SILENT_SIGN_IN_MS);
+  const fetchFn = (url: string | URL, init?: RequestInit): Promise<Response> => fetch(url, { ...init, signal });
   let authorizationCode: string | undefined;
 
   // T3 accepts a loopback redirect on any port, and nobody follows this one: the decision hands the code back.
   const provider: OAuthClientProvider = {
     ...keptClient(stateDir, resource.href, 'http://127.0.0.1/callback'),
-    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, access, t3Home); },
+    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { access, t3Home, signal }); },
   };
 
   try {
-    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' ') });
+    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' '), fetchFn });
 
     if (authorizationCode === undefined) return { ok: false, reason: 'T3 Code started no sign-in' };
-    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' '), authorizationCode });
+    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' '), authorizationCode, fetchFn });
 
     return validToken(stateDir, resource.href) ? { ok: true } : { ok: false, reason: 'T3 Code issued no credential' };
   } catch (error) {
+    if (signal.aborted) return { ok: false, reason: `the silent sign-in did not finish within ${SILENT_SIGN_IN_MS / 1_000} s` };
+
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }

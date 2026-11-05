@@ -133,18 +133,20 @@ describe('teamai-runtime-t3', () => {
         { failure: 'the t3 command fails', config: { commandFails: 3 }, reason: 't3 auth pairing create exited with status 3: Could not reach the T3 Code server' },
         { failure: 'T3 refuses the pairing code', config: { decisionRefused: true }, reason: 'T3 Code refused the pairing code with HTTP 400: That pairing code is not valid. Create a new one and try again' },
         { failure: 'T3 redirects with no code', config: { decisionNoCode: true }, reason: 'T3 Code\'s sign-in redirect carried no code (access_denied)' },
+        // teamai gives an unattended init 10 s, so a T3 Code that does not answer the sign-in fails it with the reason, well before.
+        { failure: 'T3 does not answer the sign-in', config: { decisionMs: 30_000 }, reason: 'the silent sign-in did not finish within 8 s' },
       ];
 
       /** Every secret the sign-in handled: the pairing codes the t3 command created, and the token T3 issues. */
       const secrets = (): string[] => [...t3.pairingCodes(), 'fake-t3-token-0123456789'];
 
-      it.each(failures)('fails an unattended run login_required, saying why, when $failure', async ({ path: pathOf, config, reason }) => {
+      it.each(failures)('fails an unattended run login_required, saying why, when $failure', { timeout: 30_000 }, async ({ path: pathOf, config, reason }) => {
         if (config) t3.config(config);
         const runtime = start(pathOf ? { PATH: pathOf() } : {});
 
         runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
 
-        const reply = await runtime.next((line) => line['type'] === 'init');
+        const reply = await runtime.next((line) => line['type'] === 'init', 20_000);
         expect(reply).toEqual({
           type: 'init', ok: false,
           error: {
@@ -156,14 +158,14 @@ describe('teamai-runtime-t3', () => {
         for (const secret of secrets()) expect(`${JSON.stringify(reply)}${runtime.stderr()}`).not.toContain(secret);
       });
 
-      it.each(failures)('opens T3\'s page in an attended run, saying why, when $failure', async ({ path: pathOf, config, reason }) => {
+      it.each(failures)('opens T3\'s page in an attended run, saying why, when $failure', { timeout: 30_000 }, async ({ path: pathOf, config, reason }) => {
         if (config) t3.config(config);
         const browser = fakeBrowser(dir);
         const runtime = start({ PATH: [browser.bin, pathOf?.() ?? [t3.bin, PATH_WITHOUT_T3].join(path.delimiter)].join(path.delimiter) });
 
         runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
 
-        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        expect(await runtime.next((line) => line['type'] === 'init', 20_000)).toMatchObject({ ok: true });
         expect(browser.visits()).toEqual(['/oauth/mcp/authorize']);
         const [said, link] = runtime.stderr().split('\n');
         expect(said).toBe(`Approve teamai in T3 Code (silent sign-in failed: ${reason}). If no browser opened, visit:`);
