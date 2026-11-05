@@ -39,5 +39,19 @@ export function parseRuntimeLine(line: string): { ok: true; message: RuntimeMess
 
   const parsed = Message.safeParse(raw);
 
-  return parsed.success ? { ok: true, message: parsed.data } : { ok: false, reason: `it wrote a message protocol ${RUNTIME_PROTOCOL} does not have: ${line.slice(0, 200)}` };
+  if (parsed.success) return { ok: true, message: parsed.data };
+  const surplus = unknownKeys(parsed.error.issues);
+
+  return { ok: false, reason: surplus.length > 0
+    ? `it wrote ${surplus.map((key) => `"${key}"`).join(', ')}, which protocol ${RUNTIME_PROTOCOL} does not have: ${line.slice(0, 200)}`
+    : `it wrote a message protocol ${RUNTIME_PROTOCOL} does not have: ${line.slice(0, 200)}` };
+}
+
+/** The keys a strict message refused, wherever the union of messages reported them. */
+function unknownKeys(issues: readonly z.core.$ZodIssue[]): string[] {
+  return [...new Set(issues.flatMap((issue) => {
+    if (issue.code === 'unrecognized_keys') return issue.keys;
+
+    return issue.code === 'invalid_union' ? issue.errors.flatMap((branch) => unknownKeys(branch)) : [];
+  }))];
 }
