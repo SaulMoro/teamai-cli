@@ -269,7 +269,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | What you see | Why | Do this |
 | --- | --- | --- |
 | `T3 Code is not running on this machine.` | No T3 server here. teamai reads `~/.t3/userdata/server-runtime.json`, or `$T3CODE_HOME/userdata/…` | Open T3 Code, then run again. |
-| `… (login_required): … could not sign in through the t3 command (there is no t3 command on PATH) …` | An unattended run has no valid sign-in, and the `t3` command could not create one. The text in brackets says why. | Check that `t3 auth session list` works in the shell teamai runs in, then run again. |
+| `… (login_required): … could not sign in through the t3 command (there is no t3 command on PATH) …` | An unattended run has no valid sign-in, and the `t3` command could not create one. The text in brackets says why. | Check that `t3 auth session list` works in the shell teamai runs in, then run again. Or start a workflow from a terminal once and approve teamai in the page. |
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai's sign-in allows less than the mode the thread runs in. | Remove `~/.teamai/runtime-state/t3/credentials.json` and run again: teamai signs in again at the run's `runtime_mode`. Or set `runtime_mode`. |
 | `… is not a project in T3 Code <machine>.` | The checkout is not a T3 project. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
