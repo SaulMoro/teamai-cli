@@ -11,7 +11,7 @@ import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
-import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 
 // ─── teamai-runtime-t3 ───
 //
@@ -1028,7 +1028,7 @@ export function serve(options: ServeOptions): Promise<void> {
         finish({
           op: request.op, state: 'failed', failure: {
             code: 'sign_in_too_narrow',
-            message: `T3 Code refused to start the step's thread in ${s.stepMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with ${STEP_MODE_LABELS[s.stepMode]} access or broader. Or set runtime_mode to a mode the sign-in allows.`,
+            message: `T3 Code refused to start the step's thread in ${s.stepMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again at the run's runtime_mode. Or set runtime_mode to a mode the sign-in allows.`,
           },
         });
       } else if (refused) finish({ op: request.op, state: 'failed', failure: { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${why}` } });

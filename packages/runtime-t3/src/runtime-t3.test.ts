@@ -456,7 +456,7 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-0000001b')).toEqual({
         op: 'op-0000001b', event: 'failed', failure: {
           code: 'sign_in_too_narrow',
-          message: 'T3 Code refused to start the step\'s thread in auto mode, because teamai\'s sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with Auto access or broader. Or set runtime_mode to a mode the sign-in allows.',
+          message: 'T3 Code refused to start the step\'s thread in auto mode, because teamai\'s sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again at the run\'s runtime_mode. Or set runtime_mode to a mode the sign-in allows.',
         },
       });
       expect(t3.threads()).toEqual([]);
