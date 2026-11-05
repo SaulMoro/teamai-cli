@@ -138,9 +138,10 @@ export interface SignIn {
 
 /**
  * An attended sign-in for `resource`: a loopback listener for T3's redirect, and the SDK's OAuth client over the
- * credentials file. The page opens in the person's browser; its link also goes to stderr, for a browser that does not open.
+ * credentials file. The page opens in the person's browser; its link also goes to stderr, for a browser that does not
+ * open, after why the silent sign-in could not serve the run, when it was tried.
  */
-export async function attendedSignIn(stateDir: string, resource: string): Promise<SignIn> {
+export async function attendedSignIn(stateDir: string, resource: string, silentFailure?: string): Promise<SignIn> {
   let answer: { resolve: (code: string) => void; reject: (error: Error) => void } | undefined;
   const answered = new Promise<string>((resolve, reject) => { answer = { resolve, reject }; });
   // A rejection nobody awaits yet must not end the process.
@@ -174,7 +175,9 @@ export async function attendedSignIn(stateDir: string, resource: string): Promis
   const provider: OAuthClientProvider = {
     ...keptClient(stateDir, resource, redirectUrl),
     redirectToAuthorization: (authorizationUrl) => {
-      process.stderr.write(`Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}\n`);
+      process.stderr.write(silentFailure === undefined
+        ? `Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}\n`
+        : `Approve teamai in T3 Code (silent sign-in failed: ${silentFailure}). If no browser opened, visit:\n  ${authorizationUrl.toString()}\n`);
       const [command, args] = opener(authorizationUrl.toString());
       const child = spawn(command, args, { stdio: 'ignore', detached: true });
       child.on('error', () => {});
@@ -208,7 +211,7 @@ function createPairingCode(t3Home: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile('t3', args, { timeout: PAIRING_TIMEOUT_MS, encoding: 'utf8' }, (error, stdout, stderr) => {
       if (error) {
-        const said = stderr.trim().split('\n').at(-1)?.slice(0, 200);
+        const said = stderr.trim().split('\n').at(-1)?.slice(0, 200).replace(/\.$/, '');
 
         const why = 'code' in error && error.code === 'ENOENT' ? 'there is no t3 command on PATH'
           : error.killed ? `t3 auth pairing create did not answer within ${PAIRING_TIMEOUT_MS / 1_000} s`
@@ -252,7 +255,7 @@ async function approveWithPairingCode(authorizationUrl: URL, access: StepMode, t
   if (!reply.ok) {
     const said = z.object({ message: z.string() }).safeParse(body);
 
-    throw new Error(`T3 Code refused the pairing code with HTTP ${reply.status}${said.success ? `: ${said.data.message}` : ''}`);
+    throw new Error(`T3 Code refused the pairing code with HTTP ${reply.status}${said.success ? `: ${said.data.message.replace(/\.$/, '')}` : ''}`);
   }
 
   const decided = DecisionSchema.safeParse(body);
