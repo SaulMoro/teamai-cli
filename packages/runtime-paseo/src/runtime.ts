@@ -884,8 +884,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         break;
     }
 
-    if (!live) {
-      write({ event: 'error', message: `teamai-runtime-paseo got ${request.type} before a successful init` });
+    // A recover-mode process may have reached the daemon for a stop, and still takes no new work.
+    if (!live || recoverAt !== undefined) {
+      fail(request.op, {
+        code: 'not_started',
+        message: recoverAt === undefined
+          ? `teamai-runtime-paseo got ${request.type} before a successful init.`
+          : `teamai-runtime-paseo opened in recover mode only stops what it ran: it got ${request.type}.`,
+      });
 
       return;
     }
@@ -929,10 +935,12 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       } catch (error) {
         const message = `Paseo failed: ${error instanceof Error ? error.message : String(error)}`;
 
-        // A close that failed keeps its place. The protocol has no failed reattach, so that one gets an error line.
+        // Each request gets its own failure, since an error line would fail every request teamai is waiting on. A close
+        // that failed keeps its place.
         if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
         else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
-        else write({ event: 'error', message });
+        else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });
+        else write({ event: 'failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
       }
     })();
 
