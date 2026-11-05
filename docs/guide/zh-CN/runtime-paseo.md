@@ -354,11 +354,13 @@ paseo permit allow 7c483fce --all
 teamai workflow cancel r144a3913136e7b62
 ```
 
-Paseo 可能在智能体的这一轮结束之前就答复取消，所以只有当 Paseo 报告智能体不再运行时，步骤才以 `cancelled` 结束。10 秒后仍在运行的智能体会让步骤以 `cancel_failed` 失败：
+Paseo 可能在智能体的这一轮结束之前就答复取消，所以只有当 Paseo 报告智能体不再运行时，步骤才以 `cancelled` 结束。取消 10 秒后仍在运行的智能体，或者 Paseo 在这段时间内没有答复的取消，会让步骤以 `cancel_failed` 失败，teamai 会保留这次尝试和登录：
 
 ```text
 Paseo cancelled the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
+
+等智能体能够停止后，再运行一次 `teamai workflow cancel`：运行时会重新尝试停止，步骤以 `cancelled` 结束。
 
 智能体工作时 teamai 被杀掉，智能体会继续运行。`resume` 重新连上同一个智能体，不会再启动第二个：
 
@@ -398,11 +400,13 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 
-守护进程停着时重新启动的运行时，仍会按它记录的内容回答这次尝试，但在连上守护进程之前拒绝关闭它：
+崩溃后的 `teamai workflow cancel` 会以 recover 模式打开运行时。它不检查登录，所以之后退出登录的工具不会妨碍它停止智能体；它只为取消智能体和关闭这次尝试而连接守护进程。守护进程停着时，取消会保留这次尝试和登录，并说明原因：
 
 ```text
-teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of wks_6fb33a5b94531f79/a04485788 or archive its workspace. Start the daemon with `paseo start`, then close the attempt again.
+No Paseo daemon answers at ws://127.0.0.1:6767/ws (no answer in 10 s). Start it with `paseo start`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, which may still run in the worktree; cancel the run again.
 ```
+
+启动守护进程，然后再运行一次 `teamai workflow cancel`。
 
 ## 启动时的错误
 
