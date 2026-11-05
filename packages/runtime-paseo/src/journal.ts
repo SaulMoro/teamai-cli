@@ -12,6 +12,9 @@ import { z } from 'zod';
 //    ops/<op>.json          a prompt: its handle, the agent create it sends, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
+//    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
+//                           own records, and one that cannot be read stops only its own handle. A handle an earlier
+//                           version opened has no such directory, and is found by reading every record
 //
 //  The agent create is kept as sent, so a runtime started again sends the same one: Paseo answers a repeated
 //  idempotency key with the agent it created, and refuses one whose request changed. Each file is written to a
@@ -133,34 +136,57 @@ export function journal(root: string) {
   const cancelFile = (op: OpId): string => path.join(root, 'ops', `${op}.cancel`);
   const names = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
 
-  const places = (): Array<{ handle: string; place: Place }> => names(path.join(root, 'places')).flatMap((name) => {
+  const indexDir = (handle: string): string => path.join(root, 'handles', encodeURIComponent(handle));
+
+  /** Every place, or, for one whose record cannot be read, its handle alone: what it holds is unknown, not absent. */
+  const places = (): Array<{ handle: string; place?: Place }> => names(path.join(root, 'places')).flatMap((name) => {
     const handle = decodeURIComponent(name.replace(/\.json$/, ''));
-    const place = read(placeFile(handle), PlaceSchema);
 
-    return place ? [{ handle, place }] : [];
+    try {
+      const place = read(placeFile(handle), PlaceSchema);
+
+      return place ? [{ handle, place }] : [];
+    } catch {
+      return [{ handle }];
+    }
   });
 
-  const promptsOf = (handle: string): Array<{ op: OpId; record: PromptRecord }> => names(path.join(root, 'ops')).flatMap((name) => {
-    const op = OpIdSchema.safeParse(name.replace(/\.json$/, ''));
-    const record = name.endsWith('.json') && op.success ? read(promptFile(op.data), PromptRecordSchema) : undefined;
+  const promptsOf = (handle: string): Array<{ op: OpId; record: PromptRecord }> => {
+    const indexed = fs.existsSync(indexDir(handle));
+    const candidates = indexed ? names(indexDir(handle)) : names(path.join(root, 'ops')).flatMap((name) => (name.endsWith('.json') ? [name.replace(/\.json$/, '')] : []));
 
-    return op.success && record?.handle === handle ? [{ op: op.data, record }] : [];
-  });
+    return candidates.flatMap((name) => {
+      const op = OpIdSchema.safeParse(name);
+      const record = op.success ? read(promptFile(op.data), PromptRecordSchema) : undefined;
+
+      return op.success && record?.handle === handle ? [{ op: op.data, record }] : [];
+    });
+  };
 
   return {
     place: (handle: string): Place | undefined => read(placeFile(handle), PlaceSchema),
-    savePlace: (handle: string, place: Place): void => write(placeFile(handle), place),
+    savePlace(handle: string, place: Place): void {
+      fs.mkdirSync(indexDir(handle), { recursive: true });
+      write(placeFile(handle), place);
+    },
     /** The handle already opened for an attempt, so a repeated open opens no second place. */
-    handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places().find(({ place }) => place.run === run && place.attempt === attempt)?.handle,
+    handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places().find(({ place }) => place?.run === run && place.attempt === attempt)?.handle,
     /**
      * The handles open on a Paseo workspace, which the last of them archives when it closes: those Paseo opened it for,
      * and those still being opened on its `directory`, which Paseo will open it for.
      */
-    handlesIn: ({ id, directory }: { id: string; directory?: string }): string[] => places().filter(({ place }) => (place.workspace
-      ? place.workspace.id === id
-      : place.kind === 'worktree' && directory !== undefined && resolved(place.cwd) === resolved(directory))).map(({ handle }) => handle),
+    handlesIn: ({ id, directory }: { id: string; directory?: string }): string[] => places().filter(({ place }) => (!place
+      // A place that cannot be read may be on this workspace: it counts as sharing it.
+      ? true
+      : place.workspace
+        ? place.workspace.id === id
+        : place.kind === 'worktree' && directory !== undefined && resolved(place.cwd) === resolved(directory))).map(({ handle }) => handle),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
-    savePrompt: (op: OpId, record: PromptRecord): void => write(promptFile(op), record),
+    savePrompt(op: OpId, record: PromptRecord): void {
+      // Indexed only under a handle opened with an index: one an earlier version opened is still read whole.
+      if (fs.existsSync(indexDir(record.handle))) fs.writeFileSync(path.join(indexDir(record.handle), op), '');
+      write(promptFile(op), record);
+    },
     promptsOf,
     cancel(op: OpId): void {
       fs.mkdirSync(path.dirname(cancelFile(op)), { recursive: true });
@@ -175,6 +201,7 @@ export function journal(root: string) {
       }
 
       fs.rmSync(placeFile(handle), { force: true });
+      fs.rmSync(indexDir(handle), { recursive: true, force: true });
     },
   };
 }
