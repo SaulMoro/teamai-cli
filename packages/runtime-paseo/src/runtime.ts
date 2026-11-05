@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type Model, type PaseoTool } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place, PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -797,26 +797,29 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
     const { stopped } = following;
 
     try {
-      // The agent of a repeated prompt is found by its id; a create a runtime died before sending is sent again.
-      if (!(await live.agent(create.agentId))) await live.create(record.cwd, create);
-      following.created = true;
-    } catch (error) {
-      const cause = error instanceof Error ? error.message : String(error);
-      // Paseo may have created the agent though its answer was lost: only an agent it does not know proves none runs.
-      const found = await live.agent(create.agentId).then((agent) => (agent ? 'exists' : 'none'), () => 'unknown');
+      // The agent of a repeated prompt is found by its id; a create a runtime died before sending is sent again. A lookup
+      // that fails throws: an earlier runtime may have created the agent.
+      const creation: Creation = (await live.agent(create.agentId)) ? { outcome: 'created' } : await live.create(record.cwd, create);
 
-      if (found === 'exists') {
-        following.created = true;
-      } else {
+      // Only a create never sent proves no agent started.
+      if (creation.outcome === 'unsent') {
+        settle(op, { op, state: 'failed', failure: { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${creation.cause}` } }, following);
+
+        return;
+      }
+
+      // Paseo may have created the agent though the create failed, as when its answer was lost: one it shows is followed,
+      // and one it does not show may still start.
+      if (creation.outcome === 'failed' && !(await live.agent(create.agentId).catch(() => null))) {
         settle(op, {
           op, state: 'failed',
-          failure: found === 'none'
-            ? { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${cause}` }
-            : { code: CANCEL_FAILED, message: `Paseo could not create the ${record.tool} agent ${create.agentId} (${cause}), and could not say whether it exists. It may still run in the worktree; stop it in the Paseo app.` },
+          failure: { code: CANCEL_FAILED, message: `Paseo could not create the ${record.tool} agent ${create.agentId} (${creation.cause}), and does not show it, though it may still start. It may still run in the worktree; stop it in the Paseo app.` },
         }, following);
 
         return;
       }
+
+      following.created = true;
     } finally {
       following.landed();
     }
