@@ -391,7 +391,7 @@ async function route(req, res) {
     }
 
     spent.add(pairing.credential);
-    fs.appendFileSync(path.join(STATE, 'calls.jsonl'), `${JSON.stringify({ tool: 'oauth_decision', args: { access: decision.access }, bearer: 'none' })}\n`);
+    record('oauth_decision', { access: decision.access }, 'none');
     const back = new URL(authorization.redirect_uri);
 
     if (config().decisionNoCode) back.searchParams.set('error', 'access_denied');

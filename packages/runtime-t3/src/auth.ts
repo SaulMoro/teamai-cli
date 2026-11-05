@@ -100,7 +100,7 @@ function opener(url: string): [string, string[]] {
  * The SDK's OAuth client for `resource` over the credentials file, short of sending anyone to sign in: it registers
  * teamai with `redirectUrl` once and keeps the registration, the PKCE verifier and the token the flow gets.
  */
-function keptClient(stateDir: string, resource: string, redirectUrl: string): Omit<OAuthClientProvider, 'redirectToAuthorization'> {
+function keptClient({ stateDir, resource, redirectUrl }: { stateDir: string; resource: string; redirectUrl: string }): Omit<OAuthClientProvider, 'redirectToAuthorization'> {
   const store = credentialStore(stateDir);
   let verifier = '';
 
@@ -141,7 +141,7 @@ export interface SignIn {
  * credentials file. The page opens in the person's browser; its link also goes to stderr, for a browser that does not
  * open, after why the silent sign-in could not serve the run, when it was tried.
  */
-export async function attendedSignIn(stateDir: string, resource: string, silentFailure?: string): Promise<SignIn> {
+export async function attendedSignIn({ stateDir, resource, silentFailure }: { stateDir: string; resource: string; silentFailure?: string }): Promise<SignIn> {
   let answer: { resolve: (code: string) => void; reject: (error: Error) => void } | undefined;
   const answered = new Promise<string>((resolve, reject) => { answer = { resolve, reject }; });
   // A rejection nobody awaits yet must not end the process.
@@ -173,7 +173,7 @@ export async function attendedSignIn(stateDir: string, resource: string, silentF
   const timer = setTimeout(() => answer?.reject(new Error('Nobody approved the T3 Code sign-in within 5 minutes.')), APPROVAL_TIMEOUT_MS);
 
   const provider: OAuthClientProvider = {
-    ...keptClient(stateDir, resource, redirectUrl),
+    ...keptClient({ stateDir, resource, redirectUrl }),
     redirectToAuthorization: (authorizationUrl) => {
       process.stderr.write(silentFailure === undefined
         ? `Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}\n`
@@ -285,7 +285,7 @@ export async function signInSilently({ stateDir, resource, access, t3Home }: { s
 
   // T3 accepts a loopback redirect on any port, and nobody follows this one: the decision hands the code back.
   const provider: OAuthClientProvider = {
-    ...keptClient(stateDir, resource.href, 'http://127.0.0.1/callback'),
+    ...keptClient({ stateDir, resource: resource.href, redirectUrl: 'http://127.0.0.1/callback' }),
     redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { access, t3Home, signal }); },
   };
 
@@ -307,7 +307,7 @@ export async function signInSilently({ stateDir, resource, access, t3Home }: { s
 export function unattendedAuth(stateDir: string, resource: string): OAuthClientProvider {
   return {
     redirectUrl: undefined,
-    clientMetadata: { client_name: 'teamai workflow', redirect_uris: [] },
+    clientMetadata: { client_name: CLIENT_NAME, redirect_uris: [] },
     clientInformation: () => credentialStore(stateDir).entry(resource).client,
     tokens: () => validToken(stateDir, resource),
     saveTokens: () => {},
