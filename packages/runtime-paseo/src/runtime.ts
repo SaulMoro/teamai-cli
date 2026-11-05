@@ -12,7 +12,8 @@ import { loadClient } from './client.js';
 import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
 
-type WorktreePlace = Extract<Place, { kind: 'worktree' }>;
+/** A worktree place Paseo opened as a workspace. */
+type WorktreePlace = Extract<Place, { kind: 'worktree' }> & { workspace: NonNullable<Place['workspace']> };
 
 type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
 
@@ -219,6 +220,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
    * and the create that settles once Paseo answered it.
    */
   const waiting = new Map<OpId, { stop: () => void; created: boolean; creating: Promise<void> }>();
+  /** The worktrees this process is opening as Paseo workspaces, by handle: a close waits for its open to end. */
+  const opens = new Map<string, Promise<void>>();
   /** The requests this process is answering. */
   const answering = new Set<Promise<void>>();
   /** teamai closed stdin: a prompt's agent goes on in Paseo, and this process stops following it. */
@@ -317,6 +320,9 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     if (place.kind === 'confined') return { label: 'Paseo confined prompt, best-effort', fields: { daemon: `Paseo ${live.version}` } };
 
+    // A worktree Paseo has not opened yet shows nothing until it has.
+    if (!place.workspace) return undefined;
+
     return { label: `Paseo workspace ${place.workspace.name}`.slice(0, 80), fields: { workspace: place.workspace.id, daemon: `Paseo ${live.version}` } };
   };
 
@@ -414,43 +420,46 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   }
 
   async function open(live: Daemon, request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> {
-    const known = journal.handleOf(request);
+    const { op, run, attempt, view } = request;
+    let handle = journal.handleOf(request);
 
-    if (known) {
-      write({ op: request.op, event: 'accepted', handle: known });
-      const display = displayOf(known, live);
-      write({ op: request.op, event: 'ready', ...(display && { display }) });
-
-      return;
+    // A handle per attempt, kept before Paseo opens anything, so the open is accepted at once: two attempts on one
+    // worktree share its workspace, and keep their own prompts. A confined prompt's place comes without a view: its
+    // workspace adopts the prompt's directory once the prompt comes. A handle an earlier version kept, named after its
+    // workspace, is answered as it is.
+    if (!handle) {
+      handle = `${view ? 'worktree' : 'confined'}/${run}/${attempt}`;
+      journal.savePlace(handle, view ? { kind: 'worktree', run, attempt, cwd: view.worktree, runDir: view.runDir } : { kind: 'confined', run, attempt });
     }
 
-    // A confined prompt's place comes without a view: its workspace adopts the prompt's directory once the prompt comes.
-    if (!request.view) {
-      const handle = `confined/${request.run}/${request.attempt}`;
-      journal.savePlace(handle, { kind: 'confined', run: request.run, attempt: request.attempt });
-      write({ op: request.op, event: 'accepted', handle });
-      const display = displayOf(handle, live);
-      write({ op: request.op, event: 'ready', ...(display && { display }) });
+    write({ op, event: 'accepted', handle });
+    const place = journal.place(handle);
 
-      return;
+    if (place?.kind === 'worktree' && !place.workspace) {
+      const opening = (async (): Promise<RuntimeFailure | undefined> => {
+        try {
+          const workspace = await live.workspace(place.cwd);
+          journal.savePlace(handle, { ...place, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
+
+          return undefined;
+        } catch (error) {
+          return { code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: ${error instanceof Error ? error.message : String(error)}` };
+        }
+      })();
+
+      opens.set(handle, opening.then(() => undefined));
+      const failure = await opening;
+      opens.delete(handle);
+
+      if (failure) {
+        fail(op, failure);
+
+        return;
+      }
     }
 
-    let workspace: Awaited<ReturnType<Daemon['workspace']>>;
-
-    try {
-      workspace = await live.workspace(request.view.worktree);
-    } catch (error) {
-      fail(request.op, { code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: ${error instanceof Error ? error.message : String(error)}` });
-
-      return;
-    }
-
-    // A handle per attempt: two attempts on one worktree share its workspace, and keep their own prompts.
-    const handle = `${workspace.id}/${request.attempt}`;
-    journal.savePlace(handle, { kind: 'worktree', run: request.run, attempt: request.attempt, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory, runDir: request.view.runDir });
-    write({ op: request.op, event: 'accepted', handle });
     const display = displayOf(handle, live);
-    write({ op: request.op, event: 'ready', ...(display && { display }) });
+    write({ op, event: 'ready', ...(display && { display }) });
   }
 
   /** The create a new prompt sends, in `launch`'s mode with its prompt and options, or the failure that keeps it from being sent. */
@@ -622,8 +631,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    if (!confined && place?.kind === 'worktree') {
-      await work(live, request, place);
+    if (!confined && place?.kind === 'worktree' && place.workspace) {
+      await work(live, request, { ...place, workspace: place.workspace });
 
       return;
     }
@@ -632,7 +641,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       code: 'unknown_handle',
       message: confined
         ? `teamai-runtime-paseo has no confined prompt's place ${request.handle}; open the attempt with no view first.`
-        : `teamai-runtime-paseo has no worktree place ${request.handle}; open the attempt on its worktree first.`,
+        : `teamai-runtime-paseo has no worktree place ${request.handle} that Paseo opened; open the attempt on its worktree first.`,
     });
   }
 
@@ -864,7 +873,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     const agents = prompts.flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
-    if (!journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
+    if (!journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record, deadline)))).flatMap((failure) => (failure ? [failure.message] : []));
 
       return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : undefined;
@@ -892,6 +901,15 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
    */
   async function closePlace(handle: string): Promise<void> {
     const deadline = Date.now() + STOP_SETTLE_MS;
+    const opening = opens.get(handle);
+
+    // A place whose worktree Paseo is still opening is closed once its workspace is known, so the workspace is archived.
+    if (opening && (await Promise.race([opening, late(deadline)])) === 'late') {
+      write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: `Paseo did not open the worktree of ${handle} as a workspace within ${STOP_SETTLE_MS / 1000} s; close the attempt again.` } });
+
+      return;
+    }
+
     const place = journal.place(handle);
     // A place with no Paseo workspace has no agent to stop: it closes without the daemon.
     const live = place?.workspace && (await reach());

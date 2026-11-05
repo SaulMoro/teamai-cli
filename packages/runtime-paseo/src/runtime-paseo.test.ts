@@ -56,14 +56,23 @@ async function ready(runtime: Runtime, { mode = 'unattended', options = { url: d
   return runtime.next(isInit);
 }
 
+const openRequest = (op: string, attempt: string) => ({
+  type: 'open' as const, op, run: RUN, attempt, credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} },
+});
+
+/** Opens the attempt's place and waits until it is ready, as teamai does before it sends a prompt there. */
 async function opened(runtime: Runtime, { attempt = ATTEMPT, op = 'op-0000000a' } = {}): Promise<string> {
-  runtime.send({ type: 'open', op, run: RUN, attempt, credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } });
+  runtime.send(openRequest(op, attempt));
   const accepted = await runtime.next(isOp(op, 'accepted'));
 
   if (!('handle' in accepted) || !accepted.handle) throw new Error(`no handle in ${JSON.stringify(accepted)}`);
+  await runtime.next((line) => isOp(op, 'ready')(line) || isOp(op, 'failed')(line));
 
   return accepted.handle;
 }
+
+/** The Paseo workspace the fake daemon opened on the worktree. */
+const worktreeWorkspace = (): string | undefined => (JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { workspaces: Record<string, string> }).workspaces[fs.realpathSync(worktree)];
 
 const promptRequest = (handle: string, op: string, lease: Partial<z.input<typeof PromptLeaseSchema>> = {}): z.input<typeof PromptRequestSchema> => ({
   type: 'prompt', op, handle, env: { TEAMAI_WORKFLOW_RESULT: path.join(dir, 'out', 'result.json'), STEP_TOKEN: 'from-teamai' }, unset: [], cwd: worktree,
@@ -557,9 +566,9 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     const handle = await opened(runtime);
-    const workspace = handle.split('/')[0];
+    const workspace = worktreeWorkspace();
 
-    expect(await runtime.next(isOp('op-0000000a', 'ready'))).toEqual({ op: 'op-0000000a', event: 'ready', display: { label: 'Paseo workspace worktree', fields: { workspace, daemon: 'Paseo 0.14.0' } } });
+    expect(runtime.lines.find(isOp('op-0000000a', 'ready'))).toEqual({ op: 'op-0000000a', event: 'ready', display: { label: 'Paseo workspace worktree', fields: { workspace, daemon: 'Paseo 0.14.0' } } });
     runtime.send(promptRequest(handle, 'op-0000000b'));
     const accepted = await runtime.next(isOp('op-0000000b', 'accepted'));
     const shown = await runtime.next(isOp('op-0000000b', 'display'));
@@ -636,11 +645,12 @@ describe('teamai-runtime-paseo', () => {
     const handle = await opened(runtime);
     runtime.send(promptRequest(handle, 'op-0000000b'));
     await runtime.next(isEnd('op-0000000b'));
+    const workspace = worktreeWorkspace();
 
     runtime.send({ type: 'close', handle });
 
     expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
-    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: handle.split('/')[0] }]);
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
     runtime.send({ type: 'reattach', handle });
     expect(await runtime.next((line) => 'event' in line && line.event === 'gone')).toEqual({ event: 'gone', handle });
   });
@@ -650,7 +660,7 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     const handle = await opened(runtime);
-    const workspace = handle.split('/')[0];
+    const workspace = worktreeWorkspace();
 
     runtime.send({ type: 'close', handle });
 
@@ -662,22 +672,71 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ event: 'alive', handle });
   });
 
-  it('archives a workspace two attempts share only when the last of them closes', async () => {
+  it('archives a workspace two attempts share only when the last of them closes, one whose open is still in flight included', async () => {
     const runtime = start();
     await ready(runtime);
     const first = await opened(runtime);
-    runtime.send({ type: 'open', op: 'op-0000000c', run: RUN, attempt: 'a4567cdef', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } });
+    const workspace = worktreeWorkspace();
+    behave({ open_ms: 2_000 });
+    runtime.send(openRequest('op-0000000c', 'a4567cdef'));
     const accepted = await runtime.next(isOp('op-0000000c', 'accepted'));
-    const second = 'handle' in accepted ? accepted.handle : undefined;
+    const second = 'handle' in accepted ? String(accepted.handle) : '';
     const archives = (): unknown[] => received().filter((request) => request.type === 'archive_workspace_request');
 
-    expect(second?.split('/')[0]).toBe(first.split('/')[0]);
     runtime.send({ type: 'close', handle: first });
     expect(await runtime.next((line) => 'event' in line && line.event === 'closed')).toEqual({ event: 'closed', handle: first });
     expect(archives()).toEqual([]);
-    runtime.send({ type: 'close', handle: String(second) });
+    expect(await runtime.next(isOp('op-0000000c', 'ready'))).toMatchObject({ display: { fields: { workspace } } });
+    runtime.send({ type: 'close', handle: second });
     expect(await runtime.next((line) => 'event' in line && line.event === 'closed')).toEqual({ event: 'closed', handle: second });
-    expect(archives()).toMatchObject([{ workspaceId: first.split('/')[0] }]);
+    expect(archives()).toMatchObject([{ workspaceId: workspace }]);
+  });
+
+  it('accepts an open before Paseo opens the worktree as a workspace, and sends ready with that workspace once it does', async () => {
+    behave({ open_ms: 3_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+
+    expect(await runtime.next(isOp('op-0000000a', 'accepted'))).toEqual({ op: 'op-0000000a', event: 'accepted', handle: `worktree/${RUN}/${ATTEMPT}` });
+    expect(worktreeWorkspace()).toBeUndefined();
+    const shown = await runtime.next(isOp('op-0000000a', 'ready'));
+    expect(shown).toEqual({ op: 'op-0000000a', event: 'ready', display: { label: 'Paseo workspace worktree', fields: { workspace: worktreeWorkspace(), daemon: 'Paseo 0.14.0' } } });
+  });
+
+  it('closes an attempt whose open is still in flight once Paseo opened its workspace, and archives it', async () => {
+    behave({ open_ms: 2_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+    const accepted = await runtime.next(isOp('op-0000000a', 'accepted'));
+    const handle = 'handle' in accepted ? String(accepted.handle) : '';
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toHaveLength(1);
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next((line) => 'event' in line && ['alive', 'gone'].includes(line.event))).toEqual({ event: 'gone', handle });
+  });
+
+  it('keeps answering a place journaled under the handle an earlier version gave it, its workspace id first', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const old = 'wks_0123456789abcdef/a0123abcd';
+    const places = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places');
+    fs.mkdirSync(places, { recursive: true });
+    fs.writeFileSync(path.join(places, `${encodeURIComponent(old)}.json`), JSON.stringify({
+      kind: 'worktree', run: RUN, attempt: ATTEMPT, workspace: { id: 'wks_0123456789abcdef', name: 'worktree' }, cwd: worktree, runDir: path.join(dir, 'run'),
+    }));
+
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+    expect(await runtime.next(isOp('op-0000000a', 'accepted'))).toEqual({ op: 'op-0000000a', event: 'accepted', handle: old });
+    expect(await runtime.next(isOp('op-0000000a', 'ready'))).toMatchObject({ display: { fields: { workspace: 'wks_0123456789abcdef' } } });
+    runtime.send({ type: 'close', handle: old });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle: old });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: 'wks_0123456789abcdef' }]);
   });
 
   it('stops only its own agents when another attempt shares its workspace, and leaves that attempt running', async () => {
@@ -706,6 +765,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     const first = await opened(runtime);
     const second = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    const workspace = worktreeWorkspace();
     const isClose = (handle: string) => (line: RuntimeMessage): boolean => 'event' in line && ['closed', 'close_failed'].includes(line.event) && 'handle' in line && line.handle === handle;
     const archives = (): unknown[] => received().filter((request) => request.type === 'archive_workspace_request');
     runtime.send(promptRequest(first, 'op-0000000b'));
@@ -731,7 +791,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ hold_ms: 60_000, output: { ok: true } });
     runtime.send({ type: 'close', handle: first });
     expect(await runtime.next(isClose(first))).toEqual({ event: 'closed', handle: first });
-    expect(archives()).toMatchObject([{ workspaceId: first.split('/')[0] }]);
+    expect(archives()).toMatchObject([{ workspaceId: workspace }]);
     expect(stopped()).toEqual([{ agentId: agent, status: 'closed' }]);
   }, 30_000);
 
@@ -743,6 +803,7 @@ describe('teamai-runtime-paseo', () => {
     first.send(promptRequest(handle, 'op-0000000b'));
     await first.next(isOp('op-0000000b', 'accepted'));
     await first.kill();
+    const workspace = worktreeWorkspace();
     const { url } = daemon;
     await daemon.close();
     const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && [...events, 'error'].includes(line.event);
@@ -768,7 +829,7 @@ describe('teamai-runtime-paseo', () => {
     await ready(back);
     back.send({ type: 'close', handle });
     expect(await back.next(isAnswer(['closed', 'close_failed']))).toEqual({ event: 'closed', handle });
-    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: handle.split('/')[0] }]);
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
   }, 40_000);
 
   it('opens in recover mode with no daemon to reach, checking no tool and offering nothing', async () => {
@@ -806,7 +867,6 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     const handle = await opened(runtime);
-    await runtime.next(isOp('op-0000000a', 'ready'));
     const record = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places', `${encodeURIComponent(handle)}.json`);
     fs.writeFileSync(record, '{"kind":');
     const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && !('op' in line) && [...events, 'error'].includes(line.event);
