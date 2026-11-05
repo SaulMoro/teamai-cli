@@ -17,6 +17,9 @@ await serve({
   write: (message: RuntimeMessage) => {
     if (stdoutOpen) process.stdout.write(`${JSON.stringify(RuntimeMessageSchema.parse(message))}\n`);
   },
+  note: (text: string) => {
+    process.stderr.write(`${text}\n`);
+  },
   journal: journal(path.join(getUserHome(), '.teamai', 'runtime-state', 'paseo')),
 });
 

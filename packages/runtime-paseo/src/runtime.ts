@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, PromptResultSchema, RUN_DIR_ENV, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, OpIdSchema, PromptResultSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -189,13 +189,22 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export interface Serving {
   input: Readable;
   write(message: RuntimeMessage): void;
+  /** Writes a line for a person, never for teamai: stderr. */
+  note(text: string): void;
   journal: Journal;
 }
+
+/** What a request line names, read without the rest of the request, so a line that cannot be read is answered on its own. */
+const NamedSchema = z.object({
+  type: z.string().catch('request'),
+  op: OpIdSchema.optional().catch(undefined),
+  handle: RuntimeHandleSchema.optional().catch(undefined),
+});
 
 /** What init offered of an installed tool: its steps and judges, its steps only, or nothing, with why not. */
 type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } | { runs: 'nothing'; reason: string };
 
-export function serve({ input, write: emit, journal }: Serving): Promise<void> {
+export function serve({ input, write: emit, note, journal }: Serving): Promise<void> {
   /** How many lines ended each op in this process: a request that throws ends its op only when nothing else did meanwhile. */
   const ends = new Map<OpId, number>();
 
@@ -1244,6 +1253,66 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
     }
   };
 
+  /** The ops of the requests this process is answering, each with how many. */
+  const inFlight = new Map<OpId, number>();
+
+  /** Whether `op` is one this runtime runs or ran: an answer of its own would end it a second time. One it cannot tell is. */
+  const holdsOp = (op: OpId): boolean => {
+    if (inFlight.has(op) || creates.has(op)) return true;
+
+    try {
+      return journal.prompt(op) !== undefined;
+    } catch {
+      return true;
+    }
+  };
+
+  /** Whether `handle` is a place this runtime holds or is opening. One it cannot tell is. */
+  const holdsHandle = (handle: string): boolean => {
+    if (opens.has(handle)) return true;
+
+    try {
+      return journal.place(handle) !== undefined;
+    } catch {
+      return true;
+    }
+  };
+
+  /**
+   * Answers a request line it cannot read: on its own op or handle when this runtime holds neither, so no other request
+   * fails. One it holds already has its answer coming, and a failure would end it twice, so that line is dropped with a
+   * note on stderr. A line that names neither gets the error line, the only answer it can have.
+   */
+  const unreadable = (line: string, reason: string): void => {
+    let named: z.infer<typeof NamedSchema> = { type: 'request' };
+
+    try {
+      named = NamedSchema.catch({ type: 'request' }).parse(JSON.parse(line));
+    } catch {
+      // Not JSON: it names nothing.
+    }
+
+    const { type, op, handle } = named;
+    const subject = op ?? handle;
+
+    if (subject === undefined) {
+      write({ event: 'error', message: `teamai-runtime-paseo could not read a request: ${reason}` });
+
+      return;
+    }
+
+    if (op ? holdsOp(op) : handle !== undefined && holdsHandle(handle)) {
+      note(`teamai-runtime-paseo dropped a ${type} request it could not read for ${subject}, which it already holds, so as not to answer it twice: ${reason}`);
+
+      return;
+    }
+
+    const failure = { code: 'bad_request', message: `teamai-runtime-paseo could not read the ${type} request for ${subject}: ${reason}` };
+
+    if (op) fail(op, failure);
+    else if (handle !== undefined) write({ event: 'failed', handle, failure });
+  };
+
   const lines = readline.createInterface({ input });
 
   lines.on('line', (line) => {
@@ -1252,12 +1321,14 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
     try {
       request = RuntimeRequestSchema.parse(JSON.parse(line));
     } catch (error) {
-      write({ event: 'error', message: `teamai-runtime-paseo could not read a request: ${error instanceof Error ? error.message : String(error)}` });
+      unreadable(line, error instanceof Error ? error.message : String(error));
 
       return;
     }
 
     const endsBefore = 'op' in request ? (ends.get(request.op) ?? 0) : 0;
+
+    if ('op' in request) inFlight.set(request.op, (inFlight.get(request.op) ?? 0) + 1);
 
     const answered = (async () => {
       try {
@@ -1285,7 +1356,15 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
     })();
 
     answering.add(answered);
-    void answered.finally(() => answering.delete(answered));
+    void answered.finally(() => {
+      answering.delete(answered);
+
+      if (!('op' in request)) return;
+      const left = (inFlight.get(request.op) ?? 1) - 1;
+
+      if (left > 0) inFlight.set(request.op, left);
+      else inFlight.delete(request.op);
+    });
   });
 
   // teamai is gone once stdin ends: the requests in flight get their answers, and an agent goes on in Paseo, which keeps
