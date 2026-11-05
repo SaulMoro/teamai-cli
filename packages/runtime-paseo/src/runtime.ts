@@ -244,6 +244,18 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     return reaching;
   };
 
+  /**
+   * The daemon a stop needs, as `reach` gives it, or why none answered by `deadline`: a recover-mode connection to a
+   * daemon that is down takes the client's own 10 s, which would run past a stop's.
+   */
+  const reachBy = async (deadline: number): Promise<Daemon | RuntimeFailure | undefined> => {
+    const reached = await Promise.race([reach(), late(deadline)]);
+
+    return reached === 'late'
+      ? { code: 'daemon_unreachable', message: `No Paseo daemon answered at ${recoverAt ?? 'the runtime\'s url'} within ${STOP_SETTLE_MS / 1000} s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address.` }
+      : reached;
+  };
+
   /** What init offered of each tool the daemon has installed. */
   let offers = new Map<PaseoTool, Offer>();
 
@@ -1043,7 +1055,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         return;
       }
 
-      const live = await reach();
+      const live = await reachBy(deadline);
 
       const refused = live && !('code' in live)
         ? await cancelAgent(live, record, deadline)
@@ -1150,7 +1162,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     const place = journal.place(handle);
     // A place with no Paseo workspace has no agent to stop: it closes without the daemon.
-    const live = place?.workspace && (await reach());
+    const live = place?.workspace && (await reachBy(deadline));
 
     const failure = place?.workspace && (live && !('code' in live)
       ? await stopPlace(live, handle, place, deadline)
