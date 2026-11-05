@@ -776,6 +776,71 @@ describe('teamai-runtime-paseo', () => {
     expect(agentsOf()).toEqual([agentIdOf(OpIdSchema.parse('op-0000000b'))]);
   });
 
+  it('ends a prompt once when its cancel cannot read the prompt\'s record, though its agent then ends', async () => {
+    const release = path.join(dir, 'release');
+    behave({ release, output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+    fs.writeFileSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.json'), '{not json');
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/^Paseo failed: .*\. Its agent may still run in the worktree; stop it in the Paseo app\.$/s) } });
+    fs.writeFileSync(release, '');
+    await delay(3_000);
+    expect(runtime.lines.filter(isEnd('op-0000000b'))).toHaveLength(1);
+  });
+
+  it('ends a prompt once when its cancel cannot record itself, and a later cancel, once it can, stops the agent', async () => {
+    const release = path.join(dir, 'release');
+    behave({ release, output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+    // The cancel marker cannot be written where a directory stands.
+    const marker = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.cancel');
+    fs.mkdirSync(marker);
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(' may still run in the worktree; stop it in the Paseo app.') } });
+    // The agent ends on its own; the prompt already ended, so it is not ended again.
+    fs.writeFileSync(release, '');
+    await delay(3_000);
+    fs.rmdirSync(marker);
+    await delay(1_000);
+    expect(runtime.lines.filter(isEnd('op-0000000b'))).toHaveLength(1);
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+  });
+
+  it('answers every cancel in recover mode, though the first could not record itself', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'display'));
+    await first.kill();
+    const marker = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.cancel');
+    fs.mkdirSync(marker);
+
+    const recovering = start();
+    await ready(recovering, { mode: 'recover' });
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    fs.rmdirSync(marker);
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await recovering.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    expect(received().map((request) => request.type)).toEqual(['agent.create.request', 'cancel_agent_request']);
+  });
+
   it('ends a cancelled prompt only once its agent stopped running, though Paseo answers the cancel before', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
     const runtime = start();
