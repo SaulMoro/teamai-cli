@@ -1399,6 +1399,33 @@ describe('teamai-runtime-paseo', () => {
       expect(journalFiles()).toEqual([]);
     });
 
+    it.each([
+      ['lists its models', { models_ms: 3_000 }, ['archive_workspace_request']],
+      ['creates its agent', { create_ms: 3_000 }, ['agent.create.request', 'archive_workspace_request']],
+    ] as const)('closes a judge\'s place while Paseo %s only once that ended, and leaves no agent running', async (_, slow, requests) => {
+      const runtime = start();
+      await ready(runtime);
+      const handle = await openedConfined(runtime);
+      // The judge's directory is already its place's workspace, so the launch goes straight on.
+      runtime.send(confinedRequest(handle, 'op-0000000c'));
+      await runtime.next(isEnd('op-0000000c'));
+      behave({ reply: '{"label": "pass"}', hold_ms: 60_000, ...slow });
+      runtime.send(confinedRequest(handle, 'op-0000000b'));
+      await runtime.next(isOp('op-0000000b', 'accepted'));
+      const sent = received().length;
+      // The close comes once the launch reached the slow call: the create crossed the wire, or the listing is still held.
+      await expect.poll(() => received().length).toBe(sent + requests.length - 1);
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+      await delay(4_000);
+      expect(received().slice(sent).map((request) => request.type)).toEqual(requests);
+      const kept = JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { status: string }> };
+      expect(Object.values(kept.agents).filter((agent) => agent.status === 'running')).toEqual([]);
+      expect(journalFiles()).toEqual([]);
+    });
+
     it('refuses a plain prompt in a confined place, and a confined prompt in a worktree place', async () => {
       const runtime = start();
       await ready(runtime);
