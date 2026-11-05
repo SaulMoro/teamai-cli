@@ -122,8 +122,8 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
 export function serve({ input, write: send, journal, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
-  /** The ops this process runs, each with its handle and what resolves once its end is written. */
-  const running = new Map<OpId, { handle: string; ended: Promise<void>; end: () => void }>();
+  /** The ops this process runs, each with what resolves once its end is written. */
+  const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
   const pendingStops = new Set<OpId>();
   /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
@@ -141,10 +141,10 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     send(message);
   };
 
-  const claim = (op: OpId, handle: string): void => {
+  const claim = (op: OpId): void => {
     let end = (): void => {};
     const ended = new Promise<void>((resolve) => { end = resolve; });
-    running.set(op, { handle, ended, end });
+    running.set(op, { ended, end });
   };
 
   /** Awaits `work`, a creation in `handle`'s place, which a close of that place waits for, however it settles. */
@@ -169,11 +169,11 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
    * to answer: `outcome`, or, when it cannot be kept, a failure naming the record. A stop it could not confirm stays
    * `cancel_failed`, the one failure a later cancel retries.
    */
-  const keep = (op: OpId, handle: string, outcome: Outcome, kept: Outcome): Outcome => {
+  const keep = (op: OpId, outcome: Outcome, kept: Outcome): Outcome => {
     try {
       const record = journal.exec(op);
 
-      if (record !== undefined && record.outcome === undefined) journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
+      if (record !== undefined && record.outcome === undefined) journal.saveExec(op, { ...record, outcome: kept });
 
       return outcome;
     } catch (error) {
@@ -189,9 +189,9 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
    * Ends `op`, which this process claimed: settles what the journal keeps first, then writes its one end. Only an op's
    * first end counts, so an exec that ends after its cancel already failed it writes nothing more.
    */
-  const finish = (op: OpId, handle: string, outcome: Outcome, kept: Outcome = outcome): void => {
+  const finish = (op: OpId, outcome: Outcome, kept: Outcome = outcome): void => {
     if (!running.has(op)) return;
-    const answered = keep(op, handle, outcome, kept);
+    const answered = keep(op, outcome, kept);
     release(op);
     write(terminal(op, answered));
   };
@@ -343,11 +343,11 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     if (replayed) return replayed;
 
     // Claimed before the first await, so the same id sent again meanwhile is answered by this run.
-    claim(op, handle);
+    claim(op);
     const place = journal.place(handle);
 
     if (place?.confined) {
-      finish(op, handle, { state: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
+      finish(op, { state: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
 
       return;
     }
@@ -355,7 +355,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     const noSandbox: Outcome = { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } };
 
     if (place === undefined) {
-      finish(op, handle, noSandbox);
+      finish(op, noSandbox);
 
       return;
     }
@@ -367,7 +367,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     const found = await sandboxOf(place, provider);
 
     if (!found.ok) {
-      finish(op, handle, { state: 'failed', failure: found.failure });
+      finish(op, { state: 'failed', failure: found.failure });
 
       return;
     }
@@ -375,13 +375,13 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     const { id } = found;
 
     if (id === undefined) {
-      finish(op, handle, noSandbox);
+      finish(op, noSandbox);
 
       return;
     }
 
     if (journal.isCancelled(op)) {
-      finish(op, handle, { state: 'cancelled' });
+      finish(op, { state: 'cancelled' });
 
       return;
     }
@@ -398,7 +398,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : end.kind === 'failed' ? { state: 'failed', failure: end.failure } : { state: 'exited', code: end.code, stdout };
     // teamai gets the complete stdout and masks it itself; the journal never holds a credential the tool printed, so a
     // repeated id is answered with it masked.
-    finish(op, handle, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: request.credentials, patterns: false }) } : outcome);
+    finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: request.credentials, patterns: false }) } : outcome);
   };
 
   /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
@@ -439,14 +439,14 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     }
 
     // Claimed before the first await, as an exec is.
-    claim(op, handle);
+    claim(op);
     journal.saveExec(op, { handle, runner: process.pid });
     write({ op, event: 'accepted' });
     const { judge } = chosen;
 
     // The journal never holds a credential the tool echoed into its reply. Only its strings are masked: a setting such
     // as `1` leaves a reply's numbers as they are.
-    const settle = (outcome: Outcome): void => finish(op, handle, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, request.credentials)) } : outcome);
+    const settle = (outcome: Outcome): void => finish(op, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, request.credentials)) } : outcome);
 
     /** The judge's container, or undefined once the prompt settled: its creation failed, or a cancel came meanwhile. */
     const create = async (): Promise<string | undefined> => {
@@ -571,7 +571,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
         const outcome: Outcome = { state: 'failed', failure: { code: CANCEL_FAILED, message: unconfirmed.message } };
 
         if (running.has(op)) {
-          finish(op, record.handle, outcome);
+          finish(op, outcome);
 
           return;
         }
@@ -774,7 +774,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
         case 'exec':
         case 'prompt':
           // One this process still runs ends failed through finish; one this request has not ended yet is answered here.
-          if (running.has(request.op)) finish(request.op, request.handle, { state: 'failed', failure });
+          if (running.has(request.op)) finish(request.op, { state: 'failed', failure });
           else if ((endsWritten.get(request.op) ?? 0) === endsBefore) write({ op: request.op, event: 'failed', failure });
 
           return;
@@ -792,10 +792,10 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
         case 'cancel': {
           // A cancel has no reply of its own, so its op ends with the failure: it may still run, and a later cancel retries.
           const outcome: Outcome = { state: 'failed', failure: { code: CANCEL_FAILED, message: `Exec ${request.op} may still run: the sandbox runtime could not stop it. ${error instanceof Error ? error.message : String(error)}` } };
-          const run = running.get(request.op);
 
-          if (run) finish(request.op, run.handle, outcome);
-          else if ((endsWritten.get(request.op) ?? 0) === endsBefore) conclude(request.op, outcome);
+          // Kept in its record when that can still be written, so a reattach before the retry reads it, never running.
+          if (running.has(request.op)) finish(request.op, outcome);
+          else if ((endsWritten.get(request.op) ?? 0) === endsBefore) conclude(request.op, keep(request.op, outcome, outcome));
 
           return;
         }

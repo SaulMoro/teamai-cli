@@ -648,6 +648,34 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   }, 60_000);
 
+  it('keeps the cancel_failed of a cancel that could not record itself, so a reattach reports it, and a retry once mended stops the exec', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const { op, pid } = await runTracked(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE });
+    // The cancel's own marker cannot be written; the exec's record still can.
+    const marker = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox', 'ops', `${op}.cancel`);
+    fs.mkdirSync(marker);
+
+    second.send({ type: 'cancel', op });
+
+    expect(await second.next(ended(op), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed' } });
+    second.send({ type: 'reattach', handle: HANDLE });
+    expect(await second.next((message) => message.handle === HANDLE)).toMatchObject({ event: 'alive', ops: [{ op, state: 'failed', failure: { code: 'cancel_failed' } }] });
+    expect(isRunning(pid)).toBe(true);
+    fs.rmdirSync(marker);
+    second.send({ type: 'cancel', op });
+    expect(await second.next(ended(op), 15_000)).toEqual({ op, event: 'cancelled' });
+    await vi.waitFor(() => { expect(isRunning(pid)).toBe(false); }, { timeout: 5_000 });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  }, 60_000);
+
   it('ends an exec resent after its runtime died once, with cancel_failed, when its cancel cannot read the place record', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });
