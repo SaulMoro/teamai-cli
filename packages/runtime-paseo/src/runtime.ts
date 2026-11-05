@@ -1213,6 +1213,14 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
+    // Its agents stopped: a prompt that has not ended ends cancelled, once, before its record goes.
+    for (const { op, record } of journal.promptsOf(handle)) {
+      if (record.outcome) continue;
+      const following = waiting.get(op);
+      settle(op, { op, state: 'cancelled' });
+      following?.stop();
+    }
+
     journal.forget(handle);
     write({ event: 'closed', handle });
   }
