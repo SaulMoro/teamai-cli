@@ -957,6 +957,45 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isAlive)).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'cancelled' }] });
   });
 
+  it('keeps the failure a prompt\'s request ended with, so a reattach and a repeated prompt report it rather than run it again', async () => {
+    behave({ output: { ok: true }, refuse_fetch: 'Agent store unavailable' });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    const ended = await runtime.next(isEnd('op-0000000b'));
+    expect(ended).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/^Paseo failed: Agent store unavailable\. /) } });
+    behave({ output: { ok: true } });
+    const isAlive = (line: RuntimeMessage): boolean => 'event' in line && line.event === 'alive';
+
+    runtime.send({ type: 'reattach', handle });
+
+    expect(await runtime.next(isAlive)).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'failed', failure: { code: 'cancel_failed' } }] });
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual(ended);
+    expect(received()).toEqual([]);
+  });
+
+  it('ends a prompt whose request failed once, though it could not record the failure and its place closes afterwards', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, models_ms: 2_000 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    // While Paseo lists the models, the prompts' records become read-only: the agent record cannot be saved, nor the failure.
+    const ops = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops');
+    fs.chmodSync(ops, 0o555);
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'paseo_failed' } });
+    fs.chmodSync(ops, 0o755);
+    const isCloseAnswer = (line: RuntimeMessage): boolean => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event);
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next(isCloseAnswer)).toEqual({ event: 'closed', handle });
+    expect(runtime.lines.filter(isEnd('op-0000000b')).map((line) => ('event' in line ? line.event : undefined))).toEqual(['failed']);
+  });
+
   it('answers every cancel in recover mode, though the first could not record itself', async () => {
     behave({ hold_ms: 60_000, output: { ok: true } });
     const first = start();
