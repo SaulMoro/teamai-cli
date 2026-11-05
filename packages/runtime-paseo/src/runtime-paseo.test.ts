@@ -601,6 +601,34 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
   });
 
+  it('ends a prompt whose create Paseo refused cancel_failed, since a refused create may still start its agent', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 1_500, refuse_create_early: 'Connection reset before the create was answered' });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    const agentId = agentIdOf(OpIdSchema.parse('op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed',
+      failure: { code: 'cancel_failed', message: `Paseo could not create the claude agent ${agentId} (Connection reset before the create was answered), and does not show it, though it may still start. It may still run in the worktree; stop it in the Paseo app.` },
+    });
+    // It did start.
+    await expect.poll(agentsOf, { timeout: 5_000 }).toEqual([agentId]);
+  });
+
+  it('ends a prompt whose create never reached Paseo agent_create_failed, since no agent can have started', async () => {
+    behave({ output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    // The worktree is gone before the create: Paseo cannot open it as the agent's workspace, so the create is never sent.
+    fs.rmSync(worktree, { recursive: true });
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'agent_create_failed', message: expect.stringMatching(/^Paseo could not create the claude agent: /) } });
+    expect(received()).toEqual([]);
+  });
+
   it('ends a prompt that fails once its agent exists cancel_failed, naming the cause, since the agent may still run', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 1_500 });
     const runtime = start();
