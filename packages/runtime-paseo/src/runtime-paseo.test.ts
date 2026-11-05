@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { OpIdSchema, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCodexExecutable } from './daemon.js';
@@ -50,7 +50,7 @@ const isOp = (op: string, event: string) => (line: RuntimeMessage): boolean => '
 const isEnd = (op: string) => (line: RuntimeMessage): boolean => 'op' in line && line.op === op && 'event' in line && ['finished', 'failed', 'cancelled'].includes(line.event);
 const isInit = (line: RuntimeMessage): boolean => 'type' in line && line.type === 'init';
 
-async function ready(runtime: Runtime, { mode = 'unattended', options = { url: daemon.url } }: { mode?: 'attended' | 'unattended'; options?: RuntimeOptions } = {}): Promise<RuntimeMessage> {
+async function ready(runtime: Runtime, { mode = 'unattended', options = { url: daemon.url } }: { mode?: RuntimeMode; options?: RuntimeOptions } = {}): Promise<RuntimeMessage> {
   runtime.send({ type: 'init', protocol: 1, mode, options });
 
   return runtime.next(isInit);
@@ -705,6 +705,37 @@ describe('teamai-runtime-paseo', () => {
     expect(await back.next(isAnswer(['closed', 'close_failed']))).toEqual({ event: 'closed', handle });
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: handle.split('/')[0] }]);
   }, 40_000);
+
+  it('opens in recover mode with no daemon to reach, checking no tool and offering nothing', async () => {
+    const { url } = daemon;
+    await daemon.close();
+
+    expect(await ready(start(), { mode: 'recover', options: { url } })).toEqual({ type: 'init', ok: true, can: {} });
+  });
+
+  it('stops a journaled prompt in recover mode though its tool is signed out since, reaching the daemon for the cancel and the close', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'accepted'));
+    await expect.poll(() => received().length).toBe(1);
+    await first.kill();
+    behave({ sign_in: { claude: 'signed_out' } });
+
+    const recovering = start();
+    expect(await ready(recovering, { mode: 'recover' })).toEqual({ type: 'init', ok: true, can: {} });
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    recovering.send({ type: 'reattach', handle });
+    expect(await recovering.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'cancelled' }] });
+    recovering.send({ type: 'close', handle });
+
+    expect(await recovering.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().map((request) => request.type)).toEqual(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request']);
+  });
 
   it('refuses to close a place whose record it cannot read, and never calls it gone', async () => {
     const runtime = start();
