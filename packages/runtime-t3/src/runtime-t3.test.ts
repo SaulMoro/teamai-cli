@@ -127,6 +127,52 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
     });
 
+    describe('when the silent sign-in fails', () => {
+      const failures: Array<{ failure: string; path?: () => string; config?: Parameters<FakeT3['config']>[0]; reason: string }> = [
+        { failure: 'there is no t3 command', path: () => PATH_WITHOUT_T3, reason: 'there is no t3 command on PATH' },
+        { failure: 'the t3 command fails', config: { commandFails: 3 }, reason: 't3 auth pairing create exited with status 3: Could not reach the T3 Code server' },
+        { failure: 'T3 refuses the pairing code', config: { decisionRefused: true }, reason: 'T3 Code refused the pairing code with HTTP 400: That pairing code is not valid. Create a new one and try again' },
+        { failure: 'T3 redirects with no code', config: { decisionNoCode: true }, reason: 'T3 Code\'s sign-in redirect carried no code (access_denied)' },
+      ];
+
+      /** Every secret the sign-in handled: the pairing codes the t3 command created, and the token T3 issues. */
+      const secrets = (): string[] => [...t3.pairingCodes(), 'fake-t3-token-0123456789'];
+
+      it.each(failures)('fails an unattended run login_required, saying why, when $failure', async ({ path: pathOf, config, reason }) => {
+        if (config) t3.config(config);
+        const runtime = start(pathOf ? { PATH: pathOf() } : {});
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+        const reply = await runtime.next((line) => line['type'] === 'init');
+        expect(reply).toEqual({
+          type: 'init', ok: false,
+          error: {
+            code: 'login_required',
+            message: `teamai has no valid T3 Code sign-in for ${t3.origin()} and could not sign in through the t3 command (${reason}), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.`,
+          },
+        });
+
+        for (const secret of secrets()) expect(`${JSON.stringify(reply)}${runtime.stderr()}`).not.toContain(secret);
+      });
+
+      it.each(failures)('opens T3\'s page in an attended run, saying why, when $failure', async ({ path: pathOf, config, reason }) => {
+        if (config) t3.config(config);
+        const browser = fakeBrowser(dir);
+        const runtime = start({ PATH: [browser.bin, pathOf?.() ?? [t3.bin, PATH_WITHOUT_T3].join(path.delimiter)].join(path.delimiter) });
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        expect(browser.visits()).toEqual(['/oauth/mcp/authorize']);
+        const [said, link] = runtime.stderr().split('\n');
+        expect(said).toBe(`Approve teamai in T3 Code (silent sign-in failed: ${reason}). If no browser opened, visit:`);
+        expect(link).toMatch(/^ {2}http:\/\/127\.0\.0\.1:\d+\/oauth\/mcp\/authorize\?/);
+
+        for (const secret of secrets()) expect(runtime.stderr()).not.toContain(secret);
+      });
+    });
+
     it('fails an unattended run with no sign-in and no t3 command, saying how to sign in, and asks T3 for none', async () => {
       const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
