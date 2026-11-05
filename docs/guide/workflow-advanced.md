@@ -1331,6 +1331,7 @@ teamai ships these definitions:
 | --- | --- |
 | `teamai-claude`, `teamai-codex`, `teamai-opencode` | `local`, with prompt steps on that tool |
 | `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`), then `local` |
+| `teamai-paseo` | `paseo` (`url: ws://127.0.0.1:6767/ws`, `max_parallel: 4`), then `local` |
 
 ### Runtime options
 

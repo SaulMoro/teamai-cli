@@ -23,19 +23,20 @@ npm install -g --prefix ~/.paseo-cli @getpaseo/cli
 export PASEO_CLIENT_PATH=~/.paseo-cli/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/client
 ```
 
-在团队仓库或 `~/.teamai/drivers/` 里添加一个定义，把提示词步骤交给 Paseo，其余步骤留在本机：
+teamai 自带一个定义，把提示词步骤交给本机的守护进程，其余步骤留在本机。`--driver paseo` 用的就是它：
 
 ```yaml
-# drivers/paseo.yaml
+# drivers/teamai-paseo.yaml，随 teamai 提供
 schemaVersion: v1alpha1
-name: paseo
-description: Run prompt steps as agents of the local Paseo daemon, and the rest here.
+name: teamai-paseo
+description: Run each prompt step as an agent of the Paseo daemon on this machine, in a worktree teamai prepares, and every other step on this machine.
 runtimes:
   - use: paseo
-    options:
-      max_parallel: 4
+    options: { url: ws://127.0.0.1:6767/ws, max_parallel: 4 }
   - use: local
 ```
+
+守护进程在其他地址，或需要其他选项时，在团队仓库或 `~/.teamai/drivers/` 里添加你自己的定义，如下面的示例所示。
 
 工作流不需要任何 Paseo 专用字段：
 
