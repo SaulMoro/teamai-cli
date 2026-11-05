@@ -99,7 +99,12 @@ function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
   }
 }
 
-export function serve({ input, write, journal, provider: providerFor }: RuntimeDeps): void {
+/** Whether `message` ends its op: the one line teamai reads as how that op ended. */
+function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId } {
+  return 'op' in message && 'event' in message && ['exited', 'finished', 'cancelled', 'failed'].includes(message.event);
+}
+
+export function serve({ input, write: send, journal, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
   /** The ops this process runs, each with what resolves once its end is written. */
@@ -108,6 +113,13 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const pendingStops = new Set<OpId>();
   /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
   const followers = new Map<OpId, { handle: string; end: (outcome: Outcome) => void }>();
+  /** How many ends of each op this process wrote, so a request that throws tells whether it was already answered. */
+  const endsWritten = new Map<OpId, number>();
+
+  const write = (message: RuntimeMessage): void => {
+    if (isEnd(message)) endsWritten.set(message.op, (endsWritten.get(message.op) ?? 0) + 1);
+    send(message);
+  };
 
   const claim = (op: OpId): void => {
     let end = (): void => {};
@@ -121,21 +133,35 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   };
 
   /**
-   * Ends `op`, which this process claimed: keeps `kept` (its outcome as the journal holds it), then writes `outcome`.
-   * Only an op's first end counts, so an exec that ends after its cancel already failed it writes nothing more, and an
-   * op ends even when keeping it throws. An op another process failed, or one `close` forgot, is not kept again.
+   * Keeps `kept` as op's outcome, unless the journal holds one already or `close` forgot the op, and returns the outcome
+   * to answer: `outcome`, or, when it cannot be kept, a failure naming the record. A stop it could not confirm stays
+   * `cancel_failed`, the one failure a later cancel retries.
    */
-  const finish = (op: OpId, handle: string, outcome: Outcome, kept: Outcome = outcome): void => {
-    if (!running.has(op)) return;
-
+  const keep = (op: OpId, handle: string, outcome: Outcome, kept: Outcome): Outcome => {
     try {
       const record = journal.exec(op);
 
       if (record !== undefined && record.outcome === undefined) journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
-    } finally {
-      release(op);
-      write(terminal(op, outcome));
+
+      return outcome;
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+
+      return outcome.state === 'failed' && outcome.failure.code === CANCEL_FAILED
+        ? { state: 'failed', failure: { code: CANCEL_FAILED, message: `${outcome.failure.message} ${why}` } }
+        : { state: 'failed', failure: { code: 'runtime_failed', message: `The sandbox runtime could not record how ${op} ended. ${why}` } };
     }
+  };
+
+  /**
+   * Ends `op`, which this process claimed: settles what the journal keeps first, then writes its one end. Only an op's
+   * first end counts, so an exec that ends after its cancel already failed it writes nothing more.
+   */
+  const finish = (op: OpId, handle: string, outcome: Outcome, kept: Outcome = outcome): void => {
+    if (!running.has(op)) return;
+    const answered = keep(op, handle, outcome, kept);
+    release(op);
+    write(terminal(op, answered));
   };
 
   /**
@@ -624,6 +650,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   };
 
   const answer = async (request: RuntimeRequest): Promise<void> => {
+    const endsBefore = 'op' in request ? endsWritten.get(request.op) ?? 0 : 0;
+
     try {
       await dispatch(request);
     } catch (error) {
@@ -639,9 +667,9 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
           return;
         case 'exec':
         case 'prompt':
-          // One this process claimed ends failed; one that threw before it was claimed is answered here.
+          // One this process still runs ends failed through finish; one this request has not ended yet is answered here.
           if (running.has(request.op)) finish(request.op, request.handle, { state: 'failed', failure });
-          else write({ op: request.op, event: 'failed', failure });
+          else if ((endsWritten.get(request.op) ?? 0) === endsBefore) write({ op: request.op, event: 'failed', failure });
 
           return;
         case 'open':
