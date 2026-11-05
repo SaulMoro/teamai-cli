@@ -367,6 +367,13 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     send(op, outcome);
   };
 
+  /** Records whether a prompt sent its create, on its record as it stands: one a close removed is not written again. */
+  const dispatch = (op: OpId, dispatched: AgentPrompt['dispatched']): void => {
+    const current = journal.prompt(op);
+
+    if (current?.kind === 'agent' && current.dispatched !== dispatched) journal.savePrompt(op, { ...current, dispatched });
+  };
+
   /**
    * Cancels a prompt's agent in Paseo and confirms it stopped by `deadline`, or says why it may still run, since the
    * agent may then still change the worktree.
@@ -833,10 +840,17 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     try {
       // The agent of a repeated prompt is found by its id; a create a runtime died before sending is sent again. A lookup
       // that fails throws: an earlier runtime may have created the agent.
-      const creation: Creation = (await live.agent(create.agentId)) ? { outcome: 'created' } : await live.create(record.cwd, create);
+      let creation: Creation = { outcome: 'created' };
+
+      if (!(await live.agent(create.agentId))) {
+        // Journaled before it is sent, and kept until Paseo shows the agent: a create that failed may still start it.
+        dispatch(op, 'unconfirmed');
+        creation = await live.create(record.cwd, create);
+      }
 
       // Only a create never sent proves no agent started.
       if (creation.outcome === 'unsent') {
+        dispatch(op, undefined);
         settle(op, { op, state: 'failed', failure: { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${creation.cause}` } }, following);
 
         return;
@@ -844,7 +858,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
       // Paseo may have created the agent though the create failed, as when its answer was lost: one it shows is followed,
       // and one it does not show may still start.
-      if (creation.outcome === 'failed' && !(await live.agent(create.agentId).catch(() => null))) {
+      if (creation.outcome !== 'created' && !(await live.agent(create.agentId).catch(() => null))) {
         settle(op, {
           op, state: 'failed',
           failure: { code: CANCEL_FAILED, message: `Paseo could not create the ${record.tool} agent ${create.agentId} (${creation.cause}), and does not show it, though it may still start. It may still run in the worktree; stop it in the Paseo app.` },
@@ -853,6 +867,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         return;
       }
 
+      dispatch(op, 'confirmed');
       following.created = true;
     } finally {
       following.landed();
@@ -1124,6 +1139,31 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   }
 
   /**
+   * Why a close keeps a place: a create it sent that Paseo has not shown the agent of, as when the create failed, may still
+   * start that agent. A lookup that finds the agent confirms it, so the close stops it; one that finds none, fails or
+   * comes late proves nothing.
+   */
+  const unseen = async (live: Daemon, handle: string, deadline: number): Promise<RuntimeFailure | undefined> => {
+    const sent = journal.promptsOf(handle).flatMap(({ op, record }) => (record.kind === 'agent' && record.dispatched === 'unconfirmed' ? [{ op, record }] : []));
+
+    const missing = (await Promise.all(sent.map(async ({ op, record }) => {
+      const agent = await Promise.race([live.agent(record.create.agentId).catch(() => undefined), late(deadline)]);
+
+      if (!agent || agent === 'late') return [record];
+      dispatch(op, 'confirmed');
+
+      return [];
+    }))).flat();
+
+    if (missing.length === 0) return undefined;
+
+    return {
+      code: 'close_failed',
+      message: `${missing.map((record) => `Paseo does not show the ${record.tool} agent ${record.create.agentId}, though its create was sent, so that create may still start it in the worktree.`).join(' ')} Look for the agent in the Paseo app and stop it if it runs, then close the attempt again: teamai keeps the attempt until Paseo shows the agent.`,
+    };
+  };
+
+  /**
    * Ends an attempt's place once nothing it started runs. A place whose agent may still run is kept, so teamai can close
    * it again: one the runtime cannot stop, or any place while it reaches no daemon, as after a restart whose init failed.
    */
@@ -1164,7 +1204,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const live = place?.workspace && (await reachBy(deadline));
 
     const failure = place?.workspace && (live && !('code' in live)
-      ? await stopPlace(live, handle, place, deadline)
+      ? (await unseen(live, handle, deadline)) ?? (await stopPlace(live, handle, place, deadline))
       : withoutDaemon(live, `stop the agents of ${handle} or archive its workspace`, 'close the attempt again'));
 
     if (failure) {

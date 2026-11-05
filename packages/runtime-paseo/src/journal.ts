@@ -9,7 +9,8 @@ import { z } from 'zod';
 //
 //    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree once Paseo
 //                           opened it, or, for a confined prompt's place, the prompt's directory
-//    ops/<op>.json          a prompt: its handle, then the agent create it sends, and once it ended, its outcome
+//    ops/<op>.json          a prompt: its handle, then the agent create it sends, whether it sent it and Paseo showed
+//                           the agent, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
 //    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
@@ -93,6 +94,11 @@ const PromptRecordSchema = z.discriminatedUnion('kind', [
     /** The directory the agent works in: the worktree, or a confined prompt's directory. */
     cwd: z.string(),
     create: AgentCreateSchema,
+    /**
+     * Whether a create was sent: absent until one is about to be, which proves none was; `unconfirmed` once one may have
+     * reached Paseo, which may still start its agent though the create failed; `confirmed` once Paseo showed the agent.
+     */
+    dispatched: z.enum(['unconfirmed', 'confirmed']).optional(),
     outcome: OpStateSchema.optional(),
   }),
 ]);
