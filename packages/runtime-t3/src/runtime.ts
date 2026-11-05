@@ -1030,7 +1030,11 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     const handle = handleOf.get(op);
-    let known = handle ? place(handle) : journal.placeOf(op);
+    const read = handle ? journal.read(handle) : journal.placeOf(op);
+
+    // A record that cannot be read may hold the op's thread: that is no proof it launched nothing.
+    if (read.kind === 'unreadable') return fail(op, { ...unreadable(handle ?? decodeURIComponent(path.basename(read.file, '.json')), read), code: CANCEL_FAILED });
+    let known = read.kind === 'found' ? read.place : undefined;
     const retained = known?.ops[op];
 
     // A runtime before this one launched the thread and died, maybe before T3 answered the launch, or a stop failed

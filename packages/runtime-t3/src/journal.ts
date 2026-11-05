@@ -76,8 +76,11 @@ export type PlaceRead = { kind: 'found'; place: PlaceRecord } | { kind: 'missing
 
 export interface Journal {
   read(handle: string): PlaceRead;
-  /** The place whose operations include `op`: a restarted runtime is asked to cancel an op before it reattaches. */
-  placeOf(op: string): PlaceRecord | undefined;
+  /**
+   * The place whose operations include `op`: a restarted runtime is asked to cancel an op before it reattaches. With
+   * none, a record that cannot be read may hold it, so the answer is unreadable then, not missing.
+   */
+  placeOf(op: string): PlaceRead;
   write(place: PlaceRecord): void;
   remove(handle: string): void;
   /** The file that holds the place's record, which the person deletes once they stopped what it may still run. */
@@ -112,14 +115,17 @@ export function journal(dir: string): Journal {
     read,
     placeOf(op) {
       const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')) : [];
+      let unreadable: PlaceRead = { kind: 'missing' };
 
       for (const name of names) {
         const found = read(decodeURIComponent(name.slice(0, -'.json'.length)));
 
-        if (found.kind === 'found' && found.place.ops[op] !== undefined) return found.place;
+        if (found.kind === 'found' && found.place.ops[op] !== undefined) return found;
+
+        if (found.kind === 'unreadable' && unreadable.kind === 'missing') unreadable = found;
       }
 
-      return undefined;
+      return unreadable;
     },
     write(place) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

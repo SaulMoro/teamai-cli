@@ -1403,6 +1403,36 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toEqual([]);
     });
 
+    // A record that cannot be read is not proof the op launched nothing, so the cancel neither stops nor forgets its thread.
+    it('fails a cancel after a restart cancel_failed, naming the record it cannot read, and a resent prompt then reconnects rather than ending cancelled', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const first = await opened();
+      first.runtime.send(prompt(first.handle, 'op-00000070'));
+      await first.runtime.next((line) => line['op'] === 'op-00000070' && line['event'] === 'display');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(first.handle)}.json`);
+      const kept = fs.readFileSync(record, 'utf8');
+      fs.writeFileSync(record, '{broken');
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send({ type: 'cancel', op: 'op-00000070' });
+
+      expect(await second.next((line) => line['op'] === 'op-00000070')).toEqual({ op: 'op-00000070', event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(record) } });
+      expect(fs.readFileSync(record, 'utf8')).toBe('{broken');
+
+      // The person repairs the record: the resent prompt follows the thread the record names.
+      fs.writeFileSync(record, kept);
+      second.send(prompt(first.handle, 'op-00000070'));
+      await second.next((line) => line['op'] === 'op-00000070' && line['event'] === 'accepted');
+      second.send({ type: 'reattach', handle: first.handle });
+      expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000070', state: 'running' }] });
+      expect(second.lines.filter((line) => line['op'] === 'op-00000070' && line['event'] === 'cancelled')).toEqual([]);
+      expect(t3.threads()[0]?.status).toBe('running');
+    });
+
     // teamai fails every request it waits on when a runtime writes a line that names none, so each failure names its own.
     it('fails only the request it cannot carry out, naming its handle or op, when its journal cannot be written', async () => {
       const { runtime, handle } = await opened();
