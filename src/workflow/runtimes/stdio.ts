@@ -269,7 +269,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
         listen('open', request.op, (event) => {
           if (isFailure(event)) {
             ops.delete(request.op);
-            resolve({ kind: 'failed', failure: event });
+            settleAfterPersisted({ kind: 'failed', failure: event });
 
             return;
           }
