@@ -1110,7 +1110,7 @@ describe('teamai-runtime-t3', () => {
       const unreadable = { code: 'journal_unreadable', message: expect.stringContaining(record) };
 
       runtime.send({ type: 'reattach', handle });
-      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'alive', handle, ops: [] });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'failed', handle, failure: unreadable });
       runtime.send(prompt(handle, 'op-00000049'));
       expect(await ended(runtime, 'op-00000049')).toEqual({ op: 'op-00000049', event: 'failed', failure: unreadable });
       runtime.send({ type: 'collect', handle });
@@ -1120,6 +1120,24 @@ describe('teamai-runtime-t3', () => {
 
       expect(fs.readFileSync(record, 'utf8')).toBe('{broken');
       expect(t3.threads()).toEqual([]);
+    });
+
+    // teamai fails every request it waits on when a runtime writes a line that names none, so each failure names its own.
+    it('fails only the request it cannot carry out, naming its handle or op, when its journal cannot be written', async () => {
+      const { runtime, handle } = await opened();
+      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+      fs.chmodSync(places, 0o500);
+
+      runtime.send({ type: 'open', op: 'op-00000062', run: RUN, attempt: 'a9e8d7c6', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      expect(await runtime.next((line) => line['op'] === 'op-00000062' && line['event'] !== 'accepted')).toEqual({
+        op: 'op-00000062', event: 'failed', failure: { code: 'runtime_error', message: expect.stringMatching(/^Runtime t3 could not carry out open of op-00000062: .*EACCES/) },
+      });
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({
+        event: 'failed', handle, failure: { code: 'runtime_error', message: expect.stringMatching(new RegExp(`^Runtime t3 could not carry out close of ${handle}: .*EACCES`)) },
+      });
+
+      expect(runtime.lines.filter((line) => line['event'] === 'error')).toEqual([]);
     });
 
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
