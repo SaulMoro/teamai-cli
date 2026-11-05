@@ -638,6 +638,42 @@ describe('teamai-runtime-paseo', () => {
     await expect.poll(agentsOf, { timeout: 5_000 }).toEqual([agentId]);
   });
 
+  it('keeps an attempt whose refused create may still start its agent, after a restart too, and closes it once Paseo shows the agent', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 8_000, refuse_create_early: 'Connection reset before the create was answered' });
+    const first = start();
+    await ready(first, { mode: 'attended' });
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    expect(await first.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    const agentId = agentIdOf(OpIdSchema.parse('op-0000000b'));
+    const isCloseAnswer = (line: RuntimeMessage): boolean => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event);
+    const mayStart = {
+      event: 'close_failed', handle,
+      failure: {
+        code: 'close_failed',
+        message: `Paseo does not show the claude agent ${agentId}, though its create was sent, so that create may still start it in the worktree. Look for the agent in the Paseo app and stop it if it runs, then close the attempt again: teamai keeps the attempt until Paseo shows the agent.`,
+      },
+    };
+
+    first.send({ type: 'close', handle });
+
+    expect(await first.next(isCloseAnswer)).toEqual(mayStart);
+    await first.kill();
+    const recovering = start();
+    await ready(recovering, { mode: 'recover' });
+    recovering.send({ type: 'close', handle });
+    expect(await recovering.next(isCloseAnswer)).toEqual(mayStart);
+    expect(received().map((request) => request.type)).toEqual(['agent.create.request']);
+
+    // The create lands: the next close stops the agent it started.
+    await expect.poll(agentsOf, { timeout: 15_000 }).toEqual([agentId]);
+    recovering.send({ type: 'close', handle });
+    expect(await recovering.next(isCloseAnswer)).toEqual({ event: 'closed', handle });
+    const kept = JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { status: string }> };
+    expect(Object.values(kept.agents).filter((agent) => agent.status === 'running')).toEqual([]);
+    expect(journalFiles()).toEqual([]);
+  }, 40_000);
+
   it('ends a prompt whose create never reached Paseo agent_create_failed, since no agent can have started', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
