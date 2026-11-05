@@ -393,10 +393,10 @@ The place counts as closed only once Paseo reports each of the attempt's agents 
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
-A create Paseo answered with an error, as a dropped connection does, may still start its agent. Until Paseo shows that agent, the attempt stays open:
+A create Paseo answered with an error, as a dropped connection does, may still start its agent. Until Paseo shows that agent, the attempt stays open. Once it appears, the next `teamai workflow cancel` stops it. teamai cannot tell a create Paseo refused, so if the agent never appears, delete the record the message names, then cancel again:
 
 ```text
-Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, though its create was sent, so that create may still start it in the worktree. Look for the agent in the Paseo app and stop it if it runs, then close the attempt again: teamai keeps the attempt until Paseo shows the agent.
+Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel r3ad62eacc3c191eb again, which stops it. If it never appears in Paseo, the create was refused: delete ~/.teamai/runtime-state/paseo/ops/op-3f9c2a7b1d4e6f80.json and run teamai workflow cancel r3ad62eacc3c191eb again.
 ```
 
 Two attempts on one worktree share its Paseo workspace, which only the last of them to close archives. An attempt that closes first cancels its own agents instead, a failed step's included, and leaves the other attempt's running. An agent Paseo will not cancel keeps the attempt open, so teamai can close it again:
