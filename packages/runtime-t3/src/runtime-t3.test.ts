@@ -386,7 +386,8 @@ describe('teamai-runtime-t3', () => {
       t3.config({ agent: { waits: true }, ...config });
       const { runtime, handle } = await opened('unattended');
       runtime.send(prompt(handle, 'op-00000035'));
-      expect(await ended(runtime, 'op-00000035')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('Stop it in T3 Code with its Stop button.') } });
+      // The thread may still run, so the op ends with the one code teamai reads as a stop it could not confirm.
+      expect(await ended(runtime, 'op-00000035')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('Stop it in T3 Code with its Stop button.') } });
 
       runtime.send({ type: 'collect', handle });
 
@@ -397,7 +398,7 @@ describe('teamai-runtime-t3', () => {
 
       expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'collected')).toMatchObject({ event: 'close_failed', handle, failure: { code: 'thread_still_runs' } });
       runtime.send({ type: 'reattach', handle });
-      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000035', state: 'failed' }] });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000035', state: 'failed', failure: { code: 'cancel_failed' } }] });
       expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
 
       // T3 stops it now: close stops it, settles it and drops the place.
@@ -586,7 +587,7 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()[0]?.settled).toBe(true);
       });
 
-      it('gives no cancelled after a restart until the stopped run\'s delegated work settled', async () => {
+      it('answers a cancel after a restart cancel_failed until the stopped run\'s delegated work settled, and running while a later cancel retries', async () => {
         t3.config({ agent: { hold: true, output: {} } });
         const first = await opened();
         first.runtime.send(prompt(first.handle, 'op-00000043'));
@@ -599,15 +600,17 @@ describe('teamai-runtime-t3', () => {
         second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         second.send({ type: 'cancel', op: 'op-00000043' });
-        await expect.poll(() => t3.threads()[0]?.status).toBe('interrupted');
-        await new Promise((resolve) => setTimeout(resolve, 600));
 
-        expect(second.lines.filter((line) => line['op'] === 'op-00000043')).toEqual([]);
+        expect(await second.next((line) => line['op'] === 'op-00000043')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('the work it delegated had not settled') } });
+        expect(t3.threads()[0]?.status).toBe('interrupted');
+        second.send({ type: 'reattach', handle: first.handle });
+        expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000043', state: 'failed', failure: { code: 'cancel_failed' } }] });
+
+        // The retried stop takes a while: until it is confirmed, the op runs, so its old failure is not read as this cancel's outcome.
+        t3.config({ delegatesPending: false, interruptMs: 1_000 });
+        second.send({ type: 'cancel', op: 'op-00000043' });
         second.send({ type: 'reattach', handle: first.handle });
         expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000043', state: 'running' }] });
-
-        t3.config({ delegatesPending: false });
-        second.send({ type: 'cancel', op: 'op-00000043' });
 
         expect(await second.next((line) => line['op'] === 'op-00000043')).toEqual({ op: 'op-00000043', event: 'cancelled' });
         second.send({ type: 'collect', handle: first.handle });
@@ -670,7 +673,7 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000020', state: 'running' }] });
     });
 
-    it('keeps a prompt running, and a later close failing, while T3 will not stop its thread', async () => {
+    it('ends a cancelled prompt cancel_failed, and a later close fails, while T3 will not stop its thread', async () => {
       t3.config({ agent: { hold: true, output: {} }, waitCapMs: 50 });
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000021'));
@@ -682,21 +685,46 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'cancel', op: 'op-00000021' });
       runtime.send({ type: 'close', handle });
       expect(await runtime.next((line) => line['event'] === 'close_failed', 5_000)).toMatchObject({ handle });
-      runtime.send({ type: 'close', handle });
+      const [thread] = t3.threads();
 
+      expect(await ended(runtime, 'op-00000021')).toEqual({
+        op: 'op-00000021', event: 'failed', failure: {
+          code: 'cancel_failed',
+          message: `The T3 thread ${linkTo(thread?.threadId)} ("review · teamai ${RUN}") still runs, and T3 Code did not stop it: Thread ${thread?.threadId} has a run T3 cannot interrupt now. Stop it in T3 Code with its Stop button, then run teamai workflow cancel ${RUN} again.`,
+        },
+      });
+      runtime.send({ type: 'close', handle });
       expect(await runtime.next((line) => line['event'] === 'close_failed' || line['event'] === 'closed', 5_000)).toMatchObject({ event: 'close_failed', failure: { code: 'thread_still_runs' } });
       runtime.send({ type: 'reattach', handle });
-      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000021', state: 'running' }] });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000021', state: 'failed', failure: { code: 'cancel_failed' } }] });
       expect(runtime.lines.filter((line) => line['op'] === 'op-00000021' && line['event'] === 'cancelled')).toEqual([]);
       expect(t3.threads()[0]?.status).toBe('running');
     });
+
+    // teamai ends a live prompt it cancelled lost when no outcome comes within 15 s, so the runtime answers well before.
+    it('answers a live cancel cancel_failed within the stop bound when T3 Code does not answer the stop', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000063'));
+      await runtime.next((line) => line['op'] === 'op-00000063' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      t3.config({ interruptMs: 30_000 });
+      const cancelledAt = Date.now();
+
+      runtime.send({ type: 'cancel', op: 'op-00000063' });
+
+      expect(await runtime.next((line) => line['op'] === 'op-00000063' && line['event'] !== 'accepted', 14_000)).toMatchObject({
+        event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('T3 Code did not answer the stop within 10 s') },
+      });
+      expect(Date.now() - cancelledAt).toBeLessThan(12_000);
+    }, 20_000);
 
     // T3 answers a stop of a thread the person deleted thread_not_found: nothing of it runs any more.
     it('counts a thread the person deleted in T3 as stopped and settled, so close finishes', async () => {
       t3.config({ agent: { waits: true }, interruptFails: true });
       const { runtime, handle } = await opened('unattended');
       runtime.send(prompt(handle, 'op-00000050'));
-      expect(await ended(runtime, 'op-00000050')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed' } });
+      expect(await ended(runtime, 'op-00000050')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
       t3.config({ interruptFails: false });
       t3.deleteThread(z.string().parse(t3.threads()[0]?.threadId));
 
@@ -840,6 +868,8 @@ describe('teamai-runtime-t3', () => {
         await t3.stop();
         fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
 
+        runtime.send({ type: 'cancel', op: 'op-00000061' });
+        expect(await runtime.next((line) => line['op'] === 'op-00000061')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('Open T3 Code') } });
         runtime.send({ type: 'close', handle });
         expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', failure: { code: 't3_unavailable', message: expect.stringContaining('Open T3 Code') } });
 
@@ -990,7 +1020,7 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       });
 
-      it('gives no cancelled after a restart while T3 cannot complete the repeated launch, and cancels once it can', async () => {
+      it('answers a cancel after a restart cancel_failed while T3 cannot complete the repeated launch, and cancelled once it can', async () => {
         t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
         const first = await opened();
         first.runtime.send(prompt(first.handle, 'op-0000004b'));
@@ -1002,11 +1032,11 @@ describe('teamai-runtime-t3', () => {
         second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         second.send({ type: 'cancel', op: 'op-0000004b' });
-        await expect.poll(() => t3.calls().filter((call) => call.tool === 't3_thread_launch')).toHaveLength(2);
-        second.send({ type: 'reattach', handle: first.handle });
 
-        expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000004b', state: 'running' }] });
-        expect(second.lines.filter((line) => line['op'] === 'op-0000004b')).toEqual([]);
+        expect(await second.next((line) => line['op'] === 'op-0000004b')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('The operation could not be completed') } });
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toHaveLength(2);
+        second.send({ type: 'reattach', handle: first.handle });
+        expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000004b', state: 'failed', failure: { code: 'cancel_failed' } }] });
         expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
 
         t3.config({ launchUnavailable: false });
@@ -1060,7 +1090,7 @@ describe('teamai-runtime-t3', () => {
 
           runtime.send({ type: 'cancel', op: 'op-0000004d' });
 
-          expect(await runtime.next((line) => line['op'] === 'op-0000004d')).toEqual({ op: 'op-0000004d', event: 'failed', failure: unconfirmed(record) });
+          expect(await runtime.next((line) => line['op'] === 'op-0000004d')).toEqual({ op: 'op-0000004d', event: 'failed', failure: { ...unconfirmed(record), code: 'cancel_failed' } });
           runtime.send({ type: 'close', handle });
           expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', failure: { code: 'launch_unconfirmed' } });
           expect(t3.threads()).toHaveLength(1);
@@ -1316,7 +1346,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ agent: { waits: true }, interruptFails: true });
       const { runtime, handle } = await opened({}, 'unattended');
       runtime.send(judge(handle, 'op-000000a8'));
-      expect(await ended(runtime, 'op-000000a8')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed' } });
+      expect(await ended(runtime, 'op-000000a8')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
       const copy = z.string().parse(t3.threads()[0]?.worktreePath);
 
       runtime.send({ type: 'close', handle });
