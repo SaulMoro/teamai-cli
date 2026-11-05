@@ -512,6 +512,32 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'cancelled' }] });
   });
 
+  it('answers a prompt resent while a retried cancel runs, in a runtime started again, as running, never with the old cancel_failed', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy' });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'display'));
+    first.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await first.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    await first.kill();
+
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
+    const second = start();
+    await ready(second, { mode: 'recover' });
+    second.send({ type: 'cancel', op: 'op-0000000b' });
+    const restarted = start();
+    await ready(restarted);
+    restarted.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await restarted.next(isOp('op-0000000b', 'accepted'))).toEqual({ op: 'op-0000000b', event: 'accepted' });
+    restarted.send({ type: 'reattach', handle });
+    expect(await restarted.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'running' }] });
+    expect(await second.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    expect(await restarted.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+  });
+
   it('ends a cancel Paseo does not answer cancel_failed within 10 s, inside the 15 s teamai gives it', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy', refuse_cancel_ms: 40_000 });
     const runtime = start();

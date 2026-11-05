@@ -223,6 +223,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
    * and the create that settles once Paseo answered it.
    */
   const waiting = new Map<OpId, { stop: () => void; created: boolean; creating: Promise<void> }>();
+  /** The prompts whose stop this process runs, and settles; one another process stops is settled when it journals the end. */
+  const stopping = new Set<OpId>();
   /** The worktrees this process is opening as Paseo workspaces, by handle: a close waits for its open to end. */
   const opens = new Map<string, Promise<void>>();
   /** The requests this process is answering. */
@@ -260,7 +262,15 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   const settle = (op: OpId, outcome: OpState): void => {
     const record = journal.prompt(op);
 
-    if (record?.kind !== 'agent' || record.outcome) return;
+    if (record?.kind !== 'agent') return;
+
+    // Another process ended it first, as a recover-mode cancel does: a prompt this one follows ends as that one recorded.
+    if (record.outcome) {
+      if (waiting.delete(op)) send(op, record.outcome);
+
+      return;
+    }
+
     journal.savePrompt(op, { ...record, outcome });
     waiting.delete(op);
     send(op, outcome);
@@ -695,8 +705,21 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     for (;;) {
       if (closing) return;
 
-      // Whoever sends the cancel settles the prompt once Paseo answers it.
-      if (journal.isCancelled(op)) return;
+      // Whoever runs the stop settles the prompt once it is confirmed or refused: this process, or another one, such as
+      // a recover-mode cancel, whose outcome this one waits to read. A cancel marker alone proves nothing stopped.
+      if (journal.isCancelled(op)) {
+        if (stopping.has(op)) return;
+        const ended = journal.prompt(op);
+
+        if (ended?.kind === 'agent' && ended.outcome) {
+          settle(op, ended.outcome);
+
+          return;
+        }
+
+        await Promise.race([delay(STOP_POLL_MS), stopped]);
+        continue;
+      }
 
       const end = await Promise.race([live.wait(create.agentId).catch(() => ({ dropped: true })), stopped]);
 
@@ -836,13 +859,20 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     // A prompt whose agent is still being created is cancelled once it exists.
     if (following && !following.created) return;
-    const live = await reach();
+    stopping.add(op);
 
-    const refused = live && !('code' in live)
-      ? await cancelAgent(live, record, deadline)
-      : { ...withoutDaemon(live, `cancel the ${record.tool} agent ${record.create.agentId}, which may still run in the worktree`, 'cancel the run again'), code: 'cancel_failed' };
+    try {
+      const live = await reach();
 
-    settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' });
+      const refused = live && !('code' in live)
+        ? await cancelAgent(live, record, deadline)
+        : { ...withoutDaemon(live, `cancel the ${record.tool} agent ${record.create.agentId}, which may still run in the worktree`, 'cancel the run again'), code: 'cancel_failed' };
+
+      settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' });
+    } finally {
+      stopping.delete(op);
+    }
+
     following?.stop();
   }
 
