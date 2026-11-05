@@ -12,10 +12,10 @@ import type { Can, PlaceView, RuntimeDisplay, RuntimeFailure } from '@teamai/run
 //
 
 /**
- * The longest a provider's stop takes. teamai ends a live exec whose cancel has no outcome 15 s after it sent the
- * cancel, so the stop and the wait for the exec's process to end (runtime.ts) fit inside that.
+ * The longest one provider command on a stop or close path runs (a lookup, a stop, a removal) before it is killed and
+ * answers with how to clean up by hand. The runtime bounds a whole stop or close at 10 s on top of that (runtime.ts).
  */
-export const STOP_MS = 9_000;
+export const COMMAND_MS = 9_000;
 
 /** The attempt a sandbox belongs to, which names it and finds it again. */
 export interface PlaceKey {
@@ -44,6 +44,7 @@ export function unreachable(failure: RuntimeFailure): Provider {
     stop: async (id) => kept(id),
     destroy: async (id) => kept(id),
     display: (key) => ({ label: sandboxName(key) }),
+    removal: (key) => `remove sandbox ${sandboxName(key)} once the sandbox runtime reaches its engine`,
   };
 }
 
@@ -85,9 +86,12 @@ export interface Provider {
   exec(id: string, spec: ExecSpec, onOutput: (stream: 'stdout' | 'stderr', data: string) => void): Promise<ExecEnd>;
   /**
    * Stops every process running in the sandbox; the sandbox stays, ready for the next exec. Ok only once they are gone.
-   * It answers within STOP_MS, failing with how to remove the sandbox when the technology does not answer by then.
+   * It answers within COMMAND_MS, failing with how to remove the sandbox when the technology does not answer by then.
    */
   stop(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
+  /** Removes the sandbox and every process in it; ok once it is gone. It answers within COMMAND_MS. */
   destroy(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   display(key: PlaceKey): RuntimeDisplay;
+  /** How a person removes the place by hand, as the end of a sentence: "remove it with `…`". */
+  removal(place: PlaceKey & { confined?: true }): string;
 }

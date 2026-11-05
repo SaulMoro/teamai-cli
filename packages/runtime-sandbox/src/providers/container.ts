@@ -1,7 +1,7 @@
 import type { ContainerEngine } from '../options.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
-import { sandboxName, STOP_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -55,7 +55,7 @@ function dnsStaysInside(version: string): boolean {
   return major >= 26 || (major === 25 && (minor > 0 || patch >= 5)) || (major === 23 && (minor > 0 || patch >= 11));
 }
 
-/** Seconds a stop waits before the engine kills the container, well inside STOP_MS. */
+/** Seconds a stop waits before the engine kills the container, well inside COMMAND_MS. */
 const STOP_GRACE = '5';
 
 export interface Host {
@@ -90,7 +90,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
   const sandboxFailed = (message: string) => ({ ok: false as const, failure: { code: 'sandbox_failed', message } });
 
   const find: Provider['find'] = async (key) => {
-    const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`]);
+    const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`], { timeoutMs: COMMAND_MS });
 
     if (listed.kind === 'ran' && listed.code === 0) return { ok: true, id: listed.stdout.trim().split('\n').find((line) => line !== '') };
 
@@ -204,16 +204,16 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     },
 
     async release(key) {
-      const filter = await cli(['rm', '--force', filterOf(key)]);
+      const filter = await cli(['rm', '--force', filterOf(key)], { timeoutMs: COMMAND_MS });
 
       if (!(filter.kind === 'ran' && (filter.code === 0 || said(filter, /no such container/i)))) {
-        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the judge's network filter ${filterOf(key)}: ${lastLine(filter)}. Remove it with \`${engine} rm --force ${filterOf(key)}\`.` } };
+        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the judge's network filter ${filterOf(key)}: ${why(filter)}. Remove it with \`${engine} rm --force ${filterOf(key)}\`.` } };
       }
 
-      const network = await cli(['network', 'rm', networkOf(key)]);
+      const network = await cli(['network', 'rm', networkOf(key)], { timeoutMs: COMMAND_MS });
 
       if (!(network.kind === 'ran' && (network.code === 0 || said(network, /not found|no such network/i)))) {
-        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the judge network ${networkOf(key)}: ${lastLine(network)}. Remove it with \`${engine} network rm ${networkOf(key)}\`.` } };
+        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the judge network ${networkOf(key)}: ${why(network)}. Remove it with \`${engine} network rm ${networkOf(key)}\`.` } };
       }
 
       return { ok: true };
@@ -231,7 +231,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     },
 
     async stop(id) {
-      const restarted = await cli(['restart', '--time', STOP_GRACE, id], { timeoutMs: STOP_MS });
+      const restarted = await cli(['restart', '--time', STOP_GRACE, id], { timeoutMs: COMMAND_MS });
 
       if (restarted.kind === 'ran' && restarted.code === 0) return { ok: true };
 
@@ -239,13 +239,17 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     },
 
     async destroy(id) {
-      const removed = await cli(['rm', '--force', id]);
+      const removed = await cli(['rm', '--force', id], { timeoutMs: COMMAND_MS });
 
       if (removed.kind === 'ran' && (removed.code === 0 || /no such container/i.test(removed.stderr))) return { ok: true };
 
-      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${lastLine(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
+      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
     },
 
     display: (key) => ({ label: `${sandboxName(key)} (${engine})`, fields: { container: sandboxName(key), image } }),
+
+    removal: (place) => (place.confined
+      ? `remove it with \`${engine} rm --force ${sandboxName(place)} ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``
+      : `remove it with \`${engine} rm --force ${sandboxName(place)}\``),
   };
 }
