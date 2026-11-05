@@ -384,6 +384,8 @@ export function serve(options: ServeOptions): Promise<void> {
   const running = new Map<OpId, Running>();
   /** Ops teamai cancelled before this process saw their prompt. */
   const cancelledEarly = new Set<OpId>();
+  /** Ops whose cancel failed on a record it could not read, which may have been another place's. */
+  const cancelledUnread = new Set<OpId>();
   /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
   const working = new Map<string, Set<Promise<unknown>>>();
 
@@ -902,6 +904,14 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
+    // A record that holds the op was the one its cancel could not read, and the prompt reconnects to what it holds. One
+    // that holds nothing of it says the cancel failed on another place's record, so the cancel stands.
+    if (cancelledUnread.delete(request.op) && !ended) {
+      refuse({ op: request.op, state: 'cancelled' });
+
+      return;
+    }
+
     const lease = request.lease;
     const driver = driverOf(lease.tool);
     const instance = driver && s.instances.get(DRIVERS[driver].tool);
@@ -1094,7 +1104,12 @@ export function serve(options: ServeOptions): Promise<void> {
     const read = handle ? journal.read(handle) : journal.placeOf(op);
 
     // A record that cannot be read may hold the op's thread: that is no proof it launched nothing.
-    if (read.kind === 'unreadable') return fail(op, { ...unreadable(handle ?? decodeURIComponent(path.basename(read.file, '.json')), read), code: CANCEL_FAILED });
+    if (read.kind === 'unreadable') {
+      cancelledUnread.add(op);
+
+      return fail(op, { ...unreadable(handle ?? decodeURIComponent(path.basename(read.file, '.json')), read), code: CANCEL_FAILED });
+    }
+
     let known = read.kind === 'found' ? read.place : undefined;
     const retained = known?.ops[op];
 
@@ -1423,7 +1438,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
         // teamai fails every request it waits on for an error line, so one is written only for a line that names none. An
         // op this process saw, or one a record holds or may hold, already has its outcome or gets it from what runs it.
-        if (named.op !== undefined && (handleOf.has(named.op) || running.has(named.op) || cancelledEarly.has(named.op) || journal.placeOf(named.op).kind !== 'missing')) {
+        if (named.op !== undefined && (handleOf.has(named.op) || running.has(named.op) || cancelledEarly.has(named.op) || cancelledUnread.has(named.op) || journal.placeOf(named.op).kind !== 'missing')) {
           process.stderr.write(`Dropped a line that names ${named.op}, which runtime t3 already runs or answered: ${message}\n`);
         } else if (named.op !== undefined) fail(named.op, { code: named.type === 'cancel' ? CANCEL_FAILED : 'runtime_protocol', message });
         else if (named.handle !== undefined) write({ event: 'failed', handle: named.handle, failure: { code: 'runtime_protocol', message } });
