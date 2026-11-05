@@ -404,7 +404,7 @@ A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its
 `teamai workflow cancel` after a crash opens the runtime in recover mode. It checks no sign-in, so a tool signed out since does not keep it from stopping the agent, and it reaches the daemon only to cancel the agent and close the attempt. While the daemon is down, the cancel keeps the attempt and the login, and says why:
 
 ```text
-No Paseo daemon answers at ws://127.0.0.1:6767/ws (no answer in 10 s). Start it with `paseo start`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, which may still run in the worktree; cancel the run again.
+No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `paseo start`, or set the runtime's url option to the daemon's address. Until then teamai-runtime-paseo cannot cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, which may still run in the worktree; cancel the run again.
 ```
 
 Start the daemon, then run `teamai workflow cancel` again.
