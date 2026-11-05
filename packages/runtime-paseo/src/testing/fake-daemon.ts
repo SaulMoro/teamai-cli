@@ -84,6 +84,11 @@ const BehaviourSchema = z.object({
   create_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to archive a workspace. */
   archive_ms: z.number().int().nonnegative().default(0),
+  /**
+   * The daemon answers the create with this error at once, as a dropped connection does, yet creates and starts the agent
+   * `create_ms` later: its answer came before the agent existed.
+   */
+  refuse_create_early: z.string().optional(),
   /** The daemon creates the agent and starts it, but its answer is lost: the create fails as a dropped connection does. */
   lose_create_reply: z.boolean().default(false),
 });
@@ -352,7 +357,10 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
 
     if (hold > 0 && !held.has(message)) {
       held.add(message);
-      timers.add(setTimeout(() => handle(message, reply), hold));
+      const early = message.type === 'agent.create.request' ? behaviour().refuse_create_early : undefined;
+
+      if (message.type === 'agent.create.request' && early !== undefined) reply({ type: 'agent.create.response', payload: { requestId: message.requestId, agent: null, error: early } });
+      timers.add(setTimeout(() => handle(message, early === undefined ? reply : () => {}), hold));
 
       return;
     }
@@ -402,6 +410,13 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
 
         return;
       case 'open_project_request': {
+        if (!fs.existsSync(message.cwd)) {
+          // As Paseo answers a directory that is gone.
+          reply({ type: 'open_project_response', payload: { requestId: message.requestId, workspace: null, error: `Directory not found: ${message.cwd}`, errorCode: 'directory_not_found' } });
+
+          return;
+        }
+
         const cwd = fs.realpathSync(message.cwd);
         const id = kept.workspaces[cwd] ?? `wks_${createHash('sha256').update(cwd).digest('hex').slice(0, 16)}`;
         kept.workspaces[cwd] = id;
