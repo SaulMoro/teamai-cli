@@ -13,8 +13,7 @@ import { z } from 'zod';
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
 //    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
-//                           own records, and one that cannot be read stops only its own handle. A handle an earlier
-//                           version opened has no such directory, and is found by reading every record
+//                           own records, and one that cannot be read stops only its own handle
 //
 //  The agent create is kept as sent, so a runtime started again sends the same one: Paseo answers a repeated
 //  idempotency key with the agent it created, and refuses one whose request changed. Each file is written to a
@@ -153,17 +152,13 @@ export function journal(root: string) {
     }
   });
 
-  const promptsOf = (handle: string): Array<{ op: OpId; record: PromptRecord }> => {
-    const indexed = fs.existsSync(indexDir(handle));
-    const candidates = indexed ? names(indexDir(handle)) : names(path.join(root, 'ops')).flatMap((name) => (name.endsWith('.json') ? [name.replace(/\.json$/, '')] : []));
+  /** The prompts `handle`'s index names; a record outside it is never read for `handle`. */
+  const promptsOf = (handle: string): Array<{ op: OpId; record: PromptRecord }> => names(indexDir(handle)).flatMap((name) => {
+    const op = OpIdSchema.safeParse(name);
+    const record = op.success ? read(promptFile(op.data), PromptRecordSchema) : undefined;
 
-    return candidates.flatMap((name) => {
-      const op = OpIdSchema.safeParse(name);
-      const record = op.success ? read(promptFile(op.data), PromptRecordSchema) : undefined;
-
-      return op.success && record?.handle === handle ? [{ op: op.data, record }] : [];
-    });
-  };
+    return op.success && record?.handle === handle ? [{ op: op.data, record }] : [];
+  });
 
   return {
     place: (handle: string): Place | undefined => read(placeFile(handle), PlaceSchema),
@@ -189,7 +184,7 @@ export function journal(root: string) {
         : place.kind === 'worktree' && directory !== undefined && resolved(place.cwd) === resolved(directory))).map(({ handle }) => handle),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
     savePrompt(op: OpId, record: PromptRecord): void {
-      // Indexed only under a handle opened with an index: one an earlier version opened is still read whole.
+      // Indexed under the directory `savePlace` made: a handle `forget` removed gets none back.
       if (fs.existsSync(indexDir(record.handle))) fs.writeFileSync(path.join(indexDir(record.handle), op), '');
       write(promptFile(op), record);
     },

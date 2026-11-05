@@ -1015,23 +1015,21 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && ['alive', 'gone'].includes(line.event))).toEqual({ event: 'gone', handle });
   });
 
-  it('keeps answering a place journaled under the handle an earlier version gave it, its workspace id first', async () => {
+  it('reads an attempt\'s prompts from its own index alone, so a record outside it never blocks its reattach or close', async () => {
     const runtime = start();
     await ready(runtime);
-    const old = 'wks_0123456789abcdef/a0123abcd';
-    const places = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places');
-    fs.mkdirSync(places, { recursive: true });
-    fs.writeFileSync(path.join(places, `${encodeURIComponent(old)}.json`), JSON.stringify({
-      kind: 'worktree', run: RUN, attempt: ATTEMPT, workspace: { id: 'wks_0123456789abcdef', name: 'worktree' }, cwd: worktree, runDir: path.join(dir, 'run'),
-    }));
+    const handle = await opened(runtime);
+    const root = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo');
+    // A place with no index of its own, as one journaled before the index was kept, and another attempt's damaged record.
+    fs.rmSync(path.join(root, 'handles', encodeURIComponent(handle)), { recursive: true });
+    fs.mkdirSync(path.join(root, 'ops'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'ops', 'op-0000000f.json'), '{not json');
 
-    runtime.send(openRequest('op-0000000a', ATTEMPT));
-    expect(await runtime.next(isOp('op-0000000a', 'accepted'))).toEqual({ op: 'op-0000000a', event: 'accepted', handle: old });
-    expect(await runtime.next(isOp('op-0000000a', 'ready'))).toMatchObject({ display: { fields: { workspace: 'wks_0123456789abcdef' } } });
-    runtime.send({ type: 'close', handle: old });
+    runtime.send({ type: 'reattach', handle });
 
-    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle: old });
-    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: 'wks_0123456789abcdef' }]);
+    expect(await runtime.next((line) => 'handle' in line && !('op' in line) && ['alive', 'gone', 'failed'].includes(line.event))).toMatchObject({ event: 'alive', handle, ops: [] });
+    runtime.send({ type: 'close', handle });
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
   });
 
   it('stops only its own agents when another attempt shares its workspace, and leaves that attempt running', async () => {
