@@ -107,8 +107,8 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
 export function serve({ input, write: send, journal, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
-  /** The ops this process runs, each with what resolves once its end is written. */
-  const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
+  /** The ops this process runs, each with its handle and what resolves once its end is written. */
+  const running = new Map<OpId, { handle: string; ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
   const pendingStops = new Set<OpId>();
   /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
@@ -121,10 +121,10 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     send(message);
   };
 
-  const claim = (op: OpId): void => {
+  const claim = (op: OpId, handle: string): void => {
     let end = (): void => {};
     const ended = new Promise<void>((resolve) => { end = resolve; });
-    running.set(op, { ended, end });
+    running.set(op, { handle, ended, end });
   };
 
   const release = (op: OpId): void => {
@@ -306,7 +306,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     if (replayed) return replayed;
 
     // Claimed before the first await, so the same id sent again meanwhile is answered by this run.
-    claim(op);
+    claim(op, handle);
     const place = journal.place(handle);
 
     if (place?.confined) {
@@ -386,7 +386,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     }
 
     // Claimed before the first await, as an exec is.
-    claim(op);
+    claim(op, handle);
     journal.saveExec(op, { handle, runner: process.pid });
     write({ op, event: 'accepted' });
     const { judge } = chosen;
@@ -683,9 +683,17 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
           write({ event: 'failed', handle: request.handle, failure });
 
           return;
-        case 'cancel':
-          // Its outcome is the operation's end, which teamai reads on reattach, and bounds on its own.
+        case 'cancel': {
+          // A cancel has no reply of its own, so its op ends with the failure: it may still run, and a later cancel retries.
+          const outcome: Outcome = { state: 'failed', failure: { code: CANCEL_FAILED, message: `Exec ${request.op} may still run: the sandbox runtime could not stop it. ${error instanceof Error ? error.message : String(error)}` } };
+          const run = running.get(request.op);
+
+          if (run) finish(request.op, run.handle, outcome);
+          else if ((endsWritten.get(request.op) ?? 0) === endsBefore) conclude(request.op, outcome);
+
           return;
+        }
+
         default: {
           const unhandled: never = request;
 
