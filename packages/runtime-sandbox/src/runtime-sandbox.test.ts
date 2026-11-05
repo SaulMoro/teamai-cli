@@ -424,6 +424,93 @@ describe('a prompt attempt in a container', () => {
 
   const ended = (op: string) => (message: Message): boolean => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event));
 
+  /** Starts an exec that runs until something stops it, and returns its op and its shell's pid once it runs. */
+  async function runTracked(connection: Connection, at: Place): Promise<{ op: string; pid: number }> {
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo $$ > pid.tmp; mv pid.tmp pid; while :; do sleep 1; done'] });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    const file = path.join(at.worktree, 'pid');
+    await vi.waitFor(() => { expect(fs.existsSync(file)).toBe(true); }, { timeout: 10_000 });
+
+    return { op, pid: Number(fs.readFileSync(file, 'utf8')) };
+  }
+
+  /** Whether the step's process still runs. */
+  function isRunning(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The pids of `parent`'s children, as `pgrep -P` lists them. */
+  function childrenOf(parent: number | undefined): number[] {
+    try {
+      return execFileSync('pgrep', ['-P', String(parent)], { encoding: 'utf8' }).trim().split('\n').map(Number);
+    } catch {
+      return [];
+    }
+  }
+
+  it('reports an exec whose stop a killed runtime never confirmed as running, and a later cancel stops it', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const { op, pid } = await runTracked(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    // A runtime in recover mode asks the engine to stop it, and is killed before the engine stopped anything.
+    engine.stopDelay(60_000);
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE }, 'recover');
+    second.send({ type: 'cancel', op });
+    await vi.waitFor(() => { expect(engine.calls().some(([, command]) => command === 'restart')).toBe(true); }, { timeout: 10_000 });
+    const stopping = childrenOf(second.child.pid);
+    second.child.kill('SIGKILL');
+    await second.end();
+
+    for (const child of stopping) process.kill(child, 'SIGKILL');
+    engine.stopDelay(0);
+    expect(isRunning(pid)).toBe(true);
+
+    const third = start();
+    await init(third, { provider: 'docker', image: IMAGE }, 'recover');
+    third.send({ type: 'reattach', handle: HANDLE });
+
+    expect(await third.next((message) => message.handle === HANDLE)).toMatchObject({ event: 'alive', ops: [{ op, state: 'running' }] });
+    third.send({ type: 'cancel', op });
+    expect(await third.next(ended(op), 15_000)).toEqual({ op, event: 'cancelled' });
+    await vi.waitFor(() => { expect(isRunning(pid)).toBe(false); }, { timeout: 5_000 });
+    third.send({ type: 'close', handle: HANDLE });
+    expect(await third.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  }, 60_000);
+
+  it("reports a killed runtime's exec as running, never lost, so a cancel still stops it", async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const { op, pid } = await runTracked(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE }, 'recover');
+    second.send({ type: 'reattach', handle: HANDLE });
+
+    expect(await second.next((message) => message.handle === HANDLE)).toMatchObject({ event: 'alive', ops: [{ op, state: 'running' }] });
+    expect(isRunning(pid)).toBe(true);
+    second.send({ type: 'cancel', op });
+    expect(await second.next(ended(op), 15_000)).toEqual({ op, event: 'cancelled' });
+    await vi.waitFor(() => { expect(isRunning(pid)).toBe(false); }, { timeout: 5_000 });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  }, 60_000);
+
   // teamai ends a live exec whose cancel has no outcome 15 s after it sent the cancel.
   it.each<{ options: Message; remove: string }>([
     { options: { provider: 'docker', image: IMAGE }, remove: 'docker rm --force' },
@@ -1072,7 +1159,7 @@ console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claud
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed')).toEqual({ event: 'closed', handle: HANDLE });
   });
 
-  it("removes a judge's container at close after a restarted runtime that offers no judge refused its resent prompt", async () => {
+  it("answers a judge's prompt resent to a restarted runtime that offers no judge as still running, and close ends it cancelled and removes its container", async () => {
     const credentials = { ANTHROPIC_API_KEY: 'judge-key-1' };
     const lease = { model: { name: '--hang' } };
     const first = start();
@@ -1088,9 +1175,15 @@ console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claud
     const second = start();
     expect(await init(second, { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: [] })).not.toHaveProperty('confinedPrompt');
 
-    expect(await judge(second, { credentials, op, lease })).toMatchObject({ op, event: 'failed' });
+    // The runtime that ran it is gone, but its judge may still run: the resent id is accepted, and its end waits for a stop.
+    const resent = judge(second, { credentials, op, lease });
+    await second.next((message) => message.op === op && message.event === 'accepted');
     second.send({ type: 'close', handle: HANDLE });
+
+    expect(await resent).toEqual({ op, event: 'cancelled' });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    // closed follows the op's last line.
+    expect(second.messages.findIndex((message) => message.op === op && message.event === 'cancelled')).toBeLessThan(second.messages.findIndex((message) => message.event === 'closed'));
     expect(engine.containers()).toEqual([]);
     expect(engine.networks()).toEqual([]);
   });
@@ -1308,7 +1401,7 @@ describe('an attempt in an sbx sandbox', () => {
     expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toEqual({ event: 'gone', handle: HANDLE });
   });
 
-  it('reattaches by name after the runtime is killed mid-step, reports the exec it lost, and close then leaves no sandbox', async () => {
+  it('reattaches by name after the runtime is killed mid-step, reports its exec still running, and close then leaves no sandbox', async () => {
     const first = start();
     await init(first, { provider: 'sbx', agent: 'claude' });
     const at = place();
@@ -1325,7 +1418,7 @@ describe('an attempt in an sbx sandbox', () => {
     second.send({ type: 'reattach', handle: HANDLE });
 
     expect(await second.next((message) => message.event === 'alive' || message.event === 'gone')).toMatchObject({
-      event: 'alive', handle: HANDLE, display: { label: `${HANDLE} (sbx)` }, ops: [{ op, state: 'failed', failure: { code: 'runtime_lost' } }],
+      event: 'alive', handle: HANDLE, display: { label: `${HANDLE} (sbx)` }, ops: [{ op, state: 'running' }],
     });
 
     second.send({ type: 'close', handle: HANDLE });

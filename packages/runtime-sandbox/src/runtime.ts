@@ -53,16 +53,6 @@ export interface RuntimeDeps {
 /** One exec as the journal keeps it, with its id. */
 type Journaled = { op: OpId } & ExecRecord;
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
-}
-
 /**
  * Whether `hostname`, as a URL spells it, is this machine itself: localhost, 127.0.0.0/8, ::1 (also IPv4-mapped), or
  * the unspecified 0.0.0.0 and ::, which a client connects to as this machine.
@@ -116,6 +106,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet: each still runs, as far as it knows. */
   const pendingStops = new Set<OpId>();
+  /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
+  const followers = new Map<OpId, { handle: string; end: (outcome: Outcome) => void }>();
 
   const claim = (op: OpId): void => {
     let end = (): void => {};
@@ -146,22 +138,23 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     }
   };
 
-  /** The outcome of an exec no live runtime process will finish: cancelled when teamai cancelled it, otherwise lost. */
-  const settleOrphan = ({ op, handle, runner }: Journaled): Outcome => {
-    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : { state: 'failed', failure: { code: 'runtime_lost', message: `The sandbox runtime that ran exec ${op} stopped before it ended, so its outcome is unknown.` } };
-    journal.saveExec(op, { handle, runner, outcome });
-
-    return outcome;
-  };
-
+  /**
+   * An op with no outcome is running, wherever it runs: the runtime process that ran it may be gone, but what it started
+   * in the sandbox may still run (#1717: only `running`, or `failed` with `cancel_failed`, may still run). Only a stop the
+   * provider confirmed ends it.
+   */
   const stateOf = (exec: Journaled): OpState => {
     if (pendingStops.has(exec.op)) return { op: exec.op, state: 'running' };
 
-    if (exec.outcome) return { op: exec.op, ...exec.outcome };
+    return exec.outcome ? { op: exec.op, ...exec.outcome } : { op: exec.op, state: 'running' };
+  };
 
-    if (running.has(exec.op) || alive(exec.runner)) return { op: exec.op, state: 'running' };
+  /** Writes the end of an op this process does not run: through its follower here when it has one. */
+  const conclude = (op: OpId, outcome: Outcome): void => {
+    const follower = followers.get(op);
 
-    return { op: exec.op, ...settleOrphan(exec) };
+    if (follower) follower.end(outcome);
+    else write(terminal(op, outcome));
   };
 
   /** The place's sandbox: the id the journal kept, or the one its labels find when a runtime died before keeping it. */
@@ -222,26 +215,37 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     write({ op, event: 'ready', display: provider.display(key) });
   };
 
-  /** Answers an exec another runtime process started: its outcome once it has one. */
-  const follow = async (exec: Journaled): Promise<void> => {
-    for (;;) {
-      const now = journal.exec(exec.op);
+  /**
+   * Answers an op another runtime process started, or one whose process is gone: with its outcome once the journal holds
+   * one, or once a stop or a close here ends it. Its polling never keeps this process alive once teamai is gone.
+   */
+  const follow = (op: OpId, handle: string): Promise<void> => new Promise((resolve, reject) => {
+    let timer: NodeJS.Timeout | undefined;
 
-      if (now?.outcome) {
-        write(terminal(exec.op, now.outcome));
+    const end = (outcome: Outcome): void => {
+      clearTimeout(timer);
+      followers.delete(op);
+      write(terminal(op, outcome));
+      resolve();
+    };
 
-        return;
+    const look = (): void => {
+      try {
+        const now = journal.exec(op);
+
+        // A close forgot it once its sandbox, and whatever ran there, was removed.
+        if (now === undefined) end({ state: 'cancelled' });
+        else if (now.outcome) end(now.outcome);
+        else timer = setTimeout(look, FOLLOW_MS).unref();
+      } catch (error) {
+        followers.delete(op);
+        reject(error);
       }
+    };
 
-      if (!alive(exec.runner)) {
-        write(terminal(exec.op, settleOrphan(exec)));
-
-        return;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, FOLLOW_MS));
-    }
-  };
+    followers.set(op, { handle, end });
+    look();
+  });
 
   /**
    * Answers an id this runtime has seen, with its outcome or once it has one, without running it again; undefined for
@@ -257,7 +261,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return Promise.resolve();
     }
 
-    if (running.has(op)) {
+    if (running.has(op) || followers.has(op)) {
       // Its end is written when it ends, under the same id.
       write({ op, event: 'accepted' });
 
@@ -267,7 +271,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     if (record) {
       write({ op, event: 'accepted' });
 
-      return follow({ op, ...record });
+      return follow(op, record.handle);
     }
 
     return undefined;
@@ -478,23 +482,18 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
         // A first cancel of an exec that ended on its own meanwhile leaves that end.
         if (!isRetried && journal.exec(op)?.outcome !== undefined) return;
         journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
-        write(terminal(op, outcome));
+        conclude(op, outcome);
 
         return;
       }
 
-      // A retried stop replaces the failure the stop before it left; whatever ran is gone once the engine stopped it.
-      if (isRetried) {
-        journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome: { state: 'cancelled' } });
-        write(terminal(op, { state: 'cancelled' }));
+      // The engine confirmed the stop, so whatever ran is gone: an exec this process ran has ended cancelled already, and
+      // any other ends cancelled here, a retried stop replacing the failure the stop before it left.
+      const now = journal.exec(op);
 
-        return;
-      }
-
-      // A stopped exec a live runtime process runs ends cancelled there; one whose process is gone ends here.
-      if (running.has(op) || alive(record.runner)) return;
-
-      write(terminal(op, settleOrphan({ op, ...record })));
+      if (now === undefined || (now.outcome !== undefined && !isRetried)) return;
+      journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome: { state: 'cancelled' } });
+      conclude(op, { state: 'cancelled' });
     } finally {
       pendingStops.delete(op);
     }
@@ -541,6 +540,9 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     }
 
     await Promise.all(stopping);
+
+    // The sandbox is gone, so an op answered here but run by no live process ended with it.
+    for (const follower of followers.values()) if (follower.handle === handle) follower.end({ state: 'cancelled' });
     journal.forget(handle);
     write({ event: 'closed', handle });
   };
