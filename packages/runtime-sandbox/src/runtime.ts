@@ -38,8 +38,23 @@ interface Ready {
 /** How often an exec another runtime process runs is looked at, to answer its outcome. */
 const FOLLOW_MS = 100;
 
-/** How long an exec this process runs gets to end once its sandbox was stopped, before its cancel is answered unconfirmed. */
-const CONFIRM_MS = 4_000;
+/**
+ * How long a stop, or a whole close, may take before it is answered unconfirmed (#1717: "A runtime confirms a stop, or
+ * a whole `close` (removal included, its stops confirmed in parallel), within 10 s"), inside teamai's own 15 s.
+ */
+const BOUND_MS = 10_000;
+
+/** What `work` settled with, or `late` once `deadline` (a Date.now() time) came first. `work` goes on either way. */
+async function by<T>(deadline: number, work: Promise<T>): Promise<{ kind: 'done'; value: T } | { kind: 'late' }> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<{ kind: 'late' }>((resolve) => { timer = setTimeout(() => resolve({ kind: 'late' }), Math.max(0, deadline - Date.now())); });
+
+  try {
+    return await Promise.race([work.then((value) => ({ kind: 'done' as const, value })), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface RuntimeDeps {
   input: Readable;
@@ -469,26 +484,35 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
 
   /**
    * Stops what `op` runs, and when this process runs it, waits for its process to end: why the stop is not confirmed,
-   * or undefined once it is. A step's stop answers within STOP_MS + CONFIRM_MS, inside teamai's 15 s; a judge's
-   * removal, and the lookup of a sandbox whose id the journal lacks, have no bound of their own.
+   * or undefined once it is, all within BOUND_MS. A judge's container is removed, so an exec still on its way to the
+   * engine has nothing to start in; a step's restarts, ready for the step's next exec. One the engine cannot look up is
+   * not stopped.
    */
   const stopOf = async (op: OpId, { handle }: ExecRecord, provider: Provider): Promise<RuntimeFailure | undefined> => {
+    const deadline = Date.now() + BOUND_MS;
     const place = journal.place(handle);
-    const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
 
-    // A judge's container is removed, so an exec still on its way to the engine has nothing to start in; a step's
-    // restarts, ready for the step's next exec. One the engine cannot look up is not stopped.
-    const stopped = !found.ok ? found : found.id === undefined ? { ok: true as const } : place?.confined ? await provider.destroy(found.id) : await provider.stop(found.id);
+    const overdue = (what: string): RuntimeFailure => ({
+      code: CANCEL_FAILED,
+      message: `${what} within ${BOUND_MS / 1000} s, so exec ${op} may still run. Run \`teamai workflow cancel ${place?.run ?? '<run>'}\` again to stop it${place ? `, or ${provider.removal(place)}` : ''}.`,
+    });
 
-    if (!stopped.ok) return stopped.failure;
+    const stopping = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+      const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
+
+      return !found.ok ? found : found.id === undefined ? { ok: true } : place?.confined ? provider.destroy(found.id) : provider.stop(found.id);
+    };
+
+    const stopped = await by(deadline, stopping());
+
+    if (stopped.kind === 'late') return overdue(`The stop of sandbox ${handle} did not end`);
+
+    if (!stopped.value.ok) return stopped.value.failure;
     const ended = running.get(op)?.ended;
 
-    if (ended === undefined) return undefined;
-    let timer: NodeJS.Timeout | undefined;
-    const isEnded = await Promise.race([ended.then(() => true), new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), CONFIRM_MS); })]);
-    clearTimeout(timer);
+    if (ended === undefined || (await by(deadline, ended)).kind === 'done') return undefined;
 
-    return isEnded ? undefined : { code: CANCEL_FAILED, message: `Sandbox ${handle} was stopped, but exec ${op} did not end within ${CONFIRM_MS / 1000} s after, so it may still run. Run \`teamai workflow cancel ${place?.run ?? '<run>'}\` again to stop it.` };
+    return overdue(`Sandbox ${handle} was stopped, but exec ${op} did not end`);
   };
 
   const cancel = async (op: OpId, provider: Provider): Promise<void> => {
@@ -556,10 +580,29 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     write({ event: 'alive', handle, ops: journal.opsOf(handle).map(({ op, record }) => stateOf({ op, ...record })), display: provider.display(place) });
   };
 
-  const close = async (handle: string, provider: Provider): Promise<void> => {
-    const ops = journal.opsOf(handle);
+  /** Removes the place's sandbox, and a judge's filter and network: ok once the provider confirmed they are gone. */
+  const removeSandbox = async (place: PlaceRecord | undefined, provider: Provider): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
+    const destroyed = !found.ok ? found : found.id === undefined ? { ok: true as const } : await provider.destroy(found.id);
 
-    // What still runs there is stopped with the sandbox, and ends as cancelled before the place is answered closed.
+    return destroyed.ok && place?.confined && provider.judges ? provider.judges.release(place) : destroyed;
+  };
+
+  /**
+   * Removes the place, within BOUND_MS: an op still running there is marked cancelled, a judge's container still being
+   * created is waited for so the removal finds whatever it made, and each running op's own end is written before
+   * `closed`. Past the bound, or when the removal fails, the journal keeps the place for a later close.
+   */
+  const close = async (handle: string, provider: Provider): Promise<void> => {
+    const deadline = Date.now() + BOUND_MS;
+    const ops = journal.opsOf(handle);
+    const known = journal.place(handle);
+
+    const overdue = (what: string): void => write({
+      event: 'close_failed', handle,
+      failure: { code: 'sandbox_failed', message: `Closing ${handle} took over ${BOUND_MS / 1000} s: ${what}, so what ran there may still run, and the place stays this attempt's. Run \`teamai workflow cancel ${known?.run ?? '<run>'}\` again to close it${known ? `, or ${provider.removal(known)}` : ''}.` },
+    });
+
     const stopping = ops.flatMap(({ op }) => {
       const run = running.get(op);
 
@@ -569,21 +612,32 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
       return [run.ended];
     });
 
-    // A judge's container still being created is waited for first, so the removal finds whatever that creation made.
-    await Promise.all(ops.flatMap(({ op }) => creating.get(op) ?? []));
-    const place = journal.place(handle);
-    const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
-    const destroyed = !found.ok ? found : found.id === undefined ? { ok: true as const } : await provider.destroy(found.id);
-    const removed = destroyed.ok && place?.confined && provider.judges ? await provider.judges.release(place) : destroyed;
-
-    if (!removed.ok) {
-      // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox.
-      write({ event: 'close_failed', handle, failure: removed.failure });
+    if ((await by(deadline, Promise.all(ops.flatMap(({ op }) => creating.get(op) ?? [])))).kind === 'late') {
+      overdue("its judge's container was still being created");
 
       return;
     }
 
-    await Promise.all(stopping);
+    const removed = await by(deadline, removeSandbox(journal.place(handle), provider));
+
+    if (removed.kind === 'late') {
+      overdue('its removal did not end');
+
+      return;
+    }
+
+    if (!removed.value.ok) {
+      // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox.
+      write({ event: 'close_failed', handle, failure: removed.value.failure });
+
+      return;
+    }
+
+    if ((await by(deadline, Promise.all(stopping))).kind === 'late') {
+      overdue('an exec that ran there did not end after its removal');
+
+      return;
+    }
 
     // The sandbox is gone, so an op answered here but run by no live process ended with it.
     for (const follower of followers.values()) if (follower.handle === handle) follower.end({ state: 'cancelled' });

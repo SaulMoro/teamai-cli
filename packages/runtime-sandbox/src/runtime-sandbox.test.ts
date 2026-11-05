@@ -360,6 +360,32 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it("answers a close within 10 s with close_failed and how to remove it when an exec does not end after the removal, and keeps the place to close again", async () => {
+    engine.stopLag(16_000);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; while :; do sleep 1; done'] });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    const sent = Date.now();
+
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 15_000)).toMatchObject({
+      event: 'close_failed', handle: HANDLE, failure: { message: expect.stringMatching(new RegExp(`teamai workflow cancel ${RUN}.*docker rm --force ${HANDLE}`)) },
+    });
+    expect(Date.now() - sent).toBeLessThan(10_500);
+    expect(journalFiles().some((file) => file.includes(`${path.sep}places${path.sep}`))).toBe(true);
+    // Once the exec ended, the place closes.
+    expect(await connection.next((message) => message.op === op && message.event !== 'accepted' && message.event !== 'output', 15_000)).toEqual({ op, event: 'cancelled' });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(journalFiles()).toEqual([]);
+  }, 60_000);
+
   it('never counts an exec whose runtime died as cancelled when the engine could not stop it', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });
@@ -1254,6 +1280,27 @@ describe('a judge (a confined prompt) in a container of its own', () => {
 
     expect(await ended).toEqual({ op, event: 'cancelled' });
     expect(engine.containers()).toEqual([`${HANDLE}-proxy`]);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+    expect(engine.networks()).toEqual([]);
+  }, 60_000);
+
+  it("answers a judge's cancel within 10 s with cancel_failed and how to remove it when the engine's removal stalls", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    const op = newOp();
+    const ended = judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, op, lease: { model: { name: '--hang' } }, ms: 15_000 });
+    await vi.waitFor(() => { expect(engine.calls().some(([, command]) => command === 'exec')).toBe(true); }, { timeout: 10_000 });
+    engine.delay('rm', 60_000);
+    const sent = Date.now();
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await ended).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('docker rm --force') } });
+    expect(Date.now() - sent).toBeLessThan(10_500);
+    engine.delay('rm', 0);
     connection.send({ type: 'close', handle: HANDLE });
     expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
     expect(engine.containers()).toEqual([]);
