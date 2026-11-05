@@ -879,6 +879,43 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isAnswer(['alive', 'gone', 'failed']))).toMatchObject({ event: 'failed', handle, failure: { code: 'paseo_failed' } });
   });
 
+  it('answers and closes a healthy attempt though the record of another attempt\'s prompt cannot be read, and refuses its own unreadable one', async () => {
+    behave({ output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+    const ops = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops');
+    fs.writeFileSync(path.join(ops, 'op-0000000f.json'), '{"kind":');
+    const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && !('op' in line) && [...events, 'error'].includes(line.event);
+
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next(isAnswer(['alive', 'gone', 'failed']))).toMatchObject({ event: 'alive', handle, ops: [{ op: 'op-0000000b', state: 'finished' }] });
+    runtime.send({ type: 'close', handle });
+    expect(await runtime.next(isAnswer(['closed', 'close_failed']))).toEqual({ event: 'closed', handle });
+
+    const other = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    runtime.send(promptRequest(other, 'op-0000000d'));
+    await runtime.next(isEnd('op-0000000d'));
+    fs.writeFileSync(path.join(ops, 'op-0000000d.json'), '{"kind":');
+    runtime.send({ type: 'reattach', handle: other });
+    expect(await runtime.next(isAnswer(['alive', 'gone', 'failed']))).toMatchObject({ event: 'failed', handle: other });
+  });
+
+  it('closes a healthy attempt though another attempt\'s place record cannot be read, and leaves the workspace that place may share', async () => {
+    behave({ output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    fs.writeFileSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places', `${encodeURIComponent(`worktree/${RUN}/a4567cdef`)}.json`), '{"kind":');
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed', 'failed', 'error'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
+  });
+
   it('answers an open or a prompt it cannot run, before a successful init or in recover mode, with its own failure, never an error line', async () => {
     const { url } = daemon;
     await daemon.close();
