@@ -40,18 +40,14 @@ const connect: ServeOptions['connect'] = async (how) => {
   const silentFailure = silent?.ok === false ? silent.reason : undefined;
 
   if (how.mode !== 'attended' && !validToken(state, resource.href)) {
-    const tried = silentFailure === undefined ? '' : ` and could not sign in through the t3 command (${silentFailure})`;
+    const message = silentFailure === undefined
+      ? `teamai has no valid T3 Code sign-in for ${resource.origin}, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.`
+      : `teamai has no valid T3 Code sign-in for ${resource.origin} and could not sign in through the t3 command (${silentFailure}), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.`;
 
-    return {
-      ok: false,
-      error: {
-        code: 'login_required',
-        message: `teamai has no valid T3 Code sign-in for ${resource.origin}${tried}, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.`,
-      },
-    };
+    return { ok: false, error: { code: 'login_required', message } };
   }
 
-  const signIn = how.mode === 'attended' ? await attendedSignIn(state, resource.href, silentFailure) : undefined;
+  const signIn = how.mode === 'attended' ? await attendedSignIn({ stateDir: state, resource: resource.href, silentFailure }) : undefined;
 
   try {
     const t3 = await connectT3(resource, signIn?.provider ?? unattendedAuth(state, resource.href), () => signIn?.code() ?? Promise.reject(new Error('No sign-in.')));
