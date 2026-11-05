@@ -223,7 +223,7 @@ T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 
 步骤的线程在 T3 里，不在 teamai 的进程里。如果驱动进程退出，`teamai workflow resume <run> --driver t3` 会重新连接到同一个线程，而不是再启动一个。`teamai workflow cancel <run>` 像线程的 Stop 按钮一样停止线程。线程以 interrupted 结束，它正在等待的请求会被撤回，teamai 会把它标记为已处理。取消不需要重新登录：驱动进程退出后，teamai 只为停止它记录过的内容打开运行时，使用它保存的登录凭据，并且只在停止时连接 T3 Code。
 
-T3 有 10 秒来确认停止。如果没有确认，teamai 会保留步骤的位置，不提交它的任何内容，取消命令会说明哪个线程仍在运行：
+从取消开始，T3 有 10 秒来确认停止，仍在进行的启动也算在内。如果没有确认，teamai 会保留步骤的位置，不提交它的任何内容，取消命令会说明哪个线程仍在运行：
 
 ```text
 ⚠ Could not stop attempt a96c8bc03 of run r70d31098c8884803 on step runtime "t3" of driver "teamai-t3": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): The T3 thread t3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149… ("review · teamai r70d31098c8884803") still runs, and T3 Code did not stop it: T3 Code acknowledged the stop, but its run was still running 10 s later. Stop it in T3 Code with its Stop button, then run teamai workflow cancel r70d31098c8884803 again.
