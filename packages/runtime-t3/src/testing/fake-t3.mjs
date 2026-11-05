@@ -12,7 +12,7 @@
 //                               launchFails: T3 refuses every launch, a repeated one too; launchUnavailable: T3 answers every launch
 //                               with its generic orchestration_error refusal, before it looks anything up; launchMs: a launch answers this long after
 //                               it launched; launchReplyLost: a launch launches, then its reply never comes (an MCP error, not a refusal)
-//                               projectsMs: the project list answers this long after it was asked
+//                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
@@ -200,7 +200,11 @@ function launch(args) {
 }
 
 const TOOLS = {
-  t3_environment_read: () => ok(config().environment),
+  t3_environment_read: async () => {
+    await sleep(config().environmentMs ?? 0);
+
+    return ok(config().environment);
+  },
   orchestrator_capabilities: () => ok({ providers: config().providers }),
   t3_project_list: async () => {
     await sleep(config().projectsMs ?? 0);
