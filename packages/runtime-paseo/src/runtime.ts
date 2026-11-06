@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, OpIdSchema, PromptResultSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -300,6 +300,11 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   let offers = new Map<PaseoTool, Offer>();
   /** The mode each offered tool's steps start in, which init read from Paseo. */
   let stepModes = new Map<PaseoTool, StepMode>();
+  /**
+   * The tool home each offered tool keeps its sessions in, when Paseo reports one: each finished prompt on it names that
+   * home, so teamai reads the session there whatever HOME or tool root it runs with.
+   */
+  let sessionHomes = new Map<PaseoTool, string>();
 
   /**
    * Why a new step or judge on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was
@@ -471,6 +476,13 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     };
   };
 
+  /** A finished prompt's session: its tool and id, and the home it lives in when Paseo reports it. */
+  const sessionOf = (tool: string, id: string): z.infer<typeof PromptSessionSchema> => {
+    const home = isPaseoTool(tool) ? sessionHomes.get(tool) : undefined;
+
+    return { tool, id, ...(home !== undefined && { home }) };
+  };
+
   /** What the run's details show of a prompt's agent: its title, a link that opens it in Paseo, and where it runs. */
   const agentDisplay = (record: AgentPrompt, workspace: string | undefined, live: Daemon): RuntimeDisplay => ({
     label: record.create.title.slice(0, 80),
@@ -587,6 +599,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     }
 
     stepModes = new Map(tools.map((entry) => [entry.tool, entry.stepMode]));
+    sessionHomes = new Map(tools.flatMap(({ tool, home }) => (home === undefined ? [] : [[tool, home]])));
     offers = new Map(installed.map((entry): [PaseoTool, Offer] => {
       if (!entry.canRun) return [entry.tool, { runs: 'nothing', reason: entry.reason }];
       const confinedMode = CONFINED_MODES[entry.tool];
@@ -1102,7 +1115,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
               return;
             }
 
-            settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result: { output }, confined: record.answer.kept }, following);
+            settle(op, { op, state: 'finished', session: sessionOf(record.tool, session), result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -1138,7 +1151,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             return;
           }
 
-          settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(record.tool, session), result }, following);
 
           return;
         }

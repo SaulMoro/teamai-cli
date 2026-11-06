@@ -74,6 +74,21 @@ function stepModeOf(tool: PaseoTool, defaultMode: string | null | undefined, mod
 
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/** The config directory `claude auth status` reports in Claude's diagnostic, when it reports an absolute one. */
+function claudeHomeIn(diagnostic: string): string | undefined {
+  const quoted = /"configDirectory":\s*("(?:[^"\\]|\\.)*")/.exec(diagnostic)?.[1];
+
+  if (quoted === undefined) return undefined;
+
+  try {
+    const home = z.string().safeParse(JSON.parse(quoted));
+
+    return home.success && path.isAbsolute(home.data) ? home.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface Model {
   id: string;
   /** The model Paseo starts the tool on when none is named. */
@@ -90,7 +105,13 @@ export type WaitEnd = Awaited<ReturnType<DaemonClient['waitForFinish']>>;
  * A tool installed on the daemon's host: one it can run, with its modes and the one a step starts in, or why it cannot,
  * for a person to read.
  */
-export type InstalledTool = { tool: PaseoTool; canRun: true; modes: string[]; stepMode: StepMode } | { tool: PaseoTool; canRun: false; reason: string };
+export type InstalledTool = { tool: PaseoTool; canRun: true; modes: string[]; stepMode: StepMode; home?: string } | { tool: PaseoTool; canRun: false; reason: string };
+
+/**
+ * What a tool's sign-in check found: why the daemon cannot run it, or that it can, with the tool home it keeps its
+ * sessions in when Paseo reports it (Claude's `configDirectory`).
+ */
+type SignIn = { canRun: false; problem: string } | { canRun: true; home?: string };
 
 
 /** How long `codex login status` may take, as Paseo gives `claude auth status` in Claude's diagnostic. */
@@ -359,20 +380,29 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
   };
 
   /**
-   * Why the daemon cannot run `tool`, or undefined when it can. Paseo calls a tool available once its binary is on PATH,
-   * signed in or not, so each tool's sign-in is read from what Paseo reports of it.
+   * Why the daemon cannot run `tool`, or the tool home it runs it with when Paseo reports one. Paseo calls a tool
+   * available once its binary is on PATH, signed in or not, so each tool's sign-in is read from what Paseo reports of it.
    */
-  const signInProblem = async (tool: PaseoTool): Promise<string | undefined> => {
+  const signIn = async (tool: PaseoTool): Promise<SignIn> => {
     switch (tool) {
       case 'claude': {
-        // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in.
-        const loggedIn = /"loggedIn":\s*(true|false)\b/.exec((await api.providers.diagnostic('claude')).diagnostic)?.[1];
+        // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in, and,
+        // from Claude Code 2.1, the config directory the daemon's Claude keeps its sessions under.
+        const { diagnostic } = await api.providers.diagnostic('claude');
+        const loggedIn = /"loggedIn":\s*(true|false)\b/.exec(diagnostic)?.[1];
 
-        if (loggedIn === 'true') return undefined;
+        if (loggedIn === 'true') {
+          const home = claudeHomeIn(diagnostic);
 
-        return loggedIn === 'false'
-          ? 'signed out; run `claude auth login` on the daemon\'s host'
-          : 'Paseo does not report whether it is signed in; run `paseo provider diagnostic claude` on the daemon\'s host to see its Auth line';
+          return { canRun: true, ...(home !== undefined && { home }) };
+        }
+
+        return {
+          canRun: false,
+          problem: loggedIn === 'false'
+            ? 'signed out; run `claude auth login` on the daemon\'s host'
+            : 'Paseo does not report whether it is signed in; run `paseo provider diagnostic claude` on the daemon\'s host to see its Auth line',
+        };
       }
 
       case 'opencode': {
@@ -381,23 +411,23 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const shared = /^OpenCode server: (\S+)/.exec((await api.providers.diagnostic('opencode')).diagnostic)?.[1];
 
         if (shared !== undefined) {
-          return `Paseo runs it on OpenCode's background server at ${shared}, which takes no environment for an agent, and teamai gives each step ${RUN_DIR_ENV}; stop that server with \`opencode service stop\` on the daemon's host, then \`paseo restart\``;
+          return { canRun: false, problem: `Paseo runs it on OpenCode's background server at ${shared}, which takes no environment for an agent, and teamai gives each step ${RUN_DIR_ENV}; stop that server with \`opencode service stop\` on the daemon's host, then \`paseo restart\`` };
         }
 
         // Paseo lists OpenCode's models from the providers it reaches, its free ones included, and none when it reaches none.
-        return (await models(tool)).length > 0 ? undefined : 'reaches no model provider; run `opencode auth login` on the daemon\'s host, then `paseo restart`';
+        return (await models(tool)).length > 0 ? { canRun: true } : { canRun: false, problem: 'reaches no model provider; run `opencode auth login` on the daemon\'s host, then `paseo restart`' };
       }
 
       case 'codex': {
         // Paseo reports no Codex sign-in, so teamai asks Codex itself, which it can only where the daemon runs. It asks the
         // codex the daemon's diagnostic resolves on the daemon's PATH, which may not be the one on teamai's.
-        if (!isOnThisMachine(url)) return `teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one`;
+        if (!isOnThisMachine(url)) return { canRun: false, problem: `teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one` };
         const resolved = /^\s*Resolved path: (.+)$/m.exec((await api.providers.diagnostic('codex')).diagnostic)?.[1]?.trim();
 
-        if (resolved === undefined || resolved === 'not found') return 'Paseo reports no path for it; run `paseo provider diagnostic codex` on the daemon\'s host to see why';
+        if (resolved === undefined || resolved === 'not found') return { canRun: false, problem: 'Paseo reports no path for it; run `paseo provider diagnostic codex` on the daemon\'s host to see why' };
 
         if (!isCodexExecutable(resolved)) {
-          return `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why`;
+          return { canRun: false, problem: `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why` };
         }
 
         let status: Awaited<ReturnType<typeof codexLoginStatus>>;
@@ -405,18 +435,18 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         try {
           status = await codexLoginStatus(resolved);
         } catch (error) {
-          return `\`${resolved} login status\` did not answer (${error instanceof Error ? error.message : String(error)}); run it on the daemon's host to see why`;
+          return { canRun: false, problem: `\`${resolved} login status\` did not answer (${error instanceof Error ? error.message : String(error)}); run it on the daemon's host to see why` };
         }
 
         // Codex 0.166.0 prints "Logged in using …" with exit 0 when signed in, and "Not logged in" with exit 1 when not.
         const { answer } = status;
 
-        if (status.code === 0 && /^Logged in\b/m.test(answer)) return undefined;
+        if (status.code === 0 && /^Logged in\b/m.test(answer)) return { canRun: true };
 
-        if (status.code === 1 && /^Not logged in\b/m.test(answer)) return 'signed out; run `codex login` on the daemon\'s host';
+        if (status.code === 1 && /^Not logged in\b/m.test(answer)) return { canRun: false, problem: 'signed out; run `codex login` on the daemon\'s host' };
         const said = answer.trim().split('\n')[0]?.slice(0, 120) ?? '';
 
-        return `\`${resolved} login status\` gave no sign-in answer (exit ${status.code}${said ? `: ${said}` : ''}); run it on the daemon's host to see why`;
+        return { canRun: false, problem: `\`${resolved} login status\` gave no sign-in answer (exit ${status.code}${said ? `: ${said}` : ''}); run it on the daemon's host to see why` };
       }
 
       default: {
@@ -437,13 +467,13 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       const installed = providers.filter((entry) => entry.available).map((entry) => entry.provider).filter(isPaseoTool);
 
       return Promise.all(installed.map(async (tool): Promise<InstalledTool> => {
-        const reason = await signInProblem(tool);
+        const signedIn = await signIn(tool);
 
-        if (reason !== undefined) return { tool, canRun: false, reason };
+        if (!signedIn.canRun) return { tool, canRun: false, reason: signedIn.problem };
         const modes = (await api.providers.listModes(tool)).modes ?? [];
         const stepMode = stepModeOf(tool, entries.find((entry) => entry.provider === tool)?.defaultModeId, modes);
 
-        return 'cannot' in stepMode ? { tool, canRun: false, reason: stepMode.cannot } : { tool, canRun: true, modes: modes.map((mode) => mode.id), stepMode };
+        return 'cannot' in stepMode ? { tool, canRun: false, reason: stepMode.cannot } : { tool, canRun: true, modes: modes.map((mode) => mode.id), stepMode, ...(signedIn.home !== undefined && { home: signedIn.home }) };
       }));
     },
     models,

@@ -47,6 +47,11 @@ const BehaviourSchema = z.object({
    * resolved path names it. Absent, that path holds no codex.
    */
   codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
+  /**
+   * The config directory of the daemon's Claude, which `claude auth status` reports from Claude Code 2.1 on as
+   * `configDirectory`, beside its `projectsDirectory` (recorded on 2.1.318). Absent: an older Claude that reports neither.
+   */
+  claude_home: z.string().optional(),
   /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
   codex_path: z.string().optional(),
   /**
@@ -456,7 +461,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       case 'provider_diagnostic_request': {
         const does = behaviour();
         const resolved = message.provider === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login) : `/usr/local/bin/${message.provider}`;
-        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: message.provider === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(message.provider, does.sign_in[message.provider], resolved) } });
+        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: message.provider === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(message.provider, does.sign_in[message.provider], resolved, does.claude_home) } });
 
         return;
       }
@@ -665,12 +670,13 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
  * A provider's diagnostic, as Paseo 0.14.0 formats it (recorded): Claude's `Auth` row quotes `claude auth status`, which
  * fails when signed out; OpenCode's quotes `opencode auth list`; Codex's has no `Auth` row.
  */
-function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | undefined, resolved: string): string {
+function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | undefined, resolved: string, claudeHome: string | undefined): string {
   const rows = [`  Binary: ${provider}`, `  Resolved path: ${resolved}`];
   const isSignedOut = signIn === 'signed_out';
 
   if (signIn !== 'unreported' && provider === 'claude') {
-    rows.push(`  Auth: {\n  "loggedIn": ${String(!isSignedOut)},\n  "authMethod": "${isSignedOut ? 'none' : 'oauth_token'}",\n  "apiProvider": "firstParty"\n}${isSignedOut ? '\nCommand failed: /usr/local/bin/claude auth status' : ''}`);
+    const home = claudeHome === undefined ? '' : `,\n  "projectsDirectory": ${JSON.stringify(path.join(claudeHome, 'projects'))},\n  "configDirectory": ${JSON.stringify(claudeHome)}`;
+    rows.push(`  Auth: {\n  "loggedIn": ${String(!isSignedOut)},\n  "authMethod": "${isSignedOut ? 'none' : 'oauth_token'}",\n  "apiProvider": "firstParty"${home}\n}${isSignedOut ? '\nCommand failed: /usr/local/bin/claude auth status' : ''}`);
   } else if (signIn !== 'unreported' && provider === 'opencode') {
     rows.push(`  Auth: \n    ${isSignedOut ? 'No authenticated integrations' : '●  Anthropic oauth'}`);
   }
