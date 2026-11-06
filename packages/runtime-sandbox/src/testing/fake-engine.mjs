@@ -14,7 +14,9 @@
 //                       milliseconds makes an `exec` whose process was stopped end that much later, as a real exec
 //                       client notices its container stopped only after the stop command returns; a file
 //                       `stop-delay` holding a number of milliseconds makes `restart` (sbx: `stop`) wait that long
-//                       before it stops anything, as a daemon that is slow to answer; a file `delay-<command>`
+//                       before it stops anything, as a daemon that is slow to answer; a file `stop-hold` holding a
+//                       number of milliseconds makes it wait that long once it stopped the processes, before it
+//                       answers, as an engine that restarts the container does; a file `delay-<command>`
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
@@ -138,11 +140,16 @@ function runProcess(container, argv, cwd, env, stdin) {
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {});
 }
 
-/** Waits as long as `stop-delay` says, before a stop does anything. */
-function delayStop() {
-  const file = path.join(state, 'stop-delay');
+/** Waits as long as the file `name` in the state directory says, when there is one. */
+function waitAsLongAs(name) {
+  const file = path.join(state, name);
 
   if (fs.existsSync(file)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(file, 'utf8')));
+}
+
+/** Waits as long as `stop-delay` says, before a stop does anything. */
+function delayStop() {
+  waitAsLongAs('stop-delay');
 }
 
 const [command, ...rest] = args;
@@ -285,6 +292,7 @@ function docker() {
 
       if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
       killProcesses(container);
+      waitAsLongAs('stop-hold');
       process.stdout.write(`${positional[0]}\n`);
       break;
     }
@@ -451,6 +459,7 @@ function sbx() {
         if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
         killProcesses(sandbox);
         writeContainer({ ...sandbox, running: false });
+        waitAsLongAs('stop-hold');
         process.stdout.write(`Stopped sandbox ${name}\n`);
       }
 

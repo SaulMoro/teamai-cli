@@ -47,6 +47,8 @@ export interface FakeEngine {
   stopLag(ms: number): void;
   /** Makes a stop wait `ms` before it stops anything, as a daemon slow to answer. */
   stopDelay(ms: number): void;
+  /** Makes a stop wait `ms` once it stopped the processes, before it answers, as an engine that restarts the container. */
+  stopHold(ms: number): void;
   /** Makes every later run of `command` (`run`, `rm`, …) wait `ms` before it does anything; 0 lets it run at once again. */
   delay(command: string, ms: number): void;
   /** Makes `ps --format` fail, as an engine that cannot render the format, or work again. */
@@ -119,6 +121,9 @@ export function fakeEngine(dir: string): FakeEngine {
     },
     stopDelay(ms) {
       fs.writeFileSync(path.join(state, 'stop-delay'), String(ms));
+    },
+    stopHold(ms) {
+      fs.writeFileSync(path.join(state, 'stop-hold'), String(ms));
     },
     delay(command, ms) {
       fs.writeFileSync(path.join(state, `delay-${command}`), String(ms));
