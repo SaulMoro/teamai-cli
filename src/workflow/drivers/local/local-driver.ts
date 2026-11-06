@@ -1140,10 +1140,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     const known = attemptRuns.get(lease.attempt);
 
     if (known) return known;
-    // The step's timeout, or a turn limit's time, is the latest the attempt may run on its runtime.
-    const timeoutMs = lease.limits?.timeoutMs;
-    const deadline = lease.expiresAt ?? (timeoutMs === undefined ? undefined : new Date(Date.now() + timeoutMs).toISOString());
-    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver, ...(deadline !== undefined && { deadline }) });
+    // The lease's expiry is the latest the attempt may run on its runtime. A turn limit ends the turn instead, and the
+    // driver keeps it itself, so it gives no deadline.
+    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver, ...(lease.expiresAt !== undefined && { deadline: lease.expiresAt }) });
     attemptRuns.set(lease.attempt, created);
 
     return created;
