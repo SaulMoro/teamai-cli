@@ -690,6 +690,41 @@ steps:
     expect(closes.at(-1)).toEqual({ handle: first?.handle, present: false });
   });
 
+  it('closes again, on a later drive whose start removes a clone a cancelled run left, the place the run\'s runtime ran in it', async () => {
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+    writeFlow('clonedhold', `  - id: trial
+    workspace: { clone: { commit: ${commit}, team: { treatment: none } } }
+    workflow:
+      steps:
+        - id: edit
+          workspace: continue
+          command: node -e "require('fs').writeFileSync(process.env.HOLD_MARK, '1'); setTimeout(() => {}, 120000)"`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    writeDefinition('toyclonehold', [{ use: 'toy', options: { state, can: { workspace: ['read-only', 'new', 'continue', 'clone'] } } }]);
+    const mark = path.join(state, 'hold-mark');
+    const driving = spawn(process.execPath, [CLI, 'workflow', 'start', 'clonedhold', '--driver', 'toyclonehold'], { cwd: repo, env: { ...process.env, ...env({ HOLD_MARK: mark }), FORCE_COLOR: '0' }, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    driving.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    const ended = new Promise((resolve) => driving.on('close', resolve));
+    for (const deadline = Date.now() + 30_000; !fs.existsSync(mark) && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fs.existsSync(mark), stderr).toBe(true);
+    driving.kill('SIGKILL');
+    await ended;
+    const runId = /Run (r[0-9a-f]+) started/.exec(stderr)?.[1] ?? '';
+
+    // The cancel stops the command and closes its place, with the clone still there; it removes no clone.
+    const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+    expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { id: runId } } });
+    const closesOf = (): Array<{ handle: string; present?: boolean }> => fs.readFileSync(path.join(state, 'closes.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { handle: string; present?: boolean });
+    const [closed] = closesOf();
+    expect(closed).toMatchObject({ present: true });
+
+    // Any later drive removes the clone at its start, and the runtime that ran in it hears of it at a close.
+    const later = await runCLI(['workflow', 'start', 'mixed', '--driver', 'local'], repo, env());
+    expect(envelope(later), later.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(closesOf()).toContainEqual({ handle: closed?.handle, present: false });
+  });
+
   it('keeps what the runtime shows of the place in the attempt\'s record, for the run\'s details', async () => {
     const display = { label: 'toy place', url: 'https://runtimes.example.test/place/1', fields: { place: 'toy-1', image: 'warm:3f9c' } };
     writeDefinition('shown', [{ use: 'toy', options: { state, display } }]);

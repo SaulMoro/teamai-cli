@@ -35,6 +35,7 @@ import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSte
 import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
+import { closeAfterSweep } from '../../runtimes/cancelled.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../../runtimes/login.js';
 import { credentialSecrets, credentialsForTool, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
@@ -1249,8 +1250,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     await closeRun(attempt);
   };
 
-  // A driver killed before cleanup, of this run or any other, left clones behind.
-  await sweepClones(config);
+  // A driver killed before cleanup, of this run or any other, left clones behind. The runtimes that ran in them, which
+  // that driver can no longer tell, hear of it at a close.
+  await closeAfterSweep(config, await sweepClones(config));
   const adapter = options.adapter ?? createLocalToolAdapter();
   const archive = openSessionArchive(config);
   // With no workflows.max_parallel the driver runs one step at a time, except the items of a for_each that declares
@@ -1487,7 +1489,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       if (signalled || isStoppedByPerson) continue;
 
       // A clone whose steps all settled is not needed any more.
-      if (await sweepClones(config, runId)) {
+      if ((await sweepClones(config, runId)).length > 0) {
         for (const [slot, closedHandle] of lastClosed) {
           if (slot.kind !== 'external') continue;
           const again = await slot.runtime.close(closedHandle);
