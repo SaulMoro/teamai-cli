@@ -103,11 +103,17 @@ in the container                                        from the host
 /tmp/teamai-home                                        HOME, private to the container
 ```
 
-- Every path keeps its host path, so nothing is copied back and `git status` works.
+- Every path keeps its host path, so nothing is copied back and `git status` works. That holds for every `workspace`: `new`, `continue`, `read-only`, and the `clone` or team-repo copy teamai prepares, whose own `.git` is the read-only git directory.
 - `git commit` in the container fails, because the git directories are read-only. teamai commits on the host with hooks turned off, so a hook the step plants never runs.
 - The step runs as you: `--user <your uid>:<gid>` on Docker, `--userns keep-id` on Podman. Files it writes are yours. On a host with SELinux, mounts get the shared label (`:z`).
 - The tool keeps its session in the attempt's tool home, so the pass's `teamai-score` run judges it from its transcript, and a later step with `session: { from: … }` resumes it.
 - Command steps run in the container too, also in a definition that lists `local` after the sandbox. Only teamai's own bookkeeping, such as a `teamai-score` run's evidence and label steps, runs on this machine.
+
+**A tool runs only where it can sign in.** A Claude login in the macOS Keychain or in `~/.claude`, or your daily `~/.codex`, never crosses into a container. So the sandbox offers a tool only when `credentials` names one of its sign-in keys (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude; `OPENAI_API_KEY`, `CODEX_API_KEY` or `codex: login` for Codex), or, on sbx, when sbx keeps a login for it. When it can sign none in, the run stops before any step, instead of at Claude's own "Not logged in":
+
+```text
+{"error":{"code":"runtime_failed","message":"Runtime \"sandbox\" of driver \"containers\" did not start (credential_missing): No tool in this docker sandbox can sign in, so every step there would stop at the tool's own \"Not logged in\". claude: a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again."}}
+```
 
 Only the names a step is given cross into the container: its `requires.env` keys, the workflow's `env`, teamai's attempt marker, the tool home variable, and, for the step's tool only, the `credentials`. Nothing else of your environment reaches it, so `GH_TOKEN`, `SSH_AUTH_SOCK` and the like stay out. Values never appear in a command line: the container is created with no credential, and each `docker exec -e NAME` reads the value from the engine CLI's own environment. Nor are they written to disk: the runtime keeps what it remembers of each exec with any credential the tool printed masked.
 
@@ -199,13 +205,15 @@ runtimes:
   - use: local                                                # takes the judge
 ```
 
-**A base URL must be one the container reaches.** `localhost`, `127.0.0.1` or `::1` in a credential is the container's own loopback, so the sandbox refuses it when the attempt opens, naming the variable. Point it at your machine as the container sees it:
+**A gateway on this machine works as it is.** `localhost`, `127.0.0.1` or `::1` in a credential would be the container's own loopback, so teamai points it at the name your machine has in the container, keeping scheme, port and path. A judge's filter then lets through only that port of your machine.
 
-```sh
-# a gateway on this machine, on port 4000
-export ANTHROPIC_BASE_URL=http://host.docker.internal:4000       # Docker Desktop
-# export ANTHROPIC_BASE_URL=http://host.containers.internal:4000 # Podman
+```text
+ANTHROPIC_BASE_URL=http://127.0.0.1:4000/anthropic   (your shell)
+ANTHROPIC_BASE_URL=http://host.docker.internal:4000/anthropic       (the step, on Docker Desktop)
+ANTHROPIC_BASE_URL=http://host.containers.internal:4000/anthropic   (the step, on Podman)
 ```
+
+Docker Engine on Linux gives your machine no such name, so there the attempt fails `bad_option` before anything is created, naming the variable but never its value. Use an address of your machine the container reaches.
 
 **The image needs `node`** for the filter, and Docker needs to keep DNS inside an internal network: 26.0.0 or later, 25.0.5 or 23.0.11 (older versions forward a container's lookups out, CVE-2024-29018). Otherwise the sandbox offers no judge, and a definition with only the sandbox stops `confined_pending` at the judge. The quick start's image has `node`. Podman offers no judge in this version: its rootless network cannot connect the filter to the judge's network.
 
@@ -218,18 +226,30 @@ What the judge does not enforce:
 
 With `provider: sbx`, each attempt runs in a microVM with its own kernel, from the template of the agent you name. No image to build.
 
-**1. Once per machine:** install Docker Sandboxes, sign in, and set a network policy. sbx creates no sandbox without one, and teamai never sets it for you.
+**1. Once per machine:** install Docker Sandboxes, sign in, set a network policy, and sign your tools in with sbx. sbx creates no sandbox without a policy, and teamai never sets one for you.
 
 ```sh
 sbx login
 sbx policy init balanced                 # or deny-all, then allow your model provider:
 # sbx policy allow network api.anthropic.com:443
+sbx run claude ~/scratch                 # then /login in Claude Code, with your subscription, and exit
+sbx rm <that sandbox>                    # its name is in sbx ls; the login stays, kept for every sandbox
+sbx secret set openai --oauth            # Codex: your ChatGPT login
+sbx secret ls
 ```
 
-**2. Add a driver definition.**
+```text
+SCOPE      TYPE      NAME        SECRET
+(global)   service   anthropic   (oauth configured)
+(global)   service   openai      (stored)
+```
+
+The login stays in sbx's proxy on your machine, which adds it to the tool's requests, and every new sandbox reuses it: no token in your environment, and no `auth.json` in the attempt's tool home. An API key works the same way: `sbx secret set anthropic`.
+
+**2. Add a driver definition.** It needs no credentials:
 
 ```yaml
-# drivers/sbx.yaml: Claude on your subscription token
+# drivers/sbx.yaml: Claude on the login sbx keeps for you
 schemaVersion: v1alpha1
 name: sbx
 tool: claude
@@ -237,9 +257,7 @@ runtimes:
   - use: sandbox
     options:
       provider: sbx
-      agent: claude
-      credentials:
-        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+      agent: claude                      # no credentials: sbx's proxy signs Claude in
   - use: local                           # takes the judge: sbx offers none
 ```
 
@@ -256,16 +274,10 @@ runtimes:
   - use: local                           # a scored step's judge: sbx offers none
 ```
 
-For Codex, each member stores their login in sbx once. It stays in sbx's proxy on your machine, which adds it to Codex's requests, so no `auth.json` is written to the attempt's tool home:
-
-```sh
-sbx secret set openai --oauth            # your ChatGPT login; or pipe an API key to: sbx secret set openai
-sbx secret ls
-```
+A member who signed a tool in neither way gets the sbx command before any step starts:
 
 ```text
-SCOPE      TYPE      NAME     SECRET
-(global)   service   openai   (stored)
+{"error":{"code":"runtime_failed","message":"Runtime \"sandbox\" of driver \"sbx\" did not start (credential_missing): No tool in this sbx sandbox can sign in, so every step there would stop at the tool's own \"Not logged in\". claude: sign Claude in once with sbx: run `sbx run claude <any dir>`, then `/login` in Claude Code, and every new sandbox reuses that login (an API key instead: `sbx secret set anthropic`); or run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again."}}
 ```
 
 **3. Run a workflow on it.**
@@ -292,11 +304,10 @@ What differs from a container:
 - Each `sbx exec` gets the step's names with `-e NAME`, never a value in the command line. A strict step's withheld names, such as `GH_TOKEN`, which sbx sets for its proxy, are unset in the step's process. A step's own `HOME`, `XDG_*`, `SBX_*` or `DOCKER_*` is not passed: the sbx CLI reads those itself, and the sandbox keeps its own.
 - A cancel or a limit runs `sbx stop`; the next exec starts the sandbox again. When the attempt ends, teamai runs `sbx rm --force`. sbx also stops an idle sandbox on its own, and that is fine.
 
-**A gateway on your machine** is reached as `host.docker.internal`, which sbx's proxy sends to `localhost`. Allow its port once:
+**A gateway on your machine** works as it is: teamai points `http://127.0.0.1:4000` at `host.docker.internal:4000`, which sbx's proxy sends to `localhost`. Your sbx policy decides whether a sandbox reaches it, and teamai asks it (`sbx policy check`, read-only) before the attempt opens. When it does not, the step fails with the rule to add, and teamai never edits the policy:
 
-```sh
-sbx policy allow network localhost:4000
-export ANTHROPIC_BASE_URL=http://host.docker.internal:4000
+```text
+✖ Step "fix" failed with runtime_failed: Step runtime "sandbox" could not open attempt a2695fde5 (sandbox_unavailable): ANTHROPIC_BASE_URL points at port 4000 of this machine, which your sbx network policy does not let a sandbox reach. Allow it once with `sbx policy allow network localhost:4000`, and start again.
 ```
 
 **sbx offers no judge.** A confined judge must reach its model provider only, and an sbx sandbox reaches every host your sbx policy allows: a balanced policy allows package registries and code hosts, through which a judge could send what it reads. A per-sandbox rule can only deny hosts it names, and policy profiles come from your organization's sbx governance, so teamai has no way to narrow one sandbox to one host. List `local`, or a `docker` sandbox, after the sbx one to take the judge:
@@ -308,7 +319,7 @@ name: sbx-judged
 tool: claude
 runtimes:
   - use: sandbox
-    options: { provider: sbx, agent: claude, credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN } }
+    options: { provider: sbx, agent: claude }
   - use: sandbox
     options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
 ```
@@ -378,10 +389,10 @@ sbx ls -q
 
 | Error | What happened | Next step |
 | --- | --- | --- |
-| `sandbox_unavailable` | `sbx`, `docker` or `podman` is not installed, its daemon or machine is not running, sbx has no network policy yet, or the image cannot be pulled. Nothing runs on the host instead. | Install or start it: `sbx daemon start`, Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For sbx, `sbx policy init balanced`. For an image, check its name and `docker login <registry>`. |
-| `credential_missing` | A credential's variable is not set where teamai runs, or a judge got no env credential its tool reads | `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN`; for a judge, add the key the message names to `credentials` |
+| `sandbox_unavailable` | `sbx`, `docker` or `podman` is not installed, its daemon or machine is not running, sbx has no network policy yet, the image cannot be pulled, or your sbx policy does not let a sandbox reach the port of this machine a base URL names. Nothing runs on the host instead. | Install or start it: `sbx daemon start`, Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For sbx, `sbx policy init balanced`, or the `sbx policy allow network localhost:<port>` the message names. For an image, check its name and `docker login <registry>`. |
+| `credential_missing` | A credential's variable is not set where teamai runs, no tool in the sandbox can sign in, or a judge got no env credential its tool reads | On sbx, `sbx run claude <any dir>` then `/login`, or `sbx secret set openai --oauth`. In a container, `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN` and name it in `credentials`. For a judge, add the key the message names to `credentials` |
 | `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` or `sbx` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `local` in the definition |
-| `bad_option` | A key or value in `options` is wrong (for `sbx`, a missing `agent`), or a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which no container reaches | Fix the definition and push it; for a base URL, use `host.docker.internal` on Docker Desktop |
+| `bad_option` | A key or value in `options` is wrong (for `sbx`, a missing `agent`), or, on Docker Engine on Linux, a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which a container there cannot reach | Fix the definition and push it; for a base URL on Linux, use an address of your machine the container reaches |
 | `sandbox_failed` | The engine could not create or find the attempt's container or sandbox, for example because Docker Desktop quit mid-run. A container it could not find is kept as the attempt's, never taken as gone. | Read the message in the step failure. Start the engine again, then remove what is left: `docker ps -a --filter label=teamai.run=<run>` or `sbx ls` lists it, and the message names the `docker rm --force` or `sbx rm --force` command |
 | `cancel_failed` | A cancel or a limit could not confirm the step stopped: the engine refused the stop, or the stop (a judge's removal included) and the end of the step's process took over 10 s. What ran there may still run, so teamai keeps the container, the work and the login. Example: `docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | Start the engine again, then run `teamai workflow cancel <run>` again: the runtime stops the step and closes its place. Or remove it with the `docker rm --force` or `sbx rm --force` command the message names |
 | **Not closed** in run details | The engine could not remove the attempt's container or sandbox, or the removal and the end of what ran there took over 10 s, so what ran there may still run. The run ends as it would. | `docker rm --force <container>` or `sbx rm --force <sandbox>`, as the message says |
