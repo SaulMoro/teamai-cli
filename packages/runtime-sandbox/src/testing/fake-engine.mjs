@@ -147,10 +147,6 @@ function waitAsLongAs(name) {
   if (fs.existsSync(file)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(file, 'utf8')));
 }
 
-/** Waits as long as `stop-delay` says, before a stop does anything. */
-function delayStop() {
-  waitAsLongAs('stop-delay');
-}
 
 const [command, ...rest] = args;
 const commandDelay = path.join(state, `delay-${command}`);
@@ -286,7 +282,7 @@ function docker() {
     }
 
     case 'restart': {
-      delayStop();
+      waitAsLongAs('stop-delay');
       const { rest: positional } = options(rest, ['--time', '-t']);
       const container = readContainer(positional[0]);
 
@@ -451,7 +447,7 @@ function sbx() {
     }
 
     case 'stop': {
-      delayStop();
+      waitAsLongAs('stop-delay');
 
       for (const name of rest) {
         const sandbox = readContainer(name);

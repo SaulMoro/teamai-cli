@@ -1938,7 +1938,9 @@ describe('an attempt in an sbx sandbox', () => {
       const op = newOp();
       connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, ...(tool && { tool }), credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: {} } });
       expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'ready' });
-      templates.push(engine.calls().filter(([name, command]) => name === 'sbx' && command === 'create').at(-1)?.[5] ?? 'none');
+      // `sbx create --name <name> --no-progress <template> <paths…>`
+      const create = engine.calls().filter(([name, command]) => name === 'sbx' && command === 'create').at(-1) ?? [];
+      templates.push(create[create.indexOf('--no-progress') + 1] ?? 'none');
       connection.send({ type: 'close', handle: HANDLE });
       await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
     }
