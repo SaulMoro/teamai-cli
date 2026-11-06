@@ -593,7 +593,7 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
   });
 
-  it('fails the attempt with its work kept when the daemon restarts mid-step, and a retried prompt runs again', async () => {
+  it('fails the attempt with its work kept when the daemon restarts mid-step, leaving the retry to teamai, and a retried prompt runs again', async () => {
     behave({ hold_ms: 60_000, touch: 'work.txt', output: { ok: true } });
     const runtime = start();
     await ready(runtime);
@@ -609,7 +609,7 @@ describe('teamai-runtime-paseo', () => {
 
     expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
       op: 'op-0000000b', event: 'failed',
-      failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${daemon.url} stopped while the claude agent worked, before it wrote a workflow result. Its work is kept in the worktree; run \`teamai workflow retry\` to run the step again.` },
+      failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${daemon.url} stopped while the claude agent worked, before it wrote a workflow result. Its work is kept in the worktree.` },
     });
     expect(fs.readFileSync(path.join(worktree, 'work.txt'), 'utf8')).toBe('work in progress\n');
     runtime.send(promptRequest(handle, 'op-0000000c'));

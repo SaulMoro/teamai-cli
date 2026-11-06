@@ -404,7 +404,7 @@ teamai workflow resume rffcaabe1e1852479 --driver paseo
 A daemon that restarts mid-step closes its agents. While it is down the step waits for it; once it is back, the step fails, and its work stays in the worktree:
 
 ```text
-✖ Step "classify" failed with runtime_failed: The step runtime could not run the prompt (daemon_restarted): The Paseo daemon at ws://127.0.0.1:6767/ws stopped while the claude agent worked, before it wrote a workflow result. Its work is kept in the worktree; run `teamai workflow retry` to run the step again.
+✖ Step "classify" failed with runtime_failed: The step runtime could not run the prompt (daemon_restarted): The Paseo daemon at ws://127.0.0.1:6767/ws stopped while the claude agent worked, before it wrote a workflow result. Its work is kept in the worktree. Then run: teamai workflow retry r3ad62eacc3c191eb classify
 ```
 
 ```sh

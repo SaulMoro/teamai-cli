@@ -404,7 +404,7 @@ teamai workflow resume rffcaabe1e1852479 --driver paseo
 守护进程在步骤中途重启会关闭它的智能体。它停着的时候，步骤等它恢复；恢复后步骤失败，已做的改动留在 worktree 里：
 
 ```text
-✖ Step "classify" failed with runtime_failed: The step runtime could not run the prompt (daemon_restarted): The Paseo daemon at ws://127.0.0.1:6767/ws stopped while the claude agent worked, before it wrote a workflow result. Its work is kept in the worktree; run `teamai workflow retry` to run the step again.
+✖ Step "classify" failed with runtime_failed: The step runtime could not run the prompt (daemon_restarted): The Paseo daemon at ws://127.0.0.1:6767/ws stopped while the claude agent worked, before it wrote a workflow result. Its work is kept in the worktree. Then run: teamai workflow retry r3ad62eacc3c191eb classify
 ```
 
 ```sh

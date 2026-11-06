@@ -1141,7 +1141,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           if (end.final?.status === 'closed' && !result) {
             settle(op, {
               op, state: 'failed',
-              failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent worked, before it wrote a workflow result. Its work is kept in the worktree; run \`teamai workflow retry\` to run the step again.` },
+              failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent worked, before it wrote a workflow result. Its work is kept in the worktree.` },
             }, following);
 
             return;
