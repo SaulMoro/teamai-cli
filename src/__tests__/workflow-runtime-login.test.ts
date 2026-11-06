@@ -72,13 +72,19 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   /** How many prompts the runtime of `runtimeSeeing` was sent. */
   let prompts = 0;
 
-  /** A runtime whose exec and prompt never end, and whose reattach answers `seen` in turn, then the last of them. */
-  const runtimeSeeing = (seen: Array<(op: string) => Reattached>): StepRuntime => {
+  /**
+   * A runtime whose exec and prompt never end, and whose reattach answers `seen` in turn, then the last of them.
+   * `received` settles once it was sent its exec or prompt: teamai records the operation before it sends it.
+   */
+  const runtimeSeeing = (seen: Array<(op: string) => Reattached>): StepRuntime & { received: Promise<void> } => {
     let asked = 0;
     let op = '';
+    let receive = (): void => {};
+    const received = new Promise<void>((resolve) => { receive = resolve; });
     prompts = 0;
 
     return {
+      received,
       name: 'fake',
       init: async () => ({ ok: true, can: {}, launchesAgents: false }),
       open: async (_request, onAccepted) => {
@@ -88,12 +94,14 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
       },
       exec: (request) => {
         op = request.op;
+        receive();
 
         return new Promise<ExecEnd>(() => {});
       },
       prompt: (request) => {
         op = request.op;
         prompts += 1;
+        receive();
 
         return new Promise<PromptEnd>(() => {});
       },
@@ -106,19 +114,19 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   };
 
   /** Opens the attempt and sends its exec on `runtime`, as the teamai that was killed did. */
-  const leftRunning = async (runtime: StepRuntime): Promise<void> => {
+  const leftRunning = async (runtime: ReturnType<typeof runtimeSeeing>): Promise<void> => {
     const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     void before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
-    await vi.waitFor(() => expect(fs.readFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), 'utf8')).toContain('"exec"'));
+    await runtime.received;
   };
 
   /** Opens the attempt and sends its prompt on `runtime`, as the teamai that was killed did. */
-  const promptLeftRunning = async (runtime: StepRuntime): Promise<void> => {
+  const promptLeftRunning = async (runtime: ReturnType<typeof runtimeSeeing>): Promise<void> => {
     const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     void resumePrompt(runtime);
-    await vi.waitFor(() => expect(fs.readFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), 'utf8')).toContain('"prompt"'));
+    await runtime.received;
   };
 
   const running = (op: string): Reattached => ({ kind: 'alive', ops: [{ op: OpIdSchema.parse(op), state: 'running' }] });
@@ -131,7 +139,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const omits = (): Reattached => ({ kind: 'alive', ops: [] });
     const cancels: string[] = [];
     const closes: string[] = [];
-    const runtime: StepRuntime = { ...runtimeSeeing([omits]), cancel: async (op) => { cancels.push(op); }, close: async (handle) => { closes.push(handle); return { ok: true }; } };
+    const runtime = { ...runtimeSeeing([omits]), cancel: async (op) => { cancels.push(op); }, close: async (handle) => { closes.push(handle); return { ok: true }; } } satisfies StepRuntime;
     await leftRunning(runtime);
     const placed = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
 
@@ -205,7 +213,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const cancelAsked = new Promise<void>((resolve) => { askedToCancel = resolve; });
     const cancelLet = new Promise<void>((resolve) => { letCancel = resolve; });
     // Its reattach answers at once until just before the 15 s, then takes as long as a runtime may take to answer one.
-    const runtime: StepRuntime = {
+    const runtime = {
       ...base,
       exec: (request, events) => {
         op = request.op;
@@ -217,7 +225,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
         await cancelLet;
       },
       reattach: async () => (Date.now() < slowFrom ? running(op) : new Promise<Reattached>((resolve) => setTimeout(() => resolve(running(op)), 15_000))),
-    };
+    } satisfies StepRuntime;
     await leftRunning(runtime);
     const stopped = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation();
     await cancelAsked;
