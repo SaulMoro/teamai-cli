@@ -52,6 +52,8 @@ export const AttemptRuntimeRecordSchema = z.object({
   phase: z.enum(PHASES),
   open: z.object({ op: OpIdSchema, handle: z.string().optional() }),
   exec: z.object({ op: OpIdSchema }).optional(),
+  /** The workflow's setup, run as an exec of the place before the step's own. */
+  setup: z.object({ op: OpIdSchema }).optional(),
   /** The prompt sent to a runtime that launches agents its own way. */
   prompt: z.object({ op: OpIdSchema }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
@@ -236,6 +238,11 @@ export interface AttemptRun {
   open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
+   * Runs the workflow's setup as an exec of the open place, recorded apart from the step's exec. A setup a teamai before
+   * this one left is stopped first: its place was prepared again, so setup runs again under a new id.
+   */
+  setup(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
+  /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
    * outcome the runtime kept, or reconnects to the prompt still running by sending the same id again.
    */
@@ -413,6 +420,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       if (before?.exec) opening.exec = before.exec;
 
+      if (before?.setup) opening.setup = before.setup;
+
       if (before?.prompt) opening.prompt = before.prompt;
 
       if (toolHome) opening.toolHome = toolHome;
@@ -478,6 +487,29 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       running = exec;
       const acceptance = accepting(events);
       const end = await runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
+      await acceptance.kept();
+      running = undefined;
+
+      return ended(end);
+    },
+
+    async setup(request, events) {
+      const before = await current();
+      const handle = before?.open.handle;
+
+      if (!before || handle === undefined) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${attempt} has no open place to run setup in.` } };
+
+      if (before.setup) {
+        const notStopped = await stopLeftRunning(handle, before.setup.op);
+
+        if (notStopped) return lostFor({ code: notStopped.code, message: `Step runtime "${runtime.name}" could not stop the setup of attempt ${attempt} that a teamai before this one left running, so it may still run there: ${notStopped.message}` });
+      }
+
+      const setup = { op: newOpId() };
+      await save({ ...before, setup, phase: 'running' });
+      running = setup;
+      const acceptance = accepting(events);
+      const end = await runtime.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
       await acceptance.kept();
       running = undefined;
 
@@ -597,7 +629,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     async stopLeftOperation() {
       const before = await current();
       const handle = before?.open.handle;
-      const left = before?.exec ?? before?.prompt;
+      const left = before?.exec ?? before?.prompt ?? before?.setup;
 
       if (!left || handle === undefined) return undefined;
       const seen = await runtime.reattach(handle);

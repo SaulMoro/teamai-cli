@@ -25,7 +25,7 @@ import { applyOverlay, restoreOverlay, unrestoredConfig } from './overlay.js';
 import { cloneRoleProblem, launchedTools, releaseWorktreeRole, roleNotDeliveredFailure } from './role-copy.js';
 import { finishReader, leaveReadCopy, readCopyFailure, stageReader } from './reader.js';
 import { PlaceFinishedSchema, readPlaceRecord, writePlaceRecord, type PlaceRecord } from './record.js';
-import { runSetup } from './setup.js';
+import { runSetup, type SetupElsewhere, type SetupExit } from './setup.js';
 import { finishTeamClone, openTeamClone, removeTeamClone, teamKeyOf } from './team.js';
 import { finishDataCheckout, openDataCheckout, removeDataCheckout } from './data.js';
 import { commitPathsOf } from './worktree-snapshot.js';
@@ -605,12 +605,20 @@ async function settle(config: LocalConfig, record: PlaceRecordBase): Promise<Pla
 }
 
 /**
+ * Runs setup's command on a step runtime: with `env` set over the runtime's own environment, without `unset`, in `dir`,
+ * and settles once setup's work is back in `dir`, or with why it is not. It stops when `signal` aborts.
+ */
+export type SetupOn = (setup: { command: string; dir: string; env: Record<string, string>; unset: string[]; signal: AbortSignal | undefined }) => Promise<SetupExit | { failure: WorkflowFailure }>;
+
+/**
  * Runs the setup of a place `preparePlace` left `staged`, with the team env resolved for it, then makes it ready.
  * Setup gets its own keys and none of the step's, the attempt marker and the run's `mode`. `signal` stops setup, which then fails, and the worktree it was
  * preparing is removed, or, when the host made it, gets the branch agent files back. Nothing to do for any other place.
+ * `on` runs setup's command on the step's runtime instead of here: it gets setup's keys over the runtime's own
+ * environment, without the names setup withholds, and brings setup's work back before the checks read it.
  */
-export async function runPlaceSetup(input: { config: LocalConfig; run: RunId; attempt: AttemptId; mode: RunMode; env: Pick<WorkflowEnv, 'values' | 'facts'>; signal?: AbortSignal }): Promise<WorkflowFailure | undefined> {
-  const { config, run, attempt, mode, env, signal } = input;
+export async function runPlaceSetup(input: { config: LocalConfig; run: RunId; attempt: AttemptId; mode: RunMode; env: Pick<WorkflowEnv, 'values' | 'facts'>; signal?: AbortSignal; on?: SetupOn }): Promise<WorkflowFailure | undefined> {
+  const { config, run, attempt, mode, env, signal, on } = input;
   const read = await readPlaceRecord(config, run, attempt);
   const recorded = read.kind === 'found' ? read.record : undefined;
 
@@ -624,7 +632,10 @@ export async function runPlaceSetup(input: { config: LocalConfig; run: RunId; at
   await markSetup(recorded.dir, 'unfinished');
   const settingUp: SettingUp = { ...baseOf(recorded), phase: 'setting-up' };
   await writePlaceRecord(config, settingUp);
-  const failure = await runSetup({ command: setup.command, dir: recorded.dir, env: { ...scoped.env, ...attemptEnv(config, run, attempt, mode) }, keys: scope.provide, signal, groupDir: attemptDir(config, run, attempt), expiresAt });
+  const marker = attemptEnv(config, run, attempt, mode);
+  const given = Object.fromEntries(scope.provide.flatMap((key) => (scoped.env[key] === undefined ? [] : [[key, scoped.env[key]]])));
+  const elsewhere: SetupElsewhere | undefined = on && ((stop) => on({ command: setup.command, dir: recorded.dir, env: { ...given, ...marker }, unset: [...scope.withhold], signal: stop }));
+  const failure = await runSetup({ command: setup.command, dir: recorded.dir, env: { ...scoped.env, ...marker }, keys: scope.provide, signal, groupDir: attemptDir(config, run, attempt), expiresAt, ...(elsewhere && { elsewhere }) });
 
   if (failure) return setupFailed(config, settingUp, failure);
   await markSetup(recorded.dir, 'finished');

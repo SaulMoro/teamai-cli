@@ -271,6 +271,68 @@ Judge the review.
     expect(fs.readFileSync(launches, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 
+  describe('setup on the runtime that runs the step', () => {
+    // A command found only on the toy's PATH, so setup succeeds only where the toy runs it.
+    const toySetup = (body: string): string => {
+      const dir = fs.mkdtempSync(path.join(sandbox, 'toy-bin-'));
+      fs.writeFileSync(path.join(dir, 'toy-setup'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+      return dir;
+    };
+
+    const writeSetupFlow = async (name: string): Promise<void> => {
+      fs.writeFileSync(path.join(repo, '.teamai', 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1
+name: ${name}
+description: ${name}
+setup:
+  command: toy-setup
+steps:
+  - id: review
+    workspace: new
+    tool: claude
+    prompt: Review the change in a fresh worktree.
+    output:
+      ok: boolean
+`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+    };
+
+    it('runs setup through the runtime, in the place it opened for the step\'s tool, before the step', async () => {
+      await writeSetupFlow('toysetupflow');
+      writeDefinition('toysetup', [{ use: 'toy', options: { state, path: toySetup('exit 0') } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'toysetupflow', '--driver', 'toysetup'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(review).toMatchObject({ id: 'review', status: 'succeeded' });
+      // One place, opened for Claude; setup ran there first, as an exec recorded apart from the tool's.
+      const notes = fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string; op?: string; names: string[] });
+      expect(notes.filter((note) => note.type === 'open')).toHaveLength(1);
+      const [setupExec, toolExec] = notes.filter((note) => note.type === 'exec');
+      expect(toolExec).toBeDefined();
+      const record = runtimeRecord(runId, attemptOf(review));
+      expect(record).toMatchObject({ setup: { op: setupExec?.op }, exec: { op: toolExec?.op } });
+      const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null })
+        .filter((op) => op.kind === 'open');
+      expect(opens.map((op) => op.tool)).toEqual(['claude']);
+    });
+
+    it('checks on the host what setup on the runtime left, once collected, and fails the step on a tracked change', async () => {
+      await writeSetupFlow('toydirtyflow');
+      writeDefinition('toydirty', [{ use: 'toy', options: { state, path: toySetup('echo changed >> README.md') } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'toydirtyflow', '--driver', 'toydirty'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      expect(readRunState(runOf(ran)).steps).toMatchObject([{
+        id: 'review', status: 'failed',
+        failure: { code: 'setup_dirty', message: 'Setup "toy-setup" changed README.md, which the step would commit, so the step did not run. Make setup write only files git ignores, then retry the step.' },
+      }]);
+      expect(fs.existsSync(launches)).toBe(false);
+    });
+  });
+
   it('fails a step whose requirements no single runtime meets, naming each runtime and what it lacks', async () => {
     // The toy is a sandbox with no tool; local has the tool and no sandbox.
     writeDefinition('splitd', [{ use: 'toy', options: { state, can: { isolation: 'sandbox', tools: [] } } }, { use: 'local' }]);

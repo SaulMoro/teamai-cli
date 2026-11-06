@@ -101,14 +101,17 @@ export interface StartedCommand {
  * A command step on the attempt's runtime, as the loop stages and stops one: open, one exec of the shell, collect.
  * A runtime failure, or an exec a restart found running and stopped, ends it with a failure instead of an exit.
  */
-export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; env: Record<string, string>; unset: string[] }): StartedCommand {
-  const { run, command, env, unset } = input;
+export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; env: Record<string, string>; unset: string[]; setUp: SetUp }): StartedCommand {
+  const { run, command, env, unset, setUp } = input;
 
   const exit = (async (): Promise<CommandExit | WorkflowFailure> => {
     const view = await input.view();
     const opened = await run.open(view);
 
     if (!opened.ok) return opened.failure;
+    const unready = await setUp();
+
+    if (unready) return unready;
     let stderr = '';
     let output = '';
 
@@ -149,6 +152,50 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
   } };
 }
 
+/**
+ * What runs once the attempt's place is open, before the step's own exec or prompt: the workflow's setup, through
+ * `runtimeSetup`, with the checks teamai keeps. A failure ends the step before it starts.
+ */
+export type SetUp = () => Promise<WorkflowFailure | undefined>;
+
+/**
+ * `runPlaceSetup`'s `on` for the attempt's runtime: setup's command as an exec of the attempt's open place, with setup's keys and none of the tool's credentials, then a
+ * collect, so the checks that follow read setup's work on the host. A stop is the runtime's `cancel`.
+ */
+export function runtimeSetup(run: AttemptRun) {
+  return async ({ command, dir, env, unset, signal }: { command: string; dir: string; env: Record<string, string>; unset: string[]; signal: AbortSignal | undefined }): Promise<{ code: number; output: string } | { failure: WorkflowFailure }> => {
+    const stop = (): void => { void run.cancel(); };
+
+    signal?.addEventListener('abort', stop, { once: true });
+    let output = '';
+
+    try {
+      const end = await run.setup({ argv: shellArgv(command), env, unset, credentials: {}, cwd: dir }, { onOutput: (_stream, data) => { output = `${output}${data}`.slice(-STDERR_KEPT); } });
+      const uncollected = end.kind === 'exited' ? await run.collect() : undefined;
+
+      switch (end.kind) {
+        case 'exited':
+          return uncollected ? { failure: uncollected } : { code: end.code, output: output || end.stdout };
+        case 'cancelled':
+          return { code: 130, output };
+        case 'interrupted':
+          return { failure: interrupted() };
+        case 'failed':
+          return { failure: { code: 'runtime_failed', message: `The step runtime could not run setup "${command}" (${end.failure.code}): ${end.failure.message}` } };
+        case 'lost':
+          return { failure: lost(`setup "${command}"`, end.failure) };
+        default: {
+          const unhandled: never = end;
+
+          return unhandled;
+        }
+      }
+    } finally {
+      signal?.removeEventListener('abort', stop);
+    }
+  };
+}
+
 /** A step whose runtime stopped answering while it ran, or could not stop it: what it started may still run there. */
 function lost(what: string, failure: RuntimeFailure): WorkflowFailure {
   return { code: 'runtime_lost', message: `The step runtime did not confirm that ${what} stopped, so it may still run there (${failure.code}): ${failure.message}` };
@@ -166,7 +213,7 @@ function interrupted(): WorkflowFailure {
  * the tool's argv with `env` (names over the runtime's own), the runtime's `credentials`, and without `unset`, and
  * collects before the adapter reads the result file. A stop is the runtime's `cancel`.
  */
-export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, credentials }: { view: PlaceView; toolHome: { tool: string; dir: string }; unset: string[]; credentials: Record<string, string> }): ToolLauncher {
+export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, credentials, setUp }: { view: PlaceView; toolHome: { tool: string; dir: string }; unset: string[]; credentials: Record<string, string>; setUp: SetUp }): ToolLauncher {
   const given = toolCredentials(credentials, unset);
 
   return ({ executable, args, cwd, env, onStdout }) => {
@@ -177,6 +224,9 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, creden
       const opened = await run.open(view, { tool: toolHome.tool, toolHome, credentials: given });
 
       if (!opened.ok) return { failure: opened.failure };
+      const unready = await setUp();
+
+      if (unready) return { failure: unready };
 
       const end = await run.exec({ argv: [executable, ...args], env: stringEnv(env), unset, credentials: given, cwd }, {
         onAccepted: () => { accepted = true; },
@@ -231,13 +281,14 @@ function promptFailure(failure: RuntimeFailure, retry: { run: string; step: stri
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, runId, step, provided, unset, credentials }: {
+export function runtimePrompter(run: AttemptRun, { view, runId, step, provided, unset, credentials, setUp }: {
   view: PlaceView;
   runId: RunId;
   step: string;
   provided: string[];
   unset: string[];
   credentials: Record<string, string>;
+  setUp: SetUp;
 }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
@@ -245,6 +296,9 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, provided, 
     const opened = await run.open(view, { tool, credentials: given });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
+    const unready = await setUp();
+
+    if (unready) return { started: false, exitCode: 1, failure: unready };
     const lease: PromptLease = { step, tool, prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
 
     if (input.model) lease.model = input.model.effort ? { name: input.model.name, effort: input.model.effort } : { name: input.model.name };

@@ -31,7 +31,7 @@ import {
   type LocalToolResult,
   type LocalToolRun,
 } from './local-tool-adapter.js';
-import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
+import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
 import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
@@ -369,7 +369,7 @@ const LocalLeaseSchema = LeaseWireSchema.or(z.preprocess((raw) => (isRecord(raw)
  * then fails, and the workspace it was preparing is removed. A prompt step's place is prepared for `launches`, the tool
  * `promptReport` launches there, when the lease names none.
  */
-async function stageLease(lease: Lease, { config, lock, root, env, mode, signal, launches }: {
+async function stageLease(lease: Lease, { config, lock, root, env, mode, signal, launches, isSetUpOnRuntime = false }: {
   config: LocalConfig;
   lock: RunLock;
   root: string;
@@ -377,6 +377,8 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
   mode: RunMode;
   signal?: AbortSignal;
   launches?: string;
+  /** The attempt runs on a step runtime, which runs setup once the step opens its place there (`runtimeSetup`). */
+  isSetUpOnRuntime?: boolean;
 }): Promise<WorkflowFailure | undefined> {
   if (lease.unreadableWorkspace) return unreadablePlace(lock.run);
   // A lease is handed back to a driver after one of this run was killed: the setup or command that one left running
@@ -402,7 +404,7 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
 
   if (prepared.prompt !== undefined) lease.prompt = prepared.prompt;
 
-  return runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env, signal });
+  return isSetUpOnRuntime ? undefined : runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env, signal });
 }
 
 /**
@@ -515,7 +517,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -716,16 +718,19 @@ async function promptReport(
 
   let launcher = adapter;
 
+  // Setup runs on the step's runtime once the place is open there, before the tool.
+  const setUp = async (): Promise<WorkflowFailure | undefined> => (onRuntime ? runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env: onRuntime.teamEnv, signal, on: runtimeSetup(onRuntime.run) }) : undefined);
+
   // On a step runtime the tool gets only the names its lease provides, over the runtime's own, and its home.
   if (onRuntime?.launchesAgents) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials });
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials, setUp });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
-    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool) }), (command) => command, (command) => command);
+    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp }), (command) => command, (command) => command);
   }
 
   if (launch) input.launch = launch;
@@ -1587,7 +1592,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         inFlight.set(lease.attempt, { lease, command: stageThenStart(
           lease,
           async (signal) => {
-            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal });
+            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, isSetUpOnRuntime: runOf(lease) !== undefined });
 
             return staged ?? refuseDirtyAdoptedCommand({ config, run: lock.run, attempt: lease.attempt });
           },
@@ -1597,8 +1602,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             const stepRun = runOf(lease);
 
             if (stepRun) {
+              // An adopted place is checked again once setup ran there.
+              const setUp = async (): Promise<WorkflowFailure | undefined> => (await runPlaceSetup({ config, run: runId, attempt: lease.attempt, mode, env: turn, on: runtimeSetup(stepRun) }))
+                ?? refuseDirtyAdoptedCommand({ config, run: runId, attempt: lease.attempt });
+
               return runtimeCommand({
-                run: stepRun, command, view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root),
+                run: stepRun, command, view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root), setUp,
                 ...runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: runId, mode }),
               });
             }
@@ -1693,7 +1702,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
           const slot = slotOf.get(lease.attempt);
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), slot?.can.default_tool) : undefined;
-          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined });
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, isSetUpOnRuntime: runOf(lease) !== undefined });
 
           if (!startable(lease, controller.signal)) {
             await abandon(lease.attempt);
@@ -1706,7 +1715,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });
         })() });
       }
 
