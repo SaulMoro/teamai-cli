@@ -244,7 +244,7 @@ describe('teamai-runtime-t3', () => {
       expect(Date.now() - sentAt).toBeLessThan(12_000);
     }, 30_000);
 
-    it('fails when T3 Code is not running, saying to open it', async () => {
+    it('fails when T3 Code is not running, saying to open it or run t3 serve', async () => {
       signIn(t3);
       await t3.stop();
       fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
@@ -252,7 +252,7 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
 
-      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 't3_unavailable', message: expect.stringContaining('Open T3 Code') } });
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, or run `t3 serve`, then start the workflow again.' } });
     });
 
     // A server file outlives a server that crashed or is stopping.

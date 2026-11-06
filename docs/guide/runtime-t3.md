@@ -271,7 +271,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 
 | What you see | Why | Do this |
 | --- | --- | --- |
-| `T3 Code is not running on this machine.` | No T3 server here. teamai reads `~/.t3/userdata/server-runtime.json`, or `$T3CODE_HOME/userdata/…` | Open T3 Code, then run again. |
+| `T3 Code is not running on this machine.` | No T3 server here. teamai reads `~/.t3/userdata/server-runtime.json`, or `$T3CODE_HOME/userdata/…` | Open T3 Code, or run `t3 serve`, then run again. |
 | `T3 Code at http://127.0.0.1:3773 does not answer. Open T3 Code, or run \`t3 serve\` …` | T3 left its server file behind, but nothing answers there. | Open T3 Code, or run `t3 serve`, then run again. |
 | `… (login_required): … could not sign in through the t3 command (there is no t3 command on PATH) …` | An unattended run has no valid sign-in, and the `t3` command could not create one. The text in brackets says why. | Check that `t3 auth session list` works in the shell teamai runs in, then run again. Or start a workflow from a terminal once and approve teamai in the page. |
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai's sign-in allows less than the mode the thread runs in. | Remove `~/.teamai/runtime-state/t3/credentials.json` and run again: teamai signs in again; approve it with Auto access if T3 Code asks. Or set `runtime_mode`. |
