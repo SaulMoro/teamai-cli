@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { resolveRunMode } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
+import type { RunStatus } from '../types.js';
 import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { attemptRun, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
@@ -22,13 +23,14 @@ import { disposeDriver, LOGIN_TOOLS, openDriver } from './sources.js';
  * a runtime still holds, such as one whose stop or close failed before, then releases the logins of the attempts that
  * no longer run. Says what it released, and which login stays held and how to free it. Attempt `release` goes through
  * the same stop, and what its runtime cannot confirm, such as a close it can never clear, does not hold it: the person
- * checked that nothing of it still runs, so teamai writes its login back and lets it go.
+ * checked that nothing of it still runs, so teamai writes its login back and lets it go. Answers the run's status and
+ * the attempts whose place it closed or let go.
  */
-export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, release?: AttemptId): Promise<void> {
+export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, release?: AttemptId): Promise<StoppedAttempts | undefined> {
   const { run } = lock;
   const state = await readRun(config, run);
 
-  if (state === 'missing' || state === 'corrupt') return;
+  if (state === 'missing' || state === 'corrupt') return undefined;
   const leased = new Set(state.steps.flatMap((step) => (step.status === 'leased' ? [step.lease.attempt] : [])));
   const stillRunning = new Set<string>();
 
@@ -42,8 +44,13 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
 
   if (release !== undefined && !left.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
 
+  const stopped: StoppedAttempts = { status: state.status, closed: [], released: [] };
+
   for (const attempt of left) {
-    if (!await stopAttempt(config, run, attempt, { isReleased: attempt === release })) stillRunning.add(attempt);
+    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release });
+
+    if (ended === 'running') stillRunning.add(attempt);
+    else if (ended !== 'none') stopped[ended].push(attempt);
   }
 
   const open = new Set([...stillRunning, ...leased]);
@@ -57,7 +64,19 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
       log.warn(`The ${tool} login teamai keeps stays held by attempt ${holder.attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then delete ${loginLockFile(tool)}.`);
     }
   }
+
+  return stopped;
 }
+
+/** What a cancel stopped of a run: its status, and the attempts whose place it closed, or let go as the person asked. */
+export interface StoppedAttempts {
+  status: RunStatus;
+  closed: AttemptId[];
+  released: AttemptId[];
+}
+
+/** How a stop of an attempt ended: its place closed or let go, nothing left to stop, or its work may still run. */
+type AttemptStop = 'closed' | 'released' | 'none' | 'running';
 
 /** The attempts of `run` that no lease runs, whose record says a step runtime still holds their place. */
 async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlySet<string>): Promise<AttemptId[]> {
@@ -80,16 +99,16 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
  * Stops attempt `attempt` on the step runtime its record names, or says why it could not and answers false. A released
  * attempt the runtime cannot stop or close is let go instead, as the person asked.
  */
-async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased }: { isReleased: boolean }): Promise<boolean> {
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased }: { isReleased: boolean }): Promise<AttemptStop> {
   const record = await readAttemptRuntime(config, run, attempt);
 
-  if (!record || record.phase === 'closed') return true;
+  if (!record || record.phase === 'closed') return 'none';
 
-  const cannot = async (why: string): Promise<boolean> => {
+  const cannot = async (why: string): Promise<AttemptStop> => {
     if (isReleased) return releaseAttempt(config, run, attempt, why);
     log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
 
-    return false;
+    return 'running';
   };
 
   const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout: process.cwd() });
@@ -117,7 +136,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
       if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.`);
       else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.`);
 
-      return true;
+      return 'closed';
     }
 
     return isReleased ? releaseAttempt(config, run, attempt, notClosed.message) : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
@@ -144,13 +163,13 @@ async function writeHeldLoginBack(run: RunId, attempt: AttemptId, record: Attemp
  * Lets attempt `attempt` go though its runtime could not confirm its stop or close (`why`), as the person asked: writes
  * back the login it holds when its tool home came back, and records its place as no longer teamai's to close.
  */
-async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, why: string): Promise<true> {
+async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, why: string): Promise<'released' | 'none'> {
   const record = await readAttemptRuntime(config, run, attempt);
 
-  if (!record || record.phase === 'closed') return true;
+  if (!record || record.phase === 'closed') return 'none';
   await writeHeldLoginBack(run, attempt, record, { isCollected: record.phase === 'collected' });
   await releaseAttemptRuntime(config, run, attempt, record);
   log.info(`Released attempt ${attempt} of run ${run} on step runtime "${record.runtime}" without its confirmation, as asked. That runtime may still keep the place: ${why}`);
 
-  return true;
+  return 'released';
 }

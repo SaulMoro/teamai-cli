@@ -1299,12 +1299,15 @@ export async function workflowCancel(runId: string, step?: string, options: { re
 
     // Cancelled under the run's lock, no driver of the run starts between the cancel and the stop. A run that already
     // settled is stopped again, so an attempt its runtime could not stop before is tried once more.
-    const taken = await takeRunLock(config, run.data, async (lock) => {
+    const taken = await takeRunLock(config, run.data, async (lock): Promise<WorkflowEnvelope> => {
       const cancelled = await cancelRun(config, runId, secrets, step);
+      const isSettled = 'error' in cancelled && cancelled.error.code === 'run_settled';
+      const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, release?.data) : undefined;
 
-      if (!('error' in cancelled) || cancelled.error.code === 'run_settled') await stopCancelledAttempts(config, lock, release?.data);
+      // Of a run that had settled, what this cancel did is the places it closed or let go, which it answers with.
+      if (!isSettled || stopped === undefined || stopped.closed.length + stopped.released.length === 0) return cancelled;
 
-      return cancelled;
+      return { data: { run: { id: runId, status: stopped.status }, ...(stopped.closed.length > 0 && { closed: stopped.closed }), ...(stopped.released.length > 0 && { released: stopped.released }) } };
     }, { waitMs: 0 });
 
     if (taken.kind === 'held') return taken.value;

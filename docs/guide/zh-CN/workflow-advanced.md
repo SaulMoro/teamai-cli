@@ -1708,11 +1708,12 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 ⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
 ```
 
-解决原因后，再运行一次同样的 `teamai workflow cancel r48201aa`。这个运行已经取消，所以它会回答 `run_settled`，同时停止这次尝试、关闭它的位置并释放登录：
+解决原因后，再运行一次同样的 `teamai workflow cancel r48201aa`。这个运行已经取消，所以它会停止这次尝试、关闭它的位置、释放登录，并回答这个运行以及它关闭的尝试。没有可停止的内容时，它回答 `run_settled`：
 
 ```text
 ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
 ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
+{"data":{"run":{"id":"r48201aa","status":"cancelled"},"closed":["a3f0c2b1d"]}}
 ```
 
 如果之前失败的只是 close，这一行改为说明它关闭的位置：`Closed the place of attempt a3f0c2b1d of run r48201aa on step runtime "sandbox", which an earlier close had kept.`

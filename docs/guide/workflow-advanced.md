@@ -1714,11 +1714,12 @@ A runtime that cannot stop the work says why. teamai then keeps the place, its r
 ⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
 ```
 
-Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it answers `run_settled`, and it also stops the attempt, closes its place and releases the login:
+Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it stops the attempt, closes its place, releases the login, and answers with the run and the attempt it closed. With nothing left to stop, it answers `run_settled`:
 
 ```text
 ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
 ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
+{"data":{"run":{"id":"r48201aa","status":"cancelled"},"closed":["a3f0c2b1d"]}}
 ```
 
 When only the close had failed, the line names the place it closed instead: `Closed the place of attempt a3f0c2b1d of run r48201aa on step runtime "sandbox", which an earlier close had kept.`

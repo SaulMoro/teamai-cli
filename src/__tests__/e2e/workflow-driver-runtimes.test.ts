@@ -630,7 +630,9 @@ steps:
 
     const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
 
-    expect(envelope(cancelled)).toMatchObject({ error: { code: 'run_settled' } });
+    // The run had settled; what this cancel did is the place it closed, not an error.
+    expect(envelope(cancelled), cancelled.stderr).toEqual({ data: { run: { id: runId, status: 'succeeded' }, closed: [attempt] } });
+    expect(cancelled.code).toBe(0);
     expect(cancelled.stderr).toContain(`Closed the place of attempt ${attempt} of run ${runId} on step runtime "toy", which an earlier close had kept.`);
     expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
   });
@@ -1709,7 +1711,7 @@ span('end');
       const released = await runCLI(['workflow', 'cancel', run, '--release', attempt], repo, env());
 
       // The run was cancelled already; that cancel tries the attempts again, and lets this one go.
-      expect(envelope(released), released.stderr).toMatchObject({ error: { code: 'run_settled' } });
+      expect(envelope(released), released.stderr).toEqual({ data: { run: { id: run, status: 'cancelled' }, released: [attempt] } });
       expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} on step runtime "toy" without its confirmation, as asked. That runtime may still keep the place: Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set.`);
       expect(released.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
       expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed', closeFailed: { code: 'close_failed' } });
