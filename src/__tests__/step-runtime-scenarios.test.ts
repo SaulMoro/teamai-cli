@@ -6,6 +6,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { log } from '../utils/logger.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
@@ -1211,6 +1212,40 @@ describe('the stdio step runtime client', () => {
       throw new Error('the run record could not be written');
     })).rejects.toThrow('the run record could not be written');
     await runtime.dispose();
+  });
+
+  it('shows a notice the runtime writes as a warning, with its credentials masked, and keeps the request it came with going', async () => {
+    const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    // A runtime that tells the person something while it answers: at init, and before it accepts an open.
+    const notes = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') { write({ event: 'notice', message: 'Signing in to acme as al.' }); write({ type: 'init', ok: true, can: {} }); }
+      if (request.type === 'open') {
+        write({ event: 'notice', op: request.op, message: 'The acme token ' + request.credentials.ACME_TOKEN + ' expires tomorrow.' });
+        write({ op: request.op, event: 'accepted', handle: 'h1' });
+        write({ event: 'notice', handle: 'h1', message: 'Pulling acme/agent:1.' });
+        write({ op: request.op, event: 'ready' });
+      }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'notes', command: process.execPath, args: ['-e', notes], secrets: { 'ACME_TOKEN (credential of notes)': 'acme-secret-7f3a91' } });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      const opened = await runtime.open({ op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: { ACME_TOKEN: 'acme-secret-7f3a91' }, view: { worktree: os.tmpdir(), readonly: [], result: os.tmpdir(), runDir: os.tmpdir(), toolHome: {} } }, async () => {});
+
+      expect(opened).toMatchObject({ kind: 'ready', handle: 'h1' });
+      const lines = warned.mock.calls.map(([line]) => line);
+      expect(lines).toEqual([
+        'Step runtime "notes": Signing in to acme as al.',
+        expect.stringMatching(/^Step runtime "notes", operation op-[0-9a-f]+: The acme token <REDACTED:ACME_TOKEN \(credential of notes\)> expires tomorrow\.$/),
+        'Step runtime "notes", place h1: Pulling acme/agent:1.',
+      ]);
+      expect(lines.join('\n')).not.toContain('acme-secret-7f3a91');
+    } finally {
+      warned.mockRestore();
+      await runtime.dispose();
+    }
   });
 
   it('fails a runtime that writes a key protocol 1 does not have, naming the key', async () => {

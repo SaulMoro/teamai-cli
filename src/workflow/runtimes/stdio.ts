@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
+import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
 import { RUNTIME_PROTOCOL, type Can, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
@@ -46,9 +47,11 @@ function offered(can: Can, answersConfined: boolean): Can {
  * reply for its handle. Every request still waiting fails `runtime_unanswered` when the runtime writes an error that
  * names no request (an exec or prompt ending `lost`), and so does an `init`, a `reattach` or a `close` with no reply
  * within 15 s, and an `open`, `exec` or `prompt` with no answer within 15 s. A `cancel` gets no answer of its own: an
- * `exec` or `prompt` this process waits on with no outcome within 15 s of its cancel ends `lost` the same way.
+ * `exec` or `prompt` this process waits on with no outcome within 15 s of its cancel ends `lost` the same way. A
+ * `notice` answers nothing: it is shown as a warning, with `secrets`, the values of the credentials the runtime gets,
+ * masked.
  */
-export function stdioStepRuntime({ name, command, args = [], cwd }: { name: string; command: string; args?: string[]; cwd?: string }): StepRuntime {
+export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }: { name: string; command: string; args?: string[]; cwd?: string; secrets?: Record<string, string> }): StepRuntime {
   let child: ChildProcess | undefined;
   let dead: RuntimeFailure | undefined;
   let stderrTail = '';
@@ -127,6 +130,13 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     if ('type' in message) {
       onInit?.(message.ok ? { ok: true, can: offered(message.can, message.confinedPrompt === true), launchesAgents: message.prompt === true } : { ok: false, failure: message.error });
       onInit = undefined;
+
+      return;
+    }
+
+    if (message.event === 'notice') {
+      const about = message.op !== undefined ? `, operation ${message.op}` : message.handle !== undefined ? `, place ${message.handle}` : '';
+      log.warn(`Step runtime "${name}"${about}: ${redact(message.message, { envSecrets: secrets })}`);
 
       return;
     }

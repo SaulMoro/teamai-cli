@@ -1790,6 +1790,17 @@ Step runtime "acme" could not close the place of attempt a1, so what ran there m
 
 `ready`、exec 或 prompt 的 `accepted` 或 `display` 事件，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，立即接受 prompt，等智能体创建好后再发送它的链接，如下面的例子所示。`display` 事件既不接受也不结束它的操作：它不算 teamai 等待 15 秒的那个回答，也不算 `cancel` 的结果。
 
+要在不回答请求的情况下告诉用户一件事，就写一条 `notice`：一个要打开的登录页面、一次很慢的镜像拉取，或一个不影响工作继续的问题。它涉及某个操作或位置时，写上 `op` 或 `handle`。teamai 把它作为警告显示，并遮蔽你的运行时拿到的凭据，然后照常等待该请求自己的回答：
+
+```text
+← {"event":"notice","message":"Open https://acme.example.test/device and enter the code shown there to sign in."}
+← {"event":"notice","op":"op-83bfffde9ce3","message":"Pulling ghcr.io/acme/agent:1 (1.2 GB)."}
+```
+
+```text
+⚠ Step runtime "acme", operation op-83bfffde9ce3: Pulling ghcr.io/acme/agent:1 (1.2 GB).
+```
+
 `open` 的 `view` 列出地点按与本机相同的绝对路径拿到的路径：可读写的工作树、只读的 git 路径、attempt 的结果目录和工具主目录，以及可读写的 `runDir`，即运行的临时目录，所以 `$TEAMAI_RUN_DIR` 在那里和在本机一样可用。
 
 #### 自己启动智能体的运行时

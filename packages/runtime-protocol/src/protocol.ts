@@ -30,6 +30,7 @@ import { z } from 'zod';
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
+//    < {"event":"notice","op":"op-8b10…","message":"…"}   any time, op or handle optional: a line for the person; it answers nothing
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
 //                                                   or, when the stop is not confirmed, {"op":"op-8b10…","event":"failed",
 //                                                   "failure":{"code":"cancel_failed",…}}, which reattach keeps reporting
@@ -439,7 +440,14 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
     z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
   ]);
 
-  return { OpEvent, HandleEvent, Message: z.union([InitReply, OpEvent, HandleEvent, z.object({ event: z.literal('error'), message: z.string() }).strict()]) };
+  /**
+   * A line for the person, at any time, naming the operation or the place it is about when it is about one: a sign-in
+   * page to open, a slow pull, a problem that does not stop the work. It neither answers nor ends any request, so it
+   * is no answer teamai waits for. teamai masks it and shows it as a warning.
+   */
+  const Notice = z.object({ event: z.literal('notice'), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional(), message: z.string().min(1).max(2000) }).strict();
+
+  return { OpEvent, HandleEvent, Notice, Message: z.union([InitReply, OpEvent, HandleEvent, Notice, z.object({ event: z.literal('error'), message: z.string() }).strict()]) };
 }
 
 /** What a runtime may write, display and offer included: a check for its own output. */

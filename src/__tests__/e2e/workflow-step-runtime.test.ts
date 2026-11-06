@@ -485,6 +485,23 @@ Judge the review.
     expect(fs.existsSync(mark)).toBe(false);
   });
 
+  it('shows a runtime\'s notices to the person while the step runs, with a credential it echoes masked', async () => {
+    fs.mkdirSync(path.join(repo, '.teamai', 'drivers'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toynotice.yaml'), [
+      'schemaVersion: v1alpha1', 'name: toynotice', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+      `      state: ${JSON.stringify(path.join(sandbox, 'toy-state-notice'))}`,
+      '      credentials: { ANTHROPIC_API_KEY: "env:MEMBER_ANTHROPIC_KEY" }',
+      '      notice: { init: "Signed in to the toy as al.", open: "The key {ANTHROPIC_API_KEY} expires tomorrow." }', '',
+    ].join('\n'));
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toynotice'], repo, { ...env(), MEMBER_ANTHROPIC_KEY: 'sk-ant-api03-notice-7f3a91c2e5' });
+
+    succeededRun(ran);
+    expect(ran.stderr).toContain('Step runtime "toy": Signed in to the toy as al.');
+    expect(ran.stderr).toMatch(/Step runtime "toy", operation op-[0-9a-f]+: The key <REDACTED:ANTHROPIC_API_KEY \(credential of toy\)> expires tomorrow\./);
+    expect(ran.stderr).not.toContain('sk-ant-api03-notice-7f3a91c2e5');
+  });
+
   it('cancels a running step with the processes it started', async () => {
     writeDefinition('toycancel', { state: path.join(sandbox, 'toy-state-cancel') });
     const pidFile = path.join(sandbox, 'sleeper.pid');

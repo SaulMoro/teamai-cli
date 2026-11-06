@@ -1796,6 +1796,17 @@ Every request and reply is defined as a zod schema in `packages/runtime-protocol
 
 `display`, on `ready`, on an exec's or prompt's `accepted` or `display` event, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, accepts the prompt at once, and sends the agent's link once the agent exists, as in the example below. A `display` event neither accepts nor ends its operation: it is not the answer teamai waits 15 s for, nor the outcome of a `cancel`.
 
+To tell the person something without answering a request, write a `notice`: a sign-in page to open, a slow image pull, a problem that does not stop the work. Name the `op` or `handle` it is about, when it is about one. teamai shows it as a warning with the credentials your runtime gets masked, and waits for the request's own answer as before:
+
+```text
+← {"event":"notice","message":"Open https://acme.example.test/device and enter the code shown there to sign in."}
+← {"event":"notice","op":"op-83bfffde9ce3","message":"Pulling ghcr.io/acme/agent:1 (1.2 GB)."}
+```
+
+```text
+⚠ Step runtime "acme", operation op-83bfffde9ce3: Pulling ghcr.io/acme/agent:1 (1.2 GB).
+```
+
 `open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
 
 #### A runtime that launches agents its own way
