@@ -1705,6 +1705,12 @@ describe('an attempt in an sbx sandbox', () => {
     engine.image('shell', {});
   });
 
+  /** The attempt's sandbox name: the journal that owns it, then the run and the attempt. */
+  const SANDBOX = new RegExp(`^teamai-[0-9a-f]{16}-${RUN}-${ATTEMPT}$`);
+
+  /** The name of the attempt's sandbox, once it exists. */
+  const sandbox = (): string => engine.containers().find((name) => SANDBOX.test(name)) ?? 'none';
+
   it('fails init without an agent, since the bare shell template holds none, naming the key', async () => {
     const missing = await init(start(), { provider: 'sbx' });
 
@@ -1751,6 +1757,35 @@ describe('an attempt in an sbx sandbox', () => {
     expect(reply).not.toHaveProperty('confinedPrompt');
   });
 
+  it("names each sandbox after the journal that owns it, with the id a container's teamai.owner label carries, and reaches it by that name only", async () => {
+    const docker = start();
+    await init(docker, { provider: 'docker', image: IMAGE });
+    await openPlace(docker, place());
+    const owner = engine.labelsOf(HANDLE)?.['teamai.owner'];
+    docker.send({ type: 'close', handle: HANDLE });
+    await docker.next((message) => message.event === 'closed');
+    const connection = start();
+    await init(connection, { provider: 'sbx', agent: 'claude' });
+    const at = place();
+    const { accepted, ready } = await openPlace(connection, at);
+    const name = `teamai-${owner}-${RUN}-${ATTEMPT}`;
+
+    expect(owner).toMatch(/^[0-9a-f]{16}$/);
+    // The handle teamai holds stays the attempt's; only sbx's name carries the journal.
+    expect(accepted.handle).toBe(HANDLE);
+    expect(engine.containers()).toEqual([name]);
+    expect(ready).toMatchObject({ display: { label: `${name} (sbx)`, fields: { sandbox: name } } });
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'echo ran'], cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0 });
+    engine.failRemove(true);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'close_failed')).toMatchObject({ failure: { message: expect.stringContaining(`sbx rm --force ${name}`) } });
+    engine.failRemove(false);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed')).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+    expect(new Set(engine.calls().filter(([tool]) => tool === 'sbx').flat().filter((arg) => arg.startsWith('teamai-')))).toEqual(new Set([name]));
+  });
+
   it('removes no sandbox at open that it has no record of, since an sbx sandbox carries no label to say which journal it is', async () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });
@@ -1758,7 +1793,8 @@ describe('an attempt in an sbx sandbox', () => {
     execFileSync(path.join(engine.bin, 'sbx'), ['create', '--name', left, '--no-progress', 'claude'], { env: engine.env() });
 
     expect((await openPlace(connection, place())).ready).toMatchObject({ event: 'ready' });
-    expect(engine.containers().sort()).toEqual([HANDLE, left].sort());
+    expect(engine.containers().sort()).toEqual([sandbox(), left].sort());
+    expect(sandbox()).toMatch(SANDBOX);
   });
 
   it("opens one sandbox per attempt from the agent's template, at the place's host paths, git paths read-only, with no credential, and shows it in the dashboard", async () => {
@@ -1768,16 +1804,16 @@ describe('an attempt in an sbx sandbox', () => {
     const { accepted, ready } = await openPlace(connection, at, newOp(), { credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-1' } });
 
     expect(accepted.handle).toBe(HANDLE);
-    expect(ready).toMatchObject({ event: 'ready', display: { label: `${HANDLE} (sbx)`, fields: { sandbox: HANDLE, agent: 'claude' } } });
+    expect(ready).toMatchObject({ event: 'ready', display: { label: `${sandbox()} (sbx)`, fields: { sandbox: sandbox(), agent: 'claude' } } });
     // A new open of the same attempt finds that sandbox by its name instead of creating a second.
     expect((await openPlace(connection, at)).ready).toMatchObject({ event: 'ready' });
-    expect(engine.containers()).toEqual([HANDLE]);
+    expect(engine.containers()).toEqual([expect.stringMatching(SANDBOX)]);
 
     const creates = engine.calls().filter(([name, command]) => name === 'sbx' && command === 'create');
 
     expect(creates).toHaveLength(1);
     // The worktree is the primary workspace; every other path keeps its host path, the git paths read-only.
-    expect(creates[0]).toEqual(['sbx', 'create', '--name', HANDLE, '--no-progress', 'claude', at.worktree, at.result, at.runDir, at.toolHome, `${at.git}:ro`]);
+    expect(creates[0]).toEqual(['sbx', 'create', '--name', sandbox(), '--no-progress', 'claude', at.worktree, at.result, at.runDir, at.toolHome, `${at.git}:ro`]);
     expect(JSON.stringify(engine.calls())).not.toContain('oauth-value-1');
     expect(fs.existsSync(at.toolHome)).toBe(true);
   });
@@ -1818,7 +1854,7 @@ describe('an attempt in an sbx sandbox', () => {
     const at = place();
     await openPlace(connection, at);
     // sbx stops an idle sandbox on its own.
-    const stop = execFileSync(path.join(engine.bin, 'sbx'), ['stop', HANDLE], { env: engine.env(), encoding: 'utf8' });
+    const stop = execFileSync(path.join(engine.bin, 'sbx'), ['stop', sandbox()], { env: engine.env(), encoding: 'utf8' });
 
     expect(stop).toContain('Stopped');
     const op = newOp();
@@ -1865,7 +1901,7 @@ describe('an attempt in an sbx sandbox', () => {
     connection.send({ type: 'cancel', op });
 
     expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000)).toEqual({ op, event: 'cancelled' });
-    expect(engine.containers()).toEqual([HANDLE]);
+    expect(engine.containers()).toEqual([expect.stringMatching(SANDBOX)]);
     expect((await exec(connection, { argv: ['/bin/sh', '-c', 'echo again'], cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'again\n' });
 
     connection.send({ type: 'close', handle: HANDLE });
@@ -1892,7 +1928,7 @@ describe('an attempt in an sbx sandbox', () => {
     second.send({ type: 'reattach', handle: HANDLE });
 
     expect(await second.next((message) => message.event === 'alive' || message.event === 'gone')).toMatchObject({
-      event: 'alive', handle: HANDLE, display: { label: `${HANDLE} (sbx)` }, ops: [{ op, state: 'running' }],
+      event: 'alive', handle: HANDLE, display: { label: `${sandbox()} (sbx)` }, ops: [{ op, state: 'running' }],
     });
 
     second.send({ type: 'close', handle: HANDLE });
@@ -1904,7 +1940,7 @@ describe('an attempt in an sbx sandbox', () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });
     await openPlace(connection, place());
-    execFileSync(path.join(engine.bin, 'sbx'), ['rm', '--force', HANDLE], { env: engine.env() });
+    execFileSync(path.join(engine.bin, 'sbx'), ['rm', '--force', sandbox()], { env: engine.env() });
     connection.send({ type: 'reattach', handle: HANDLE });
 
     expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toMatchObject({ event: 'alive', handle: HANDLE, ops: [] });
@@ -1922,7 +1958,7 @@ describe('an attempt in an sbx sandbox', () => {
     connection.send({ type: 'close', handle: HANDLE });
 
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed')).toMatchObject({
-      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringContaining(`sbx rm --force ${HANDLE}`) },
+      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringContaining(`sbx rm --force ${sandbox()}`) },
     });
     engine.failRemove(false);
     connection.send({ type: 'close', handle: HANDLE });
