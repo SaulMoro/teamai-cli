@@ -353,6 +353,17 @@ describe('teamai-runtime-paseo', () => {
     ]));
   });
 
+  it('says once at start, for each tool, that its steps start in a tighter mode than the bypass mode Paseo sets as its default', async () => {
+    behave({ codex_login: 'signed_in', default_modes: { claude: 'bypassPermissions', codex: 'full-access' } });
+    const runtime = start();
+
+    expect(await ready(runtime)).toMatchObject({ ok: true });
+    expect(runtime.lines.filter((line) => 'event' in line && line.event === 'notice')).toEqual([
+      { event: 'notice', message: 'Paseo starts claude in mode bypassPermissions by default, which never asks before it acts; teamai starts its claude steps in mode auto, the nearest one before it in Paseo\'s list that asks.' },
+      { event: 'notice', message: 'Paseo starts codex in mode full-access by default, which never asks before it acts; teamai starts its codex steps in mode auto-review, the nearest one before it in Paseo\'s list that asks.' },
+    ]);
+  });
+
   it('does not offer a tool whose Paseo default mode is not one Paseo lists for it, saying so, and creates no agent', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, default_modes: { claude: 'gone' } });
     const runtime = start();
