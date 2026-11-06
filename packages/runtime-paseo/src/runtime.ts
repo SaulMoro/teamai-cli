@@ -557,6 +557,15 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     daemon = connected;
     mode = request.mode;
 
+    // A tool whose Paseo default never asks starts its steps in a tighter mode, which the person is told once.
+    for (const entry of tools) {
+      const { stepMode } = entry;
+
+      if (stepMode.id !== undefined && stepMode.insteadOf !== undefined) {
+        write({ event: 'notice', message: `Paseo starts ${entry.tool} in mode ${stepMode.insteadOf} by default, which never asks before it acts; teamai starts its ${entry.tool} steps in mode ${stepMode.id}, the nearest one before it in Paseo's list that asks.` });
+      }
+    }
+
     stepModes = new Map(tools.map((entry) => [entry.tool, entry.stepMode]));
     offers = new Map(installed.map((entry): [PaseoTool, Offer] => {
       if (!entry.canRun) return [entry.tool, { runs: 'nothing', reason: entry.reason }];
