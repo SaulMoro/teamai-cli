@@ -4738,6 +4738,30 @@ describe('the tool a driver picks for a prompt step that names none', () => {
   });
 });
 
+describe('a command step of a workflow under the name of one teamai ships', () => {
+  // A team file under a default's name replaces it, and is pinned as the default is.
+  it.each(['teamai-import-rules', 'teamai-promote-learning'])('holds %s\'s command step from a runtime off this host, and leases it on the host', async (name) => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1
+name: ${name}
+description: Bookkeeping on this host.
+steps:
+  - id: record
+    command: node record.js
+`);
+    await syncScorersThenWorkflows(config);
+    const started = await startRun(config, name, {}, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    const remote = await leaseNext(config, runId, driverB, { can: { remote: true } });
+    const host = await leaseNext(config, runId, driverA, {});
+
+    expect(remote).toMatchObject({ data: { wait: { held: [{ step: 'record', missing: ['host'] }] } } });
+    expect(host).toMatchObject({ data: { lease: { step: 'record' } } });
+  });
+});
+
 describe('a prompt step with permissions: unattended', () => {
   const FIX_AND_LINT = graph(`  - id: fix
     prompt: Fix it.

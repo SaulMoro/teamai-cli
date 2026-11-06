@@ -150,12 +150,6 @@ export type StrictKey = KeysOf<'strict'>;
 type BestEffortKey = KeysOf<'bestEffort'>;
 
 /**
- * teamai's own workflows whose command steps do its bookkeeping on this host: they run `teamai` against the run's
- * files, this machine's sessions and the team repo. Pinned by name, so a team copy under another name is not pinned.
- */
-export const HOST_PINNED_WORKFLOWS: ReadonlySet<string> = new Set(['teamai-score', 'teamai-share-session', 'teamai-share-learnings', 'teamai-finished-sessions', 'teamai-benchmark']);
-
-/**
  * A driver's `can` as the engine reads it: the protocol's keys, and three the local loop sets on the runtimes of a
  * driver definition, which no driver or runtime declares over the wire.
  * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
@@ -373,8 +367,9 @@ export interface Offer {
   /** The caller asked `next --prepare`. */
   prepare: boolean;
   /**
-   * The step runs only on this host: a command step of a workflow `HOST_PINNED_WORKFLOWS` names, or a step that
-   * publishes to a teamai data branch. Absent: not pinned.
+   * The step runs only on this host: a command step of a workflow teamai ships, which does its bookkeeping against the
+   * run's files, this machine's sessions and the team repo, or a step that publishes to a teamai data branch. Absent: not
+   * pinned.
    */
   pinned?: boolean;
   /** The team role the step's copy runs with: its clone's, or the step's own in a worktree copy. */
