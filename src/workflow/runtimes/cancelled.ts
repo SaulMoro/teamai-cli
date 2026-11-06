@@ -47,7 +47,7 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   const stopped: StoppedAttempts = { status: state.status, closed: [], released: [] };
 
   for (const attempt of left) {
-    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release });
+    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout: state.checkout ?? process.cwd() });
 
     if (ended === 'running') stillRunning.add(attempt);
     else if (ended !== 'none') stopped[ended].push(attempt);
@@ -102,7 +102,7 @@ const RELEASE = { release: true } as const;
  * Stops attempt `attempt` on the step runtime its record names, or says why it could not and answers false. A released
  * attempt the runtime cannot stop or close is let go instead, as the person asked.
  */
-async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased }: { isReleased: boolean }): Promise<AttemptStop> {
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout }: { isReleased: boolean; checkout: string }): Promise<AttemptStop> {
   const record = await readAttemptRuntime(config, run, attempt);
 
   if (!record || record.phase === 'closed') return 'none';
@@ -114,7 +114,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
     return 'running';
   };
 
-  const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout: process.cwd() });
+  const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout });
 
   if (!opened.ok) return cannot(opened.failure.message);
 

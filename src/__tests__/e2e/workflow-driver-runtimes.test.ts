@@ -2014,9 +2014,13 @@ span('end');
         const refused = await runCLI(['workflow', 'cancel', run], repo, env());
         expect(refused.stderr).toContain(cannotStop(run).message);
 
-        const released = await runCLI(['workflow', 'cancel', run, '--release', attempt], repo, env());
+        // From a folder inside the checkout: the runtime still starts in the run's checkout.
+        const inside = path.join(repo, 'docs-inside');
+        fs.mkdirSync(inside, { recursive: true });
+        const released = await runCLI(['workflow', 'cancel', run, '--release', attempt], inside, env());
 
         expect(envelope(released), released.stderr).toEqual({ data: { run: { id: run, status: 'cancelled' }, released: [attempt] } });
+        expect(fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown).at(-1)).toMatchObject({ checkout: repo, cwd: repo });
         expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} on step runtime "toy" without its confirmation, as asked.`);
         expect(released.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
