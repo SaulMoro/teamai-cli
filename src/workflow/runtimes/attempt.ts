@@ -251,8 +251,9 @@ export interface AttemptRun {
    * Closes the handle once the attempt's report is recorded, so a teamai killed before that still reattaches. A runtime
    * that cannot, or no longer answers, leaves the place open: its failure is recorded on the attempt and returned. So
    * does an exec or prompt that ended `lost`, whose work may still run there: the place is not closed under it.
+   * `release` tells the runtime the person let the attempt go (`StepRuntime.close`).
    */
-  close(): Promise<WorkflowFailure | undefined>;
+  close(how?: { release: true }): Promise<WorkflowFailure | undefined>;
   /**
    * Stops the exec or prompt a killed teamai left running, for a run cancelled without a live driver, and waits until
    * the runtime no longer reports it running. Answers why the stop is not confirmed, in the runtime's own words when it
@@ -565,7 +566,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       return undefined;
     },
 
-    async close() {
+    async close(how) {
       const before = await current();
       const handle = before?.open.handle;
 
@@ -578,7 +579,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
         return runtimeFailure(runtime.name, `kept the place of attempt ${attempt} open, since what ran there may still run (${failure.code}): ${failure.message}`);
       }
 
-      const closed = await runtime.close(handle);
+      const closed = await runtime.close(handle, how);
 
       if (!closed.ok) {
         const failure = masked(closed.failure);

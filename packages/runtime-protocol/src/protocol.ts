@@ -33,6 +33,7 @@ import { z } from 'zod';
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
 //                                                   a handle already closed answers `closed` again: teamai closes one
 //                                                   again once it removed a clone or team folder of the run
+//    > {"type":"close","handle":"…","release":true}  the person let the attempt go: forget the place either way
 //    < {"event":"notice","op":"op-8b10…","message":"…"}   any time, op or handle optional: a line for the person; it answers nothing
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
 //                                                   or, when the stop is not confirmed, {"op":"op-8b10…","event":"failed",
@@ -401,7 +402,10 @@ export const RuntimeRequestSchema = z.discriminatedUnion('type', [
   ExecRequestSchema,
   PromptRequestSchema,
   z.object({ type: z.literal('cancel'), op: OpIdSchema }),
-  z.object({ type: z.enum(['collect', 'reattach', 'close']), handle: RuntimeHandleSchema }),
+  z.object({ type: z.enum(['collect', 'reattach']), handle: RuntimeHandleSchema }),
+  // `release: true`: the person let the attempt go after checking nothing of it runs (`workflow cancel --release`).
+  // The runtime forgets the place, whether or not it can end it, and still answers `closed` or `close_failed`.
+  z.object({ type: z.literal('close'), handle: RuntimeHandleSchema, release: z.literal(true).optional() }),
 ]);
 
 export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;

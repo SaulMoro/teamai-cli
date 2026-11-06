@@ -146,7 +146,8 @@ function stopGroup(pgid) {
 // `exit_at: 'exec-accepted'` makes the toy itself exit right after it accepted an exec, which keeps running. With
 // `close_fails`, it answers every `close` with `close_failed`; set to a credential's name, its failure echoes the value
 // the place's open brought, so a test reads what teamai keeps of it. Each `close` appends the handle and whether the
-// folder its place was opened in still exists to `closes.jsonl`, so a test reads what a runtime sees go at a close.
+// folder its place was opened in still exists to `closes.jsonl`, so a test reads what a runtime sees go at a close; a
+// close with `release` forgets the place even when `close_fails` refuses it.
 // `display` is sent as given, valid or not, so a test reads what teamai keeps of it.
 function shown() {
   return options.display === undefined ? {} : { display: options.display };
@@ -594,7 +595,25 @@ function reattach(request) {
   send({ event: 'alive', handle: request.handle, ops, ...shown() });
 }
 
+/** Drops `handle` from the places the toy keeps. */
+function forget(handle) {
+  const handles = readHandles();
+
+  for (const [key, kept] of Object.entries(handles)) if (kept === handle) delete handles[key];
+  writeJson(file('handles.json'), handles);
+}
+
 function close(request) {
+  let names;
+
+  try { names = fs.readdirSync(file('ops')); } catch { names = []; }
+  const opened = names.map((name) => readJson(file('ops', name), undefined)).find((record) => record?.kind === 'open' && record.handle === request.handle);
+  const folder = opened?.view?.worktree;
+  fs.appendFileSync(file('closes.jsonl'), `${JSON.stringify({ handle: request.handle, ...(folder && { present: fs.existsSync(folder) }), ...(request.release && { release: true }) })}\n`);
+
+  // A close that releases the attempt forgets the place, whether or not the toy can end it.
+  if (request.release) forget(request.handle);
+
   if (options.close_fails) {
     const echoed = typeof options.close_fails === 'string' ? ` It holds ${openCredentials.get(request.handle)?.[options.close_fails] ?? 'nothing'}.` : '';
     send({ event: 'close_failed', handle: request.handle, failure: { code: 'close_failed', message: `The toy keeps place ${request.handle}: close_fails is set.${echoed}` } });
@@ -602,16 +621,7 @@ function close(request) {
     return;
   }
 
-  let names;
-
-  try { names = fs.readdirSync(file('ops')); } catch { names = []; }
-  const opened = names.map((name) => readJson(file('ops', name), undefined)).find((record) => record?.kind === 'open' && record.handle === request.handle);
-  const folder = opened?.view?.worktree;
-  fs.appendFileSync(file('closes.jsonl'), `${JSON.stringify({ handle: request.handle, ...(folder && { present: fs.existsSync(folder) }) })}\n`);
-  const handles = readHandles();
-
-  for (const [key, handle] of Object.entries(handles)) if (handle === request.handle) delete handles[key];
-  writeJson(file('handles.json'), handles);
+  forget(request.handle);
 
   for (const { op } of opsOf(request.handle)) fs.rmSync(opPath(op), { force: true });
   send({ event: 'closed', handle: request.handle });

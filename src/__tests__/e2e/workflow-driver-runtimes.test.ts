@@ -1870,8 +1870,9 @@ span('end');
       expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed', closeFailed: { code: 'close_failed' } });
       expect(fs.existsSync(lockFile())).toBe(false);
       expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
-      // The close was tried once more and refused, so the toy still knows the place.
-      expect(JSON.parse(fs.readFileSync(path.join(state, 'handles.json'), 'utf8'))).toMatchObject({ [`${run}/${attempt}`]: handle });
+      // The close was tried once more and refused, but it said the person let the attempt go, so the toy forgets the place.
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'handles.json'), 'utf8'))).not.toHaveProperty([`${run}/${attempt}`]);
+      expect(fs.readFileSync(path.join(state, 'closes.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown).at(-1)).toMatchObject({ handle, release: true });
 
       const again = await runCLI(['workflow', 'cancel', run], repo, env());
 
@@ -1993,6 +1994,31 @@ span('end');
 
         expect(again.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
         expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
+        expect(fs.existsSync(lockFile())).toBe(false);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('releases an attempt whose stop its runtime does not confirm, writing the login back, when the release\'s close goes through', async () => {
+      loginDefinition('codexreleasestuck', state);
+      const { run, pid, watched } = await holdingRun('codexreleasestuck');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexreleasestuck', state, { cancel_fails: cannotStop(run) });
+      const attempt = attemptOf(readRunState(run).steps[0]);
+
+      try {
+        const refused = await runCLI(['workflow', 'cancel', run], repo, env());
+        expect(refused.stderr).toContain(cannotStop(run).message);
+
+        const released = await runCLI(['workflow', 'cancel', run, '--release', attempt], repo, env());
+
+        expect(envelope(released), released.stderr).toEqual({ data: { run: { id: run, status: 'cancelled' }, released: [attempt] } });
+        expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} on step runtime "toy" without its confirmation, as asked.`);
+        expect(released.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
         expect(fs.existsSync(lockFile())).toBe(false);
       } finally {

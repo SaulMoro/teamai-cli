@@ -631,8 +631,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       return reply.event === 'alive' ? { kind: 'alive', ops: reply.ops, ...displayOf(name, reply.display) } : { kind: 'gone' };
     },
 
-    async close(handle) {
-      const reply = await askHandle({ type: 'close', handle }, ['closed', 'close_failed']);
+    async close(handle, how) {
+      const reply = await askHandle({ type: 'close', handle, ...how }, ['closed', 'close_failed']);
 
       if (isFailure(reply)) return { ok: false, failure: reply };
 

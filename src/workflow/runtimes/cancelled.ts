@@ -95,6 +95,9 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
   return open;
 }
 
+/** How a close tells the runtime the person let the attempt go. */
+const RELEASE = { release: true } as const;
+
 /**
  * Stops attempt `attempt` on the step runtime its record names, or says why it could not and answers false. A released
  * attempt the runtime cannot stop or close is let go instead, as the person asked.
@@ -105,7 +108,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
   if (!record || record.phase === 'closed') return 'none';
 
   const cannot = async (why: string): Promise<AttemptStop> => {
-    if (isReleased) return releaseAttempt(config, run, attempt, why);
+    if (isReleased) return releaseAttempt(config, run, attempt, why, record);
     log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
 
     return 'running';
@@ -123,14 +126,17 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
 
     const notStopped = await placed.stopLeftOperation();
 
-    // Nothing is brought back or closed while what ran may still write the place.
+    // Nothing is brought back or closed while what ran may still write the place. A person who released the attempt
+    // checked that nothing of it runs, so the runtime is still told to forget the place before teamai lets it go.
+    if (notStopped && isReleased) await placed.close(RELEASE);
+
     if (notStopped) return cannot(`its exec or prompt may still run, since the runtime did not confirm it stopped (${notStopped.code}): ${notStopped.message}`);
     // A place whose work already came back is not brought back again.
     const notCollected = record.phase === 'collected' ? undefined : await placed.collect();
 
     if (notCollected) log.warn(notCollected.message);
     await writeHeldLoginBack(run, attempt, record, { isCollected: notCollected === undefined });
-    const notClosed = await placed.close();
+    const notClosed = await placed.close(isReleased ? RELEASE : undefined);
 
     if (!notClosed) {
       if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.`);
@@ -139,7 +145,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
       return 'closed';
     }
 
-    return isReleased ? releaseAttempt(config, run, attempt, notClosed.message) : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
+    return isReleased ? releaseAttempt(config, run, attempt, notClosed.message, record) : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
   } catch (error) {
     return cannot(error instanceof Error ? error.message : String(error));
   } finally {
@@ -162,13 +168,13 @@ async function writeHeldLoginBack(run: RunId, attempt: AttemptId, record: Attemp
 /**
  * Lets attempt `attempt` go though its runtime could not confirm its stop or close (`why`), as the person asked: writes
  * back the login it holds when its tool home came back, and records its place as no longer teamai's to close.
+ * `before` is its record as the cancel found it open; the release's own close may have closed it since.
  */
-async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, why: string): Promise<'released' | 'none'> {
-  const record = await readAttemptRuntime(config, run, attempt);
-
-  if (!record || record.phase === 'closed') return 'none';
+async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, why: string, before: AttemptRuntimeRecord): Promise<'released'> {
+  const record = await readAttemptRuntime(config, run, attempt) ?? before;
   await writeHeldLoginBack(run, attempt, record, { isCollected: record.phase === 'collected' });
-  await releaseAttemptRuntime(config, run, attempt, record);
+
+  if (record.phase !== 'closed') await releaseAttemptRuntime(config, run, attempt, record);
   log.info(`Released attempt ${attempt} of run ${run} on step runtime "${record.runtime}" without its confirmation, as asked. That runtime may still keep the place: ${why}`);
 
   return 'released';

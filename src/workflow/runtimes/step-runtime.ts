@@ -92,8 +92,11 @@ export interface StepRuntime {
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */
   collect(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   reattach(handle: string): Promise<Reattached>;
-  /** Ends the handle: the runtime may drop its retained outcomes. A failure says the place, and what runs in it, may remain. */
-  close(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * Ends the handle: the runtime may drop its retained outcomes. A failure says the place, and what runs in it, may
+   * remain. `release` says the person let the attempt go, so the runtime forgets the place even when it cannot end it.
+   */
+  close(handle: string, how?: { release: true }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** Ends this connection to the runtime. Operations the runtime keeps running stay its own. */
   dispose(): Promise<void>;
 }
