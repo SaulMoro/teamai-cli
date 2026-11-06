@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { z } from 'zod';
-import type { InitCredentials, InitInstance } from '@teamai/runtime-protocol';
+import { UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 
@@ -164,6 +164,16 @@ describe('the tool instances teamai passes at init', () => {
 
     expect((await exec(connection, { argv: ['acme-claude', '-p', 'Review it.'], env: { ACME_CLAUDE_CONFIG_DIR: at.toolHome }, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'reviewed\n' });
     expect(fs.readFileSync(path.join(at.toolHome, 'ran'), 'utf8')).toBe('acme-claude');
+  });
+
+  it('cuts a reason longer than protocol 1 takes to fit, marking the cut, so init still answers', async () => {
+    const name = `acme-${'x'.repeat(300)}`;
+    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] }, [{ name, tool: 'claude', command: name }]);
+    const reason = String((reply.unavailable as Message)[name]);
+
+    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude'] } });
+    expect(reason).toHaveLength(UNAVAILABLE_REASON_MAX);
+    expect(reason.endsWith('…')).toBe(true);
   });
 
   it('offers an instance with no command of its own wherever its tool is offered', async () => {
