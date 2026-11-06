@@ -260,6 +260,11 @@ export const CanSchema = z.object({
   max_turns: z.boolean().optional(),
   setup: z.boolean().optional(),
   tools: z.array(z.string().min(1)).optional(),
+  /**
+   * The tool the app the runtime drives runs by default, one of `tools`. A prompt step that names no tool, in a run where
+   * the member named none for it either, runs on it, before the member's own teamai default.
+   */
+  default_tool: z.string().min(1).optional(),
   end_turn: z.boolean().optional(),
   unattended: z.boolean().optional(),
   role: z.boolean().optional(),

@@ -1742,6 +1742,15 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
 ```
 
+驱动某个应用、而该应用有自己默认工具的运行时，用 `can.default_tool` 报告它，取值是它的 `can.tools` 之一。没有指定工具的提示词步骤依次取第一个已设置的：步骤的 `tool:`、`--tools <agent>=`、`workflows.tools.<agent>`、`--tools default=`、定义的 `tool`、运行时的 `can.default_tool`，然后是你自己的默认值：`TEAMAI_AI_TOOL`、`workflows.tools.default`、`ai.tool`。因此不指定工具的 `--driver t3` 会像你的 T3 一样运行，而 `local` 上仍由 `ai.tool` 选择工具。这些都没有设置时，步骤以 `tool_unconfigured` 失败；teamai 从不退回到它找到的第一个已安装工具：
+
+```text
+← {"type":"init","ok":true,"prompt":true,"can":{"tools":["claude","codex"],"default_tool":"claude"}}
+$ TEAMAI_AI_TOOL=codex teamai workflow start review --driver app          # review 没有指定工具：在 claude 上运行
+$ teamai workflow start review --driver app --tools default=codex         # --tools 优先：codex
+✖ Step "review" failed with tool_unconfigured: This prompt step names no tool, and none is set for it. Name one with the step's tool:, with --tools default=<tool>, or with ai.tool in your teamai config
+```
+
 `max_parallel` 和 `credentials` 由 teamai 自己使用：它在 `init` 之前把它们从选项里去掉，所以你的运行时永远看不到它们，也不应检查它们。`init` 改为列出凭据的名字，从不带值，这样你的运行时可以只提供它能登录的工具，例如 `can.confined` 评审：
 
 ```text

@@ -259,11 +259,13 @@ async function maskAttemptFiles(config: LocalConfig, run: RunId, secrets: Record
 
 /**
  * The tool a prompt step runs on: the step's own `tool`, then `--tools`, then `workflows.tools`, the agent's entry before
- * the default, with the member's own AI tool between them: TEAMAI_AI_TOOL before `workflows.tools.default`, and
- * `ai.tool`, the project's before the machine's, after it. A member's tool that teamai does not launch fails the step;
- * one that runs no workflow step gives way to the next rung, which `warnings` says.
+ * the default (`--tools default=` holds the driver definition's `tool` under the one given), then `runtimeDefault`, the
+ * default of the app the runtime that takes the step drives (`can.default_tool`), then the member's own AI tool:
+ * TEAMAI_AI_TOOL before `workflows.tools.default`, and `ai.tool`, the project's before the machine's, after it. A
+ * member's tool that teamai does not launch fails the step; one that runs no workflow step gives way to the next rung,
+ * which `warnings` says.
  */
-function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): { ok: true; tool: string | undefined; warnings: string[] } | { ok: false; failure: WorkflowFailure } {
+function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config: LocalConfig, flags: Record<string, string>, members: MemberTool[], runtimeDefault: string | undefined): { ok: true; tool: string | undefined; warnings: string[] } | { ok: false; failure: WorkflowFailure } {
   const configured = config.workflows?.tools ?? {};
   const member = ({ setting, tool: named }: MemberTool) => ({ source: setting, named, member: true });
 
@@ -272,6 +274,7 @@ function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config:
     { source: '--tools', named: agent ? flags[agent] : undefined, member: false },
     { source: `workflows.tools.${agent}`, named: agent ? configured[agent] : undefined, member: false },
     { source: '--tools', named: flags.default, member: false },
+    { source: 'can.default_tool', named: runtimeDefault, member: false },
     ...members.flatMap((memberTool) => (memberTool.source === 'TEAMAI_AI_TOOL' ? [member(memberTool)] : [])),
     { source: 'workflows.tools.default', named: configured.default, member: false },
     ...members.flatMap((memberTool) => (memberTool.source !== 'TEAMAI_AI_TOOL' ? [member(memberTool)] : [])),
@@ -305,13 +308,13 @@ type LaunchChoice = { ok: true; tool: LaunchTool; target: LaunchTarget; warnings
  * none: no tool is configured, or the one picked is not one teamai launches, which `tool` then names. `warnings` says
  * which of the member's tools gave way, for the step that launches to log.
  */
-export function launchToolFor(step: Pick<WorkflowStep, 'agent' | 'tool'>, config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): LaunchChoice {
-  const choice = stepTool(step, config, flags, members);
+export function launchToolFor(step: Pick<WorkflowStep, 'agent' | 'tool'>, config: LocalConfig, flags: Record<string, string>, members: MemberTool[], runtimeDefault?: string): LaunchChoice {
+  const choice = stepTool(step, config, flags, members, runtimeDefault);
 
   if (!choice.ok) return { ...choice, warnings: [] };
   const { tool: selected, warnings } = choice;
 
-  if (!selected) return { ok: false, failure: { code: 'tool_unconfigured', message: 'No local workflow tool is configured for this prompt step' }, warnings };
+  if (!selected) return { ok: false, failure: { code: 'tool_unconfigured', message: 'This prompt step names no tool, and none is set for it. Name one with the step\'s tool:, with --tools default=<tool>, or with ai.tool in your teamai config' }, warnings };
 
   const target = launchTargetOf(selected);
 
@@ -508,7 +511,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string> } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; defaultTool?: string } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -522,7 +525,7 @@ async function promptReport(
   };
 
   // A role lease's place was staged for its launch tool, which launches it; others pick theirs now.
-  const choice = staged ?? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config));
+  const choice = staged ?? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), onRuntime?.defaultTool);
 
   for (const warning of choice.warnings) log.warn(warning);
 
@@ -1081,12 +1084,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const members = await memberTools(config);
 
   // The tool a prompt step that names none launches on, which a runtime must offer as it must a named one: an
-  // instance by its own name, since a runtime that offers the tool it extends does not run it.
-  const toolFor: ToolFor = (step) => {
-    const choice = launchToolFor(step, config, options.tools ?? {}, members);
+  // instance by its own name, since a runtime that offers the tool it extends does not run it. Offered to a runtime
+  // that reports the default of the app it drives, that default comes before the member's own.
+  const toolForOn = (runtimeDefault: string | undefined): ToolFor => (step) => {
+    const choice = launchToolFor(step, config, options.tools ?? {}, members, runtimeDefault);
 
     return choice.ok ? choice.target.name : undefined;
   };
+
+  const toolFor = toolForOn(undefined);
 
   // It launches a step that names its tool on the tools this machine has: those the run's steps name, or every one when a
   // step's output may bring a workflow later. It is the run's only driver, so a step whose tool it cannot launch fails
@@ -1409,7 +1415,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       for (const entry of defined.runtimes) if (entry.kind === 'external') rememberSecrets(entry.masks, turn.secrets);
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
-        running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true, isOneAtATime, toolFor,
+        running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
       });
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
@@ -1649,7 +1655,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           }
 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
-          const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config)) : undefined;
+          const slot = slotOf.get(lease.attempt);
+          const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), slot?.can.default_tool) : undefined;
           const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined });
 
           if (!startable(lease, controller.signal)) {
@@ -1663,7 +1670,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true, credentials: slotOf.get(lease.attempt)?.credentials ?? {} });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });
         })() });
       }
 

@@ -1748,6 +1748,15 @@ A tool you cannot run now, such as one that is not signed in, stays out of `can.
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
 ```
 
+A runtime that drives an app with a default tool of its own reports it as `can.default_tool`, one of its `can.tools`. A prompt step that names no tool runs on the first of: the step's `tool:`, `--tools <agent>=`, `workflows.tools.<agent>`, `--tools default=`, the definition's `tool`, the runtime's `can.default_tool`, then your own default: `TEAMAI_AI_TOOL`, `workflows.tools.default`, `ai.tool`. So `--driver t3` with no tool named runs as your T3 does, and `ai.tool` still picks the tool on `local`. With none of them set, the step fails `tool_unconfigured`; teamai never falls back to the first tool it finds installed:
+
+```text
+← {"type":"init","ok":true,"prompt":true,"can":{"tools":["claude","codex"],"default_tool":"claude"}}
+$ TEAMAI_AI_TOOL=codex teamai workflow start review --driver app          # review names no tool: it runs on claude
+$ teamai workflow start review --driver app --tools default=codex         # --tools wins: codex
+✖ Step "review" failed with tool_unconfigured: This prompt step names no tool, and none is set for it. Name one with the step's tool:, with --tools default=<tool>, or with ai.tool in your teamai config
+```
+
 teamai keeps `max_parallel` and `credentials` for itself: it strips them from the options before `init`, so your runtime never sees them and must not check them. `init` names the credentials instead, never their values, so your runtime can offer only the tools it can sign in, such as a `can.confined` judge:
 
 ```text

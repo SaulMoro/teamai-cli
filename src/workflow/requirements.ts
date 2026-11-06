@@ -159,8 +159,11 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  */
 export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned' };
 
-/** A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do. */
-export type DecidedCan = Required<Can>;
+/**
+ * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
+ * `default_tool` is no capability but the app's own default, which a driver that drives no app leaves out.
+ */
+export type DecidedCan = Required<Omit<Can, 'default_tool'>> & Pick<Can, 'default_tool'>;
 
 /** The `can` keys this CLI reads; any other key is echoed in `ignored`. */
 export const CAN_KEYS: ReadonlySet<string> = new Set(Object.keys(CanSchema.shape));

@@ -628,6 +628,43 @@ steps:
       expect(sent?.provided).toEqual(['WORKFLOW_TEAM_TOKEN']);
     });
 
+    it.each([
+      { given: 'the runtime\'s default over the member\'s', args: [], tool: 'claude' },
+      { given: '--tools default= over the runtime\'s default', args: ['--tools', 'default=codex'], tool: 'codex' },
+    ])('runs a step that names no tool, in a definition that names none, on $given', async ({ args, tool }) => {
+      writeFlow('notool', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      const dir = path.join(repo, '.teamai', 'drivers');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'appdefault.yaml'), stringify({ schemaVersion: 'v1alpha1', name: 'appdefault', runtimes: [{ use: 'toy', options: { state, agent: { output: { ok: true } }, can: { default_tool: 'claude' } } }] }));
+
+      const ran = await runCLI(['workflow', 'start', 'notool', '--driver', 'appdefault', ...args], repo, env({ TEAMAI_AI_TOOL: 'codex' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(sends().at(-1)?.sent).toMatchObject({ step: 'review', tool });
+    });
+
+    it('fails a step that names no tool, where no runtime default and no tool of the member is set, naming where to set one', async () => {
+      writeFlow('notoolset', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      const dir = path.join(repo, '.teamai', 'drivers');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'nodefault.yaml'), stringify({ schemaVersion: 'v1alpha1', name: 'nodefault', runtimes: [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }] }));
+      const before = sends().length;
+
+      const ran = await runCLI(['workflow', 'start', 'notoolset', '--driver', 'nodefault'], repo, env({ TEAMAI_AI_TOOL: '' }));
+
+      const review = readRunState(runOf(ran)).steps.find((step) => step.id === 'review');
+      expect(review).toMatchObject({ status: 'failed', failure: { code: 'tool_unconfigured', message: expect.stringContaining('Name one with the step\'s tool:, with --tools default=<tool>, or with ai.tool in your teamai config') } });
+      expect(sends()).toHaveLength(before);
+    });
+
     it('masks the team\'s secret a runtime echoes in a notice, as it masks the step\'s other output', async () => {
       const secrets = path.join(repo, '.teamai', 'env', 'secrets.yaml');
       fs.mkdirSync(path.dirname(secrets), { recursive: true });
