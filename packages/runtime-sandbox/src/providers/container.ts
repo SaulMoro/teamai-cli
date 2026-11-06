@@ -4,7 +4,7 @@ import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protoco
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
+import { cliOf, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
 //
@@ -150,7 +150,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       }
 
       const can: Can = {
-        workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true,
+        workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true,
         ...(confined.length > 0 && { confined }),
       };
 

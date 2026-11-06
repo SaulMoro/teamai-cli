@@ -5,7 +5,7 @@ import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
+import { cliOf, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
 //
@@ -152,7 +152,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
       const signedIn = offerSignedIn({ tools: found.tools, provider: 'sbx', credentials, stored: stored.services });
 
       if (!signedIn.ok) return signedIn;
-      const can: Can = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: signedIn.tools, end_turn: true, unattended: true, role: true };
+      const can: Can = { workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: signedIn.tools, end_turn: true, unattended: true, role: true };
 
       return { ok: true, can };
     },

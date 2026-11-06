@@ -1,13 +1,19 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { Can, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
 
 // ─── What every bind-mount provider shares: its CLI, and the place view as mounts ───
 //
 //  docker, podman and sbx are each one CLI the runtime runs once per step of its work, found on teamai's PATH, and each
 //  mounts the place view at its host paths with the access the view gives each path.
 //
+
+/**
+ * The workspaces a bind-mount sandbox runs a step in. teamai prepares each on the host, a clone or the team repo's
+ * included, and gives its path and its git paths in the place view, which a bind mount keeps at the same paths.
+ */
+export const WORKSPACES: Can['workspace'] = ['read-only', 'new', 'continue', 'clone', 'team'];
 
 /** The tools a step runtime can launch, as `can.tools` lists those a sandbox holds. */
 // oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
