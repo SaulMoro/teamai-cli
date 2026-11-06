@@ -17,6 +17,12 @@ const DISPOSE_WAIT_MS = 2000;
  */
 const ANSWER_WITHIN_MS = 15_000;
 
+/**
+ * How long an attended `init` may take: a person may have a sign-in page to approve, which the runtime names in a
+ * `notice`. An unattended or recover `init` has nobody to wait for, and gets `ANSWER_WITHIN_MS`.
+ */
+const ATTENDED_INIT_WITHIN_MS = 10 * 60_000;
+
 type HandleRequest = Extract<RuntimeRequest, { handle: string; type: 'collect' | 'reattach' | 'close' }>;
 
 /** The display a runtime gave, if the run's details show it; one they do not show is named in a warning. */
@@ -46,7 +52,7 @@ function offered(can: Can, answersConfined: boolean): Can {
  * request fails with `runtime_exited`. A `reattach`, `collect` or `close` ends with its own reply, or with the failure
  * reply for its handle. Every request still waiting fails `runtime_unanswered` when the runtime writes an error that
  * names no request (an exec or prompt ending `lost`), and so does an `init`, a `reattach` or a `close` with no reply
- * within 15 s, and an `open`, `exec` or `prompt` with no answer within 15 s. A `cancel` gets no answer of its own: an
+ * within 15 s (an attended `init`, which may wait for a person to sign in, within 10 min), and an `open`, `exec` or `prompt` with no answer within 15 s. A `cancel` gets no answer of its own: an
  * `exec` or `prompt` this process waits on with no outcome within 15 s of its cancel ends `lost` the same way. A
  * `notice` answers nothing: it is shown as a warning, with `secrets`, the values of the credentials the runtime gets,
  * masked.
@@ -245,8 +251,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
         const timer = setTimeout(() => {
           if (onInit !== settle) return;
           onInit = undefined;
-          resolve({ ok: false, failure: { code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer init within ${ANSWER_WITHIN_MS / 1000} s.` } });
-        }, ANSWER_WITHIN_MS);
+          resolve({ ok: false, failure: { code: 'runtime_unanswered', message: mode === 'attended'
+            ? `Step runtime "${name}" did not answer init within ${ATTENDED_INIT_WITHIN_MS / 60_000} min, while it ran attended.`
+            : `Step runtime "${name}" did not answer init within ${ANSWER_WITHIN_MS / 1000} s.` } });
+        }, mode === 'attended' ? ATTENDED_INIT_WITHIN_MS : ANSWER_WITHIN_MS);
 
         timer.unref();
         onInit = settle;
