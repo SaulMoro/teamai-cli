@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { offerSignedIn } from '../sign-in.js';
 import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
@@ -35,6 +36,9 @@ const NOT_INSTALLED = 'sbx is not installed here, or not on PATH. Install Docker
 const CLI_SETTING = /^(?:HOME|XDG_[A-Z_]+|SBX_[A-Z0-9_]*|DOCKER_[A-Z0-9_]*)$/;
 
 const ListedSchema = z.array(z.looseObject({ name: z.string() }));
+
+/** `sbx secret ls --global --json`: the services sbx's proxy holds a login for. Each secret's masked value is never read. */
+const StoredSchema = z.object({ secrets: z.array(z.object({ name: z.string() })) });
 
 /** The notice sbx prints on stderr when an exec starts a sandbox it stopped while idle: sbx's line, not the step's. */
 const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
@@ -107,8 +111,24 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
     return { ok: true, tools: LAUNCHABLE.filter((tool) => found.has(tool)) };
   };
 
+  /** The services whose login sbx's proxy holds for every sandbox, which it injects into a tool's requests. */
+  const storedLogins = async (): Promise<{ ok: true; services: ReadonlySet<string> } | { ok: false; failure: RuntimeFailure }> => {
+    const ran = await cli(['secret', 'ls', '--global', '--json']);
+    let parsed: z.infer<typeof StoredSchema> | undefined;
+
+    try {
+      parsed = ran.kind === 'ran' && ran.code === 0 ? StoredSchema.parse(JSON.parse(ran.stdout)) : undefined;
+    } catch {
+      parsed = undefined;
+    }
+
+    if (parsed === undefined) return unavailable(`sbx could not list the logins it keeps (${messageOf(ran) || 'it printed no list'}). Run \`sbx secret ls\` to see why, and start again.`);
+
+    return { ok: true, services: new Set(parsed.secrets.map(({ name }) => name)) };
+  };
+
   return {
-    async offer() {
+    async offer(credentials) {
       const ls = await cli(['ls', '--json']);
 
       if (ls.kind !== 'ran') return unavailable(ls.message);
@@ -120,10 +140,16 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
         return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
       }
 
-      const tools = LAUNCHABLE.includes(agent) ? { ok: true as const, tools: [agent] } : await probeTools();
+      const found = LAUNCHABLE.includes(agent) ? { ok: true as const, tools: [agent] } : await probeTools();
 
-      if (!tools.ok) return tools;
-      const can: Can = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: tools.tools, end_turn: true, unattended: true, role: true };
+      if (!found.ok) return found;
+      const stored = await storedLogins();
+
+      if (!stored.ok) return stored;
+      const signedIn = offerSignedIn({ tools: found.tools, provider: 'sbx', credentials, stored: stored.services });
+
+      if (!signedIn.ok) return signedIn;
+      const can: Can = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: signedIn.tools, end_turn: true, unattended: true, role: true };
 
       return { ok: true, can };
     },

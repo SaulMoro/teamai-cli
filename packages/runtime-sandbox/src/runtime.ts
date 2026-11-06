@@ -777,7 +777,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    const offered = await provider.offer();
+    const offered = await provider.offer(credentials);
 
     if (!offered.ok) {
       ready = { provider: unreachable(offered.failure), can: {} };
