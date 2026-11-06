@@ -57,6 +57,8 @@ export interface FakeEngine {
   holdOwned(isHeld: boolean): void;
   /** Whether a held list of one journal's containers is waiting now. */
   isListingOwned(): boolean;
+  /** How many lists of one journal's containers it answered, as a sweep makes once per open. */
+  ownedListings(): number;
   /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
@@ -131,6 +133,7 @@ export function fakeEngine(dir: string): FakeEngine {
       else fs.rmSync(path.join(state, 'owned-hold'), { force: true });
     },
     isListingOwned: () => fs.existsSync(path.join(state, 'owned-listing')),
+    ownedListings: () => (fs.existsSync(path.join(state, 'owned-listed')) ? fs.readFileSync(path.join(state, 'owned-listed'), 'utf8').length : 0),
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
       else fs.rmSync(path.join(state, 'rm-fails'), { force: true });

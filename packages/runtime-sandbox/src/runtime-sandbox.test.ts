@@ -1207,16 +1207,24 @@ describe("the containers of one runtime's journal", () => {
   it("keeps the container of another runtime's create still on its way, whose place that runtime saved first", async () => {
     const creating = start();
     await init(creating, { provider: 'docker', image: IMAGE });
-    engine.holdCreate(4_000);
+    engine.holdCreate(10_000);
     const held = openAttempt(creating, 'a00000001');
+    let isCreateOver = false;
+    void held.finally(() => { isCreateOver = true; });
     await vi.waitFor(() => { expect(engine.containers()).toEqual(named('a00000001')); }, { timeout: 10_000 });
     engine.holdCreate(0);
     const other = start();
     await init(other, { provider: 'docker', image: IMAGE });
 
     expect(await openAttempt(other, 'a00000002')).toMatchObject({ event: 'ready' });
-    expect(await held).toMatchObject({ event: 'ready' });
+    // Both opens' sweeps have listed the journal's containers, and a removal either started has had time to end.
+    await vi.waitFor(() => { expect(engine.ownedListings()).toBe(2); }, { timeout: 10_000 });
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    expect(engine.calls().filter(([, command]) => command === 'rm')).toEqual([]);
     expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000002'));
+    // Checked while the create was still on its way, or the test proves nothing.
+    expect(isCreateOver).toBe(false);
+    expect(await held).toMatchObject({ event: 'ready' });
   }, 60_000);
 });
 
