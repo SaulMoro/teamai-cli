@@ -23,7 +23,7 @@ export interface PlaceKey {
   attempt: string;
 }
 
-/** An attempt's sandbox name, which is also its handle: `teamai-<run>-<attempt>`. */
+/** An attempt's handle, `teamai-<run>-<attempt>`, which also names its container (sbx adds its journal: providers/sbx.ts). */
 export function sandboxName({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
 }

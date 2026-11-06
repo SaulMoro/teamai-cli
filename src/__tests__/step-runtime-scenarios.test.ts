@@ -50,7 +50,8 @@ const SUBJECTS: Subject[] = [
     start: (state) => stdioStepRuntime({ name: 'sandbox', command: sbx.command, args: sbx.args(state) }),
     options: () => sbx.options,
     retains: true,
-    display: { label: 'teamai-r0123abcd-a0123abcd (sbx)', fields: { sandbox: 'teamai-r0123abcd-a0123abcd', agent: 'claude' } },
+    // An sbx sandbox's name starts with its journal's id, which follows the subject's HOME.
+    display: { label: expect.stringMatching(/^teamai-[0-9a-f]{16}-r0123abcd-a0123abcd \(sbx\)$/), fields: { sandbox: expect.stringMatching(/^teamai-[0-9a-f]{16}-r0123abcd-a0123abcd$/), agent: 'claude' } },
   },
 ];
 
