@@ -12,6 +12,7 @@ import { z } from 'zod';
 //
 //    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude"}]}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
+//                                                                    permissions: {"claude":"full-access"}, the tools it runs without prompts
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","tool":"claude","view":{...},"credentials":{}}   tool: the prompt's, when it has one
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
@@ -453,6 +454,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
       type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(),
       // The tools it cannot run now, each with why and what the person does about it; it still offers the rest.
       unavailable: z.record(z.string().min(1), z.string().min(1).max(500)).optional(),
+      // The tools it runs without permission prompts, because an option of its definition or of the member set that.
+      permissions: z.record(z.string().min(1), z.literal('full-access')).optional(),
     }).strict(),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }).strict(),
   ]);

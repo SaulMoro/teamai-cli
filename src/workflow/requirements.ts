@@ -150,14 +150,16 @@ export type StrictKey = KeysOf<'strict'>;
 type BestEffortKey = KeysOf<'bestEffort'>;
 
 /**
- * A driver's `can` as the engine reads it: the protocol's keys, and three the local loop sets on the runtimes of a
- * driver definition, which no driver or runtime declares over the wire.
+ * A driver's `can` as the engine reads it: the protocol's keys, and those the local loop sets on the runtimes of a
+ * driver definition, which no driver or runtime declares in `can`.
  * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
  * - `prompt: false`: it takes no prompt step, only answer steps, as the host command slot of a definition with no `local`.
  * - `commands: 'pinned'`: of command steps, it takes only those pinned to the host, since another runtime of the
  *   definition runs commands. A prompt it takes still brings its setup, which runs where the prompt runs.
+ * - `fullAccess`: the tools its init reports in `permissions` as running without permission prompts. Of a runtime
+ *   that reports it, `unattended` holds only for those tools.
  */
-export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned' };
+export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[] };
 
 /**
  * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
@@ -449,7 +451,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
 
   const gaps: Missing[] = policy.length > 0 ? policy : [
     ...toolGap(offer.tool, can),
-    ...(offer.unattended && !can.unattended ? ['unattended' as const] : []),
+    ...(offer.unattended && !runsUnattended(offer.tool, can) ? ['unattended' as const] : []),
     ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
     ...(floor.network === false && !can.network ? ['network' as const] : []),
     // Only teamai delivers a role into a copy: one a driver makes itself gets the member's assets.
@@ -532,6 +534,11 @@ export function envAdvice(keys: readonly string[], declared: ReadonlySet<string>
 }
 
 /** Whether a driver that declares `can` is held from a step that runs on `tool`. */
+/** Whether a driver runs a prompt on `tool` unattended: it offers it, and on a runtime that reports full access, for that tool. */
+function runsUnattended(tool: string | undefined, can: Pick<DriverCan, 'unattended' | 'fullAccess'>): boolean {
+  return can.unattended === true && (can.fullAccess === undefined || (tool !== undefined && can.fullAccess.includes(tool)));
+}
+
 export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean {
   return !(can.tools ?? []).includes(tool);
 }

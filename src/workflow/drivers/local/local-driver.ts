@@ -1109,13 +1109,25 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // An external runtime is offered with what it said it can. One that execs the tool launches only the tools it can give
   // a home, and the instances of them it lists; one that launches agents its own way gives each its own. It keeps
   // `can.confined` only when its init said it answers confined prompts (the stdio reader drops it otherwise).
+  // A runtime that runs a tool without permission prompts outside a sandbox proves no isolation: its steps' is none.
+  const unproven = (can: DriverCan): boolean => (can.fullAccess?.length ?? 0) > 0 && can.isolation !== 'sandbox';
+
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
     ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
     : {
       kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
       ...(entry.unavailable && { unavailable: entry.unavailable }),
-      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(toolOf(tool)?.base ?? tool)), remote: true },
+      can: {
+        ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(toolOf(tool)?.base ?? tool)), remote: true,
+        ...(unproven(entry.can) && { isolation: 'none' as const }),
+      },
     });
+
+  for (const entry of defined.runtimes) {
+    if (entry.kind === 'external' && unproven(entry.can)) {
+      log.warn(`Runtime ${entry.use} of driver ${defined.driver} runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.`);
+    }
+  }
 
   // Every definition has a host command slot: its `local`, or else one here that takes no prompt step but answer steps, last. While another
   // runtime runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs

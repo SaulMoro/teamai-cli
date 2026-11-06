@@ -49,7 +49,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice', 'unavailable']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -205,15 +205,17 @@ function init(request) {
   // `unavailable` names the tools the toy cannot run now, with why: it offers the rest, and still starts.
   const tools = DEFAULT_CAN.tools.filter((tool) => !(tool in (options.unavailable ?? {})));
   const unavailable = options.unavailable === undefined ? {} : { unavailable: options.unavailable };
+  // `permissions` is what it reports of the tools it runs without permission prompts, as given.
+  const permissions = options.permissions === undefined ? {} : { permissions: options.permissions };
 
   if (options.agent === undefined) {
-    send({ type: 'init', ok: true, ...judging, ...unavailable, can: { ...DEFAULT_CAN, tools, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+    send({ type: 'init', ok: true, ...judging, ...unavailable, ...permissions, can: { ...DEFAULT_CAN, tools, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 
     return;
   }
 
   // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
-  send({ type: 'init', ok: true, prompt: true, ...judging, ...unavailable, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+  send({ type: 'init', ok: true, prompt: true, ...judging, ...unavailable, ...permissions, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 }
 
 /** Notes which credentials a request brought, by name only: a value is never written. */

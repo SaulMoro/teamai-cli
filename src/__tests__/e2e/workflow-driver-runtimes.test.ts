@@ -507,6 +507,44 @@ steps:
     expect(toyOpens()).toBe(0);
   });
 
+  it('warns once that a runtime runs steps in full access on this machine, and records their isolation as none', async () => {
+    writeFlow('worktreed', `  - id: review
+    tool: claude
+    prompt: Review the repository in a worktree.
+    requires: { isolation: worktree }
+    output:
+      ok: boolean`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    writeDefinition('toyfull', [{ use: 'toy', options: { state, can: { isolation: 'worktree' }, permissions: { claude: 'full-access' } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'worktreed', '--driver', 'toyfull'], repo, env());
+
+    const [review] = readRunState(runOf(ran)).steps;
+    expect(review, ran.stderr).toMatchObject({ status: 'succeeded', unenforced: [{ requirement: 'isolation', asked: 'worktree', provided: 'none' }] });
+    const warning = 'Runtime toy of driver toyfull runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.';
+    expect(ran.stderr.split(warning).length - 1).toBe(1);
+  });
+
+  it.each([
+    { reported: 'claude', status: 'succeeded' },
+    { reported: 'codex', status: 'failed' },
+  ])('runs a permissions: unattended step on claude only where the runtime reports full access for it, given $reported', async ({ reported, status }) => {
+    writeFlow('unattendedfix', `  - id: fix
+    tool: claude
+    prompt: Fix the failing test.
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+    output:
+      ok: boolean`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    writeDefinition('toyunattended', [{ use: 'toy', options: { state, can: { isolation: 'sandbox' }, permissions: { [reported]: 'full-access' } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'unattendedfix', '--driver', 'toyunattended'], repo, env());
+
+    const [fix] = readRunState(runOf(ran)).steps;
+    expect(fix, ran.stderr).toMatchObject({ status });
+  });
+
   it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {
     writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
 
