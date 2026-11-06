@@ -230,7 +230,23 @@ describe('a prompt attempt in a container', () => {
     const credentials = { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://localhost:4000/v1' };
 
     expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
-    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL"'], credentials, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: `http://${alias}:4000/v1` });
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL" > base-url.txt'], credentials, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0 });
+    expect(fs.readFileSync(path.join(at.worktree, 'base-url.txt'), 'utf8')).toBe(`http://${alias}:4000/v1`);
+  });
+
+  it("masks a base URL on this machine itself as the step got it, in what the step prints, since teamai masks only the value it gave", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    const credentials = { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://member:gateway-secret-1@localhost:4000/v1' };
+
+    expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
+    const ran = await exec(connection, { argv: ['/bin/sh', '-c', 'echo "calling $ANTHROPIC_BASE_URL"; echo "failed: $ANTHROPIC_BASE_URL" >&2'], credentials, cwd: at.worktree });
+
+    expect(ran.end).toMatchObject({ event: 'exited', code: 0 });
+    // Every line it wrote to teamai: both streams as they came, and the stdout it ended with.
+    expect(JSON.stringify(connection.messages)).not.toContain('gateway-secret-1');
+    expect(ran.output).toContain('calling <REDACTED:');
   });
 
   it("refuses a step whose base URL points at this machine itself on Docker on Linux, before it creates the container, naming the variable and never its value", async () => {
@@ -1454,6 +1470,19 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(proxyRun.slice(-2)).toEqual(['3128', `host.docker.internal:${url.port || (url.protocol === 'http:' ? '80' : '443')}`]);
   });
 
+  it("masks a base URL on this machine itself as the judge got it, in the reply teamai gets, since teamai masks only the value it gave", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    // The Codex judge takes its base URL in its argv, which the fake judge echoes into its reply.
+    const credentials = { OPENAI_API_KEY: 'judge-key-2', OPENAI_BASE_URL: 'http://member:gateway-secret-2@127.0.0.1:4000/v1' };
+    await openJudge(connection, credentials);
+    const end = await judge(connection, { tool: 'codex', credentials });
+
+    expect(end).toMatchObject({ event: 'finished' });
+    expect(JSON.stringify(reasoning(end).argv)).toContain('<REDACTED:OPENAI_BASE_URL (in the sandbox)>');
+    expect(JSON.stringify(connection.messages)).not.toContain('gateway-secret-2');
+  });
+
   it.each(LOOPBACK)("refuses a judge whose %s points at this machine itself on Docker on Linux, which gives no host alias, naming the variable and never its value", async (name, value) => {
     const connection = start({ FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS' });
     await init(connection, { provider: 'docker', image: IMAGE });
@@ -2064,7 +2093,8 @@ describe('an attempt in an sbx sandbox', () => {
     const credentials = { ANTHROPIC_AUTH_TOKEN: 'gateway-token-1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:4000/anthropic' };
 
     expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
-    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL"'], credentials, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'http://host.docker.internal:4000/anthropic' });
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL" > base-url.txt'], credentials, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0 });
+    expect(fs.readFileSync(path.join(at.worktree, 'base-url.txt'), 'utf8')).toBe('http://host.docker.internal:4000/anthropic');
   });
 
   it("fails the open, naming the sbx rule with the real port, when sbx's policy does not let a sandbox reach it, and never edits the policy", async () => {

@@ -5,7 +5,7 @@ import { CANCEL_FAILED, PromptResultSchema, RuntimeRequestSchema, type Can, type
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
-import { maskedAsGiven, onThisMachine, toAlias } from './loopback.js';
+import { maskedAsGiven, onThisMachine, rewrittenMasks, toAlias } from './loopback.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type Provider } from './provider.js';
 
@@ -468,17 +468,21 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // A credential the exec withholds is not set; a name the exec sets itself wins over a credential.
     const scoped = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), host);
+    // teamai masks what the step prints with the values it gave. A URL on this machine itself reached the step as the
+    // sandbox names it, which teamai cannot know, so that value is masked here first.
+    const rewritten = rewrittenMasks(request.credentials, scoped);
+    const unrewritten = (text: string): string => redact(text, { envSecrets: rewritten, patterns: false });
     let stdout = '';
 
     const end = await provider.exec(id, { argv: request.argv, env: { ...scoped, ...request.env }, unset: request.unset, cwd: request.cwd }, (stream, data) => {
       if (stream === 'stdout') stdout += data;
-      write({ op, event: 'output', stream, data });
+      write({ op, event: 'output', stream, data: unrewritten(data) });
     });
 
-    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : end.kind === 'failed' ? { state: 'failed', failure: end.failure } : { state: 'exited', code: end.code, stdout };
+    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : end.kind === 'failed' ? { state: 'failed', failure: end.failure } : { state: 'exited', code: end.code, stdout: unrewritten(stdout) };
     // teamai gets the complete stdout and masks it itself; the journal never holds a credential the tool printed, so a
     // repeated id is answered with it masked.
-    finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: maskedAsGiven(request.credentials, scoped), patterns: false }) } : outcome);
+    finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(outcome.stdout, { envSecrets: maskedAsGiven(request.credentials, scoped), patterns: false }) } : outcome);
   };
 
   /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
@@ -527,8 +531,11 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // The journal never holds a credential the tool echoed into its reply. Only its strings are masked: a setting such
     // as `1` leaves a reply's numbers as they are.
+    // teamai masks the reply with the values it gave; a value the sandbox got rewritten is masked here first.
     const masks = maskedAsGiven(request.credentials, given);
-    const settle = (outcome: Outcome): void => finish(op, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, masks)) } : outcome);
+    const rewritten = rewrittenMasks(request.credentials, given);
+    const replyMasked = (outcome: Outcome, envSecrets: Record<string, string>): Outcome => (outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, envSecrets)) } : outcome);
+    const settle = (outcome: Outcome): void => finish(op, replyMasked(outcome, rewritten), replyMasked(outcome, masks));
 
     /** The judge's container, or undefined once the prompt settled: its creation failed, or a cancel came meanwhile. */
     const create = async (): Promise<string | undefined> => {

@@ -61,9 +61,15 @@ export function toAlias(credentials: Record<string, string>, alias: string): Rec
   }));
 }
 
+/**
+ * Each credential value the sandbox got in place of the one teamai gave, so it is masked as that one: teamai masks only
+ * the values it gave, which a rewritten value no longer spells.
+ */
+export function rewrittenMasks(given: Record<string, string>, sent: Record<string, string>) {
+  return Object.fromEntries(Object.entries(sent).filter(([name, value]) => given[name] !== value).map(([name, value]) => [`${name} (in the sandbox)`, value]));
+}
+
 /** What masks the credentials a process got: each value teamai gave, and each as the sandbox got it. */
 export function maskedAsGiven(given: Record<string, string>, sent: Record<string, string>) {
-  const aliased = Object.entries(sent).filter(([name, value]) => given[name] !== value).map(([name, value]) => [`${name} (in the sandbox)`, value]);
-
-  return { ...given, ...Object.fromEntries(aliased) };
+  return { ...given, ...rewrittenMasks(given, sent) };
 }
