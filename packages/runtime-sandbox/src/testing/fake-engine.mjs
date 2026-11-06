@@ -15,7 +15,10 @@
 //                       client notices its container stopped only after the stop command returns; a file
 //                       `stop-delay` holding a number of milliseconds makes `restart` (sbx: `stop`) wait that long
 //                       before it stops anything, as a daemon that is slow to answer; a file `delay-<command>`
-//                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first
+//                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
+//                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
+//                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
+//                       exists, before it answers, as a create still on its way
 //   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
@@ -199,6 +202,7 @@ function docker() {
 
       if (network && !fs.existsSync(path.join(state, 'networks', network))) fail(`Error response from daemon: network ${network} not found`, 125);
       const id = crypto.randomBytes(16).toString('hex');
+      const hold = path.join(state, 'create-hold');
 
       writeContainer({
         id, name, image, running: true,
@@ -211,18 +215,23 @@ function docker() {
         }),
       });
 
+      if (fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(hold, 'utf8')));
       process.stdout.write(`${id}\n`);
       break;
     }
 
     case 'ps': {
       const { found } = options(rest, ['--filter', '--format'], ['-a', '-q']);
+
+      if (one(found, '--format') !== undefined && fs.existsSync(path.join(state, 'format-fails'))) fail('Error: template: ps:1: function "Label" not defined', 125);
       const wanted = all(found, '--filter').map((filter) => filter.replace(/^label=/, '').split(/=(.*)/s).slice(0, 2));
+      // The fields of `--format` the providers use: the id and a label's value, empty when it has none.
+      const format = one(found, '--format') ?? '{{.ID}}';
 
       for (const id of fs.readdirSync(containers)) {
         const container = readContainer(id);
 
-        if (container && wanted.every(([key, value]) => container.labels[key] === value)) process.stdout.write(`${container.id}\n`);
+        if (container && wanted.every(([key, value]) => container.labels[key] === value)) process.stdout.write(`${format.replaceAll('{{.ID}}', container.id).replace(/\{\{\.Label "([^"]+)"\}\}/g, (_, key) => container.labels[key] ?? '')}\n`);
       }
 
       break;
