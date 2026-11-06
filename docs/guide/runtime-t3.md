@@ -61,7 +61,7 @@ teamai pull
 teamai workflow start readme-review --driver t3
 ```
 
-The first run signs teamai in to T3 Code with no page and no question. teamai asks the `t3` command on this machine for a pairing code that lasts two minutes, and uses it to approve its own sign-in with Auto access, even when you [tighten `runtime_mode`](#how-much-a-step-thread-asks-you): each thread still runs in its own mode, and one sign-in serves every run. The command it runs:
+The first run signs teamai in to T3 Code with no page and no question. teamai asks the `t3` command on this machine for a pairing code that lasts two minutes, and uses it to approve its own sign-in with Auto access, even when you [tighten `runtime_mode`](#how-much-a-step-thread-asks-you): each thread still runs in its own mode, and one sign-in serves every run. Only [`runtime_mode: full-access`](#full-access-on-a-machine-you-can-lose) makes it sign in with Full access. The command it runs:
 
 ```sh
 t3 auth pairing create --json --base-dir ~/.t3 --scope orchestration:read --scope orchestration:operate --ttl 2m --label "teamai workflow"
@@ -81,7 +81,7 @@ af508185-8908-4575-a1d0-f3c6f67cddec
 
 teamai keeps the credential in `~/.teamai/runtime-state/t3/credentials.json` (mode 0600). Later runs reuse it. When T3 expires it after 30 days, the next run signs in again the same way. To revoke it, run `t3 auth session revoke <id>`.
 
-teamai runs the first `t3` it finds: `$T3CODE_CLI_PATH` (T3 sets it in its own threads), then `t3` on your PATH, then `bin/t3` in T3's data directory (`~/.t3/bin/t3`, or under `$T3CODE_HOME`). If it finds none, or T3 refuses the code, the run opens T3's sign-in page instead, and prints its link in case no browser opens. Create a pairing code in T3 Code, pick **Auto** access, enter the code and approve. The access you pick is the broadest mode a step thread can run in.
+teamai runs the first `t3` it finds: `$T3CODE_CLI_PATH` (T3 sets it in its own threads), then `t3` on your PATH, then `bin/t3` in T3's data directory (`~/.t3/bin/t3`, or under `$T3CODE_HOME`). If it finds none, or T3 refuses the code, the run opens T3's sign-in page instead, and prints its link in case no browser opens. Create a pairing code in T3 Code, pick **Auto** access (**Full access** when `runtime_mode` is `full-access`), enter the code and approve. The access you pick is the broadest mode a step thread can run in.
 
 **4. Watch the step in T3.** `inventory` runs on your machine. `review` appears in the project's thread list as `review · teamai r928e2fc23ab9bd62`. Its first message says which run it belongs to:
 
@@ -120,7 +120,7 @@ teamai settles only the threads it launched, and the threads of the tasks they d
 
 ## How much a step thread asks you
 
-A step thread is a thread of its own, so nobody but you can answer its requests. It starts in the default mode you set in T3 Code: the project's own setting if it has one, else the global one, else Auto. It never takes the mode of the thread you started the run from, and never runs in Full access. When your default is Full access, it runs in Auto, and the run says so.
+A step thread is a thread of its own, so nobody but you can answer its requests. It starts in the default mode you set in T3 Code: the project's own setting if it has one, else the global one, else Auto. It never takes the mode of the thread you started the run from, and never runs in Full access unless `runtime_mode` says so. When your default is Full access, it runs in Auto, and the run says so.
 
 | Mode | What you see in the thread |
 | --- | --- |
@@ -144,10 +144,10 @@ workflows:
           runtime_mode: approval-required   # or auto-accept-edits
 ```
 
-It takes `auto`, `auto-accept-edits` or `approval-required`. Any other value fails before T3 is called:
+It takes `auto`, `auto-accept-edits`, `approval-required` or `full-access`. Any other value fails before T3 is called:
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition …/drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"full-access\" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access; runtime_mode sets it to auto, auto-accept-edits or approval-required. Remove it, or set one of those three. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition …/drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"yolo\" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four. Fix the option and start again."}}
 ```
 
 teamai's sign-in caps the mode. If it allows less than the run's mode, T3 refuses the thread and the step fails. For example, someone approved teamai in T3's page with Supervised access, and this run uses Auto:
@@ -156,9 +156,32 @@ teamai's sign-in caps the mode. If it allows less than the run's mode, T3 refuse
 ✖ Step "review" failed with runtime_failed: The step runtime could not run the prompt (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode, because teamai's sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Auto access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.
 ```
 
+### Full access, on a machine you can lose
+
+When T3 Code runs somewhere a step can do no harm, such as a VM of its own, `runtime_mode: full-access` runs every step thread in Full access, so it asks you nothing:
+
+```yaml
+# .teamai/drivers/t3-vm.yaml
+schemaVersion: v1alpha1
+name: t3-vm
+description: T3 threads in full access, for a T3 that runs inside its own VM.
+runtimes:
+  - use: t3
+    options: { environment: local, runtime_mode: full-access }
+  - use: local
+```
+
+The run says so once, as it starts, and records the steps' isolation as `none`:
+
+```text
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+```
+
+teamai signs in again, this time with Full access (the pairing code also asks for `settings:write` and `source-control:write`). A judge's thread still runs in Auto. `permissions: unattended` steps are still not offered.
+
 ## Pick the provider instance and the model
 
-The tools are the T3 provider instances that can run now, leaving out any you turned off for the project. When a provider has several, a tool runs on the instance of your T3 default model, else the one named after the provider (`claudeAgent` for Claude, `codex` for Codex). To run every prompt on one instance, for example a second Claude account, name it in your machine's config:
+The tools are the T3 provider instances that can run now, leaving out any you turned off for the project. A step that names no tool, in a definition that names none, runs on the tool of your T3 default model (the project's, else the global one). When a provider has several, a tool runs on the instance of your T3 default model, else the one named after the provider (`claudeAgent` for Claude, `codex` for Codex). To run every prompt on one instance, for example a second Claude account, name it in your machine's config:
 
 ```yaml
 # ~/.teamai/config.yaml
@@ -170,6 +193,8 @@ workflows:
           instance: claude-work      # the id in T3 Settings → Providers
           max_parallel: 2
 ```
+
+To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) fails before T3 is called, and so does an instance T3 cannot run.
 
 A step's `model: { name, effort }` picks the model, and `effort` becomes the option that instance names it by (`effort` for Claude, `reasoningEffort` for Codex). A step with no model gets your T3 default model (the project's, else the global one) when that model is on the step's instance; T3 picks it, as for a thread you start. Otherwise it gets the first model the instance lists. Something the instance cannot run fails before any thread starts:
 
@@ -226,7 +251,7 @@ $ teamai workflow start readme-test-section --driver t3only
 - It is a new thread of its own, in a new scratch folder (`~/.t3/scratch/…`). teamai fills that folder with a copy of the evidence the judge reads (the transcript, the diff, `evidence.json`), and makes the copy read-only.
 - Its first message tells it to read only that folder, gives the JSON Schema of the reply, and points each mention of the evidence directory in teamai's prompt at the copy.
 - Its last message is the reply: `{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`.
-- It runs in `runtime_mode`, else your global T3 default mode, else Auto; never in Full access. When the judge's place closes, teamai settles the thread and removes the copy.
+- It runs in `runtime_mode` (Auto when that is `full-access`), else your global T3 default mode, else Auto; never in Full access. When the judge's place closes, teamai settles the thread and removes the copy.
 
 A T3 judge runs at **best-effort** [isolation](scorers.md#isolation):
 
@@ -256,7 +281,7 @@ T3 gets 10 s from the cancel to confirm a stop, a launch still under way include
 ⚠ Could not stop attempt a96c8bc03 of run r70d31098c8884803 on step runtime "t3" of driver "teamai-t3": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): The T3 thread t3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149… ("review · teamai r70d31098c8884803") still runs, and T3 Code did not stop it: T3 Code acknowledged the stop, but its run was still running 10 s later. Stop it in T3 Code with its Stop button, then run teamai workflow cancel r70d31098c8884803 again.
 ```
 
-Stop the thread, then run the same cancel again.
+Stop the thread, then run the same cancel again. If T3 still cannot confirm it once you checked the thread no longer runs, `teamai workflow cancel <run> --release <attempt>` lets the attempt go: teamai tries the stop once more, then forgets the thread, whatever T3 answers.
 
 A thread's run may hand work to subagents or background tasks. The step ends only once that work has settled too, and a cancel or close counts the thread as stopped only then.
 
@@ -279,6 +304,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `T3 Code at http://127.0.0.1:3773 does not answer. Open T3 Code, or run \`t3 serve\` …` | T3 left its server file behind, but nothing answers there. | Open T3 Code, or run `t3 serve`, then run again. |
 | `… (login_required): … could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ~/.t3/bin/t3) …` | An unattended run has no valid sign-in, and the `t3` command could not create one. The text in brackets says why. | Check that `t3 auth session list` works in the shell teamai runs in, then run again. Or start a workflow from a terminal once and approve teamai in the page. |
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai's sign-in allows less than the mode the thread runs in. | Remove `~/.teamai/runtime-state/t3/credentials.json` and run again: teamai signs in again; approve it with Auto access if T3 Code asks. Or set `runtime_mode`. |
+| `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | Someone picked a narrower access than Full access in T3's sign-in page. | Start the workflow again and pick Full access, or remove `runtime_mode: full-access`. |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | The checkout is not a T3 project, and `t3 project add` failed. The text in brackets says why. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
@@ -297,5 +323,6 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 - It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
 - A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
 - A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A step with a `role`, `env` or `setup` goes to `local`.
+- A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`) runs on the instance of the tool it extends: teamai does not pass a tool instance's name to a step runtime yet.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.
