@@ -230,6 +230,8 @@ export interface Daemon {
   /** The tools whose provider the daemon has installed, each one it can run when signed in and Paseo gives it a mode a step can start in. */
   installedTools(): Promise<InstalledTool[]>;
   models(tool: PaseoTool): Promise<Model[]>;
+  /** Whether Paseo has an active workspace on a directory, as one the member opened in the app. */
+  isOpen(cwd: string): Promise<boolean>;
   /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
   /**
@@ -245,6 +247,34 @@ export interface Daemon {
   archive(workspaceId: string): Promise<void>;
   link(agentId: string): string;
   close(): Promise<void>;
+}
+
+/**
+ * A directory as Paseo compares it to find its workspace: resolved and normalised, never through its links, so a
+ * checkout opened under another path is another workspace. Paseo folds case for a Windows path.
+ */
+function asPaseoKeys(directory: string): string {
+  const resolved = path.resolve(directory);
+
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Whether Paseo has an active workspace that an open of `cwd` finds, reading every page of its workspaces: one on the
+ * same path, and not a background one, which Paseo leaves out of that match.
+ */
+async function isOpenIn(api: PaseoApi, cwd: string): Promise<boolean> {
+  const wanted = asPaseoKeys(cwd);
+
+  for (let cursor: string | undefined; ;) {
+    const listed = await api.workspaces.list({ page: { limit: 200, ...(cursor !== undefined && { cursor }) } });
+
+    if (listed.entries.some((entry) => entry.archivingAt === null && !entry.background && asPaseoKeys(entry.workspaceDirectory) === wanted)) return true;
+    const next = listed.pageInfo.nextCursor;
+
+    if (!listed.pageInfo.hasMore || !next) return false;
+    cursor = next;
+  }
 }
 
 /** A WebSocket from the client's `ws`, as the client binds one: Node 20 has no WebSocket of its own. */
@@ -397,6 +427,7 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
       }));
     },
     models,
+    isOpen: (cwd) => isOpenIn(api, cwd),
     async workspace(cwd) {
       const opened = await api.workspaces.open({ cwd });
       const current = opened.current();

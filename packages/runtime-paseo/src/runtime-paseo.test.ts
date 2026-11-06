@@ -90,6 +90,11 @@ const mayStartMessage = (agentId: string, op: string): string => `Paseo does not
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Waits until `holds` does, as a state outside the runtime's own lines shows it, for at most `ms`. */
+async function until(holds: () => boolean, ms = 10_000): Promise<void> {
+  for (const end = Date.now() + ms; !holds(); await delay(25)) if (Date.now() > end) throw new Error(`not so within ${ms} ms`);
+}
+
 /** The Paseo workspace the fake daemon opened on the worktree. */
 const worktreeWorkspace = (): string | undefined => (JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { workspaces: Record<string, string> }).workspaces[fs.realpathSync(worktree)];
 
@@ -118,14 +123,14 @@ afterEach(async () => {
 });
 
 describe('teamai-runtime-paseo', () => {
-  it('offers prompt steps only, in a new or continued worktree, with no env, token count or unattended mode, for the tools the daemon can run', async () => {
+  it('offers prompt steps only, in the checkout or a new or continued worktree, with no env, token count or unattended mode, for the tools the daemon can run', async () => {
     // The daemon runs on this machine, where `codex login status` says Codex is signed in.
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }, codex_login: 'signed_in' });
 
     expect(await ready(start())).toEqual({
       type: 'init', ok: true, prompt: true, confinedPrompt: true,
       can: {
-        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'codex', 'opencode'],
+        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue'], tools: ['claude', 'codex', 'opencode'],
         confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex', 'opencode'] }],
       },
     });
@@ -1207,6 +1212,123 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
     runtime.send({ type: 'reattach', handle });
     expect(await runtime.next((line) => 'event' in line && line.event === 'gone')).toEqual({ event: 'gone', handle });
+  });
+
+  it('never archives a workspace the member had open in Paseo on that directory before teamai opened it, as on their checkout for a read-only step, and stops only its own agents', async () => {
+    // The member works in this directory in Paseo, as in their own checkout, which a read-only step runs in.
+    behave({ output: { ok: true }, member_workspaces: [worktree] });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const workspace = worktreeWorkspace();
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
+    // The member's workspace stays open in Paseo, on the same id.
+    expect(worktreeWorkspace()).toBe(workspace);
+  });
+
+  it('archives a workspace once though a second attempt opens its directory while Paseo makes it for the first', async () => {
+    behave({ output: { ok: true }, open_reply_ms: 1_500 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+    const first = await runtime.next(isOp('op-0000000a', 'accepted'));
+    await until(() => fs.existsSync(path.join(daemonState, 'agents.json')) && worktreeWorkspace() !== undefined);
+    runtime.send(openRequest('op-0000000c', 'a4567cdef'));
+    const second = await runtime.next(isOp('op-0000000c', 'accepted'));
+    await runtime.next(isOp('op-0000000a', 'ready'));
+    await runtime.next(isOp('op-0000000c', 'ready'));
+    const workspace = worktreeWorkspace();
+
+    for (const accepted of [first, second]) {
+      const handle = 'handle' in accepted ? accepted.handle : undefined;
+      runtime.send({ type: 'close', handle: String(handle) });
+      expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    }
+
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+  });
+
+  it('archives a workspace once though another runtime on the same journal opens its directory while Paseo makes it for this one', async () => {
+    behave({ output: { ok: true }, open_reply_ms: 1_500 });
+    const runtime = start();
+    const other = start();
+    await ready(runtime);
+    await ready(other);
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+    const first = await runtime.next(isOp('op-0000000a', 'accepted'));
+    await until(() => fs.existsSync(path.join(daemonState, 'agents.json')) && worktreeWorkspace() !== undefined);
+    other.send(openRequest('op-0000000c', 'a4567cdef'));
+    const second = await other.next(isOp('op-0000000c', 'accepted'));
+    await runtime.next(isOp('op-0000000a', 'ready'));
+    await other.next(isOp('op-0000000c', 'ready'));
+    const workspace = worktreeWorkspace();
+
+    for (const [owner, accepted] of [[runtime, first], [other, second]] as const) {
+      const handle = 'handle' in accepted ? accepted.handle : undefined;
+      owner.send({ type: 'close', handle: String(handle) });
+      expect(await owner.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    }
+
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+  });
+
+  it('fails an open it cannot journal before asking Paseo, and opens nothing there', async () => {
+    const runtime = start();
+    await ready(runtime);
+    // A file where the journal keeps its opens in flight, so none can be written there.
+    fs.mkdirSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'opening'), '');
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+
+    expect(await runtime.next((line) => isOp('op-0000000a', 'ready')(line) || isOp('op-0000000a', 'failed')(line))).toMatchObject({
+      event: 'failed', failure: { code: 'workspace_failed', message: expect.stringMatching(/^teamai-runtime-paseo could not journal its open of .+ before asking Paseo, so it opened nothing: /) },
+    });
+    expect(fs.existsSync(path.join(daemonState, 'agents.json')) ? worktreeWorkspace() : undefined).toBeUndefined();
+  });
+
+  it('archives the workspace a runtime made before it died mid-open, once a runtime started again opens the attempt', async () => {
+    behave({ output: { ok: true }, open_reply_ms: 60_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+    const accepted = await runtime.next(isOp('op-0000000a', 'accepted'));
+    await until(() => fs.existsSync(path.join(daemonState, 'agents.json')) && worktreeWorkspace() !== undefined);
+    await runtime.kill();
+    const workspace = worktreeWorkspace();
+
+    const again = start();
+    await ready(again);
+    again.send(openRequest('op-0000000c', ATTEMPT));
+    expect(await again.next(isOp('op-0000000c', 'accepted'))).toMatchObject({ handle: 'handle' in accepted ? accepted.handle : undefined });
+    expect(await again.next((line) => isOp('op-0000000c', 'ready')(line) || isOp('op-0000000c', 'failed')(line))).toMatchObject({ event: 'ready' });
+    again.send({ type: 'close', handle: String('handle' in accepted ? accepted.handle : '') });
+    expect(await again.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toMatchObject({ event: 'closed' });
+
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+  });
+
+  it('archives the workspace it opened on a directory the member opened in Paseo under another path, which Paseo keeps apart, and leaves the member\'s', async () => {
+    // The member opened the checkout through a link to it; Paseo matches a directory's workspace by its path, not its target.
+    const link = path.join(dir, 'checkout-link');
+    fs.symlinkSync(worktree, link);
+    behave({ output: { ok: true }, member_workspaces: [link] });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const workspace = worktreeWorkspace();
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
   });
 
   it('answers close_failed when Paseo will not archive the workspace, and keeps the attempt to close again', async () => {
