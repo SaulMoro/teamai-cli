@@ -1047,6 +1047,38 @@ describe('a prompt attempt in a container', () => {
   });
 });
 
+describe("the containers of one runtime's journal", () => {
+  /** Opens `attempt` of RUN on the shared place view, and returns how the open ended. */
+  async function openAttempt(connection: Connection, attempt: string): Promise<Message> {
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+
+    return connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
+  }
+
+  it('labels each container with its journal: the same label after a restart, another for another home', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    await openAttempt(first, 'a00000001');
+    await first.end();
+    const again = start();
+    await init(again, { provider: 'docker', image: IMAGE });
+    await openAttempt(again, 'a00000002');
+    fs.mkdirSync(path.join(dir, 'other-home'));
+    const other = start({ HOME: path.join(dir, 'other-home') });
+    await init(other, { provider: 'docker', image: IMAGE });
+    await openAttempt(other, 'a00000003');
+
+    const owner = (attempt: string): string | undefined => engine.labelsOf(`teamai-${RUN}-${attempt}`)?.['teamai.owner'];
+
+    expect(owner('a00000001')).toMatch(/^[0-9a-f]{16}$/);
+    expect(owner('a00000002')).toBe(owner('a00000001'));
+    expect(owner('a00000003')).toMatch(/^[0-9a-f]{16}$/);
+    expect(owner('a00000003')).not.toBe(owner('a00000001'));
+  }, 60_000);
+});
+
 // A judge's tools: each lists the files it can see from its working directory, says which credential names it got
 // (names only), and replies as the real tool does on stdout.
 const SEES = "const fs = require('node:fs'); const sees = fs.readdirSync('.', { recursive: true }).map(String).filter((file) => fs.statSync(file).isFile()).sort();";
