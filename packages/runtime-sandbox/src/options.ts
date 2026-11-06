@@ -9,7 +9,8 @@ import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 //      - use: sandbox
 //        options:
 //          provider: sbx                    # sbx | docker | podman
-//          agent: claude                    # sbx: the agent template (claude, codex) or a kit reference
+//          agent: claude                    # sbx, optional: the agent template (claude, codex) or a kit reference;
+//                                           # unset, each attempt starts from its own tool's template
 //      - use: sandbox
 //        options:
 //          provider: docker
@@ -35,11 +36,11 @@ const ContainerOptionsSchema = z.strictObject({
   image: z.string({ error: 'Name the prebuilt image that holds the tools, for example image: ghcr.io/acme/agent:1' }).min(1),
 });
 
-const NAME_AN_AGENT = "Name the agent whose template each sandbox starts from: agent: claude, agent: codex, or a kit reference that brings the tools (sbx's bare shell template holds no agent)";
+const NAME_AN_AGENT = "Name the agent whose template each sandbox starts from: agent: claude, agent: codex, or a kit reference that brings the tools (sbx's bare shell template holds no agent), or leave agent out to start each attempt from its own tool's template";
 
 const SbxOptionsSchema = z.strictObject({
   provider: z.literal('sbx'),
-  agent: z.string({ error: NAME_AN_AGENT }).min(1, NAME_AN_AGENT).refine((agent) => agent !== 'shell', NAME_AN_AGENT),
+  agent: z.string({ error: NAME_AN_AGENT }).min(1, NAME_AN_AGENT).refine((agent) => agent !== 'shell', NAME_AN_AGENT).optional(),
 });
 
 const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
