@@ -153,12 +153,24 @@ function write(file: string, value: Place | PromptRecord): void {
 /** Whether a process runs, as a runtime holding an open: one another user runs is alive though it cannot be signalled. */
 const HoldPidSchema = z.coerce.number().int().positive();
 
-/** The hold on a directory's open: its text, and the pid of the runtime that holds it when it names one; none once released. */
-function holdAt(file: string): { text: string; pid: number | undefined } | undefined {
+/**
+ * How old a hold on a directory's open may grow before another open takes it over: its runtime may be stuck on a Paseo
+ * that never answers, or gone with its pid in use since. An open that held it that long journaled whether the workspace
+ * is the member's before it asked Paseo to make one, so the open that takes over decides the same.
+ */
+const HOLD_STALE_MS = 60_000;
+
+/**
+ * The hold on a directory's open: its text, the pid of the runtime that holds it when it names one, and when it was
+ * taken; none once released.
+ */
+function holdAt(file: string): { text: string; pid: number | undefined; takenAt: number } | undefined {
   let text: string;
+  let takenAt: number;
 
   try {
     text = fs.readFileSync(file, 'utf8');
+    takenAt = fs.statSync(file).mtimeMs;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
@@ -166,7 +178,28 @@ function holdAt(file: string): { text: string; pid: number | undefined } | undef
 
   const pid = HoldPidSchema.safeParse(text.split(' ')[0]);
 
-  return { text, pid: pid.success ? pid.data : undefined };
+  return { text, pid: pid.success ? pid.data : undefined, takenAt };
+}
+
+/**
+ * Removes the hold at `file` when it is still the one whose text is `text`: one another open took over since is put
+ * back. It is moved aside first, so no hold is removed between the read and the removal.
+ */
+function releaseHold({ file, text }: { file: string; text: string }): void {
+  const aside = path.join(path.dirname(file), `.${process.pid}.${randomUUID()}.aside`);
+
+  try {
+    fs.renameSync(file, aside);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+
+  try {
+    if (fs.readFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
+  } finally {
+    fs.rmSync(aside, { force: true });
+  }
 }
 
 function isAlive(pid: number): boolean {
@@ -242,7 +275,8 @@ export function journal(root: string) {
       .find((member) => member !== undefined),
     /**
      * Holds `directory` for one open at a time across the runtimes on this journal, waiting while another live runtime
-     * holds it, and taking it from one that died. Resolves to its release; rejects when the hold cannot be written.
+     * holds it, and taking it from one that died or has held it for `HOLD_STALE_MS`. Resolves to its release, which
+     * leaves a hold another open took over; rejects when the hold cannot be written.
      */
     async holdOpen(directory: string): Promise<() => void> {
       const dir = path.join(root, 'opening');
@@ -251,14 +285,17 @@ export function journal(root: string) {
       // Written whole, then linked into place, so another runtime never reads a hold with no pid in it. Each hold is told
       // apart from every other, so a hold found stale is never mistaken for one another runtime took since.
       const mine = path.join(dir, `.${process.pid}.${randomUUID()}.tmp`);
-      fs.writeFileSync(mine, `${process.pid} ${randomUUID()}`, { mode: 0o600 });
+      const text = `${process.pid} ${randomUUID()}`;
 
       try {
         for (;;) {
           try {
+            // Written again before each try, so a hold's age counts from when it was taken, not from when its open began
+            // to wait for it.
+            fs.writeFileSync(mine, text, { mode: 0o600 });
             fs.linkSync(mine, file);
 
-            return () => fs.rmSync(file, { force: true });
+            return () => releaseHold({ file, text });
           } catch (error) {
             if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
           }
@@ -268,27 +305,14 @@ export function journal(root: string) {
           // Released since the link failed: try again.
           if (hold === undefined) continue;
 
-          if (hold.pid !== undefined && hold.pid !== process.pid && isAlive(hold.pid)) {
+          if (hold.pid !== undefined && hold.pid !== process.pid && isAlive(hold.pid) && Date.now() - hold.takenAt < HOLD_STALE_MS) {
             await new Promise((resolve) => setTimeout(resolve, 50));
             continue;
           }
 
-          // Its runtime is gone. It is moved aside before it is removed: a hold another runtime took in its place since it
-          // was read is put back, so two runtimes that both found it stale never both hold.
-          const aside = path.join(dir, `.${process.pid}.${randomUUID()}.stale`);
-
-          try {
-            fs.renameSync(file, aside);
-          } catch (error) {
-            if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
-            throw error;
-          }
-
-          try {
-            if (fs.readFileSync(aside, 'utf8') !== hold.text) fs.linkSync(aside, file);
-          } finally {
-            fs.rmSync(aside, { force: true });
-          }
+          // Its runtime is gone, or held it too long. A hold another runtime took in its place since it was read is put
+          // back, so two runtimes that both found it stale never both hold.
+          releaseHold({ file, text: hold.text });
         }
       } finally {
         fs.rmSync(mine, { force: true });
