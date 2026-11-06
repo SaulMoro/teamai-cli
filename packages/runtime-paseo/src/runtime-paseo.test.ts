@@ -1462,6 +1462,26 @@ describe('teamai-runtime-paseo', () => {
     expect(runtime.lines.filter((line) => 'event' in line && (line.event === 'error' || ('handle' in line && !('op' in line) && line.event === 'failed')))).toEqual([]);
   });
 
+  it('keeps running, and ends its prompt, when it notes a dropped request after teamai stopped reading its stderr', async () => {
+    const release = path.join(dir, 'release');
+    behave({ release, output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000e'));
+    await runtime.next(isOp('op-0000000e', 'display'));
+    runtime.child.stderr?.destroy();
+
+    // Its note about the dropped request goes to a stderr nobody reads.
+    runtime.child.stdin?.write(`${JSON.stringify({ type: 'stop', op: 'op-0000000e' })}\n`);
+    runtime.send({ type: 'reattach', handle });
+    await runtime.next((line) => 'event' in line && line.event === 'alive');
+    await delay(500);
+    fs.writeFileSync(release, '');
+
+    expect(await runtime.next(isEnd('op-0000000e'))).toMatchObject({ event: 'finished' });
+  });
+
   it('answers an open or a prompt it cannot run, before a successful init or in recover mode, with its own failure, never an error line', async () => {
     const { url } = daemon;
     await daemon.close();

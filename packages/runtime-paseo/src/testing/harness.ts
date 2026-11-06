@@ -70,7 +70,9 @@ export const TEST_CLIENT = path.join(ROOT, 'node_modules', '@getpaseo', 'client'
 export function startRuntime(home: string, env: Record<string, string | undefined> = {}): Runtime {
   const merged = { ...process.env, HOME: home, PASEO_CLIENT_PATH: TEST_CLIENT, ...env };
   const given = Object.fromEntries(Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  const child = spawn(process.execPath, [bundledRuntime()], { env: given, stdio: ['pipe', 'pipe', 'inherit'] });
+  // Its stderr reaches the test's own, through a pipe a test can close as teamai does when it stops reading.
+  const child = spawn(process.execPath, [bundledRuntime()], { env: given, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stderr?.on('data', (data: Buffer) => { process.stderr.write(data); });
   const lines: RuntimeMessage[] = [];
   const waiters: Array<() => void> = [];
 
