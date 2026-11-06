@@ -1755,6 +1755,12 @@ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa h
 ← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
 ```
 
+每次 `teamai workflow cancel <run>` 都会再试一次 close。如果运行时永远无法确认它，例如提供方拒绝了一次创建，请先确认这次尝试已没有任何东西还在那里运行，再用 `teamai workflow cancel <run> --release <attempt>` 放开这次尝试。teamai 不停止也不关闭它，会把它的登录写回并释放，之后不再尝试 close。运行时可能仍然保留这个位置：
+
+```text
+ℹ Released attempt a1 of run r7 without closing its place on step runtime "docker", as asked. That runtime may still keep the place.
+```
+
 exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
 
 每当 teamai 必须停止一次尝试时（例如驱动被杀掉后的 `workflow cancel`），它都会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`，这样宕机或一直不回答的提供方就不会卡住停止。用错误回答 `recover` 的运行时会再为新工作打开一次；如果这也失败，cancel 会同时给出两个失败：

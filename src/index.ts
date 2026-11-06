@@ -941,9 +941,10 @@ workflowCmd
 workflowCmd
   .command('cancel <run> [step]')
   .description('Cancel a whole run, or a pending, waiting, leased, running, or delivering step and its open descendants. Invalidates leases; drivers stop tools listed in next.cancelled. Prints one JSON envelope.')
-  .action(async (run: string, step?: string) => {
+  .option('--release <attempt>', 'Let an attempt go whose step runtime cannot close its place, once you checked that nothing of it still runs there: teamai neither stops nor closes it, writes its login back, and frees that login')
+  .action(async (run: string, step: string | undefined, cmdOpts: { release?: string }) => {
     const { workflowCancel } = await import('./workflow-commands.js');
-    await workflowCancel(run, step);
+    await workflowCancel(run, step, cmdOpts);
   });
 
 const selfImprovementCmd = program
