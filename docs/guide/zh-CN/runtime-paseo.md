@@ -4,7 +4,7 @@
 
 `teamai-runtime-paseo` 把每个提示词步骤作为 [Paseo](https://github.com/getpaseo/paseo) 守护进程的智能体运行，放在 teamai 交给该步骤的目录上的一个 Paseo 工作区里：只读步骤用你的检出目录，其余步骤用 teamai 准备的 worktree、克隆或团队仓库克隆。你在 Paseo 应用里查看智能体、回答它的权限请求。读取结果、提交、交付、评分和恢复仍由 teamai 负责。
 
-它只运行提示词步骤。命令和 `setup` 交给定义里的下一个运行时，或留在本机。需要 `permissions: unattended` 或 `role` 的提示词步骤，交给下一个能运行它的运行时。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
+它只运行提示词步骤。命令和 `setup` 交给定义里的下一个运行时，或留在本机。需要 `permissions: unattended` 的提示词步骤，交给下一个能运行它的运行时。带 `role` 的步骤在这里运行，使用 teamai 交付到其副本中的角色：运行时只在 Paseo 里打开这个副本，而 Paseo 只在它自己创建的 worktree 里运行项目的 worktree setup，所以不会有别的东西把你自己的资产交付进去。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
 
 ## 快速开始
 

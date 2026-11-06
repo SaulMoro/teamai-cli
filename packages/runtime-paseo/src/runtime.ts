@@ -568,7 +568,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
         // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.
         // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
-        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: tools.map(({ tool }) => tool),
+        // role: Paseo runs a project's worktree setup only in a worktree it creates itself, or when asked to run it; this
+        // runtime only opens the copy teamai prepared, so nothing delivers the member's own assets over the role's.
+        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: tools.map(({ tool }) => tool),
         ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
       },
     });
