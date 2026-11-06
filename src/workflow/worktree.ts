@@ -716,8 +716,8 @@ export async function replaceConfig(dir: string, from: string): Promise<void> {
  * The commit `git add` would record for the gitlink at `relative`, or undefined when that path is not a gitlink.
  * A checkout inside the submodule is that commit. The index commit is the fallback when the checkout cannot be read.
  */
-async function gitlinkCommit(dir: string, relative: string): Promise<string | undefined> {
-  const listed = await git(dir, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', relative]);
+async function gitlinkCommit(dir: string, relative: string, run: Git): Promise<string | undefined> {
+  const listed = await run(dir, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', relative]);
 
   if (listed.code !== 0) return undefined;
 
@@ -732,15 +732,18 @@ async function gitlinkCommit(dir: string, relative: string): Promise<string | un
 
   if (staged === undefined) return undefined;
   const indexSha = staged.slice(0, staged.indexOf('\t')).split(' ')[1] ?? '';
-  const head = await git(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const head = await run(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD']);
   const checked = head.code === 0 ? head.stdout.trim() : '';
 
   return /^[0-9a-f]{40}$/i.test(checked) ? checked : indexSha;
 }
 
-/** The content key of `relative` in `dir`, or `absent` when that path is not there. A gitlink is `gitlink:<commit>`, the commit checked out in it. */
-export async function worktreeContentKey(dir: string, relative: string): Promise<string> {
-  const gitlink = await gitlinkCommit(dir, relative);
+/**
+ * The content key of `relative` in `dir`, or `absent` when that path is not there. A gitlink is `gitlink:<commit>`, the
+ * commit checked out in it. `run` is the git it runs, required so a caller in a place a step controls passes `untrustedGit`.
+ */
+export async function worktreeContentKey(dir: string, relative: string, run: Git): Promise<string> {
+  const gitlink = await gitlinkCommit(dir, relative, run);
 
   if (gitlink !== undefined && gitlink !== '') return `gitlink:${gitlink}`;
   const files = await fileManifest(dir, [relative]);

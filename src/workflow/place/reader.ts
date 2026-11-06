@@ -92,7 +92,7 @@ export async function leaveReadCopy(input: {
   const onBranch = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim() === `refs/heads/${workspace.branch}`;
 
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
-  const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved });
+  const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved, run: git });
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
 
   // The copy keeps its mark, so later steps there are refused until it is back.
