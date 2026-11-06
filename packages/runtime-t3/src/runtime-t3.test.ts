@@ -980,6 +980,30 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000010')).toEqual({ op: 'op-00000010', event: 'failed', failure: { code: 'tool_failed', message: `The T3 thread ${linkTo(t3.threads()[0]?.threadId)} ("review · teamai r7f3a91c2") ended failed before the step was done.` } });
     });
 
+    // T3 records why a run failed as an error item, titled "Usage limit reached" when the provider's usage ran out.
+    it('fails usage_limited, naming the tool, its instance and what T3 says of the reset, when the thread\'s run stops on a usage limit', async () => {
+      t3.config({ agent: { fail: true, error: { title: 'Usage limit reached', text: 'You\'ve hit your limit · resets 3pm (Europe/Madrid)' } } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-00000014'));
+
+      const end = await ended(runtime, 'op-00000014');
+      expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
+      expect(end).toEqual({
+        op: 'op-00000014', event: 'failed',
+        failure: { code: 'usage_limited', message: 'claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): You\'ve hit your limit · resets 3pm (Europe/Madrid)' },
+      });
+    });
+
+    it('fails tool_failed when the thread\'s run fails on a provider error that is no usage limit', async () => {
+      t3.config({ agent: { fail: true, error: { title: 'Provider error', text: 'Claude API is overloaded (529). Try again shortly.' } } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-00000015'));
+
+      expect(await ended(runtime, 'op-00000015')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') } });
+    });
+
     it('fails a thread that completes without writing the result file', async () => {
       t3.config({ agent: {} });
       const { runtime, handle } = await opened();

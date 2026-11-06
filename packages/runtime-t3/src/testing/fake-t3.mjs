@@ -5,7 +5,8 @@
 //
 //   FAKE_T3_STATE/config.json   written by the test: { token, namespace, environment, projects, providers, agent }
 //                               namespace: the caller's sign-in session, which T3 hashes into a launch's thread id with its clientRequestId
-//                               agent: { output, fail, hold, release, waits, noSession, reply, result }; read again on every call;
+//                               agent: { output, fail, error, hold, release, waits, noSession, reply, result }; read again on every call;
+//                               error: with fail, the { title, text } of the error item T3 records for the failed run
 //                               result: the result file's JSON exactly, in place of { output, failure }
 //                               organizeFails: T3 refuses t3_thread_organize; stopLagMs: a stop ends the run this long after T3 acknowledged it
 //                               delegatesPending: the run's delegated work has not settled; resultRunStatus: the run that answered then
@@ -123,7 +124,7 @@ async function play(threadId) {
   }
 
   if (agent.fail) {
-    update(threadId, () => ({ status: 'failed' }));
+    update(threadId, () => ({ status: 'failed', ...(agent.error && { error: { ...agent.error, runId: `run:${threadId}:1` } }) }));
 
     return;
   }
@@ -324,7 +325,11 @@ const TOOLS = {
 
     if (!thread) return notFound(args.threadId);
 
-    const items = args.view !== 'activity' && thread.reply !== undefined ? [{ position: 1, itemId: 'item-reply', type: 'assistant_message', text: thread.reply, textTruncated: false, nextTextOffset: null }] : [];
+    // The messages view holds the agent's replies; the activity view also holds the error a failed run recorded.
+    const items = [
+      ...(thread.reply !== undefined ? [{ position: 1, itemId: 'item-reply', type: 'assistant_message', runId: `run:${thread.threadId}:1`, title: null, text: thread.reply, textTruncated: false, nextTextOffset: null }] : []),
+      ...(args.view === 'activity' && thread.error ? [{ position: 2, itemId: 'item-error', type: 'error', status: 'failed', runId: thread.error.runId, title: thread.error.title, text: thread.error.text, textTruncated: false, nextTextOffset: null }] : []),
+    ].filter((item) => args.itemId === undefined || item.itemId === args.itemId);
 
     return ok({
       thread: { threadId: thread.threadId, status: thread.status, worktreePath: thread.worktreePath ?? null, runCount: thread.runCount ?? 1, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled },

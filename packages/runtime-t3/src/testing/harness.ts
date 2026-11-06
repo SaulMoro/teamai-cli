@@ -37,6 +37,8 @@ export interface FakeAgent {
   failure?: { code: string; message: string };
   /** The run ends failed. */
   fail?: boolean;
+  /** With `fail`: the error item T3 records for the failed run, as the thread's activity view shows it. */
+  error?: { title: string; text: string };
   /** The agent works until its thread is interrupted. */
   hold?: boolean;
   /** The agent works until this file exists. */

@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
-import { T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
 // ─── teamai-runtime-t3 ───
@@ -928,6 +928,31 @@ export function serve(options: ServeOptions): Promise<void> {
     return launched;
   };
 
+  /** The T3 provider instance `thread` runs on: the one its launch named, else the one the session picked for its tool. */
+  const instanceIdOf = (s: Session, thread: ThreadRecord): string | undefined => {
+    const driver = driverOf(thread.tool);
+
+    return thread.instanceId ?? (driver && s.instances.get(DRIVERS[driver].tool)?.providerInstanceId);
+  };
+
+  /**
+   * What a failed run of `thread` says of the usage limit it stopped on: the tool, its instance and T3's own message,
+   * which carries the reset time when the provider gave one. Undefined for any other failure, or when T3 does not say.
+   */
+  const usageLimitOf = async (s: Session, thread: ThreadRecord, runId: string | undefined): Promise<string | undefined> => {
+    const error = await s.t3.lastError(thread.threadId, runId).catch(() => undefined);
+
+    if (error?.title !== USAGE_LIMIT_TITLE) return undefined;
+
+    const instanceId = instanceIdOf(s, thread);
+    const instance = [...s.instances.values()].find((one) => one.providerInstanceId === instanceId);
+    const reset = error.text.trim() || 'T3 Code gave no reset time';
+
+    if (!instance) return `${thread.tool} reached its usage limit in T3 Code: ${reset}`;
+
+    return `${thread.tool} reached its usage limit on T3 Code provider instance "${instance.providerInstanceId}" (${instance.displayName}): ${reset}`;
+  };
+
   /**
    * Waits for the thread until the step is done, stopped or failed, and returns how it ended, and whether the runtime
    * saw the thread stop on the way: only then does the thread end with the op.
@@ -984,7 +1009,14 @@ export function serve(options: ServeOptions): Promise<void> {
         continue;
       }
 
-      // From here on, the thread's run and the work it delegated settled.
+      // From here on, the thread's run and the work it delegated settled. A run the provider stopped on its usage limit
+      // fails the step as such, so teamai says to retry once the limit resets.
+      if (ended === 'failed') {
+        const limited = await usageLimitOf(s, thread, waited.resultRun?.runId);
+
+        if (limited) return stopped({ op: request.op, state: 'failed', failure: { code: 'usage_limited', message: limited } });
+      }
+
       if (ended !== 'completed') return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ended ${ended} before the step was done.` } });
 
       // An interactive step ends once the person said it is done and the agent wrote the result; until then the
@@ -1000,7 +1032,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const cwd = thread.copy ?? request.cwd;
       const driver = driverOf(thread.tool);
       // The session is in the tool home of the instance the thread runs on, which is the scoring and resume store.
-      const instanceId = thread.instanceId ?? (driver && s.instances.get(DRIVERS[driver].tool)?.providerInstanceId);
+      const instanceId = instanceIdOf(s, thread);
       const toolHome = driver && instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined;
       const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt }) : undefined;
 
