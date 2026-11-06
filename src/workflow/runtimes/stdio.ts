@@ -17,6 +17,9 @@ const DISPOSE_WAIT_MS = 2000;
  */
 const ANSWER_WITHIN_MS = 15_000;
 
+// The most of a runtime's notice teamai shows.
+const NOTICE_SHOWN = 2000;
+
 // The events that end an operation: only the first counts.
 const OP_ENDS = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
 
@@ -171,7 +174,9 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
     if (message.event === 'notice') {
       const about = message.op !== undefined ? `, operation ${message.op}` : message.handle !== undefined ? `, place ${message.handle}` : '';
-      log.warn(`Step runtime "${name}"${about}: ${redact(message.message, { envSecrets: secrets })}`);
+      // Masked before it is cut, so no cut leaves part of a secret.
+      const masked = redact(message.message, { envSecrets: secrets });
+      log.warn(`Step runtime "${name}"${about}: ${masked.length > NOTICE_SHOWN ? `${masked.slice(0, NOTICE_SHOWN)}…` : masked}`);
 
       return;
     }

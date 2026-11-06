@@ -1341,6 +1341,26 @@ describe('the stdio step runtime client', () => {
     await runtime.dispose();
   });
 
+  it('shows the first 2000 characters of a longer notice, and keeps the runtime', async () => {
+    const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const long = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      if (request.type === 'init') {
+        process.stdout.write(JSON.stringify({ event: 'notice', message: 'x'.repeat(3000) }) + '\\n');
+        process.stdout.write(JSON.stringify({ type: 'init', ok: true, can: {} }) + '\\n');
+      }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'long', command: process.execPath, args: ['-e', long] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(warned.mock.calls.map(([line]) => line)).toEqual([`Step runtime "long": ${'x'.repeat(2000)}…`]);
+    } finally {
+      warned.mockRestore();
+      await runtime.dispose();
+    }
+  });
+
   it('shows a notice the runtime writes as a warning, with its credentials masked, and keeps the request it came with going', async () => {
     const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
     // A runtime that tells the person something while it answers: at init, and before it accepts an open.
