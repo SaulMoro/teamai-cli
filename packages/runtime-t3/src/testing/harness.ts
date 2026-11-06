@@ -65,7 +65,7 @@ export interface FakeT3Config {
   projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null }>;
   providers: FakeProvider[];
   agent: FakeAgent;
-  /** The mode teamai's sign-in was approved with; T3 refuses a thread in a broader one. Unset: any mode. */
+  /** The mode teamai's sign-in was approved with; T3 refuses a thread in a broader one. Unset: the access the last pairing-code decision approved, else any mode. */
   access?: StepMode;
   /** T3 refuses to interrupt a thread, as when it lost track of its run. */
   interruptFails?: boolean;
