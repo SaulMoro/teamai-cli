@@ -824,7 +824,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
     ready = { provider, can, host: offered.host };
-    write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }) });
+    write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }), ...(Object.keys(offered.unavailable).length > 0 && { unavailable: offered.unavailable }) });
   };
 
   const dispatch = async (request: RuntimeRequest): Promise<void> => {

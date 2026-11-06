@@ -177,13 +177,11 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
       const stored = await storedLogins();
 
       if (!stored.ok) return stored;
-      const signedIn = offerSignedIn({ tools: found.tools, provider: 'sbx', credentials, stored: stored.services });
-
-      if (!signedIn.ok) return signedIn;
-      const can: Can = { workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: signedIn.tools, end_turn: true, unattended: true, role: true };
+      const { tools, unavailable: notSignedIn } = offerSignedIn({ tools: found.tools, provider: 'sbx', credentials, stored: stored.services });
+      const can: Can = { workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true };
 
       // sbx's proxy answers host.docker.internal as this machine's localhost, which its policy then allows or refuses.
-      return { ok: true, can, host: { ok: true, alias: 'host.docker.internal' } };
+      return { ok: true, can, host: { ok: true, alias: 'host.docker.internal' }, unavailable: notSignedIn };
     },
 
     find,

@@ -1,4 +1,4 @@
-import type { InitCredentials, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { InitCredentials } from '@teamai/runtime-protocol';
 import type { LAUNCHABLE } from './providers/cli.js';
 
 // ─── Whether a tool can sign in inside a sandbox ─────────
@@ -11,8 +11,8 @@ import type { LAUNCHABLE } from './providers/cli.js';
 //             a login teamai copies into the attempt's tool home (`init.credentials.logins`, `codex: login`)
 //
 //  Otherwise a step would start and stop at the tool's own "Not logged in", whose next step cannot be followed there.
-//  Until teamai reads a reason per tool it does not offer, a runtime that can sign none of its tools in fails `init`
-//  with how to sign each one in, and one that signs some in offers only those.
+//  A tool that cannot sign in is left out of `can.tools` and listed in `init`'s `unavailable` with how to sign it in,
+//  which teamai shows on a step that runs on it. The runtime still starts, so command steps run with no tool signed in.
 //
 
 /** The providers a tool signs in on, which decides how to sign it in. */
@@ -70,11 +70,11 @@ export function isGivenSignIn(tool: string, credentials: InitCredentials): boole
 
 /**
  * The tools of `tools` that can sign in on `provider`: by a credential teamai gives, or, on sbx, by the login sbx keeps
- * for its service (`stored`). It fails `credential_missing`, with how to sign each one in, when there were tools and
- * none can. An older teamai names no credentials: every tool is offered, as before.
+ * for its service (`stored`); each other tool is `unavailable`, with how to sign it in. An older teamai names no
+ * credentials: every tool is offered, as before.
  */
-export function offerSignedIn({ tools, provider, credentials, stored }: { tools: string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): { ok: true; tools: string[] } | { ok: false; failure: RuntimeFailure } {
-  if (credentials === undefined) return { ok: true, tools };
+export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): { tools: string[]; unavailable: Record<string, string> } {
+  if (credentials === undefined) return { tools: [...tools], unavailable: {} };
 
   const isStored = (tool: string): boolean => {
     const service = signInOf(tool)?.sbx;
@@ -82,10 +82,11 @@ export function offerSignedIn({ tools, provider, credentials, stored }: { tools:
     return service !== undefined && stored.has(service);
   };
 
-  const signedIn = tools.filter((tool) => isGivenSignIn(tool, credentials) || isStored(tool));
+  const isSignedIn = (tool: string): boolean => isGivenSignIn(tool, credentials) || isStored(tool);
+  const how = (tool: string): string => signInOf(tool)?.hint[provider] ?? 'teamai knows no way to sign it in inside a sandbox';
 
-  if (signedIn.length > 0 || tools.length === 0) return { ok: true, tools: signedIn };
-  const how = tools.map((tool) => `${tool}: ${signInOf(tool)?.hint[provider] ?? 'teamai knows no way to sign it in inside a sandbox'}.`);
-
-  return { ok: false, failure: { code: 'credential_missing', message: `No tool in this ${provider} sandbox can sign in, so every step there would stop at the tool's own "Not logged in". ${how.join(' ')} Then start again.` } };
+  return {
+    tools: tools.filter(isSignedIn),
+    unavailable: Object.fromEntries(tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, `${tool} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`])),
+  };
 }
