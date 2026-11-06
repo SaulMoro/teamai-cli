@@ -69,10 +69,11 @@ export function isGivenSignIn(tool: string, credentials: InitCredentials): boole
   return credentials.logins.includes(tool) || signInOf(tool)?.env.some((name) => credentials.env.includes(name)) === true;
 }
 
-/** What a sandbox offers of the tools it holds: those that can sign in, and why each other one cannot. */
+/** What a sandbox offers of the tools it holds: those that can sign in, why each other one cannot, and those sbx keeps a login for (`kept`). */
 interface SignedIn {
   tools: string[];
   unavailable: Unavailable;
+  kept: string[];
 }
 
 /**
@@ -81,7 +82,7 @@ interface SignedIn {
  * credentials: every tool is offered, as before.
  */
 export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): SignedIn {
-  if (credentials === undefined) return { tools: [...tools], unavailable: {} };
+  if (credentials === undefined) return { tools: [...tools], unavailable: {}, kept: [] };
 
   const isStored = (tool: string): boolean => {
     const service = signInOf(tool)?.sbx;
@@ -94,6 +95,7 @@ export function offerSignedIn({ tools, provider, credentials, stored }: { tools:
 
   return {
     tools: tools.filter(isSignedIn),
+    kept: tools.filter(isStored),
     unavailable: Object.fromEntries(tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, `${tool} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`])),
   };
 }

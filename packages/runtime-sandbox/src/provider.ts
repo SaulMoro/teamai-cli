@@ -85,7 +85,7 @@ export interface Provider {
    * fix. It offers a tool only when it can sign in there with `credentials`, the names teamai gives, and lists each
    * other tool it holds in `unavailable` with how to sign it in (sign-in.ts).
    */
-  offer(credentials: InitCredentials | undefined): Promise<{ ok: true; can: Can; host: HostRoute; unavailable: Unavailable } | { ok: false; failure: RuntimeFailure }>;
+  offer(credentials: InitCredentials | undefined): Promise<{ ok: true; can: Can; host: HostRoute; unavailable: Unavailable; ownLogins: string[] } | { ok: false; failure: RuntimeFailure }>;
   /**
    * The sandbox of this attempt: its id, or undefined once the technology said there is none. A lookup it could not
    * make fails with what to do, so a sandbox is never taken as absent while its technology does not answer.

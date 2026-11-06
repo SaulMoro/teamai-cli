@@ -115,6 +115,8 @@ describe('init', () => {
 
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude'] }, unavailable: { codex: expect.stringContaining('CODEX_HOME=~/.teamai/logins/codex codex login') } });
     expect(Object.keys(reply.unavailable as Message)).toEqual(['codex']);
+    // A container keeps no login of its own, so every sign-in teamai found goes to it.
+    expect(reply).not.toHaveProperty('ownLogins');
   });
 
   it('offers a sandbox with the tools the image holds, and declares no network', async () => {
@@ -1957,6 +1959,16 @@ describe('an attempt in an sbx sandbox', () => {
 
     expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox' }, { use: 'local' }] });
     expect(await init(start(), options, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
+  });
+
+  it.each([
+    { secrets: ['anthropic'], ownLogins: ['claude'] },
+    { secrets: ['anthropic', 'openai'], ownLogins: ['claude', 'codex'] },
+  ])('names in ownLogins each tool sbx keeps a login for: $ownLogins', async ({ secrets, ownLogins }) => {
+    for (const service of secrets) engine.secret(service, true);
+
+    expect(await init(start(), { provider: 'sbx' }, 'unattended', { env: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'OPENAI_API_KEY'], logins: [] }))
+      .toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] }, ownLogins });
   });
 
   it('runs a Claude step from the claude template with no agent, and a command step in that same sandbox', async () => {

@@ -117,6 +117,8 @@ in the container                                        from the host
 
 Command steps still run in the sandbox: they need no sign-in. A `local` listed after the sandbox does not take such a prompt step either: it fails as above, so a step never runs on this machine's tool because its tool could not sign in in the sandbox. `local` still takes the judge and interactive steps.
 
+On sbx, a tool sbx keeps a login for signs in on that login, even when your shell sets one of its variables, such as `ANTHROPIC_BASE_URL` for a gateway. A variable the definition names in `credentials` still goes to the step's tool.
+
 Only the names a step is given cross into the container: its `requires.env` keys, the workflow's `env`, teamai's attempt marker, the tool home variable, and, for the step's tool only, the `credentials`. Nothing else of your environment reaches it, so `GH_TOKEN`, `SSH_AUTH_SOCK` and the like stay out. Values never appear in a command line: the container is created with no credential, and each `docker exec -e NAME` reads the value from the engine CLI's own environment. Nor are they written to disk: the runtime keeps what it remembers of each exec with any credential the tool printed masked.
 
 ```text
