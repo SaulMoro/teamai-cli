@@ -128,8 +128,9 @@ describe('teamai-runtime-t3', () => {
     });
 
     describe('when the silent sign-in fails', () => {
-      const failures: Array<{ failure: string; path?: () => string; config?: Partial<FakeT3Config>; reason: string }> = [
-        { failure: 'there is no t3 command', path: () => PATH_WITHOUT_T3, reason: 'there is no t3 command on PATH' },
+      const failures: Array<{ failure: string; path?: () => string; config?: Partial<FakeT3Config>; reason: string | (() => string) }> = [
+        // It names the three places it looked, T3's own command first.
+        { failure: 'there is no t3 command', path: () => PATH_WITHOUT_T3, reason: () => `found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ${path.join(t3.t3Home, 'bin', 't3')}` },
         { failure: 'the t3 command fails', config: { commandFails: 3 }, reason: 't3 auth pairing create exited with status 3: Could not reach the T3 Code server' },
         { failure: 'T3 refuses the pairing code', config: { decisionRefused: true }, reason: 'T3 Code refused the pairing code with HTTP 400: That pairing code is not valid. Create a new one and try again' },
         { failure: 'T3 redirects with no code', config: { decisionNoCode: true }, reason: 'T3 Code\'s sign-in redirect carried no code (access_denied)' },
@@ -140,7 +141,8 @@ describe('teamai-runtime-t3', () => {
       /** Every secret the sign-in handled: the pairing codes the t3 command created, and the token T3 issues. */
       const secrets = (): string[] => [...t3.pairingCodes(), 'fake-t3-token-0123456789'];
 
-      it.each(failures)('fails an unattended run login_required, saying why, when $failure', { timeout: 30_000 }, async ({ path: pathOf, config, reason }) => {
+      it.each(failures)('fails an unattended run login_required, saying why, when $failure', { timeout: 30_000 }, async ({ path: pathOf, config, reason: reasonOf }) => {
+        const reason = typeof reasonOf === 'string' ? reasonOf : reasonOf();
         if (config) t3.config(config);
         const runtime = start(pathOf ? { PATH: pathOf() } : {});
 
@@ -158,7 +160,8 @@ describe('teamai-runtime-t3', () => {
         for (const secret of secrets()) expect(`${JSON.stringify(reply)}${runtime.stderr()}`).not.toContain(secret);
       });
 
-      it.each(failures)('opens T3\'s page in an attended run, saying why, when $failure', { timeout: 30_000 }, async ({ path: pathOf, config, reason }) => {
+      it.each(failures)('opens T3\'s page in an attended run, saying why, when $failure', { timeout: 30_000 }, async ({ path: pathOf, config, reason: reasonOf }) => {
+        const reason = typeof reasonOf === 'string' ? reasonOf : reasonOf();
         if (config) t3.config(config);
         const browser = fakeBrowser(dir);
         const runtime = start({ PATH: [browser.bin, pathOf?.() ?? [t3.bin, PATH_WITHOUT_T3].join(path.delimiter)].join(path.delimiter) });
@@ -223,7 +226,7 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({
-        ok: false, error: { code: 'login_required', message: expect.stringContaining('could not sign in through the t3 command (there is no t3 command on PATH)') },
+        ok: false, error: { code: 'login_required', message: expect.stringContaining('could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ') },
       });
     });
 
@@ -249,6 +252,53 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 't3_unavailable', message: expect.stringContaining('Open T3 Code') } });
+    });
+
+    // A server file outlives a server that crashed or is stopping.
+    it('fails t3_unavailable, naming t3 serve, when the server its file names does not answer', async () => {
+      signIn(t3);
+      const origin = t3.origin();
+      await t3.stop();
+      fs.writeFileSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'), JSON.stringify({ version: 1, pid: 999_999, origin }));
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
+        type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code at ${origin} does not answer. Open T3 Code, or run \`t3 serve\`, then start the workflow again.` },
+      });
+    });
+
+    describe('with no t3 command on PATH', () => {
+      /** T3's own command, where T3 installs it in its data directory. */
+      const installed = (): string => {
+        const command = path.join(t3.t3Home, 'bin', 't3');
+        fs.mkdirSync(path.dirname(command), { recursive: true });
+        fs.copyFileSync(path.join(t3.bin, 't3'), command);
+        fs.chmodSync(command, 0o755);
+
+        return command;
+      };
+
+      // T3 sets T3CODE_CLI_PATH and no T3CODE_HOME in its threads; a T3 home other than ~/.t3 is found through the command's path.
+      it('signs in through the t3 command T3CODE_CLI_PATH names, in the T3 home that holds it', async () => {
+        const runtime = start({ PATH: PATH_WITHOUT_T3, T3CODE_HOME: '', T3CODE_CLI_PATH: installed() });
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        expect(t3.commandRuns()).toEqual([expect.arrayContaining(['auth', 'pairing', 'create', '--base-dir', t3.t3Home])]);
+      });
+
+      it('signs in through the t3 command in the T3 home', async () => {
+        installed();
+        const runtime = start({ PATH: PATH_WITHOUT_T3 });
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        expect(t3.commandRuns()).toHaveLength(1);
+      });
     });
 
     it('runs every prompt on the provider instance `instance` names, and fails naming the setup step for one T3 lacks', async () => {
