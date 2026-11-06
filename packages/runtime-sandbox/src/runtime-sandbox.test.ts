@@ -1913,12 +1913,56 @@ describe('an attempt in an sbx sandbox', () => {
   /** The name of the attempt's sandbox, once it exists. */
   const sandbox = (): string => engine.containers().find((name) => SANDBOX.test(name)) ?? 'none';
 
-  it('fails init without an agent, since the bare shell template holds none, naming the key', async () => {
-    const missing = await init(start(), { provider: 'sbx' });
+  it('fails init on agent: shell, since the bare shell template holds no agent, naming the key', async () => {
+    const reply = await init(start(), { provider: 'sbx', agent: 'shell' });
 
-    expect(missing).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'agent' } });
-    expect(JSON.stringify(missing)).toMatch(/agent: claude/);
-    expect(await init(start(), { provider: 'sbx', agent: 'shell' })).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'agent' } });
+    expect(reply).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'agent' } });
+    expect(JSON.stringify(reply)).toMatch(/agent: claude/);
+  });
+
+  it("offers claude and codex with no agent, and starts each attempt from its own tool's template, a command step's from the bare shell", async () => {
+    engine.secret('anthropic', true);
+    engine.secret('openai', true);
+    const connection = start();
+
+    expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
+    const at = place();
+    const templates: string[] = [];
+
+    for (const tool of ['claude', 'codex', undefined]) {
+      const op = newOp();
+      connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, ...(tool && { tool }), credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: {} } });
+      expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'ready' });
+      templates.push(engine.calls().filter(([name, command]) => name === 'sbx' && command === 'create').at(-1)?.[5] ?? 'none');
+      connection.send({ type: 'close', handle: HANDLE });
+      await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
+    }
+
+    expect(templates).toEqual(['claude', 'codex', 'shell']);
+  });
+
+  it('runs a Claude step from the claude template with no agent, and a command step in that same sandbox', async () => {
+    engine.secret('anthropic', true);
+    const connection = start();
+    await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] });
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
+
+    expect((await exec(connection, { argv: ['claude', '--version'], cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: '2.1.0 (Claude Code)\n' });
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'echo ok'], cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'ok\n' });
+  });
+
+  it('fails an open with bad_option on agent when no agent is set and its tool has no sbx template, before it creates anything', async () => {
+    const connection = start();
+    await init(connection, { provider: 'sbx' });
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'codebuddy', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: {} } });
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'agent', message: expect.stringContaining('codebuddy') } });
+    expect(engine.containers()).toEqual([]);
   });
 
   it("fails init on an option sbx does not take, as a container's image", async () => {

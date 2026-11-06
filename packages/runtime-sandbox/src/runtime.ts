@@ -290,7 +290,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
   };
 
-  const open = async ({ op, run, attempt, view, credentials }: OpenRequest, current: Ready): Promise<void> => {
+  const open = async ({ op, run, attempt, view, tool, credentials }: OpenRequest, current: Ready): Promise<void> => {
     const { provider } = current;
 
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
@@ -335,7 +335,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       const found = await provider.find(key);
 
       if (!found.ok) return found;
-      const created = found.id === undefined ? await provider.create(key, view) : { ok: true as const, id: found.id };
+      const created = found.id === undefined ? await provider.create(key, view, tool) : { ok: true as const, id: found.id };
 
       if (created.ok) journal.savePlace(handle, { ...key, id: created.id });
 

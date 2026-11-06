@@ -11,7 +11,7 @@ import { cliOf, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 //
 //  One microVM per attempt, from the agent's template, each place path at its host path through virtiofs:
 //
-//    sbx create --name teamai-<journal>-<run>-<attempt> --no-progress <agent> <worktree> <result> <run dir> <tool home> <git path>:ro …
+//    sbx create --name teamai-<journal>-<run>-<attempt> --no-progress <template> <worktree> <result> <run dir> <tool home> <git path>:ro …
 //    sbx exec -w <cwd> -e NAME … teamai-<journal>-<run>-<attempt> env -u WITHHELD … -- <argv>
 //    sbx stop teamai-<journal>-<run>-<attempt>          ends every process; the next exec starts the sandbox again
 //    sbx rm --force teamai-<journal>-<run>-<attempt>
@@ -26,6 +26,12 @@ import { cliOf, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 //  sandboxes `sbx ls` lists under this journal's prefix as it sweeps containers by their label. sbx's network policy
 //  lets a sandbox reach every host it allows, so this provider offers no judge, which must reach its model provider only.
 //
+
+/**
+ * The agent templates sbx ships for the tools teamai launches. With no `agent`, an attempt starts from its own tool's,
+ * and a command step's from the bare `shell` template, which holds no agent.
+ */
+const TEMPLATES = ['claude', 'codex'] as const;
 
 const NOT_INSTALLED = 'sbx is not installed here, or not on PATH. Install Docker Sandboxes (https://docs.docker.com/ai/sandboxes/), sign in with `sbx login`, and start again.';
 
@@ -65,8 +71,11 @@ function namesListed(stdout: string): string[] | undefined {
   }
 }
 
-/** `owner`: the id of the journal whose attempts the sandboxes are, which starts each one's name. */
-export function sbxProvider({ agent, owner, env }: { agent: string; owner: JournalId; env: NodeJS.ProcessEnv }): Provider {
+/**
+ * `owner`: the id of the journal whose attempts the sandboxes are, which starts each one's name. `agent`: the template
+ * or kit every sandbox starts from; unset, each attempt's tool picks its template.
+ */
+export function sbxProvider({ agent, owner, env }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv }): Provider {
   const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
 
   /** What starts the name of every sandbox of this journal. */
@@ -106,17 +115,17 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
   };
 
   /** The tools a kit (or an agent other than claude and codex) brings, from a scratch sandbox with no workspace. */
-  const probeTools = async (): Promise<{ ok: true; tools: string[] } | { ok: false; failure: RuntimeFailure }> => {
+  const probeTools = async (kit: string): Promise<{ ok: true; tools: string[] } | { ok: false; failure: RuntimeFailure }> => {
     const scratch = `teamai-tools-${crypto.randomBytes(4).toString('hex')}`;
-    const created = await cli(['create', '--name', scratch, '--no-progress', agent]);
+    const created = await cli(['create', '--name', scratch, '--no-progress', kit]);
 
-    if (created.kind !== 'ran' || created.code !== 0) return unavailable(`sbx could not create a sandbox from agent ${agent} (${messageOf(created)}). Check the agent name or kit reference, and start again.`);
+    if (created.kind !== 'ran' || created.code !== 0) return unavailable(`sbx could not create a sandbox from agent ${kit} (${messageOf(created)}). Check the agent name or kit reference, and start again.`);
     const probe = await cli(['exec', scratch, '/bin/sh', '-c', `for t in ${LAUNCHABLE.join(' ')}; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; exit 0`]);
     const removed = await remove(scratch);
 
     if (!removed.ok) return { ok: false, failure: { code: 'sandbox_unavailable', message: removed.failure.message } };
 
-    if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`sbx could not run a command in a sandbox from agent ${agent} (${messageOf(probe)}). Check that its template runs /bin/sh, and start again.`);
+    if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`sbx could not run a command in a sandbox from agent ${kit} (${messageOf(probe)}). Check that its template runs /bin/sh, and start again.`);
     const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
 
     return { ok: true, tools: LAUNCHABLE.filter((tool) => found.has(tool)) };
@@ -171,7 +180,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
         return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
       }
 
-      const found = LAUNCHABLE.some((tool) => tool === agent) ? { ok: true as const, tools: [agent] } : await probeTools();
+      const found = agent === undefined ? { ok: true as const, tools: [...TEMPLATES] } : LAUNCHABLE.some((tool) => tool === agent) ? { ok: true as const, tools: [agent] } : await probeTools(agent);
 
       if (!found.ok) return found;
       const stored = await storedLogins();
@@ -219,14 +228,20 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
       };
     },
 
-    async create(key, view) {
+    async create(key, view, tool) {
+      const template = agent ?? (tool === undefined ? 'shell' : TEMPLATES.find((shipped) => shipped === tool));
+
+      if (template === undefined) {
+        return { ok: false, failure: { code: 'bad_option', key: 'agent', message: `sbx ships no template for ${tool}, the tool of attempt ${key.attempt}. Set agent to a kit reference that brings ${tool}, or run the step on claude or codex` } };
+      }
+
       const mounted = mountsOf('sbx', view);
 
       if (!mounted.ok) return mounted;
       const name = nameOf(key);
       // mountsOf lists the worktree first, which sbx takes as the primary workspace.
       const paths = mounted.mounts.map(({ at, mode }) => (mode === 'ro' ? `${at}:ro` : at));
-      const created = await cli(['create', '--name', name, '--no-progress', agent, ...paths]);
+      const created = await cli(['create', '--name', name, '--no-progress', template, ...paths]);
 
       if (created.kind === 'ran' && created.code === 0) {
         const linked = await linkSignIns(name, view.toolHome);
@@ -239,7 +254,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
 
       if (raced.ok && raced.id !== undefined) return { ok: true, id: name };
 
-      return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not create the sandbox for attempt ${key.attempt} from agent ${agent}: ${messageOf(created)}` } };
+      return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not create the sandbox for attempt ${key.attempt} from agent ${template}: ${messageOf(created)}` } };
     },
 
     async exec(id, spec, onOutput): Promise<ExecEnd> {
@@ -272,7 +287,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
 
     destroy: remove,
 
-    display: (key) => ({ label: `${nameOf(key)} (sbx)`, fields: { sandbox: nameOf(key), agent: path.basename(agent) } }),
+    display: (key) => ({ label: `${nameOf(key)} (sbx)`, fields: { sandbox: nameOf(key), ...(agent !== undefined && { agent: path.basename(agent) }) } }),
 
     removal: (place) => `remove it with \`sbx rm --force ${nameOf(place)}\``,
   };

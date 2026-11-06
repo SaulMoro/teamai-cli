@@ -94,8 +94,11 @@ export interface Provider {
    * provider that cannot tell its journal's sandboxes from another's has none: nothing of it is ever swept.
    */
   owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }> } | { ok: false; failure: RuntimeFailure }>;
-  /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
-  create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. `tool` is the
+   * attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set.
+   */
+  create(key: PlaceKey, view: PlaceView, tool: string | undefined): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider whose own network policy decides what a sandbox reaches (sbx): whether it lets one reach `port` of
    * this machine, or how to allow it, naming the credential `variable` that needs it. The policy is never edited.
