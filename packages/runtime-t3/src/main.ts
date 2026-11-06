@@ -10,10 +10,11 @@ import { connectT3 } from './t3.js';
 import { t3Command, t3HomeOf } from './t3-command.js';
 
 // teamai-runtime-t3: teamai spawns it for a driver definition that uses runtime `t3` (`--driver t3`), and speaks
-// runtime protocol 1 to it over stdio. Its stdout carries only protocol lines; anything for a person goes to stderr.
+// runtime protocol 1 to it over stdio. Its stdout carries only protocol lines, a line for the person as a `notice`;
+// stderr carries what only helps to debug it.
 
 // When teamai is gone, a line it would have read goes nowhere: a thread still running keeps going and records its end.
-// So does a note on stderr, which the runtime writes for a dropped line or a thread it could not stop or settle.
+// So does a note on stderr, which the runtime writes for a dropped line or a thread it could not stop.
 let stdoutOpen = true;
 
 process.stdout.on('error', () => { stdoutOpen = false; });
