@@ -5,7 +5,7 @@ import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { cliOf, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
+import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
 //
@@ -53,12 +53,12 @@ const CheckedSchema = z.object({ allowed: z.boolean() });
 const StoredSchema = z.object({ secrets: z.array(z.object({ name: z.string() })) });
 
 /**
- * Where an agent template keeps a tool's sign-in in its own home, by the variable that moves the tool's home: the
- * stand-in sbx's proxy swaps for the stored login (sbx 0.51.0's claude template: `~/.claude/.credentials.json`). teamai
- * points that variable at the attempt's tool home, where the tool would find no sign-in, so the sandbox links it there.
+ * Where an agent template keeps a tool's sign-in in its own home, by tool: the stand-in sbx's proxy swaps for the stored
+ * login (sbx 0.51.0's claude template: `~/.claude/.credentials.json`). teamai points the tool's home variable, or an
+ * instance's own, at the attempt's tool home, where the tool would find no sign-in, so the sandbox links it there.
  * Codex's template keeps none: it signs in from an OPENAI_API_KEY placeholder in its env.
  */
-const TEMPLATE_SIGN_IN = { CLAUDE_CONFIG_DIR: '.claude/.credentials.json' } satisfies Record<string, string>;
+const TEMPLATE_SIGN_IN = { claude: '.claude/.credentials.json' } satisfies Partial<Record<(typeof LAUNCHABLE)[number], string>>;
 
 /** The notice sbx prints on stderr when an exec starts a sandbox it stopped while idle: sbx's line, not the step's. */
 const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
@@ -117,13 +117,16 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
     return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not remove sandbox ${name}: ${messageOf(removed)}. Remove it with \`sbx rm --force ${name}\`.` } };
   };
 
-  /** The tools a kit (or an agent other than claude and codex) brings, from a scratch sandbox with no workspace. */
-  const probeTools = async (kit: string): Promise<{ ok: true; tools: string[] } | { ok: false; failure: RuntimeFailure }> => {
+  /**
+   * The tools a kit (or an agent other than claude and codex) brings, and which of `commands` it holds, from a scratch
+   * sandbox with no workspace.
+   */
+  const probeTools = async (kit: string, commands: string[]): Promise<{ ok: true; tools: string[]; held: ReadonlySet<string> } | { ok: false; failure: RuntimeFailure }> => {
     const scratch = `teamai-tools-${crypto.randomBytes(4).toString('hex')}`;
     const created = await cli(['create', '--name', scratch, '--no-progress', kit]);
 
     if (created.kind !== 'ran' || created.code !== 0) return unavailable(`sbx could not create a sandbox from agent ${kit} (${messageOf(created)}). Check the agent name or kit reference, and start again.`);
-    const probe = await cli(['exec', scratch, '/bin/sh', '-c', `for t in ${LAUNCHABLE.join(' ')}; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; exit 0`]);
+    const probe = await cli(['exec', scratch, '/bin/sh', ...heldProbe([...LAUNCHABLE, ...commands])]);
     const removed = await remove(scratch);
 
     if (!removed.ok) return { ok: false, failure: { code: 'sandbox_unavailable', message: removed.failure.message } };
@@ -131,19 +134,17 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
     if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`sbx could not run a command in a sandbox from agent ${kit} (${messageOf(probe)}). Check that its template runs /bin/sh, and start again.`);
     const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
 
-    return { ok: true, tools: LAUNCHABLE.filter((tool) => found.has(tool)) };
+    return { ok: true, tools: LAUNCHABLE.filter((tool) => found.has(tool)), held: found };
   };
 
   /**
-   * Links, inside sandbox `name`, the sign-in its template keeps for each tool whose home the attempt moves into its
-   * tool home, unless that home already holds one. Only a link lands on the host's disk, pointing into the sandbox.
+   * Links, inside sandbox `name`, the sign-in its template keeps for the attempt's `tool` into the attempt's tool home,
+   * under whichever variable moves it there (an instance's own included), unless that home already holds one. Only a
+   * link lands on the host's disk, pointing into the sandbox.
    */
-  const linkSignIns = async (name: string, toolHome: Record<string, string>): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
-    const links = Object.entries(toolHome).flatMap(([variable, dir]) => {
-      const file = Object.entries(TEMPLATE_SIGN_IN).find(([home]) => home === variable)?.[1];
-
-      return file === undefined ? [] : [file, dir];
-    });
+  const linkSignIns = async (name: string, toolHome: Record<string, string>, tool: string | undefined): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const file = Object.entries(TEMPLATE_SIGN_IN).find(([launched]) => launched === tool)?.[1];
+    const links = file === undefined ? [] : Object.values(toolHome).flatMap((dir) => [file, dir]);
 
     if (links.length === 0) return { ok: true };
     const script = 'while [ $# -gt 0 ]; do f="$HOME/$1" t="$2/$(basename "$1")"; if [ -e "$f" ] && [ ! -e "$t" ] && [ ! -L "$t" ]; then ln -s "$f" "$t" || exit 1; fi; shift 2; done';
@@ -171,7 +172,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
   };
 
   return {
-    async offer(credentials) {
+    async offer(credentials, instances) {
       const ls = await cli(['ls', '--json']);
 
       if (ls.kind !== 'ran') return unavailable(ls.message);
@@ -183,13 +184,23 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
         return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
       }
 
-      const found = agent === undefined ? { ok: true as const, tools: [...TEMPLATED] } : LAUNCHABLE.some((tool) => tool === agent) ? { ok: true as const, tools: [agent] } : await probeTools(agent);
+      const template = LAUNCHABLE.find((tool) => tool === agent);
+      const found = agent === undefined ? { ok: true as const, tools: [...TEMPLATED], held: undefined } : template !== undefined ? { ok: true as const, tools: [template], held: undefined } : await probeTools(agent, commandsOf(instances));
 
       if (!found.ok) return found;
+      const { held } = found;
+
+      // A kit was looked in; sbx's own templates hold only their agent, so an instance's command is never there.
+      const missing = (command: string, tool: string): string | undefined => {
+        if (held !== undefined) return held.has(command) ? undefined : `kit ${agent} does not hold: add it to the kit`;
+
+        return `sbx's ${template ?? tool} template does not hold: set agent to a kit that brings it`;
+      };
+
       const stored = await storedLogins();
 
       if (!stored.ok) return stored;
-      const { tools, unavailable: notSignedIn, kept, unusedGateways } = offerSignedIn({ tools: found.tools, provider: 'sbx', credentials, stored: stored.services, env });
+      const { tools, unavailable: notSignedIn, kept, unusedGateways } = offerSignedIn({ tools: found.tools, provider: 'sbx', credentials, stored: stored.services, env, instances, missing });
       const can: Can = { workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true };
 
       // sbx's proxy answers host.docker.internal as this machine's localhost, which its policy then allows or refuses.
@@ -248,7 +259,8 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
       const created = await cli(['create', '--name', name, '--no-progress', template, ...paths]);
 
       if (created.kind === 'ran' && created.code === 0) {
-        const linked = await linkSignIns(name, view.toolHome);
+        // An open that names no tool is of the agent's, when the agent is a tool's own template.
+        const linked = await linkSignIns(name, view.toolHome, tool ?? LAUNCHABLE.find((each) => each === agent));
 
         return linked.ok ? { ok: true, id: name } : linked;
       }

@@ -813,7 +813,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * In `recover` mode teamai only stops and closes what the journal holds: nothing is checked or offered, and the
    * provider is reached only when a cancel or a close needs it.
    */
-  const init = async ({ options, credentials, mode }: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
+  const init = async ({ options, credentials, mode, instances = [] }: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
@@ -832,7 +832,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    const offered = await provider.offer(credentials);
+    const offered = await provider.offer(credentials, instances);
 
     if (!offered.ok) {
       ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {} };

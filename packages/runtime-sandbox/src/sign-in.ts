@@ -1,4 +1,4 @@
-import type { InitCredentials } from '@teamai/runtime-protocol';
+import type { InitCredentials, InitInstance } from '@teamai/runtime-protocol';
 import type { Unavailable } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
 
@@ -90,11 +90,31 @@ interface SignedIn {
 }
 
 /**
+ * Where an instance's `command` is missing in the sandbox of an attempt on `tool`, as the rest of a sentence that starts
+ * "<command>, which": what does not hold it and how to add it, such as "image ghcr.io/acme/agent:1 does not hold:
+ * add it to the image"; undefined when the sandbox holds it.
+ */
+export type MissingCommand = (command: string, tool: string) => string | undefined;
+
+/**
  * The tools of `tools` that can sign in on `provider`: by a credential teamai gives, or, on sbx, by the login sbx keeps
  * for its service (`stored`); each other tool is `unavailable`, with how to sign it in. An older teamai names no
  * credentials: every tool is offered, as before. `env` is the member's, which a kept login replaces a gateway of.
+ *
+ * Each of `instances` whose tool the sandbox holds is offered under its own name too, when its tool signs in there (an
+ * instance keeps its own login: teamai copies its tool's into no instance's home) and the sandbox holds its `command`
+ * (`missing`); otherwise it is `unavailable`, with why. teamai launches an offered instance's command, with its home
+ * variable at the attempt's tool home.
  */
-export function offerSignedIn({ tools, provider, credentials, stored, env = {} }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string>; env?: NodeJS.ProcessEnv }): SignedIn {
+export function offerSignedIn({ tools, provider, credentials, stored, env = {}, instances = [], missing }: {
+  tools: readonly string[];
+  provider: SignInProvider;
+  credentials: InitCredentials | undefined;
+  stored: ReadonlySet<string>;
+  env?: NodeJS.ProcessEnv;
+  instances?: readonly InitInstance[];
+  missing?: MissingCommand;
+}): SignedIn {
   if (credentials === undefined) return { tools: [...tools], unavailable: {}, kept: [], unusedGateways: {} };
 
   const isStored = (tool: string): boolean => {
@@ -120,10 +140,26 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {} }
     }]];
   }));
 
+  const cannotSignIn = (name: string, tool: string): string => `${name}${name === tool ? '' : `, an instance of ${tool},`} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`;
+
+  const served = instances.filter((instance) => tools.includes(instance.tool)).map((instance) => {
+    const isSignedInThere = credentials.logins.includes(instance.name) || signInOf(instance.tool)?.env.some((name) => credentials.env.includes(name)) === true || isStored(instance.tool);
+    const lacking = instance.command === undefined ? undefined : missing?.(instance.command, instance.tool);
+
+    const why = !isSignedInThere ? cannotSignIn(instance.name, instance.tool)
+      : lacking === undefined ? undefined
+      : `${instance.name} runs ${instance.command}, which ${lacking}, or run the step with --driver local.`;
+
+    return { name: instance.name, why };
+  });
+
   return {
-    tools: tools.filter(isSignedIn),
+    tools: [...tools.filter(isSignedIn), ...served.flatMap(({ name, why }) => (why === undefined ? [name] : []))],
     kept,
     unusedGateways,
-    unavailable: Object.fromEntries(tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, `${tool} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`])),
+    unavailable: Object.fromEntries([
+      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, cannotSignIn(tool, tool)]),
+      ...served.flatMap(({ name, why }) => (why === undefined ? [] : [[name, why]])),
+    ]),
   };
 }
