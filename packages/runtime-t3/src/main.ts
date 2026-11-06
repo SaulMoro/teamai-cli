@@ -36,7 +36,7 @@ const connect: ServeOptions['connect'] = async (how) => {
 
   if (!resource) return { ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, then start the workflow again.' } };
 
-  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, access: how.access, t3Home }) : undefined;
+  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, t3Home }) : undefined;
   const silentFailure = silent?.ok === false ? silent.reason : undefined;
 
   if (how.mode !== 'attended' && !validToken(state, resource.href)) {
