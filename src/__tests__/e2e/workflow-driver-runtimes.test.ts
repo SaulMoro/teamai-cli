@@ -1518,17 +1518,33 @@ span('end');
 
       // The run was cancelled already; that cancel tries the attempts again, and lets this one go.
       expect(envelope(released), released.stderr).toMatchObject({ error: { code: 'run_settled' } });
-      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} without closing its place on step runtime "toy", as asked. That runtime may still keep the place.`);
+      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} on step runtime "toy" without its confirmation, as asked. That runtime may still keep the place: Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set.`);
       expect(released.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
       expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed', closeFailed: { code: 'close_failed' } });
       expect(fs.existsSync(lockFile())).toBe(false);
       expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
-      // No close reached the toy, which still knows the place.
+      // The close was tried once more and refused, so the toy still knows the place.
       expect(JSON.parse(fs.readFileSync(path.join(state, 'handles.json'), 'utf8'))).toMatchObject({ [`${run}/${attempt}`]: handle });
 
       const again = await runCLI(['workflow', 'cancel', run], repo, env());
 
       expect(again.stderr).not.toContain(`Could not stop attempt ${attempt}`);
+    });
+
+    it('still stops the tool of an attempt the person releases, when its runtime can stop it', async () => {
+      loginDefinition('codexreleaserun', state);
+      const { run, pid, watched } = await holdingRun('codexreleaserun');
+      watched.kill();
+      await watched.ended;
+      const attempt = attemptOf(readRunState(run).steps[0]);
+
+      const released = await runCLI(['workflow', 'cancel', run, '--release', attempt], repo, env());
+
+      expect(envelope(released), released.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+      expect(pidAlive(pid)).toBe(false);
+      expect(released.stderr).not.toContain('Released attempt');
+      expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
+      expect(fs.existsSync(lockFile())).toBe(false);
     });
 
     const initModes = (toyState: string): string[] => fs.readFileSync(path.join(toyState, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { mode: string }).mode);
