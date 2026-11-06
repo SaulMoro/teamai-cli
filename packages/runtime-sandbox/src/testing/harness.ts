@@ -53,6 +53,10 @@ export interface FakeEngine {
   failFormat(shouldFail: boolean): void;
   /** Makes every later `run -d` wait `ms` once its container exists, before it answers; 0 answers at once again. */
   holdCreate(ms: number): void;
+  /** Holds every later list of one journal's containers (`ps --filter label=teamai.owner=…`) until released. */
+  holdOwned(isHeld: boolean): void;
+  /** Whether a held list of one journal's containers is waiting now. */
+  isListingOwned(): boolean;
   /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
@@ -122,6 +126,11 @@ export function fakeEngine(dir: string): FakeEngine {
     holdCreate(ms) {
       fs.writeFileSync(path.join(state, 'create-hold'), String(ms));
     },
+    holdOwned(isHeld) {
+      if (isHeld) fs.writeFileSync(path.join(state, 'owned-hold'), '');
+      else fs.rmSync(path.join(state, 'owned-hold'), { force: true });
+    },
+    isListingOwned: () => fs.existsSync(path.join(state, 'owned-listing')),
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
       else fs.rmSync(path.join(state, 'rm-fails'), { force: true });
