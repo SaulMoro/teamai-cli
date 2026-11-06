@@ -1700,6 +1700,16 @@ describe('an attempt in an sbx sandbox', () => {
     expect(reply).not.toHaveProperty('confinedPrompt');
   });
 
+  it('removes no sandbox at open that it has no record of, since an sbx sandbox carries no label to say which journal it is', async () => {
+    const connection = start();
+    await init(connection, { provider: 'sbx', agent: 'claude' });
+    const left = `teamai-${RUN}-a00000009`;
+    execFileSync(path.join(engine.bin, 'sbx'), ['create', '--name', left, '--no-progress', 'claude'], { env: engine.env() });
+
+    expect((await openPlace(connection, place())).ready).toMatchObject({ event: 'ready' });
+    expect(engine.containers().sort()).toEqual([HANDLE, left].sort());
+  });
+
   it("opens one sandbox per attempt from the agent's template, at the place's host paths, git paths read-only, with no credential, and shows it in the dashboard", async () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });
