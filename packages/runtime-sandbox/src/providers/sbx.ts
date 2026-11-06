@@ -53,8 +53,11 @@ function namesListed(stdout: string): string[] | undefined {
 export function sbxProvider({ agent, owner, env }: { agent: string; owner: string; env: NodeJS.ProcessEnv }): Provider {
   const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
 
+  /** What starts the name of every sandbox of this journal. */
+  const journalPrefix = `teamai-${owner}-`;
+
   /** An attempt's sandbox name, which is also its id: `teamai-<journal>-<run>-<attempt>`. */
-  const nameOf = ({ run, attempt }: PlaceKey): string => `teamai-${owner}-${run}-${attempt}`;
+  const nameOf = ({ run, attempt }: PlaceKey): string => `${journalPrefix}${run}-${attempt}`;
 
   /** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
   const messageOf = (ran: Ran): string => (ran.kind !== 'ran' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
@@ -130,7 +133,6 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: strin
       const listed = await list();
 
       if (!listed.ok) return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not list the sandboxes this runtime's journal owns: ${listed.message}` } };
-      const journalPrefix = `teamai-${owner}-`;
 
       return {
         ok: true,
