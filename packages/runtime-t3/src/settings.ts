@@ -46,8 +46,11 @@ const SettingsSchema = z.object({
   projectSettingsOverrides: lenient(z.record(z.string(), OverrideSchema.catch({}))),
   providerInstances: lenient(z.record(z.string(), z.object({
     enabled: lenient(z.boolean().nullable()),
-    /** Where the instance runs its tool: `homePath`, and for Codex `shadowHomePath`, which T3 runs it in when set. */
-    config: lenient(z.object({ homePath: lenient(z.string()), shadowHomePath: lenient(z.string()) }).catch({})),
+    /**
+     * Where the instance runs its tool: `homePath`, and for Codex `shadowHomePath`, which T3 runs it in when set; and
+     * `binaryPath`, the command T3 starts for it in place of the tool's own.
+     */
+    config: lenient(z.object({ homePath: lenient(z.string()), shadowHomePath: lenient(z.string()), binaryPath: lenient(z.string()) }).catch({})),
   }).catch({}))),
 });
 

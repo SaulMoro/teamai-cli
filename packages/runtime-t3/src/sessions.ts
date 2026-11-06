@@ -14,13 +14,13 @@ import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 //
 
 /**
- * The T3 provider drivers this runtime runs, each with the teamai tool it is, its tool's home under a user's home, and
- * the store its sessions are in under a tool home.
+ * The T3 provider drivers this runtime runs, each with the teamai tool it is, its name in T3, its tool's home under a
+ * user's home, and the store its sessions are in under a tool home.
  */
 export const DRIVERS = {
-  claudeAgent: { tool: 'claude', home: '.claude', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')) },
-  codex: { tool: 'codex', home: '.codex', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions')) },
-} as const satisfies Record<string, { tool: string; home: string; sessions(toolHome: string): AgentAdapter }>;
+  claudeAgent: { tool: 'claude', label: 'Claude', home: '.claude', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')) },
+  codex: { tool: 'codex', label: 'Codex', home: '.codex', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions')) },
+} as const satisfies Record<string, { tool: string; label: string; home: string; sessions(toolHome: string): AgentAdapter }>;
 
 export type Driver = keyof typeof DRIVERS;
 

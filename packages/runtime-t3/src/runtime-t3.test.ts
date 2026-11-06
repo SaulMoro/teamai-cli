@@ -375,6 +375,80 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
+    describe('a team or personal tool instance', () => {
+      const ACME = { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' };
+      const INSTANCE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+
+      /** The init reply for `instances` given in init, `options` added to the definition's, and each provider instance's Binary path. */
+      const initWith = async ({ binaryPaths, options = {}, providers = [CLAUDE, CODEX, ACME] }: { binaryPaths: Record<string, string>; options?: Line; providers?: FakeT3Config['providers'] }): Promise<Line> => {
+        signIn(t3);
+        t3.config({ providers });
+        t3.settings({ providerInstances: Object.fromEntries(Object.entries(binaryPaths).map(([id, binaryPath]) => [id, { config: { binaryPath } }])) });
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, instances: [INSTANCE] });
+        const reply = await runtime.next((line) => line['type'] === 'init');
+        expect(RuntimeMessageSchema.safeParse(reply).success, JSON.stringify(reply)).toBe(true);
+
+        return reply;
+      };
+
+      it('offers it on the T3 provider instance whose Binary path is its command', async () => {
+        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude' } });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'], confined: [{ tools: ['claude', 'codex', 'acme-claude'] }] } });
+        expect(reply).not.toHaveProperty('unavailable');
+      });
+
+      it.each([
+        { case: 'a relative Binary path', binaryPath: 'acme-claude' },
+        { case: 'a Binary path to another file', binaryPath: '/opt/acme/bin/acme-claude-old' },
+      ])('does not offer it on an instance with $case, and names the instance to add', async ({ binaryPath }) => {
+        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': binaryPath } });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
+        expect(reply['unavailable']).toEqual({
+          'acme-claude': 'No T3 Code provider instance runs acme-claude. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition\'s t3 options.',
+        });
+      });
+
+      it('fails init, naming both and the option that picks one, when two instances run its command', async () => {
+        const reply = await initWith({
+          binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude', 'acme-claude-2': '/usr/local/bin/acme-claude' },
+          providers: [CLAUDE, ACME, { ...ACME, providerInstanceId: 'acme-claude-2' }],
+        });
+
+        expect(reply).toEqual({
+          type: 'init', ok: false,
+          error: { code: 'bad_option', key: 'instances', message: 'T3 Code provider instances "acme-claude-t3" and "acme-claude-2" both run acme-claude. Pick one with instances: { acme-claude: <its id> }' },
+        });
+      });
+
+      it('fails init, naming the key, when `instances` maps a name that is neither a tool T3 runs nor an instance teamai passed', async () => {
+        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude' }, options: { instances: { 'acme-cluade': 'acme-claude-t3' } } });
+
+        expect(reply).toEqual({
+          type: 'init', ok: false,
+          error: { code: 'bad_option', key: 'instances', message: 'instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has. Remove instances.acme-cluade, or name the instance as its tool definition does.' },
+        });
+      });
+
+      it('runs it on the instance `instances` maps it to', async () => {
+        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude', 'acme-claude-2': '/usr/local/bin/acme-claude' }, providers: [CLAUDE, ACME, { ...ACME, providerInstanceId: 'acme-claude-2' }], options: { instances: { 'acme-claude': 'acme-claude-2' } } });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'acme-claude'] } });
+      });
+
+      it.each([
+        { case: 'that T3 lacks', mapped: 'acme-sandbox', message: 'T3 Code has no provider instance "acme-sandbox", which instances maps acme-claude to. Add or enable it in T3 Code under Settings → Providers, or remove instances.acme-claude' },
+        { case: 'of another driver', mapped: 'codex', message: 'T3 Code provider instance "codex" runs codex, and acme-claude extends claude. Map acme-claude to a Claude instance in instances.acme-claude' },
+        { case: 'whose Binary path runs another file', mapped: 'acme-claude-t3', message: 'T3 Code provider instance "acme-claude-t3" has the Binary path /opt/acme/bin/claude, which is not acme-claude, the command acme-claude runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of acme-claude (command -v acme-claude), or change instances.acme-claude' },
+      ])('fails init, naming the setting, for a mapping to an instance $case', async ({ mapped, message }) => {
+        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/claude' }, options: { instances: { 'acme-claude': mapped } } });
+
+        expect(reply).toEqual({ type: 'init', ok: false, error: { code: 'bad_option', key: 'instances', message } });
+      });
+    });
+
     describe('with `runtime_mode: full-access`', () => {
       const FULL_ACCESS_SCOPES = ['--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'settings:write', '--scope', 'source-control:write'];
 
@@ -1158,6 +1232,31 @@ describe('teamai-runtime-t3', () => {
       runtime.send(prompt(handle, 'op-0000000f'));
 
       expect(await ended(runtime, 'op-0000000f')).toMatchObject({ event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/), home: path.join(t3.home, '.claude') } });
+    });
+
+    it('runs a tool instance\'s step on the T3 provider instance whose Binary path is its command, and names the session after the instance, in that instance\'s home', async () => {
+      t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
+      t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', homePath: '~/.acme-claude' } } } });
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'CLAUDE_CONFIG_DIR' } }] });
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+
+      runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000001e', { tool: 'acme-claude' }));
+
+      expect(await ended(runtime, 'op-0000001e')).toMatchObject({ event: 'finished', session: { tool: 'acme-claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/), home: path.join(t3.home, '.acme-claude') } });
+      expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'acme-claude-t3', model: 'claude-opus-5-5' });
+    });
+
+    it('runs a tool on the provider instance `instances` maps it to', async () => {
+      t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'claude-work', displayName: 'Claude (work)' }] });
+      const runtime = await initialized({ instances: { claude: 'claude-work' } });
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+
+      runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000001f'));
+
+      expect(await ended(runtime, 'op-0000001f')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+      expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claude-work', model: 'claude-opus-5-5' });
     });
 
     // A T3 thread always starts a session of its own, so teamai must not link it to the one the step asked to resume.
