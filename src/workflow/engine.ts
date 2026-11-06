@@ -1466,6 +1466,57 @@ function secretMismatch(inputs: RunState['inputs'], secrets: Record<string, stri
   return null;
 }
 
+/** What a start admitted: the run's workflow, as `createRun` takes it. */
+type AdmittedStart = Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'definition' | 'workflows'> & Required<Pick<RunState, 'origin'>>;
+
+/**
+ * Admits workflow `name` for a start with `inputs` from `base`: every check a start makes before it needs the run's
+ * driver. A caller that opens a driver's runtimes calls it first, so a start refused here starts none of them.
+ */
+export async function admitStart(
+  config: LocalConfig,
+  name: string,
+  // oxlint-disable-next-line teamai/no-unknown-parameters -- the parse boundary: start's inputs as the CLI or a driver sent them, checked here first
+  inputs: unknown,
+  { secrets, base }: { secrets: Record<string, string>; base?: RunState['base'] },
+): Promise<{ ok: true; admitted: AdmittedStart } | { ok: false; refused: WorkflowEnvelope }> {
+  const cached = await loadCachedWorkflow(config, name);
+
+  if (!cached) {
+    const conflict = await namespaceConflictOf(config, name);
+
+    if (conflict) return { ok: false, refused: error('workflow_namespace_conflict', conflict) };
+
+    return { ok: false, refused: error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`) };
+  }
+
+  const given = withInputDefaults(cached.definition, inputs);
+  const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, given ?? inputs);
+
+  if (mismatch) return { ok: false, refused: error('invalid_inputs', mismatch) };
+  const tree = await loadWorkflowTree(config, cached);
+
+  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
+  if ('failed' in tree) return { ok: false, refused: error(tree.failed.code, tree.failed.message) };
+  const admission = await admitWorkflow(config, { kind: 'cached', definition: cached.definition, workflows: tree.workflows }, { secrets, base });
+
+  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
+  if ('failure' in admission) return { ok: false, refused: error(admission.failure.code, admission.failure.message) };
+
+  // A run reads an undefined inputs or teamRevision as not given.
+  return {
+    ok: true,
+    admitted: {
+      name: cached.definition.name,
+      inputs: cached.definition.inputs ? given : undefined,
+      sourceHash: tree.sourceHash,
+      teamRevision: tree.teamRevision || undefined,
+      origin: DefaultWorkflows.originOf(cached),
+      ...admission.admitted,
+    },
+  };
+}
+
 /**
  * Creates a run. `inputs` are checked against the declared inputs before the run file exists. `secrets` are what the
  * caller resolved for the operation.
@@ -1477,40 +1528,11 @@ export async function startRun(
   inputs: unknown,
   { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
-  const cached = await loadCachedWorkflow(config, name);
+  const admission = await admitStart(config, name, inputs, { secrets, base: options.base });
 
-  if (!cached) {
-    const conflict = await namespaceConflictOf(config, name);
+  if (!admission.ok) return admission.refused;
 
-    if (conflict) return error('workflow_namespace_conflict', conflict);
-
-    return error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`);
-  }
-
-  const given = withInputDefaults(cached.definition, inputs);
-  const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, given ?? inputs);
-
-  if (mismatch) return error('invalid_inputs', mismatch);
-  const tree = await loadWorkflowTree(config, cached);
-
-  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
-  if ('failed' in tree) return error(tree.failed.code, tree.failed.message);
-  const admission = await admitWorkflow(config, { kind: 'cached', definition: cached.definition, workflows: tree.workflows }, { secrets, base: options.base });
-
-  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
-  if ('failure' in admission) return error(admission.failure.code, admission.failure.message);
-
-  // createRun reads an undefined inputs or teamRevision as not given.
-  return createRun(config, {
-    name: cached.definition.name,
-    inputs: cached.definition.inputs ? given : undefined,
-    sourceHash: tree.sourceHash,
-    teamRevision: tree.teamRevision || undefined,
-    origin: DefaultWorkflows.originOf(cached),
-    ...admission.admitted,
-    secrets,
-    ...options,
-  });
+  return createRun(config, { ...admission.admitted, secrets, ...options });
 }
 
 /**

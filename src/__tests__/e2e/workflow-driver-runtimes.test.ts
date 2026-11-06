@@ -633,6 +633,23 @@ steps:
     expect(fs.existsSync(path.join(state, 'credentials.jsonl'))).toBe(false);
   });
 
+  it('refuses a start its admission checks refuse before it opens any runtime of the definition', async () => {
+    writeFlow('unsandboxedfix', `  - id: fix
+    tool: claude
+    prompt: Fix the failing test.
+    permissions: unattended
+    output:
+      ok: boolean`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    writeDefinition('toyrefused', [{ use: 'toy', options: { state } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'unsandboxedfix', '--driver', 'toyrefused'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'unattended_unsandboxed' } });
+    // The toy notes every init it answers; none means no runtime process was started, so none signed in.
+    expect(fs.existsSync(path.join(state, 'inits.jsonl'))).toBe(false);
+  });
+
   it('keeps what the runtime shows of the place in the attempt\'s record, for the run\'s details', async () => {
     const display = { label: 'toy place', url: 'https://runtimes.example.test/place/1', fields: { place: 'toy-1', image: 'warm:3f9c' } };
     writeDefinition('shown', [{ use: 'toy', options: { state, display } }]);

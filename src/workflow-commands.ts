@@ -9,7 +9,7 @@ import { PassScoring } from './scorers/pass-scoring.js';
 import { Subject } from './scorers/subject.js';
 import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from './utils/logger.js';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
-import { parseNextPayload, parseReport, parseResponsePayload, resumableSessions, retryCommand, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
+import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, retryCommand, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
 import { claimOffered, publishRun, resumeRun } from './workflow/handoff.js';
 import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Taker } from './workflow-published-runs.js';
 import { safeText } from './session-flow/session-cmd-shared.js';
@@ -18,11 +18,13 @@ import { getRepoIdentity } from './session-flow/sync.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
+import { headCommit } from './workflow/worktree.js';
 import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive, drivesHere } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
 import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { resolveDriver } from './workflow/runtimes/definitions.js';
 import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
 import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
@@ -607,6 +609,26 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
 
   if (refused) {
     writeEnvelope({ error: refused }, secrets);
+
+    return;
+  }
+
+  // A definition no one defines is refused first; resolving one starts none of its runtimes.
+  const definition = options.driver === 'local' || options.driver === 'skill' ? undefined : options.driver;
+  const unresolved = definition === undefined ? undefined : await resolveDriver(config, definition, { personal: true });
+
+  if (unresolved && !unresolved.ok) {
+    writeEnvelope({ error: unresolved.failure }, secrets);
+
+    return;
+  }
+
+  // A start its admission refuses, such as an unattended step with no sandbox, ends before any runtime opens, too.
+  const admission = await admitStart(config, name, inputs, { secrets, base: await headCommit(process.cwd()) });
+
+  if (!admission.ok) {
+    if (shortcut.present) await shortcut.present(config, admission.refused, secrets);
+    else writeEnvelope(admission.refused, secrets);
 
     return;
   }
