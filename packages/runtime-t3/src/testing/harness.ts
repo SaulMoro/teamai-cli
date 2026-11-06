@@ -62,7 +62,7 @@ export interface FakeT3Config {
   /** The sign-in session the token belongs to: T3 finds a repeated launch only under the session that sent it. Unset: `session-1`. */
   namespace?: string;
   environment: { environmentId: string; label: string; serverVersion: string };
-  projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null }>;
+  projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null; scripts?: Array<{ id: string; name: string; command: string; runOnWorktreeCreate: boolean; runOnSettle?: boolean }> }>;
   providers: FakeProvider[];
   agent: FakeAgent;
   /** The mode teamai's sign-in was approved with; T3 refuses a thread in a broader one. Unset: the access the last pairing-code decision approved, else any mode. */
@@ -106,6 +106,8 @@ export interface FakeT3Config {
   decisionMs?: number;
   /** The `t3` command fails with this exit status, saying why on stderr. */
   commandFails?: number;
+  /** `t3 project add` fails with this exit status, saying why on stderr. */
+  projectAddFails?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
@@ -115,6 +117,8 @@ export type FakeCall = z.infer<typeof CallSchema>;
 const ThreadSchema = z.object({
   threadId: z.string(), title: z.string(), message: z.string().optional(), worktreePath: z.string().optional(), projectId: z.string().optional(),
   provider: z.string(), model: z.string().optional(), runtimeMode: z.string().optional(), status: z.string(), settled: z.boolean(),
+  /** What the thread binds: the project's own folder, one of its worktrees, or a scratch folder. */
+  workspace: z.enum(['root', 'existing_worktree', 'worktree', 'scratch']).optional(),
   /** The files the agent found under its thread's folder, and whether it could write there. */
   sees: z.array(z.string()).optional(), couldWrite: z.boolean().optional(),
 });
@@ -145,6 +149,8 @@ export interface FakeT3 {
   /** Where the running server listens, as T3 writes it in its runtime file. */
   origin(): string;
   config(change: Partial<FakeT3Config>): void;
+  /** Writes the member's T3 settings, `userdata/settings.json` in T3's data directory. */
+  settings(value: Line): void;
   calls(): FakeCall[];
   threads(): FakeThread[];
   /** A thread someone else launched, such as the person, ended at `status`. */
@@ -167,6 +173,7 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 't3'), t3Command(state), { mode: 0o755 });
+  fs.mkdirSync(t3Home, { recursive: true });
   const runs = path.join(state, 't3-command.jsonl');
 
   let current: FakeT3Config = {
@@ -193,6 +200,10 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
     config(change) {
       current = { ...current, ...change };
       write();
+    },
+    settings(value) {
+      fs.mkdirSync(path.join(t3Home, 'userdata'), { recursive: true });
+      fs.writeFileSync(path.join(t3Home, 'userdata', 'settings.json'), JSON.stringify(value));
     },
     calls: () => {
       const file = path.join(state, 'calls.jsonl');
@@ -241,8 +252,18 @@ const args = process.argv.slice(2);
 fs.appendFileSync(path.join(state, 't3-command.jsonl'), JSON.stringify(args) + '\\n');
 const failure = JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8')).commandFails;
 if (failure) { process.stderr.write('Could not reach the T3 Code server.\\n'); process.exit(failure); }
-if (args.slice(0, 3).join(' ') !== 'auth pairing create' || !args.includes('--json')) { process.stderr.write('Unknown command.\\n'); process.exit(2); }
 const values = (flag) => args.flatMap((arg, i) => (arg === flag ? [args[i + 1]] : []));
+if (args.slice(0, 2).join(' ') === 'project add') {
+  const config = JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8'));
+  if (config.projectAddFails) { process.stderr.write('Could not add the project.\\n'); process.exit(config.projectAddFails); }
+  const root = args[args.length - 1];
+  const project = { id: 'project-' + randomUUID().slice(0, 8), title: values('--title')[0] ?? path.basename(root), workspaceRoot: root, deletedAt: null };
+  config.projects.push(project);
+  fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify(config));
+  process.stdout.write('Added project ' + project.id + ' (' + project.title + ') at ' + root + '.\\n');
+  process.exit(0);
+}
+if (args.slice(0, 3).join(' ') !== 'auth pairing create' || !args.includes('--json')) { process.stderr.write('Unknown command.\\n'); process.exit(2); }
 const base = values('--base-dir')[0] ?? process.env.T3CODE_HOME ?? path.join(process.env.HOME, '.t3');
 const credential = randomUUID();
 fs.appendFileSync(path.join(state, 'pairings.jsonl'), JSON.stringify({ credential, scopes: values('--scope'), base }) + '\\n');
@@ -282,10 +303,13 @@ export interface Connection {
   close(): Promise<number | null>;
 }
 
-/** Starts the runtime at `executable` against `t3`, with `env` over a plain environment whose `t3` command is the fake's. */
-export function connect(executable: string, t3: FakeT3, env: Record<string, string> = {}): Connection {
+/**
+ * Starts the runtime at `executable` against `t3`, with `env` over a plain environment whose `t3` command is the fake's,
+ * in `cwd`, where teamai starts it: the run's checkout.
+ */
+export function connect(executable: string, t3: FakeT3, env: Record<string, string> = {}, cwd?: string): Connection {
   const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [executable], {
-    env: { PATH: `${t3.bin}${path.delimiter}${PATH_WITHOUT_T3}`, HOME: t3.home, T3CODE_HOME: t3.t3Home, ...env },
+    env: { PATH: `${t3.bin}${path.delimiter}${PATH_WITHOUT_T3}`, HOME: t3.home, T3CODE_HOME: t3.t3Home, ...env }, ...(cwd && { cwd }),
   });
 
   const lines: Line[] = [];

@@ -26,8 +26,11 @@ const ThreadSchema = z.object({
    * first, and keeps the place, and a judge's copy, while T3 will not; nothing settles it before then.
    */
   ended: z.object({
-    /** How asking T3 to settle the thread went, once the runtime asked; it asks once. */
-    settlement: z.enum(['settled', 'failed']).optional(),
+    /**
+     * How asking T3 to settle the thread went, once the runtime asked; it asks once. `skipped`: it never asks, since T3
+     * would run the project's settle script in the step's folder.
+     */
+    settlement: z.enum(['settled', 'failed', 'skipped']).optional(),
   }).optional(),
 });
 
@@ -39,11 +42,12 @@ export type ThreadRecord = z.infer<typeof ThreadSchema>;
  */
 const LaunchSchema = z.object({
   title: z.string(),
-  modelSelection: z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.string() })).optional() }),
+  /** None: T3 picks the member's default model, as it does for a thread the member starts. */
+  modelSelection: z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.string() })).optional() }).optional(),
   runtimeMode: z.enum(STEP_MODES),
   tool: z.string(),
   launchedAt: z.number(),
-  /** A step's: the worktree its thread runs on. A judge's thread runs in a scratch folder of T3's own. */
+  /** A step's on an existing worktree: the worktree its thread runs on. A judge's thread runs in a scratch folder of T3's own. */
   worktreePath: z.string().optional(),
   /** Which T3 Code sign-in sent it: T3 answers a repeat with the thread it launched only under that same sign-in. */
   signIn: z.string(),
@@ -63,9 +67,16 @@ const placeFields = {
   launches: z.record(z.string(), LaunchSchema),
 };
 
-/** An attempt's worktree in a T3 project, or a confined prompt's place, which has no view of the host. */
+/**
+ * An attempt's folder in a T3 project, or a confined prompt's place, which has no view of the host. Its threads bind
+ * the folder as a worktree of the project, or as the project's own folder (`root`): a checkout, a clone, or a worktree
+ * T3 would otherwise run the project's setup script in. `settleScript`: the script T3 runs when one of them is settled.
+ */
 const PlaceSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('worktree'), ...placeFields, projectId: z.string(), projectTitle: z.string() }),
+  z.object({
+    kind: z.literal('worktree'), ...placeFields, projectId: z.string(), projectTitle: z.string(),
+    binding: z.enum(['existing_worktree', 'root']).default('existing_worktree'), settleScript: z.string().optional(),
+  }),
   z.object({ kind: z.literal('confined'), ...placeFields }),
 ]);
 

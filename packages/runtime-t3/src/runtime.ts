@@ -11,7 +11,9 @@ import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
+import { projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import type { T3Command } from './t3-command.js';
 
 // ─── teamai-runtime-t3 ───
 //
@@ -48,8 +50,8 @@ const OptionsSchema = z.object({
   environment: z.literal('local'),
   /** A T3 provider instance to run every prompt on, by its id in T3 Settings → Providers; the tool's default one otherwise. */
   instance: z.string().min(1).optional(),
-  /** Tightens the mode every step thread runs in, from `auto`; nothing widens it. */
-  runtime_mode: z.enum(['auto-accept-edits', 'approval-required']).optional(),
+  /** The mode every step thread runs in, in place of the member's T3 default; never full access. */
+  runtime_mode: z.enum(['auto', 'auto-accept-edits', 'approval-required']).optional(),
 }).strict();
 
 /** The option names an effort maps to in T3's model options, by provider. */
@@ -119,6 +121,12 @@ export interface ServeOptions {
   connect(how: { mode: RuntimeMode }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
+  /** T3 Code's data directory, where the member's settings are. */
+  t3Home: string;
+  /** The `t3` command, which adds a project as the member does. */
+  t3: T3Command;
+  /** Where teamai started the runtime: the checkout of the run, whose project's settings the offer follows. */
+  cwd: string;
 }
 
 /**
@@ -151,8 +159,8 @@ interface Session extends Reached {
   mode: WorkMode;
   /** The provider instance each offered tool runs on. */
   instances: Map<ToolId, Provider>;
-  /** The mode every step thread launches in. */
-  stepMode: StepMode;
+  /** The mode `runtime_mode` sets; none: the member's T3 default for the place's project. */
+  runtimeMode: StepMode | undefined;
 }
 
 type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };
@@ -189,9 +197,25 @@ function realpath(file: string): string {
   }
 }
 
-/** The usable instance of each tool: the one `instance` names, or T3's default one for the tool's provider. */
-function instancesOf(providers: Provider[], instance: string | undefined): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
-  const usable = providers.filter((provider) => (provider.constraints ?? []).length === 0);
+/** The T3 project whose folder is `folder`, among `projects`; one T3 deleted does not count. */
+function projectOf(projects: Project[], folder: string): Project | undefined {
+  return projects.find((candidate) => !candidate.deletedAt && realpath(candidate.workspaceRoot) === realpath(folder));
+}
+
+/** The T3 project of the checkout `dir` belongs to, or none when it is no project, or no checkout. */
+async function projectAt(t3: T3, dir: string): Promise<Project | undefined> {
+  const [root, projects] = await Promise.all([mainCheckout(dir).catch(() => undefined), t3.projects()]);
+
+  return root === undefined ? undefined : projectOf(projects, root);
+}
+
+/**
+ * The usable instance of each tool: the one `instance` names; else the instance of the member's default model when it
+ * runs that tool; else the one whose id is the provider's name; else the first of that provider. An instance the member
+ * turned off for the project is never used.
+ */
+function instancesOf({ providers, instance, project }: { providers: Provider[]; instance: string | undefined; project: ProjectSettings }): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
+  const usable = providers.filter((provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false);
   const tools = new Map<ToolId, Provider>();
 
   if (instance !== undefined) {
@@ -209,7 +233,8 @@ function instancesOf(providers: Provider[], instance: string | undefined): { ok:
   }
 
   for (const driver of DRIVER_NAMES) {
-    const found = usable.find((provider) => provider.providerInstanceId === driver) ?? usable.find((provider) => provider.driverKind === driver);
+    const found = usable.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId && provider.driverKind === driver)
+      ?? usable.find((provider) => provider.providerInstanceId === driver) ?? usable.find((provider) => provider.driverKind === driver);
 
     if (found) tools.set(DRIVERS[driver].tool, found);
   }
@@ -217,8 +242,13 @@ function instancesOf(providers: Provider[], instance: string | undefined): { ok:
   return { ok: true, instances: tools };
 }
 
-/** The model selection `lease` asks of `provider`: its model, or the first T3 lists, and the effort as T3 names it. */
-function modelSelection(provider: Provider, lease: PromptLease): { ok: true; selection: Launch['modelSelection'] } | { ok: false; failure: RuntimeFailure } {
+/**
+ * The model selection `lease` asks of `provider`: its model, or the first T3 lists, and the effort as T3 names it. A
+ * lease that names no model on the instance of the member's default asks for none, so T3 applies that default, its
+ * options, and the member's fallback once its usage is spent.
+ */
+function modelSelection({ provider, lease, defaultModel }: { provider: Provider; lease: PromptLease; defaultModel: ModelSelection | undefined }): { ok: true; selection: Launch['modelSelection'] } | { ok: false; failure: RuntimeFailure } {
+  if (!lease.model && defaultModel?.instanceId === provider.providerInstanceId) return { ok: true, selection: undefined };
   const name = lease.model?.name ?? provider.models[0]?.id;
   const model = provider.models.find((candidate) => candidate.id === name);
   const where = `T3 Code provider instance "${provider.providerInstanceId}" (${provider.displayName})`;
@@ -232,6 +262,11 @@ function modelSelection(provider: Provider, lease: PromptLease): { ok: true; sel
   if (!option) return { ok: false, failure: { code: 'model_unavailable', message: `${where} runs ${model.id} with no effort "${effort}".` } };
 
   return { ok: true, selection: { instanceId: provider.providerInstanceId, model: model.id, options: [{ id: option.id, value: effort }] } };
+}
+
+/** Where a step's thread is bound in its place: the attempt's worktree of the project, or the project's own folder. */
+function workspaceOf(place: PlaceRecord & { kind: 'worktree' }, worktreePath: string): Launch['workspace'] {
+  return place.binding === 'root' ? { type: 'root' } : { type: 'existing_worktree', worktreePath };
 }
 
 /**
@@ -393,6 +428,18 @@ export function serve(options: ServeOptions): Promise<void> {
   const cancelledUnread = new Set<OpId>();
   /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
   const working = new Map<string, Set<Promise<unknown>>>();
+
+  let saidFullAccess = false;
+
+  /** The mode a thread inherits from the member's T3 default: theirs, or auto; never full access, which it says once. */
+  const inheritedMode = (mode: T3RuntimeMode | undefined): StepMode => {
+    if (mode !== 'full-access') return mode ?? 'auto';
+
+    if (!saidFullAccess) process.stderr.write('T3\'s default mode is Full access; teamai starts its threads in Auto instead.\n');
+    saidFullAccess = true;
+
+    return 'auto';
+  };
 
   /** `work`, counted as under way in `handle` until it settles. */
   const track = <TValue>(handle: string, work: Promise<TValue>): Promise<TValue> => {
@@ -603,7 +650,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0]?.toString();
 
       const message = key === 'runtime_mode'
-        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two`
+        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access; runtime_mode sets it to auto, auto-accept-edits or approval-required. Remove it, or set one of those three`
         : `Runtime t3 takes { environment: local, instance?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
 
       write({ type: 'init', ok: false, error: { code: 'bad_option', message, ...(key && { key }) } });
@@ -613,7 +660,6 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
     const answerBy = Date.now() + INIT_WAIT_MS;
-    const stepMode = parsed.data.runtime_mode ?? 'auto';
     const connecting = options.connect({ mode: request.mode });
     const reaching = request.mode === 'attended' ? { answered: true as const, value: await connecting } : await within(connecting, INIT_WAIT_MS);
 
@@ -633,7 +679,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     try {
-      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers()]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
+      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, options.cwd)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
 
       if (!asking.answered) {
         void connected.t3.close().catch(() => {});
@@ -641,8 +687,8 @@ export function serve(options: ServeOptions): Promise<void> {
         return unanswered();
       }
 
-      const [environment, providers] = asking.value;
-      const instances = instancesOf(providers, parsed.data.instance);
+      const [environment, providers, here] = asking.value;
+      const instances = instancesOf({ providers, instance: parsed.data.instance, project: projectSettings(readSettings(options.t3Home), here) });
 
       if (!instances.ok) {
         write({ type: 'init', ok: false, error: instances.failure });
@@ -650,13 +696,14 @@ export function serve(options: ServeOptions): Promise<void> {
         return;
       }
 
-      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode, signIn: connected.signIn };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn };
       const tools = [...instances.instances.keys()];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
-          workspace: ['new', 'continue'], tools, ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
+          // A step's folder is teamai's, and T3 runs no script of its own there (`open`), so a role copy stays as teamai delivered it.
+          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools, ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
         },
       });
     } catch (error) {
@@ -701,28 +748,79 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
+    const s = session;
     let root: string;
     let projects: Project[];
 
     try {
-      [root, projects] = await Promise.all([mainCheckout(view.worktree), session.t3.projects()]);
+      [root, projects] = await Promise.all([mainCheckout(view.worktree), s.t3.projects()]);
     } catch (error) {
       fail(request.op, { code: 'open_failed', message: `Could not match the worktree ${view.worktree} to a T3 Code project: ${error instanceof Error ? error.message : String(error)}` });
 
       return;
     }
 
-    const project = projects.find((candidate) => !candidate.deletedAt && realpath(candidate.workspaceRoot) === realpath(root));
+    /** The project of `folder`, added as the member adds one when T3 has none, saying so first; or why it could not be. */
+    const projectFor = async (folder: string, { title, why }: { title?: string; why: string }): Promise<{ ok: true; project: Project } | { ok: false; reason: string }> => {
+      const listed = projectOf(projects, folder);
 
-    if (!project) {
-      fail(request.op, { code: 'not_a_t3_project', message: `${root} is not a project in T3 Code ${session.environment.label}. Add it in T3 Code (Add project, then pick that folder), then start the workflow again.` });
+      if (listed) return { ok: true, project: listed };
+      process.stderr.write(`${why}\n`);
+
+      try {
+        await options.t3.run({ name: 'project add', args: ['project', 'add', '--base-dir', options.t3Home, ...(title ? ['--title', title] : []), folder] });
+        projects = await s.t3.projects();
+      } catch (error) {
+        return { ok: false, reason: (error instanceof Error ? error.message : String(error)).replace(/\.$/, '') };
+      }
+
+      const added = projectOf(projects, folder);
+
+      return added ? { ok: true, project: added } : { ok: false, reason: 't3 project add finished, and T3 Code still lists no such project' };
+    };
+
+    const checkout = await projectFor(root, { why: `Adding ${root} to T3 Code as a project, so its steps can run there.` });
+
+    if (!checkout.ok) {
+      fail(request.op, { code: 'not_a_t3_project', message: `${root} is not a project in T3 Code ${s.environment.label}, and teamai could not add it (${checkout.reason}). Add it in T3 Code (Add project), or run t3 project add ${root}, then start the workflow again.` });
 
       return;
     }
 
-    const opened: PlaceRecord = { kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, ops: {}, threads: {}, launches: {} };
+    const settings = readSettings(options.t3Home);
+    const scripts = projectSettings(settings, checkout.project).scripts;
+    // The step's folder is the project's own: a checkout read in place, a clone, a team repo's clone.
+    const own = realpath(view.worktree) === realpath(root);
+    let project = checkout.project;
+    let binding: 'existing_worktree' | 'root' = own ? 'root' : 'existing_worktree';
+
+    // T3 runs the project's setup script in every worktree a thread binds, and its output would be committed as the
+    // step's work. On a project of its own, the worktree is the project's folder, which T3 runs no setup script in.
+    if (!own && scripts.setup !== undefined) {
+      const separate = await projectFor(view.worktree, {
+        title: `${checkout.project.title} · teamai ${request.run}`,
+        why: `T3 Code runs the setup script "${scripts.setup}" of ${checkout.project.title} in each worktree a thread opens on, so teamai adds the step's worktree ${view.worktree} to T3 Code as a project of its own, where that script does not run.`,
+      });
+
+      if (!separate.ok) {
+        fail(request.op, { code: 'open_failed', message: `T3 Code runs the setup script "${scripts.setup}" of ${checkout.project.title} in each worktree a thread opens on, and teamai could not add the step's worktree ${view.worktree} as a project of its own, where it does not run (${separate.reason}). Run t3 project add ${view.worktree}, or turn off "Run on worktree creation" for "${scripts.setup}" in the project's settings in T3 Code, then start the workflow again.` });
+
+        return;
+      }
+
+      project = separate.project;
+      binding = 'root';
+    }
+
+    const settle = project === checkout.project ? scripts.settle : projectSettings(settings, project).scripts.settle;
+
+    const opened: PlaceRecord = {
+      kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, binding,
+      ...(settle !== undefined && { settleScript: settle }), ops: {}, threads: {}, launches: {},
+    };
+
     journal.write(opened);
-    write({ op: request.op, event: 'ready', display: placeDisplay(opened, session.environment) });
+    write({ op: request.op, event: 'ready', display: placeDisplay(opened, s.environment) });
   };
 
   /** A judge's result: its last message, as the JSON value it replied with. */
@@ -733,11 +831,12 @@ export function serve(options: ServeOptions): Promise<void> {
     return output === undefined ? { ok: false, why: 'replied with no JSON value' } : { ok: true, result: { output } };
   };
 
-  /** Launches a step's thread on the attempt's worktree with its first message, and returns its id. */
-  const launchStep = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, thread: NewThread): Promise<string> => {
+  /** Launches a step's thread on the attempt's folder with its first message, and returns it with the model it runs. */
+  const launchStep = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, thread: NewThread): Promise<{ threadId: string; model: string | undefined }> => {
     const message = firstMessage(opened, request.lease, options.startedFrom && threadMention(s.environment, options.startedFrom));
+    const launched = await s.t3.launch({ ...thread, message, projectId: opened.projectId, workspace: workspaceOf(opened, request.cwd) });
 
-    return (await s.t3.launch({ ...thread, message, projectId: opened.projectId, worktreePath: request.cwd })).threadId;
+    return { threadId: launched.threadId, model: launched.modelSelection?.model };
   };
 
   /**
@@ -750,15 +849,16 @@ export function serve(options: ServeOptions): Promise<void> {
     request: PromptRequest;
     confined: ConfinedPrompt;
     opened: PlaceRecord;
-    journalThread: (threadId: string, copy: string) => ThreadRecord;
+    journalThread: (threadId: string, copy: string, model: string | undefined) => ThreadRecord;
     thread: NewThread;
     known: ThreadRecord | undefined;
   }): Promise<ThreadRecord> => {
-    const threadId = known?.threadId ?? (await s.t3.launchScratch(thread)).threadId;
+    const scratch = known ? undefined : await s.t3.launchScratch(thread);
+    const threadId = known?.threadId ?? scratch?.threadId ?? '';
     const shell = await s.t3.thread(threadId);
 
     if (shell.worktreePath === null) throw new Error(`T3 Code gave the thread ${threadId} no folder.`);
-    const launched = known ?? journalThread(threadId, shell.worktreePath);
+    const launched = known ?? journalThread(threadId, shell.worktreePath, scratch?.modelSelection?.model);
 
     if (shell.runCount === 0) {
       try {
@@ -957,7 +1057,8 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const selection = modelSelection(instance, lease);
+    const project = projectSettings(readSettings(options.t3Home), opened.kind === 'worktree' ? { id: opened.projectId } : undefined);
+    const selection = modelSelection({ provider: instance, lease, defaultModel: project.defaultModel });
 
     if (!selection.ok) {
       refuse({ op: request.op, state: 'failed', failure: selection.failure });
@@ -983,8 +1084,8 @@ export function serve(options: ServeOptions): Promise<void> {
     // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
     // so a repeat in another mode would not find the thread it launched.
     const launch: LaunchRecord = pending ?? {
-      title: `${lease.step} · teamai ${opened.run}`, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool,
-      launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && { worktreePath: request.cwd }),
+      title: `${lease.step} · teamai ${opened.run}`, ...(selection.selection && { modelSelection: selection.selection }), runtimeMode: s.runtimeMode ?? inheritedMode(project.defaultMode), tool: lease.tool,
+      launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && opened.kind === 'worktree' && opened.binding === 'existing_worktree' && { worktreePath: request.cwd }),
     };
 
     const { title, launchedAt } = launch;
@@ -1002,14 +1103,14 @@ export function serve(options: ServeOptions): Promise<void> {
     const finish = (outcome: OpState, threadEnded = false): void => endRunning(state, outcome, { threadEnded });
 
     try {
-      const newThread: NewThread = { title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: request.op };
+      const newThread: NewThread = { title, ...(launch.modelSelection && { modelSelection: launch.modelSelection }), runtimeMode: launch.runtimeMode, clientRequestId: request.op };
 
       // Accepted before T3 launches anything, which may take longer than teamai waits for an acceptance.
       accept(thread);
 
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
-      const journalThread = (threadId: string, copy: string | undefined): ThreadRecord => {
-        const launched: ThreadRecord = { threadId, title, model: launch.modelSelection.model, tool: launch.tool, launchedAt, ...(copy && { copy }) };
+      const journalThread = (threadId: string, copy: string | undefined, model: string | undefined): ThreadRecord => {
+        const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, launchedAt, ...(copy && { copy }) };
         const now = place(request.handle) ?? opened;
         const { [request.op]: _answered, ...launches } = now.launches;
         // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
@@ -1028,7 +1129,7 @@ export function serve(options: ServeOptions): Promise<void> {
       // A close that comes meanwhile waits for the launch, so it stops the thread the launch started.
       thread = await track(request.handle, work.kind === 'judge'
         ? launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known })
-        : known ? Promise.resolve(known) : launchStep(s, request, work.place, newThread).then((threadId) => journalThread(threadId, undefined)));
+        : known ? Promise.resolve(known) : launchStep(s, request, work.place, newThread).then(({ threadId, model }) => journalThread(threadId, undefined, model)));
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       // Only a check a new launch runs proves T3 launched nothing; a judge's copy fails before its idle thread is briefed.
@@ -1040,7 +1141,7 @@ export function serve(options: ServeOptions): Promise<void> {
         finish({
           op: request.op, state: 'failed', failure: {
             code: 'sign_in_too_narrow',
-            message: `T3 Code refused to start the step's thread in ${s.stepMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Auto access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.`,
+            message: `T3 Code refused to start the step's thread in ${launch.runtimeMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Auto access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.`,
           },
         });
       } else if (refused) finish({ op: request.op, state: 'failed', failure: { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${why}` } });
@@ -1075,13 +1176,17 @@ export function serve(options: ServeOptions): Promise<void> {
    */
   const resolveLaunch = async (s: Reached, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<{ ok: true; place: PlaceRecord } | { ok: false; failure: RuntimeFailure }> => {
     if (launch.signIn !== s.signIn) return { ok: false, failure: launchUnconfirmed(known, launch) };
-    const newThread: NewThread = { title: launch.title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: op };
+    const newThread: NewThread = { title: launch.title, ...(launch.modelSelection && { modelSelection: launch.modelSelection }), runtimeMode: launch.runtimeMode, clientRequestId: op };
     let threadId: string | undefined;
+    let model: string | undefined;
 
     try {
-      threadId = (known.kind === 'worktree' && launch.worktreePath !== undefined
-        ? await s.t3.launch({ ...newThread, projectId: known.projectId, worktreePath: launch.worktreePath })
-        : await s.t3.launchScratch(newThread)).threadId;
+      const launched = known.kind === 'worktree'
+        ? await s.t3.launch({ ...newThread, projectId: known.projectId, workspace: workspaceOf(known, launch.worktreePath ?? '') })
+        : await s.t3.launchScratch(newThread);
+
+      threadId = launched.threadId;
+      model = launched.modelSelection?.model;
     } catch (error) {
       // T3 answers a launch it accepted before any check a new launch needs, so only such a check's refusal proves it
       // launched nothing. Any other answer, such as orchestration_error, may come from the lookup itself.
@@ -1092,7 +1197,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const now = place(known.handle);
     const base = now ?? known;
     const { [op]: _resolved, ...launches } = base.launches;
-    const thread: ThreadRecord | undefined = threadId === undefined ? undefined : { threadId, title: launch.title, model: launch.modelSelection.model, tool: launch.tool, launchedAt: launch.launchedAt };
+    const thread: ThreadRecord | undefined = threadId === undefined ? undefined : { threadId, title: launch.title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, launchedAt: launch.launchedAt };
     const resolved: PlaceRecord = { ...base, launches, ...(thread && { threads: { ...base.threads, [op]: thread } }) };
 
     if (now) journal.write(resolved);
@@ -1200,22 +1305,29 @@ export function serve(options: ServeOptions): Promise<void> {
     const known = place(handle);
 
     if (!known) return;
+    const script = known.kind === 'worktree' ? known.settleScript : undefined;
 
     for (const [op, thread] of Object.entries(known.threads)) {
       if (!thread.ended || thread.ended.settlement) continue;
       let outcome: NonNullable<NonNullable<ThreadRecord['ended']>['settlement']>;
 
-      try {
-        const { status } = await s.t3.thread(thread.threadId);
+      if (script !== undefined) {
+        // T3 would run the script in the step's folder, before teamai commits it, so the thread stays where it is.
+        process.stderr.write(`teamai leaves the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") in T3 Code's active threads: settling it would run the project's script "${script}" in the step's folder.\n`);
+        outcome = 'skipped';
+      } else {
+        try {
+          const { status } = await s.t3.thread(thread.threadId);
 
-        if (status !== null && status !== 'idle' && !TERMINAL.has(status)) continue;
-        await s.t3.settle(thread.threadId);
-        outcome = 'settled';
-      } catch (error) {
-        // A thread T3 no longer has is in nobody's active threads.
-        outcome = error instanceof T3Error && error.threadGone ? 'settled' : 'failed';
+          if (status !== null && status !== 'idle' && !TERMINAL.has(status)) continue;
+          await s.t3.settle(thread.threadId);
+          outcome = 'settled';
+        } catch (error) {
+          // A thread T3 no longer has is in nobody's active threads.
+          outcome = error instanceof T3Error && error.threadGone ? 'settled' : 'failed';
 
-        if (outcome === 'failed') process.stderr.write(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}\n`);
+          if (outcome === 'failed') process.stderr.write(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
       }
 
       const now = place(handle);

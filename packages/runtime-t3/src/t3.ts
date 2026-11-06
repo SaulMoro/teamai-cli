@@ -26,8 +26,11 @@ const ProviderSchema = z.object({
 
 export type Provider = z.infer<typeof ProviderSchema>;
 
-/** A project as `t3_project_list` lists it; one T3 deleted keeps its row with `deletedAt` set. */
-const ProjectSchema = z.object({ id: z.string().min(1), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional() });
+/** A project as `t3_project_list` lists it; one T3 deleted keeps its row with `deletedAt` set. Its scripts are read loosely. */
+const ProjectSchema = z.object({
+  id: z.string().min(1), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional(),
+  scripts: z.array(z.object({ name: z.string(), runOnWorktreeCreate: z.boolean().optional(), runOnSettle: z.boolean().optional() })).optional().catch(undefined),
+});
 
 export type Project = z.infer<typeof ProjectSchema>;
 
@@ -36,7 +39,8 @@ const ProjectPageSchema = z.object({ projects: z.array(ProjectSchema), nextCurso
 /** A thread's run as T3 reports it; `idle` when the thread has none. */
 export const THREAD_STATUSES = ['idle', 'preparing', 'queued', 'starting', 'running', 'waiting', 'completed', 'interrupted', 'failed', 'cancelled', 'rolled_back'] as const;
 
-const LaunchedSchema = z.object({ threadId: z.string().min(1) });
+/** A launch's answer: the thread, and the model T3 started it on, which it chose itself when the launch named none. */
+const LaunchedSchema = z.object({ threadId: z.string().min(1), modelSelection: z.object({ model: z.string() }).optional().catch(undefined) });
 
 /**
  * A wait until the thread's latest run and the work it delegated settled. `status` is that run's own, so it may have
@@ -83,19 +87,23 @@ export type StepMode = (typeof STEP_MODES)[number];
 /** What every thread the runtime launches sets. */
 export interface NewThread {
   title: string;
-  modelSelection: { instanceId: string; model: string; options?: Array<{ id: string; value: string }> };
+  /** None: T3 starts the thread on the member's default for the project, or their fallback once its usage is spent. */
+  modelSelection?: { instanceId: string; model: string; options?: Array<{ id: string; value: string }> };
   /** Never inherited: set from the runtime's options, whatever the caller's mode or the member's grant would let T3 use. */
   runtimeMode: StepMode;
   /** T3 answers a repeated id with the thread it launched for it, and starts no second run. */
   clientRequestId: string;
 }
 
-/** A step's thread, on the attempt's worktree of a T3 project, started with its first message. */
+/**
+ * A step's thread in a T3 project, started with its first message: on the attempt's worktree of the project, or on
+ * the project's own folder, where T3 runs none of the project's setup scripts.
+ */
 export interface Launch extends NewThread {
   /** None: an idle thread, which a repeated launch that only looks the thread up asks for. */
   message?: string;
   projectId: string;
-  worktreePath: string;
+  workspace: { type: 'existing_worktree'; worktreePath: string } | { type: 'root' };
 }
 
 /** The body T3 answers a refused call with, as its text. */
@@ -206,8 +214,8 @@ function t3Over(client: Client): T3 {
       title: launch.title,
       ...(launch.message !== undefined && { message: launch.message }),
       projectId: launch.projectId,
-      workspaceStrategy: { type: 'existing_worktree', worktreePath: launch.worktreePath },
-      modelSelection: launch.modelSelection,
+      workspaceStrategy: launch.workspace,
+      ...(launch.modelSelection && { modelSelection: launch.modelSelection }),
       runtimeMode: launch.runtimeMode,
       interactionMode: 'default',
       clientRequestId: launch.clientRequestId,
@@ -215,7 +223,7 @@ function t3Over(client: Client): T3 {
     launchScratch: (thread) => call('t3_thread_launch', {
       title: thread.title,
       scratch: true,
-      modelSelection: thread.modelSelection,
+      ...(thread.modelSelection && { modelSelection: thread.modelSelection }),
       runtimeMode: thread.runtimeMode,
       interactionMode: 'default',
       clientRequestId: thread.clientRequestId,

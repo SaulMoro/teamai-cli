@@ -95,6 +95,9 @@ await serve({
   },
   journal: journal(path.join(state, 'places')),
   connect,
+  t3Home,
+  t3: t3Cli,
+  cwd: process.cwd(),
   ...(startedFrom && { startedFrom }),
 });
 
