@@ -8,6 +8,7 @@ import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTI
 import { maskedAsGiven, onThisMachine, rewrittenMasks, toAlias } from './loopback.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type Provider } from './provider.js';
+import type { UnusedGateways } from './sign-in.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -30,11 +31,12 @@ type ExecRequest = z.infer<typeof ExecRequestSchema>;
 
 type PromptRequest = z.infer<typeof PromptRequestSchema>;
 
-/** What `init` settled: the provider, and what it offered. */
+/** What `init` settled: the provider, what it offered, and the member's gateways a login it keeps replaces. */
 interface Ready {
   provider: Provider;
   can: Can;
   host: HostRoute;
+  unusedGateways: UnusedGateways;
 }
 
 /** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
@@ -133,7 +135,7 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
 
 export function serve({ input, write: send, journal, warn, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
-  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED };
+  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED, unusedGateways: {} };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
@@ -147,6 +149,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const creating = new Set<{ handle: string; settled: Promise<unknown> }>();
   /** How many ends of each op this process wrote, so a request that throws tells whether it was already answered. */
   const endsWritten = new Map<OpId, number>();
+  /** The tools whose unused gateway this process told the member about, so it says so once per drive. */
+  const toldGateway = new Set<string>();
 
   const write = (message: RuntimeMessage): void => {
     if (isEnd(message)) endsWritten.set(message.op, (endsWritten.get(message.op) ?? 0) + 1);
@@ -327,6 +331,14 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
+    const unused = tool === undefined ? undefined : current.unusedGateways[tool];
+
+    // The definition can still give the step the gateway, which then goes to it.
+    if (tool !== undefined && unused !== undefined && !(unused.variable in credentials) && !toldGateway.has(tool)) {
+      toldGateway.add(tool);
+      write({ event: 'notice', op, message: unused.notice });
+    }
+
     // Its own place is saved first, so the sweep keeps it.
     void sweep(provider);
 
@@ -805,7 +817,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
-      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED };
+      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {} };
       write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
@@ -814,7 +826,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const provider = providerFor(parsed.options);
 
     if (mode === 'recover') {
-      ready = { provider, can: {}, host: NOT_OFFERED };
+      ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {} };
       write({ type: 'init', ok: true, can: {} });
 
       return;
@@ -823,7 +835,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const offered = await provider.offer(credentials);
 
     if (!offered.ok) {
-      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED };
+      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {} };
       write({ type: 'init', ok: false, error: offered.failure });
 
       return;
@@ -832,7 +844,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const { confined: offers = [], ...rest } = offered.can;
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
-    ready = { provider, can, host: offered.host };
+    ready = { provider, can, host: offered.host, unusedGateways: offered.unusedGateways };
     write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }), ...(Object.keys(offered.unavailable).length > 0 && { unavailable: offered.unavailable }), ...(offered.ownLogins.length > 0 && { ownLogins: offered.ownLogins }) });
   };
 

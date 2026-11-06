@@ -119,6 +119,12 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 在 sbx 上，sbx 保存了登录的工具就用那份登录，即使你的 shell 设置了它的某个变量，比如指向网关的 `ANTHROPIC_BASE_URL`。驱动定义在 `credentials` 里写明的变量照常发给步骤的工具。
 
+如果你的 shell 设置了 `ANTHROPIC_BASE_URL`，`workflow start` 或 `resume` 在沙箱里运行的第一个 Claude 步骤会提示一次：
+
+```text
+⚠ Step runtime "sandbox", operation op-3c1e9a7f2b40: claude signs in here on the login sbx keeps (anthropic in `sbx secret ls`), so the gateway ANTHROPIC_BASE_URL names in your shell is not used in this sandbox. To use it there, add ANTHROPIC_BASE_URL: env:ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN: env:ANTHROPIC_AUTH_TOKEN to the sandbox's credentials.
+```
+
 只有分配给步骤的变量名会进入容器：它的 `requires.env` 键、工作流的 `env`、teamai 的尝试标记、工具主目录变量，以及只给步骤工具的 `credentials`。你环境里的其他内容都不会进去，所以 `GH_TOKEN`、`SSH_AUTH_SOCK` 之类会留在外面。变量值从不出现在命令行里：容器创建时不带任何凭据，每次 `docker exec -e NAME` 都从容器引擎 CLI 自己的环境里读取值。变量值也不会写到磁盘上：运行时记下的每次 exec 结果里，工具打印出的凭据都会被遮盖。
 
 ```text
