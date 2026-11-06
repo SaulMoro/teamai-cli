@@ -20,7 +20,8 @@
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
 //                       exists, before it answers, as a create still on its way; a file `owned-hold` makes a `ps`
 //                       filtered by `teamai.owner` wait until it is removed (60 s at most), with a file `owned-listing`
-//                       there while it waits
+//                       there while it waits; each list of one journal's containers it answered adds a character to
+//                       a file `owned-listed`
 //   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
@@ -244,6 +245,8 @@ function docker() {
 
         if (container && wanted.every(([key, value]) => container.labels[key] === value)) process.stdout.write(`${format.replaceAll('{{.ID}}', container.id).replace(/\{\{\.Label "([^"]+)"\}\}/g, (_, key) => container.labels[key] ?? '')}\n`);
       }
+
+      if (wanted.some(([key]) => key === 'teamai.owner')) fs.appendFileSync(path.join(state, 'owned-listed'), '.');
 
       break;
     }
