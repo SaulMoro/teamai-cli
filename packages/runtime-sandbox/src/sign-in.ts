@@ -82,9 +82,10 @@ export function isGivenSignIn(tool: string, credentials: InitCredentials, login:
 
 /**
  * The tools that sign in on the login sbx keeps though the member's shell points them at a gateway, by tool: the
- * gateway's variable, and the line that tells the member their gateway is not used in the sandbox.
+ * variables of a sign-in of the definition's own (the gateway's and the tool's), any of which an attempt's credentials
+ * carry when that login is not what signs it in, and the line that tells the member their gateway is not used there.
  */
-export type UnusedGateways = Record<string, { variable: string; notice: string }>;
+export type UnusedGateways = Record<string, { ownSignIn: readonly string[]; notice: string }>;
 
 /**
  * What a sandbox offers of the tools it holds: those that can sign in, why each other one cannot, those sbx keeps a
@@ -143,7 +144,7 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
     if (signIn?.sbx === undefined || gateway === undefined || !env[gateway.url]) return [];
 
     return [[tool, {
-      variable: gateway.url,
+      ownSignIn: [gateway.url, ...signIn.env],
       notice: `${tool} signs in here on the login sbx keeps (${signIn.sbx} in \`sbx secret ls\`), so the gateway ${gateway.url} names in your shell is not used in this sandbox. To use it there, add ${gateway.url}: env:${gateway.url} and ${gateway.token}: env:${gateway.token} to the sandbox's credentials.`,
     }]];
   }));

@@ -331,14 +331,6 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
-    const unused = tool === undefined ? undefined : current.unusedGateways[tool];
-
-    // The definition can still give the step the gateway, which then goes to it.
-    if (tool !== undefined && unused !== undefined && !(unused.variable in credentials) && !toldGateway.has(tool)) {
-      toldGateway.add(tool);
-      write({ event: 'notice', op, message: unused.notice });
-    }
-
     // Its own place is saved first, so the sweep keeps it.
     void sweep(provider);
 
@@ -362,6 +354,14 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       write({ op, event: 'failed', failure: made.failure });
 
       return;
+    }
+
+    const unused = tool === undefined ? undefined : current.unusedGateways[tool];
+
+    // A definition that gives the step the gateway, or a sign-in of its own, is not signed in on sbx's login.
+    if (tool !== undefined && unused !== undefined && !unused.ownSignIn.some((name) => name in credentials) && !toldGateway.has(tool)) {
+      toldGateway.add(tool);
+      write({ event: 'notice', op, message: unused.notice });
     }
 
     write({ op, event: 'ready', display: provider.display(key) });

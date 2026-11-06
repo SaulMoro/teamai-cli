@@ -2332,6 +2332,7 @@ describe('an attempt in an sbx sandbox', () => {
 
     it.each<{ name: string; env: NodeJS.ProcessEnv; tool: string; credentials: Record<string, string> }>([
       { name: 'the definition gives the gateway to the step', env: { ANTHROPIC_BASE_URL: GATEWAY }, tool: 'claude', credentials: { ANTHROPIC_BASE_URL: GATEWAY, ANTHROPIC_AUTH_TOKEN: 'gateway-token' } },
+      { name: "the definition signs Claude in on a key of its own, not on sbx's login", env: { ANTHROPIC_BASE_URL: GATEWAY }, tool: 'claude', credentials: { ANTHROPIC_API_KEY: 'definition-key' } },
       { name: 'your shell sets no gateway', env: {}, tool: 'claude', credentials: {} },
       { name: 'the attempt runs another tool', env: { ANTHROPIC_BASE_URL: GATEWAY }, tool: 'codex', credentials: {} },
     ])('says nothing when $name', async ({ env, tool, credentials }) => {
