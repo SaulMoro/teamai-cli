@@ -111,7 +111,7 @@ describe('init', () => {
   it('offers a sandbox with the tools the image holds, and declares no network', async () => {
     const reply = await init(start(), { provider: 'docker', image: IMAGE });
 
-    expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', env: true, unattended: true, setup: true, workspace: ['read-only', 'new', 'continue'], tools: ['claude'] } });
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', env: true, unattended: true, setup: true, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude'] } });
     expect(reply.can).not.toHaveProperty('network');
     expect(reply.can).not.toHaveProperty('hitl');
   });
@@ -189,6 +189,26 @@ describe('a prompt attempt in a container', () => {
     expect(run).toEqual(expect.arrayContaining([`${at.worktree}:${at.worktree}:rw`, `${at.result}:${at.result}:rw`, `${at.toolHome}:${at.toolHome}:rw`, `${at.runDir}:${at.runDir}:rw`, `${at.git}:${at.git}:ro`]));
     // The tool home exists on the host before the engine mounts it, so the member owns it.
     expect(fs.existsSync(at.toolHome)).toBe(true);
+  });
+
+  it.each(['docker', 'sbx'])("opens a clone or team workspace on %s at its host path, its own .git read-only there, and the step's work is on the host with nothing to copy back", async (provider) => {
+    engine.image('claude', { claude: CLAUDE });
+    const connection = start();
+    await init(connection, provider === 'sbx' ? { provider, agent: 'claude' } : { provider, image: IMAGE });
+    // A clone teamai prepared holds its own git directory, which the view names read-only.
+    const clone = path.join(dir, 'clones', RUN, 'review');
+    const at = { ...place(), worktree: clone, git: path.join(clone, '.git') };
+    fs.mkdirSync(at.git, { recursive: true });
+
+    expect((await openPlace(connection, at)).ready).toMatchObject({ event: 'ready' });
+    const create = engine.calls().find(([name, command, detached]) => name === provider && (command === 'create' || (command === 'run' && detached === '-d'))) ?? [];
+
+    expect(create).toEqual(expect.arrayContaining(provider === 'sbx' ? [clone, `${at.git}:ro`] : [`${clone}:${clone}:rw`, `${at.git}:${at.git}:ro`]));
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'echo reviewed > NOTES.md'], cwd: clone })).end).toMatchObject({ event: 'exited', code: 0 });
+    connection.send({ type: 'collect', handle: HANDLE });
+    await connection.next((message) => message.event === 'collected');
+
+    expect(fs.readFileSync(path.join(clone, 'NOTES.md'), 'utf8')).toBe('reviewed\n');
   });
 
   it('maps the member with keep-id on podman', async () => {
@@ -1858,7 +1878,7 @@ describe('an attempt in an sbx sandbox', () => {
   it("offers a sandbox with the agent's tool, no network, and no judge", async () => {
     const reply = await init(start(), { provider: 'sbx', agent: 'codex' }, 'unattended', { env: ['OPENAI_API_KEY'], logins: [] });
 
-    expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', env: true, unattended: true, setup: true, workspace: ['read-only', 'new', 'continue'], tools: ['codex'] } });
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', env: true, unattended: true, setup: true, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['codex'] } });
     expect(reply.can).not.toHaveProperty('network');
     expect(reply.can).not.toHaveProperty('confined');
     expect(reply).not.toHaveProperty('confinedPrompt');
