@@ -66,7 +66,7 @@ describe('teamai-runtime-t3', () => {
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         can: {
           exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false,
-          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude', 'codex'],
+          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude', 'codex'],
           confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex'] }],
         },
       });

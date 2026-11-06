@@ -730,8 +730,9 @@ export function serve(options: ServeOptions): Promise<void> {
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
-          // A step's folder is teamai's, and T3 runs no script of its own there (`open`), so a role copy stays as teamai delivered it.
-          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools, ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
+          // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own assets, and
+          // this runtime cannot point it at the tool home teamai delivers a role into.
+          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools, ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
         },
       });
     } catch (error) {
