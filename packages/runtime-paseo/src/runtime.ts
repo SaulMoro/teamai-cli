@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type StepMode } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type StepMode, type Target } from './daemon.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -68,7 +68,12 @@ const OptionsSchema = z.object({
    * The Paseo mode each tool's agents start in, over Paseo's default. A mode that never asks, such as Claude's
    * bypassPermissions, is the member's explicit opt-in to full access, which init reports in `permissions`.
    */
-  mode: z.partialRecord(z.enum(PASEO_TOOLS), z.string().min(1), { error: 'mode maps claude, codex or opencode to a Paseo mode' }).optional(),
+  mode: z.record(z.string().refine(isPaseoTool, 'mode maps claude, codex or opencode to a Paseo mode'), z.string().min(1)).optional(),
+  /**
+   * The Paseo provider id a tool or a team instance runs on, over the one the runtime finds: for an instance, the custom
+   * provider whose command is the instance's.
+   */
+  providers: z.record(z.string().min(1), z.string().min(1)).optional(),
 }).strict();
 
 /** How long an attended step waits between looks at a permission request a person has not answered yet. */
@@ -302,21 +307,25 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     return { code: 'daemon_unreachable', message: `No Paseo daemon answered at ${url} within ${STOP_SETTLE_MS / 1000} s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address.` };
   };
 
-  /** What init offered of each tool the daemon has installed. */
-  let offers = new Map<PaseoTool, Offer>();
+  /** What init offered of each tool and team instance the daemon has installed, by the name a step gives it. */
+  let offers = new Map<string, Offer>();
+  /** How Paseo runs each offered tool or instance, by its name. */
+  let targets = new Map<string, Target>();
   /** The mode each offered tool's steps start in, which init read from Paseo. */
-  let stepModes = new Map<PaseoTool, StepMode>();
+  let stepModes = new Map<string, StepMode>();
   /**
-   * The tool home each offered tool keeps its sessions in, when Paseo reports one: each finished prompt on it names that
-   * home, so teamai reads the session there whatever HOME or tool root it runs with.
+   * The Claude home each offered Claude or instance of it keeps its sessions in, when Paseo reports one: each finished
+   * prompt on it names that home, so teamai reads the session there whatever HOME or tool root it runs with.
    */
-  let sessionHomes = new Map<PaseoTool, string>();
+  let sessionHomes = new Map<string, string>();
+  /** The home directory under `$HOME` each team instance keeps its sessions in, by its name. */
+  let homeDirs = new Map<string, string>();
 
   /**
    * Why a new step or judge on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was
    * not offered, but not one that takes its tool from the definition's default, so the runtime refuses it here too.
    */
-  const notOffered = (tool: PaseoTool, isJudge: boolean): RuntimeFailure | undefined => {
+  const notOffered = (tool: string, isJudge: boolean): RuntimeFailure | undefined => {
     const offer = offers.get(tool) ?? { runs: 'nothing', reason: 'the daemon has not installed it' };
     const reason = offer.runs === 'nothing' ? offer.reason : offer.runs === 'steps' && isJudge ? offer.noJudge : undefined;
 
@@ -484,7 +493,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
   /** A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. */
   const sessionOf = (live: Daemon, tool: string, id: string): z.infer<typeof PromptSessionSchema> => {
-    const home = isPaseoTool(tool) ? live.sessionHome(tool, id, sessionHomes.get(tool)) : undefined;
+    const target = targets.get(tool);
+    const home = target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex' });
 
     return { tool, id, ...(home !== undefined && { home }) };
   };
@@ -538,7 +548,17 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       const issue = options.error.issues[0];
       // The option a nested issue sits under, else the unknown option itself.
       const key = issue?.path[0] ?? (issue?.code === 'unrecognized_keys' ? issue.keys[0] : undefined);
-      write({ type: 'init', ok: false, error: { code: 'bad_option', message: `teamai-runtime-paseo takes options url and mode only: ${issue?.message ?? 'bad options'}`, ...(key !== undefined && { key: String(key) }) } });
+      write({ type: 'init', ok: false, error: { code: 'bad_option', message: `teamai-runtime-paseo takes options url, mode and providers only: ${issue?.message ?? 'bad options'}`, ...(key !== undefined && { key: String(key) }) } });
+
+      return;
+    }
+
+    const instances = request.instances ?? [];
+    const runsAs = new Set<string>([...PASEO_TOOLS, ...instances.flatMap((instance) => (isPaseoTool(instance.tool) ? [instance.name] : []))]);
+    const foreign = Object.keys(options.data.providers ?? {}).find((name) => !runsAs.has(name));
+
+    if (request.mode !== 'recover' && foreign !== undefined) {
+      write({ type: 'init', ok: false, error: { code: 'bad_option', key: 'providers', message: `teamai-runtime-paseo runs claude, codex, opencode and the team's instances of them, so its providers option cannot name ${foreign}` } });
 
       return;
     }
@@ -579,18 +599,19 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    const installed = await connected.installedTools(options.data.mode ?? {});
+    const modes = Object.fromEntries(Object.entries(options.data.mode ?? {}).filter(([tool]) => isPaseoTool(tool)));
+    const installed = await connected.installedTools({ modes, instances, providers: options.data.providers ?? {} });
     const tools = installed.flatMap((entry) => (entry.canRun ? [entry] : []));
 
     // It starts though it can run no tool, so the run's command steps still go to the next runtime: each tool it cannot
     // run is named with why, which teamai shows on a step on that tool.
-    const unavailable = Object.fromEntries(PASEO_TOOLS.flatMap((tool): Array<[PaseoTool, string]> => {
-      const entry = installed.find((candidate) => candidate.tool === tool);
+    const unavailable = Object.fromEntries([...PASEO_TOOLS, ...installed.map(({ name }) => name).filter((name) => !isPaseoTool(name))].flatMap((name): Array<[string, string]> => {
+      const entry = installed.find((candidate) => candidate.name === name);
 
       if (entry?.canRun) return [];
-      const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${tool} on the daemon's PATH and sign in to it there`;
+      const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${name} on the daemon's PATH and sign in to it there`;
 
-      return [[tool, clip(`The Paseo daemon at ${connected.url} cannot run ${tool}: ${reason}.`, UNAVAILABLE_REASON_MAX)]];
+      return [[name, clip(`The Paseo daemon at ${connected.url} cannot run ${name}: ${reason}.`, UNAVAILABLE_REASON_MAX)]];
     }));
 
     daemon = connected;
@@ -601,21 +622,23 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       const { stepMode } = entry;
 
       if (stepMode.id !== undefined && 'insteadOf' in stepMode && stepMode.insteadOf !== undefined) {
-        write({ event: 'notice', message: `Paseo starts ${entry.tool} in mode ${stepMode.insteadOf} by default, which never asks before it acts; teamai starts its ${entry.tool} steps in mode ${stepMode.id}, the nearest one before it in Paseo's list that asks.` });
+        write({ event: 'notice', message: `Paseo starts ${entry.name} in mode ${stepMode.insteadOf} by default, which never asks before it acts; teamai starts its ${entry.name} steps in mode ${stepMode.id}, the nearest one before it in Paseo's list that asks.` });
       }
     }
 
-    stepModes = new Map(tools.map((entry) => [entry.tool, entry.stepMode]));
-    sessionHomes = new Map(tools.flatMap(({ tool, home }) => (home === undefined ? [] : [[tool, home]])));
-    offers = new Map(installed.map((entry): [PaseoTool, Offer] => {
-      if (!entry.canRun) return [entry.tool, { runs: 'nothing', reason: entry.reason }];
+    targets = new Map(tools.map(({ name, tool, provider }) => [name, { name, tool, provider }]));
+    homeDirs = new Map(instances.flatMap((instance) => (instance.home ? [[instance.name, instance.home.dir]] : [])));
+    stepModes = new Map(tools.map((entry) => [entry.name, entry.stepMode]));
+    sessionHomes = new Map(tools.flatMap(({ name, home }) => (home === undefined ? [] : [[name, home]])));
+    offers = new Map(installed.map((entry): [string, Offer] => {
+      if (!entry.canRun) return [entry.name, { runs: 'nothing', reason: entry.reason }];
       const confinedMode = CONFINED_MODES[entry.tool];
 
-      return [entry.tool, entry.modes.includes(confinedMode) ? { runs: 'steps-and-judges' } : { runs: 'steps', noJudge: `has no ${confinedMode} mode, which teamai judges it in` }];
+      return [entry.name, entry.modes.includes(confinedMode) ? { runs: 'steps-and-judges' } : { runs: 'steps', noJudge: `has no ${confinedMode} mode, which teamai judges it in` }];
     }));
-    const judges = tools.flatMap(({ tool }) => (offers.get(tool)?.runs === 'steps-and-judges' ? [tool] : []));
+    const judges = tools.flatMap(({ name }) => (offers.get(name)?.runs === 'steps-and-judges' ? [name] : []));
     // The tools the member opted into a mode that never asks: teamai warns once and records their steps' isolation none.
-    const permissions = Object.fromEntries(tools.flatMap(({ tool, stepMode }) => ('bypass' in stepMode ? [[tool, 'full-access' as const]] : [])));
+    const permissions = Object.fromEntries(tools.flatMap(({ name, stepMode }) => ('bypass' in stepMode ? [[name, 'full-access' as const]] : [])));
 
     write({
       type: 'init', ok: true, prompt: true,
@@ -629,7 +652,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
         // role: Paseo runs a project's worktree setup only in a worktree it creates itself, or when asked to run it; this
         // runtime only opens the copy teamai prepared, so nothing delivers the member's own assets over the role's.
-        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: tools.map(({ tool }) => tool),
+        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: tools.map(({ name }) => name),
         ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
       },
     });
@@ -724,7 +747,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   }
 
   /** The create a new prompt sends, on one of `models`, in `how`'s mode with its prompt and options, or the failure that keeps it from being sent. */
-  function createFor(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, tool: PaseoTool, models: Model[], how: Launch): AgentCreate | RuntimeFailure {
+  function createFor(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, { name: tool, provider }: Target, models: Model[], how: Launch): AgentCreate | RuntimeFailure {
     const { place } = how;
     const { lease } = request;
     const offered = models.map((candidate) => candidate.id).join(', ') || 'none';
@@ -750,7 +773,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}`, 'teamai-run': place.run, 'teamai-step': lease.step },
       ...(how.env && { env: how.env }),
-      config: { provider: `${tool}/${model.id}`, ...(how.modeId !== undefined && { modeId: how.modeId }), ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
+      config: { provider: `${provider}/${model.id}`, ...(how.modeId !== undefined && { modeId: how.modeId }), ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
     };
   }
 
@@ -780,9 +803,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   };
 
   /** The tool's models, or why Paseo did not list them, or `stopped` once the prompt is stopped: a listing changes nothing in Paseo, so no stop waits for it. */
-  const listModels = async (live: Daemon, tool: PaseoTool, following: Following): Promise<Model[] | RuntimeFailure | 'stopped'> => {
+  const listModels = async (live: Daemon, provider: string, following: Following): Promise<Model[] | RuntimeFailure | 'stopped'> => {
     try {
-      return await Promise.race([live.models(tool), following.stopped]);
+      return await Promise.race([live.models(provider), following.stopped]);
     } catch (error) {
       return { code: 'paseo_failed', message: `Paseo failed: ${error instanceof Error ? error.message : String(error)}` };
     }
@@ -793,12 +816,12 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
    * the cancel marker is read, so a cancel, here or in another process, either finds that record and stops the agent, or
    * is seen here, and no create is sent.
    */
-  async function launch(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, following: Following, tool: PaseoTool, how: Launch): Promise<void> {
+  async function launch(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, following: Following, target: Target, how: Launch): Promise<void> {
     const { op } = request;
-    const models = await listModels(live, tool, following);
+    const models = await listModels(live, target.provider, following);
 
     if (!goesOn(op, following) || models === 'stopped') return;
-    const create = 'code' in models ? models : createFor(live, request, tool, models, how);
+    const create = 'code' in models ? models : createFor(live, request, target, models, how);
 
     if ('code' in create) {
       settle(op, { op, state: 'failed', failure: create }, following);
@@ -806,7 +829,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: how.answer, cwd: how.cwd, create };
+    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool: target.name, answer: how.answer, cwd: how.cwd, create };
     journal.savePrompt(op, record);
 
     if (!goesOn(op, following)) return;
@@ -824,16 +847,17 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const { op, lease } = request;
     const { tool } = lease;
 
-    if (!isPaseoTool(tool)) {
-      fail(op, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs claude, codex and opencode, not ${tool}.` });
+    if (!isPaseoTool(tool) && !offers.has(tool)) {
+      fail(op, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs claude, codex, opencode and the team's instances of them, not ${tool}.` });
 
       return;
     }
 
     const unoffered = notOffered(tool, false);
+    const target = targets.get(tool);
 
-    if (unoffered) {
-      refuse(op, request.handle, unoffered);
+    if (unoffered || !target) {
+      refuse(op, request.handle, unoffered ?? { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}.` });
 
       return;
     }
@@ -841,9 +865,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const following = begin(op, request.handle);
 
     try {
-      await launch(live, request, following, tool, {
+      await launch(live, request, following, target, {
         place, modeId: stepModes.get(tool)?.id, prompt: lease.interactive ? `${INTERACTIVE_BRIEF}\n\n${lease.prompt}` : lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
-        options: stepGrant(tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result, ...(lease.interactive && { interactive: true }) }, cwd: place.cwd,
+        options: stepGrant(target.tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result, ...(lease.interactive && { interactive: true }) }, cwd: place.cwd,
       });
     } finally {
       following.landed();
@@ -890,16 +914,17 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     const { tool } = lease;
 
-    if (!isPaseoTool(tool)) {
-      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs a confined prompt on claude, codex or opencode, not ${tool}.` });
+    if (!isPaseoTool(tool) && !offers.has(tool)) {
+      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs a confined prompt on claude, codex, opencode or the team's instances of them, not ${tool}.` });
 
       return;
     }
 
     const unoffered = notOffered(tool, true);
+    const target = targets.get(tool);
 
-    if (unoffered) {
-      refuse(op, request.handle, unoffered);
+    if (unoffered || !target) {
+      refuse(op, request.handle, unoffered ?? { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}.` });
 
       return;
     }
@@ -923,8 +948,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         workspace = adopted;
       }
 
-      await launch(live, request, following, tool, {
-        place, modeId: CONFINED_MODES[tool], prompt: confinedBrief(tool, confined, lease.prompt), options: CONFINED_OPTIONS[tool],
+      await launch(live, request, following, target, {
+        place, modeId: CONFINED_MODES[target.tool], prompt: confinedBrief(target.tool, confined, lease.prompt), options: CONFINED_OPTIONS[target.tool],
         answer: { kind: 'reply', kept: CONFINED_KEPT }, cwd: workspace.directory,
       });
     } finally {
@@ -1665,8 +1690,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
           try {
             if (request.release) journal.forget(request.handle);
-          } catch (error) {
-            kept = ` teamai-runtime-paseo could not forget the released attempt either (${error instanceof Error ? error.message : String(error)}); make ${journal.root} writable, then release it again.`;
+          } catch (forgetting) {
+            kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} writable, then release it again.`;
           }
 
           write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${kept}` } });

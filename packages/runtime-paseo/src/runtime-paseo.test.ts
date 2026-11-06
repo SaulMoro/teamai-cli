@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { OpIdSchema, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type InitInstance, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { isCodexExecutable } from './daemon.js';
@@ -52,8 +52,8 @@ const isOp = (op: string, event: string) => (line: RuntimeMessage): boolean => '
 const isEnd = (op: string) => (line: RuntimeMessage): boolean => 'op' in line && line.op === op && 'event' in line && ['finished', 'failed', 'cancelled'].includes(line.event);
 const isInit = (line: RuntimeMessage): boolean => 'type' in line && line.type === 'init';
 
-async function ready(runtime: Runtime, { mode = 'unattended', options = { url: daemon.url } }: { mode?: RuntimeMode; options?: RuntimeOptions } = {}): Promise<RuntimeMessage> {
-  runtime.send({ type: 'init', protocol: 1, mode, options });
+async function ready(runtime: Runtime, { mode = 'unattended', options = { url: daemon.url }, instances }: { mode?: RuntimeMode; options?: RuntimeOptions; instances?: InitInstance[] } = {}): Promise<RuntimeMessage> {
+  runtime.send({ type: 'init', protocol: 1, mode, options, ...(instances && { instances }) });
 
   return runtime.next(isInit);
 }
@@ -430,6 +430,49 @@ describe('teamai-runtime-paseo', () => {
     expect(await ready(start(), { options: { url: daemon.url, mode: { claude: 'yolo' } } })).toMatchObject({
       type: 'init', ok: true, can: { tools: ['opencode'] },
       unavailable: { claude: cannotRun('claude', 'the runtime\'s mode option names yolo for it, which Paseo does not list for claude (plan, default, acceptEdits, auto, bypassPermissions); name one of those') },
+    });
+  });
+
+  describe('a team tool instance', () => {
+    const ACME: InitInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.claude-acme', env: 'CLAUDE_CONFIG_DIR' } };
+
+    it('runs a step on an instance through the Paseo custom provider whose command is the instance\'s, in its base tool\'s mode and grants, and names the instance as the session\'s tool', async () => {
+      behave({ output: { ok: true }, custom_providers: { 'claude-acme': { extends: 'claude', command: ['/opt/acme/bin/acme-claude'] } } });
+      const runtime = start();
+
+      expect(await ready(runtime, { instances: [ACME, { name: 'acme-cursor', tool: 'cursor', command: 'acme-cursor' }] })).toMatchObject({
+        type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-claude'] },
+      });
+      const handle = await opened(runtime);
+      runtime.send(promptRequest(handle, 'op-0000000b', { tool: 'acme-claude' }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'acme-claude' }, result: { output: { ok: true } } });
+      expect(received()).toMatchObject([{
+        config: { provider: 'claude-acme', model: 'claude-opus-5-5', modeId: 'auto', providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } },
+      }]);
+    });
+
+    it.each([
+      ['no Paseo provider runs its command', {}, {}, 'no Paseo provider runs its command acme-claude; add one on the daemon\'s host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime\'s providers option'],
+      ['two Paseo providers run its command', { a: { extends: 'claude', command: ['acme-claude'] }, b: { extends: 'claude', command: ['/usr/local/bin/acme-claude'] } }, {}, 'Paseo providers a and b both run its command acme-claude; name the one to use in the runtime\'s providers option, such as providers: { acme-claude: a }'],
+      ['the provider the providers option names does not extend its tool', { a: { extends: 'codex', command: ['acme-claude'] } }, { providers: { 'acme-claude': 'a' } }, 'the runtime\'s providers option names a, which the daemon\'s agents.providers does not hold as a provider that extends claude'],
+    ] satisfies Array<[string, NonNullable<Behaviour['custom_providers']>, RuntimeOptions, string]>)('does not offer an instance when %s, naming how to set one up, and still offers the rest', async (_case, custom, options, reason) => {
+      behave({ custom_providers: custom });
+
+      expect(await ready(start(), { options: { url: daemon.url, ...options }, instances: [ACME] })).toMatchObject({
+        type: 'init', ok: true, can: { tools: ['claude', 'opencode'] }, unavailable: { 'acme-claude': cannotRun('acme-claude', reason) },
+      });
+    });
+
+    it('runs an instance on the provider the providers option names, when two run its command', async () => {
+      behave({ output: { ok: true }, custom_providers: { a: { extends: 'claude', command: ['acme-claude'] }, b: { extends: 'claude', command: ['acme-claude'] } } });
+      const runtime = start();
+
+      expect(await ready(runtime, { options: { url: daemon.url, providers: { 'acme-claude': 'b' } }, instances: [ACME] })).toMatchObject({ can: { tools: ['claude', 'opencode', 'acme-claude'] } });
+      runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'acme-claude' }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+      expect(received()).toMatchObject([{ config: { provider: 'b' } }]);
     });
   });
 
@@ -2106,6 +2149,7 @@ describe('teamai-runtime-paseo', () => {
   it.each([
     ['an option it does not take', { url: 'ws://127.0.0.1:1/ws', imgae: 'x' }, {}, { code: 'bad_option', key: 'imgae' }],
     ['a mode for a tool it does not run', { url: 'ws://127.0.0.1:1/ws', mode: { cursor: 'agent' } }, {}, { code: 'bad_option', key: 'mode' }],
+    ['a provider for neither a tool it runs nor a team instance of one', { url: 'ws://127.0.0.1:1/ws', providers: { cursor: 'x' } }, {}, { code: 'bad_option', key: 'providers' }],
     ['no daemon at the url', { url: 'ws://127.0.0.1:1/ws' }, {}, { code: 'daemon_unreachable' }],
     ['a daemon older than the client', undefined, { version: '0.13.2' }, { code: 'daemon_version', message: expect.stringContaining('runs version 0.13.2') }],
     ['a daemon without agent receipts', undefined, { missing: ['agentRequestReceipts'] }, { code: 'daemon_version', message: expect.stringContaining('lacks agentRequestReceipts') }],
@@ -2210,7 +2254,7 @@ describe('teamai-runtime-paseo', () => {
 
     it.each([
       ['a verified level, which it does not reach', { level: 'verified' as const }, {}, 'confined_level', 'teamai-runtime-paseo keeps a confined prompt best-effort'],
-      ['a tool Paseo does not run', {}, { tool: 'codebuddy', model: undefined }, 'tool_unavailable', 'teamai-runtime-paseo runs a confined prompt on claude, codex or opencode, not codebuddy'],
+      ['a tool Paseo does not run', {}, { tool: 'codebuddy', model: undefined }, 'tool_unavailable', 'teamai-runtime-paseo runs a confined prompt on claude, codex, opencode or the team\'s instances of them, not codebuddy'],
     ])('refuses %s, and creates no agent', async (_, confined, lease, code, message) => {
       const runtime = start();
       await ready(runtime);

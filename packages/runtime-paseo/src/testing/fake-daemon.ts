@@ -64,6 +64,12 @@ const BehaviourSchema = z.object({
    * starting one per agent; its OpenCode diagnostic then names only that server (recorded).
    */
   opencode_server: z.string().optional(),
+  /**
+   * The custom providers in the daemon's `agents.providers`, by id, as the member adds them: each extends a built-in
+   * provider and runs its own command, as a team tool instance does. Paseo lists one beside the built-in ones, with the
+   * modes and models of the provider it extends, and calls it available once its command is on the daemon's PATH.
+   */
+  custom_providers: z.record(z.string(), z.object({ extends: z.string(), command: z.array(z.string()).min(1) })).default({}),
   /** Directories the member already has open as Paseo workspaces, as the app opens a project. */
   member_workspaces: z.array(z.string()).default([]),
   /**
@@ -183,7 +189,7 @@ type Reply = Extract<Outbound, { type: 'session' }>['message'];
 
 const isProvider = (provider: string): provider is Provider => Object.hasOwn(MODES, provider);
 
-const modesOf = (provider: string): Array<{ id: string; label: string; colorTier: string }> => (isProvider(provider) ? MODES[provider] : []);
+const modesOf = (provider: string | undefined): Array<{ id: string; label: string; colorTier: string }> => (provider !== undefined && isProvider(provider) ? MODES[provider] : []);
 
 function now(): string {
   return new Date().toISOString();
@@ -211,6 +217,13 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
     const file = path.join(state, 'behaviour.json');
 
     return BehaviourSchema.parse(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
+  };
+
+  /** The built-in provider `provider` is or extends, or undefined for one the daemon does not hold. */
+  const baseOf = (provider: string): Provider | undefined => {
+    const base = isProvider(provider) ? provider : behaviour().custom_providers[provider]?.extends;
+
+    return base !== undefined && isProvider(base) ? base : undefined;
   };
 
   const waiters = new Map<string, Array<() => void>>();
@@ -274,7 +287,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
       Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : `fake-session-${agent.id}` });
 
-      if (agent.provider === 'codex' && does.codex_home !== undefined && agent.sessionId) {
+      if (baseOf(agent.provider) === 'codex' && does.codex_home !== undefined && agent.sessionId) {
         const at = new Date();
         const day = path.join(does.codex_home, 'sessions', String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
         fs.mkdirSync(day, { recursive: true });
@@ -436,17 +449,18 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
     switch (message.type) {
       case 'list_available_providers_request': {
-        const offered = behaviour().models;
+        const { models: offered, custom_providers: custom } = behaviour();
+        const providers = [...Object.keys(MODES), ...Object.keys(custom)];
         reply({
           type: 'list_available_providers_response',
-          payload: { requestId: message.requestId, providers: Object.keys(MODES).map((provider) => ({ provider, available: Object.hasOwn(offered, provider), error: null })), error: null, fetchedAt: now() },
+          payload: { requestId: message.requestId, providers: providers.map((provider) => ({ provider, available: Object.hasOwn(offered, baseOf(provider) ?? provider), error: null })), error: null, fetchedAt: now() },
         });
 
         return;
       }
 
       case 'list_provider_models_request': {
-        const models = behaviour().models[message.provider] ?? [];
+        const models = behaviour().models[baseOf(message.provider) ?? message.provider] ?? [];
 
         if (models.length === 0) {
           // As Paseo answers a provider whose catalog failed, such as OpenCode connected to no model provider.
@@ -468,12 +482,19 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
       case 'get_providers_snapshot_request': {
         // A full snapshot, as a daemon answers a client that names no hash it holds.
-        const { models: offered, default_modes: defaults } = behaviour();
+        const { models: offered, default_modes: defaults, custom_providers: custom } = behaviour();
 
-        const entries = Object.keys(MODES).filter(isProvider).map((provider) => ({
-          provider, status: Object.hasOwn(offered, provider) ? 'ready' as const : 'unavailable' as const, enabled: true, source: 'builtin' as const, label: provider,
-          modes: MODES[provider], defaultModeId: Object.hasOwn(defaults, provider) ? defaults[provider] : DEFAULT_MODES[provider],
-        }));
+        const customs = Object.keys(custom).flatMap((id) => {
+          const base = baseOf(id);
+
+          return base ? [[id, base, 'custom'] as const] : [];
+        });
+
+        const entries = [...Object.keys(MODES).filter(isProvider).map((provider) => [provider, provider, 'builtin'] as const), ...customs]
+          .map(([provider, base, source]) => ({
+            provider, status: Object.hasOwn(offered, base) ? 'ready' as const : 'unavailable' as const, enabled: true, source, label: provider,
+            modes: MODES[base], defaultModeId: Object.hasOwn(defaults, provider) ? defaults[provider] : DEFAULT_MODES[base],
+          }));
 
         reply({ type: 'get_providers_snapshot_response', payload: { requestId: message.requestId, entries, generatedAt: now() } });
 
@@ -482,14 +503,18 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
       case 'provider_diagnostic_request': {
         const does = behaviour();
-        const resolved = message.provider === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login) : `/usr/local/bin/${message.provider}`;
-        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: message.provider === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(message.provider, does.sign_in[message.provider], resolved, does.claude_home) } });
+        const base = baseOf(message.provider) ?? message.provider;
+        // A custom provider runs its own command, which Paseo resolves on the daemon's PATH; a Codex one answers `login status` as Codex.
+        const command = does.custom_providers[message.provider]?.command[0];
+        const named = command === undefined ? base : path.basename(command);
+        const resolved = base === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login, named) : `/usr/local/bin/${named}`;
+        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: base === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(base, does.sign_in[message.provider], resolved, does.claude_home) } });
 
         return;
       }
 
       case 'list_provider_modes_request':
-        reply({ type: 'list_provider_modes_response', payload: { requestId: message.requestId, provider: message.provider, modes: modesOf(message.provider), error: null, fetchedAt: now() } });
+        reply({ type: 'list_provider_modes_response', payload: { requestId: message.requestId, provider: message.provider, modes: modesOf(baseOf(message.provider)), error: null, fetchedAt: now() } });
 
         return;
       case 'open_project_request': {
@@ -548,7 +573,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
           return;
         }
 
-        const modes = modesOf(message.config.provider);
+        const modes = modesOf(baseOf(message.config.provider));
         const { modeId } = message.config;
 
         // Paseo refuses a mode its provider does not list, a preset the provider would take included (recorded, 0.14.0).
@@ -589,6 +614,11 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         return;
       }
 
+      case 'get_daemon_config_request':
+        // Its `providers` are the custom providers of `agents.providers`, as the daemon answers them.
+        reply({ type: 'get_daemon_config_response', payload: { requestId: message.requestId, config: { mcp: { injectIntoAgents: true }, providers: behaviour().custom_providers } } });
+
+        return;
       case 'fetch_agent_request': {
         // As Paseo: an unknown agent is a null agent, not an error.
         const agent = kept.agents[message.agentId];
@@ -707,11 +737,11 @@ function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | un
 }
 
 /**
- * The path of the daemon host's `codex`, which answers `codex login status` as `login` says, as Codex 0.166.0 does on
+ * The path of the daemon host's `codex`, or of the command a custom Codex provider runs (`name`), which answers `codex login status` as `login` says, as Codex 0.166.0 does on
  * stderr (recorded); with no `login`, the path holds nothing.
  */
-function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' | undefined): string {
-  const file = path.join(state, 'host-bin', 'codex');
+function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' | undefined, name = 'codex'): string {
+  const file = path.join(state, 'host-bin', name);
   fs.rmSync(file, { force: true });
 
   if (login) {
