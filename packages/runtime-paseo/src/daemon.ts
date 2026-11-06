@@ -44,13 +44,12 @@ export function isPaseoTool(tool: string): tool is PaseoTool {
 export const PASEO_TOOLS: readonly PaseoTool[] = Object.keys(CONFINED_MODES).filter(isPaseoTool);
 
 /**
- * The Paseo mode a step's agent starts in: the one Paseo sets as the tool's default, as the member's own agents start
- * in, or none, so Paseo starts the tool as it does when it sets no default (OpenCode). A default that never asks is
- * never taken: the step starts in the nearest mode before it in Paseo's list that asks, and `insteadOf` names the
- * default it passed over, for the start to say so once a runtime can. A mode the runtime's `mode` option names is taken
- * as it is, one that never asks included, which `bypass` marks.
+ * The Paseo mode a step's agent starts in: `unset`, so Paseo starts the tool as it does when it sets no default
+ * (OpenCode); `asks`, Paseo's default for the tool, as the member's own agents start in, or the one the runtime's `mode`
+ * option names; `tightened`, the nearest mode that asks before a default that never does, which `insteadOf` names for
+ * the start to say so; `bypass`, a mode that never asks, taken only when the `mode` option names it.
  */
-export type StepMode = { id?: undefined } | { id: string; insteadOf?: string } | { id: string; bypass: true };
+export type StepMode = { kind: 'unset' } | { kind: 'asks'; id: string } | { kind: 'tightened'; id: string; insteadOf: string } | { kind: 'bypass'; id: string };
 
 /** The Paseo mode the runtime's `mode` option names for each tool it sets. */
 export type ConfiguredModes = Partial<Record<PaseoTool, string>>;
@@ -72,20 +71,20 @@ function stepModeOf(tool: PaseoTool, { defaultMode, configured, modes }: { defau
 
     if (!named) return { cannot: `the runtime's mode option names ${configured} for it, which Paseo does not list for ${tool} (${listed}); name one of those` };
 
-    return isBypass(named) ? { id: named.id, bypass: true } : { id: named.id };
+    return { kind: isBypass(named) ? 'bypass' : 'asks', id: named.id };
   }
 
-  if (defaultMode === null || defaultMode === undefined) return {};
+  if (defaultMode === null || defaultMode === undefined) return { kind: 'unset' };
   const at = modes.findIndex((mode) => mode.id === defaultMode);
 
   if (at === -1) return { cannot: `Paseo sets its default mode to ${defaultMode}, which it does not list for ${tool} (${listed}); run \`paseo provider ls\` on the daemon's host to see its modes` };
   const chosen = modes[at];
 
-  if (chosen && !isBypass(chosen)) return { id: chosen.id };
+  if (chosen && !isBypass(chosen)) return { kind: 'asks', id: chosen.id };
   const tighter = modes.slice(0, at).findLast((mode) => !isBypass(mode));
 
   return tighter
-    ? { id: tighter.id, insteadOf: defaultMode }
+    ? { kind: 'tightened', id: tighter.id, insteadOf: defaultMode }
     : { cannot: `Paseo sets its default mode to ${defaultMode}, which never asks, and lists no mode before it that does (${listed})` };
 }
 
@@ -197,7 +196,10 @@ export interface Target {
  * A tool or instance installed on the daemon's host: one it can run, with its modes and the one a step starts in, or
  * why it cannot, for a person to read.
  */
-export type InstalledTool = (Target & { canRun: true; modes: string[]; stepMode: StepMode; home?: string }) | (Target & { canRun: false; reason: string });
+export type InstalledTool = (Target & { canRun: true; modes: string[]; stepMode: StepMode; home?: string }) | Unavailable;
+
+/** A tool or instance the daemon cannot run, and why, before or after a provider is found for it. */
+type Unavailable = Pick<Target, 'name' | 'tool'> & { canRun: false; reason: string };
 
 /** What a definition and teamai choose of the tools a runtime offers: each tool's mode, the team's instances, and providers named for either. */
 export interface ToolChoices {
@@ -629,25 +631,23 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       const customs = Object.fromEntries(custom);
 
       // Each tool on its own provider or the one the definition names, each instance on the one that runs its command.
-      const builtins = PASEO_TOOLS.flatMap((tool): Array<{ target: Target; cannot?: string }> => {
+      const builtins = PASEO_TOOLS.flatMap((tool): Array<Target | Unavailable> => {
         const provider = named[tool];
 
-        if (provider === undefined) return available.has(tool) ? [{ target: { name: tool, tool, provider: tool } }] : [];
+        if (provider === undefined) return available.has(tool) ? [{ name: tool, tool, provider: tool }] : [];
+        const problem = namedProblem(provider, tool, customs);
 
-        return [{
-          target: { name: tool, tool, provider },
-          cannot: namedProblem(provider, tool, customs),
-        }];
+        return [problem === undefined ? { name: tool, tool, provider } : { name: tool, tool, canRun: false, reason: problem }];
       });
 
-      const teams = teamInstances.map(({ instance, tool }): { target: Target; cannot?: string } => {
+      const teams = teamInstances.map(({ instance, tool }): Target | Unavailable => {
         const found = providerOf(instance, tool, customs, named[instance.name]);
 
-        return 'cannot' in found ? { target: { name: instance.name, tool, provider: '' }, cannot: found.cannot } : { target: { name: instance.name, tool, provider: found.provider } };
+        return 'cannot' in found ? { name: instance.name, tool, canRun: false, reason: found.cannot } : { name: instance.name, tool, provider: found.provider };
       });
 
-      return Promise.all([...builtins, ...teams].map(async ({ target, cannot }): Promise<InstalledTool> => {
-        if (cannot !== undefined) return { ...target, canRun: false, reason: cannot };
+      return Promise.all([...builtins, ...teams].map(async (target): Promise<InstalledTool> => {
+        if ('canRun' in target) return target;
         const { tool, provider } = target;
 
         if (!available.has(provider)) return { ...target, canRun: false, reason: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };

@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type StepMode, type Target } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type Target } from './daemon.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -311,8 +311,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   let offers = new Map<string, Offer>();
   /** How Paseo runs each offered tool or instance, by its name. */
   let targets = new Map<string, Target>();
-  /** The mode each offered tool's steps start in, which init read from Paseo. */
-  let stepModes = new Map<string, StepMode>();
+  /** The Paseo mode each offered tool's steps start in, which init read from Paseo; none for a tool Paseo starts as it does. */
+  let modeIds = new Map<string, string>();
   /**
    * The Claude home each offered Claude or instance of it keeps its sessions in, when Paseo reports one: each finished
    * prompt on it names that home, so teamai reads the session there whatever HOME or tool root it runs with.
@@ -621,14 +621,14 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     for (const entry of tools) {
       const { stepMode } = entry;
 
-      if (stepMode.id !== undefined && 'insteadOf' in stepMode && stepMode.insteadOf !== undefined) {
+      if (stepMode.kind === 'tightened') {
         write({ event: 'notice', message: `Paseo starts ${entry.name} in mode ${stepMode.insteadOf} by default, which never asks before it acts; teamai starts its ${entry.name} steps in mode ${stepMode.id}, the nearest one before it in Paseo's list that asks.` });
       }
     }
 
     targets = new Map(tools.map(({ name, tool, provider }) => [name, { name, tool, provider }]));
     homeDirs = new Map(instances.flatMap((instance) => (instance.home ? [[instance.name, instance.home.dir]] : [])));
-    stepModes = new Map(tools.map((entry) => [entry.name, entry.stepMode]));
+    modeIds = new Map(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'unset' ? [] : [[name, stepMode.id]])));
     sessionHomes = new Map(tools.flatMap(({ name, home }) => (home === undefined ? [] : [[name, home]])));
     offers = new Map(installed.map((entry): [string, Offer] => {
       if (!entry.canRun) return [entry.name, { runs: 'nothing', reason: entry.reason }];
@@ -638,7 +638,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     }));
     const judges = tools.flatMap(({ name }) => (offers.get(name)?.runs === 'steps-and-judges' ? [name] : []));
     // The tools the member opted into a mode that never asks: teamai warns once and records their steps' isolation none.
-    const permissions = Object.fromEntries(tools.flatMap(({ name, stepMode }) => ('bypass' in stepMode ? [[name, 'full-access' as const]] : [])));
+    const permissions = Object.fromEntries(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'bypass' ? [[name, 'full-access' as const]] : [])));
 
     write({
       type: 'init', ok: true, prompt: true,
@@ -874,7 +874,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     try {
       await launch(live, request, following, target, {
-        place, modeId: stepModes.get(tool)?.id, prompt: lease.interactive ? `${INTERACTIVE_BRIEF}\n\n${lease.prompt}` : lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
+        place, modeId: modeIds.get(tool), prompt: lease.interactive ? `${INTERACTIVE_BRIEF}\n\n${lease.prompt}` : lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
         options: stepGrant(target.tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result, ...(lease.interactive && { interactive: true }) }, cwd: place.cwd,
       });
     } finally {
