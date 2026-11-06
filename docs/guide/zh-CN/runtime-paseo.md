@@ -213,17 +213,21 @@ $ teamai workflow start fix --driver paseo-only
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
 ```
 
-Codex 步骤的一轮也以同样方式评分。teamai 从 `teamai init` 时记录的 Codex 根目录（当时的 `$CODEX_HOME`，或 `~/.codex`）读取 Codex 会话，包括已归档的会话：teamai 关闭尝试时，Paseo 归档该智能体，Codex 把它的会话移到该根目录下的 `archived_sessions/`，teamai 仍能在那里找到它。所以请用 `teamai init` 时的 `CODEX_HOME` 启动守护进程。守护进程的 Codex 写入其他根目录时，这一轮不会被打标签：
+Codex 步骤的一轮也以同样方式评分。Paseo 不报告 Codex 的主目录，所以守护进程在本机时，运行时按会话 id 依次在你的 `CODEX_HOME`、你账户主目录下的 `.codex`、`$HOME` 下的 `.codex` 中查找该步骤的会话，并报告存有它的那个主目录：teamai 在那里读取会话，即使它用自己的 `HOME` 运行也一样。teamai 关闭尝试时，Paseo 归档该智能体，Codex 把会话移到 `archived_sessions/`，teamai 仍能在那里找到它。守护进程的 Codex 写入其他根目录，或守护进程在另一台机器上时，除非 teamai 在 `teamai init` 时记录的 Codex 根目录中有这个会话，否则这一轮不会被打标签：
 
 ```text
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
 ```
+
+OpenCode 把会话存放在数据库中，运行时无法在其中查找单个会话，所以不报告 OpenCode 的主目录：只有 teamai 以守护进程的 `HOME` 运行时，OpenCode 的一轮才会被评分。
 
 ## 选项
 
 | 键 | 默认值 | 含义 |
 | --- | --- | --- |
 | `url` | `$PASEO_HOME/config.json` 中 `daemon.listen` 所指的地址，没有时为 `ws://127.0.0.1:6767/ws` | Paseo 守护进程的 WebSocket 地址：`ws://`、`wss://`，Unix 套接字则为 `ws+unix://<套接字路径>:/ws`。 |
+| `mode` | 每个工具在 Paseo 中的默认模式，但从不是一个从不询问的模式 | 每个工具的智能体启动时所用的 Paseo 模式，例如 `{ claude: plan }`。它必须是 Paseo 为该工具列出的模式。指定一个从不询问的模式，就是你主动选择完全访问（见 [工具、模型和模式](#工具模型和模式)）。 |
+| `providers` | 运行每个团队实例命令的自定义提供方 | 工具或团队实例所用的 Paseo 提供方 id，例如 `{ acme-claude: claude-acme }`（见 [团队工具实例](#团队工具实例)）。 |
 
 `max_parallel` 是 teamai 自己的键，见 [运行时选项](workflow-advanced.md#运行时选项)。Paseo 本身没有并发上限。
 
@@ -247,7 +251,25 @@ runtimes:
 ⚠ Step runtime "paseo": Paseo starts claude in mode bypassPermissions by default, which never asks before it acts; teamai starts its claude steps in mode auto, the nearest one before it in Paseo's list that asks.
 ```
 
-Paseo 设定的默认模式不在它为该工具列出的模式中时，不提供该工具。评判以一个在编辑或运行任何东西前先询问的模式启动：
+`mode` 选项让你自己选择模式，覆盖 Paseo 的默认模式。指定一个从不询问的模式，例如 Claude 的 `bypassPermissions` 或 Codex 的 `full-access`，就是明确选择完全访问，例如用于运行在独立虚拟机中的守护进程。teamai 会在启动时警告一次，并把这些步骤的隔离级别记为 `none`。设置了 `permissions: unattended` 的步骤仍然不会在 Paseo 上运行：
+
+```yaml
+# drivers/paseo-in-vm.yaml
+schemaVersion: v1alpha1
+name: paseo-in-vm
+runtimes:
+  - use: paseo
+    options:
+      mode: { claude: bypassPermissions }
+  - use: local
+```
+
+```text
+$ teamai workflow start fix --driver paseo-in-vm
+⚠ Runtime paseo of driver paseo-in-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+```
+
+Paseo 设定的默认模式或 `mode` 指定的模式不在它为该工具列出的模式中时，不提供该工具。评判以一个在编辑或运行任何东西前先询问的模式启动：
 
 | 工具 | 何时提供 | 步骤模式 | 评判模式 |
 | --- | --- | --- | --- |
@@ -328,6 +350,38 @@ Judge whether the change does what the step asked. Read the diff and the session
 ```
 
 智能体拿到步骤的提示词。步骤的后续轮次会启动一个新的智能体，不会延续前一轮的会话。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
+
+## 团队工具实例
+
+团队工具实例（例如 `acme-claude`，`extends: claude`，`command: acme-claude`）上的步骤，在 Paseo 中运行于一个命令为该实例命令的 Paseo 自定义提供方上。在守护进程所在主机上添加一次这个提供方。Paseo 整体设置 `agents.providers`，所以请保留其中已有的每一项：
+
+```sh
+paseo daemon config get agents.providers --json
+paseo daemon config set agents.providers '{
+  "claude-acme": { "extends": "claude", "label": "Claude (acme)", "command": ["acme-claude"] }
+}'
+paseo daemon reload
+```
+
+运行时自己找到这个提供方：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径）的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。没有这样的提供方时，不提供该实例，该实例上的步骤会说明如何添加：
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
+```
+
+有两个提供方都运行该命令时，用 `providers` 选项指定要用的那个：
+
+```yaml
+# drivers/paseo-acme.yaml
+schemaVersion: v1alpha1
+name: paseo-acme
+tool: acme-claude
+runtimes:
+  - use: paseo
+    options:
+      providers: { acme-claude: claude-acme }
+  - use: local
+```
 
 ## 凭据
 
@@ -424,7 +478,7 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
-Paseo 以错误回答的创建请求（例如连接中断时）仍可能启动它的智能体。在 Paseo 显示这个智能体之前，这次尝试保持打开。智能体出现后，下一次 `teamai workflow cancel` 会停止它。teamai 无法判断 Paseo 是否拒绝了这个创建请求，所以如果智能体一直没有出现，请先确认这次尝试在工作树中没有任何东西还在运行，然后释放这次尝试：
+Paseo 以错误回答的创建请求（例如连接中断时）仍可能启动它的智能体。在 Paseo 显示这个智能体之前，这次尝试保持打开。智能体出现后，下一次 `teamai workflow cancel` 会停止它。teamai 无法判断 Paseo 是否拒绝了这个创建请求，所以如果智能体一直没有出现，请先确认这次尝试在工作树中没有任何东西还在运行，然后释放这次尝试。之后运行时会忘记它，即使它的关闭仍然失败，因此它不再妨碍另一次尝试归档它们共用的工作区：
 
 ```text
 Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel r3ad62eacc3c191eb again, which stops it. If it never appears in Paseo, the create was refused: check that nothing of the attempt runs in the worktree, then run teamai workflow cancel r3ad62eacc3c191eb --release a5c1e9d07.
@@ -437,6 +491,8 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 ```
 
 你在 Paseo 里已经打开的、同一目录上的工作区（例如只读步骤在你的检出目录中运行时）从不被归档：这次尝试改为取消它自己的智能体，你的工作区保持打开。步骤运行期间你在 Paseo 中打开该目录（得到的是这次尝试的工作区）并在其中启动了智能体时，也是如此。
+
+打开时向 Paseo 提出的问题在 20 秒内没有得到回答时（例如守护进程卡住），步骤以 `workspace_failed` 失败，之后对该工作树的打开可以继续。
 
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 
@@ -457,4 +513,4 @@ No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `p
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
 | `paseo_config` | 没有 `url` 时，无法从 Paseo 的配置读出守护进程地址：`$PASEO_HOME/config.json` 不是 JSON，它的 `daemon` 部分不是 Paseo 写出的样子，或 `daemon.listen` 指向 Windows 命名管道。修好该文件，或设置 `url`。 |
-| `bad_option` | `url` 以外的选项。 |
+| `bad_option` | `url`、`mode` 和 `providers` 以外的选项；`mode` 指定了 `claude`、`codex`、`opencode` 以外的工具；或 `providers` 中的一项既不是这些工具，也不是它们的团队实例。 |
