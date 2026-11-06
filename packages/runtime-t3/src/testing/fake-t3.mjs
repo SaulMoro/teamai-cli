@@ -173,7 +173,7 @@ let sequence = 2_900_000;
 function launch(args) {
   const key = JSON.stringify([`client:${config().namespace ?? 'session-1'}`, args.clientRequestId ?? randomUUID()]);
   const threadId = `mcp:launch:${createHash('sha256').update(key).digest('hex')}`;
-  const access = config().access;
+  const access = config().access ?? approved;
 
   // As T3 does, the mode the sign-in allows is checked before a repeated launch is looked up.
   if (access && MODES.indexOf(args.runtimeMode) < MODES.indexOf(access)) {
@@ -331,6 +331,9 @@ const pairings = () => {
 
 const spent = new Set();
 
+/** The access the last pairing-code decision approved: it caps the modes the threads of its sign-in run in. */
+let approved;
+
 const json = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'content-type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
@@ -391,6 +394,7 @@ async function route(req, res) {
     }
 
     spent.add(pairing.credential);
+    approved = decision.access;
     record('oauth_decision', { access: decision.access }, 'none');
     const back = new URL(authorization.redirect_uri);
 
