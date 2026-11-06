@@ -9,6 +9,7 @@ import { parse, stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
@@ -1689,6 +1690,14 @@ const path = require('node:path');
 const args = process.argv.slice(2);
 if (args.includes('--version')) { process.stdout.write('codex-cli 0.130.0\\n'); process.exit(0); }
 const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+// \`codex login\` signs in the home CODEX_HOME names, as account acct-new, and records where it ran.
+if (args[0] === 'login') {
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { account_id: 'acct-new', refresh_token: 'r1', access_token: 'access', id_token: 'id' } }));
+  fs.appendFileSync(process.env.LAUNCHES + '.logins', home + '\\n');
+  process.stdout.write('Successfully logged in\\n');
+  process.exit(0);
+}
 const file = path.join(home, 'auth.json');
 const login = JSON.parse(fs.readFileSync(file, 'utf8'));
 const span = (edge) => process.env.FAKE_TOOL_SPANS && fs.appendFileSync(process.env.FAKE_TOOL_SPANS, JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT, edge }) + '\\n');
@@ -1773,6 +1782,40 @@ span('end');
       }
       throw new Error(`timed out waiting for ${what}`);
     };
+
+    it('fails an unattended start whose runtime needs the dedicated login and finds none credential_missing, naming the command, before any step', async () => {
+      loginDefinition('codexnologin', state);
+      fs.rmSync(dedicated());
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexnologin'], repo, env({ TEAMAI_MODE: 'unattended' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'credential_missing', message: expect.stringContaining(`CODEX_HOME=${path.dirname(dedicated())} codex login`) } });
+      expect(fs.existsSync(launches)).toBe(false);
+      expect(fs.existsSync(`${launches}.logins`)).toBe(false);
+    });
+
+    it.skipIf(!hasPython)('runs codex login into the dedicated home for the member on an attended start that needs it and finds none, after saying why, then runs the step on it', async () => {
+      loginDefinition('codexfirstlogin', state);
+      fs.rmSync(dedicated());
+      fs.rmSync(`${launches}.logins`, { force: true });
+      const screen = path.join(sandbox, 'first-login.screen');
+      const typed = path.join(sandbox, 'first-login.typed');
+      const pidFile = path.join(sandbox, 'first-login.pid');
+      fs.rmSync(screen, { force: true });
+
+      const attended = spawn('python3', ['-c', TYPED_TERMINAL, pidFile, screen, typed, process.execPath, CLI, 'workflow', 'start', 'oneprompt', '--driver', 'codexfirstlogin'], {
+        cwd: repo, env: { ...process.env, ...env(), TEAMAI_MODE: 'attended', FORCE_COLOR: '0' }, stdio: 'ignore',
+      });
+      const code = await new Promise<number | null>((resolve) => attended.on('close', resolve));
+      const shown = fs.readFileSync(screen, 'utf8');
+
+      expect(code, shown).toBe(0);
+      expect(shown).toContain(`has no Codex login yet. Running CODEX_HOME=${path.dirname(dedicated())} codex login once to create it`);
+      expect(shown).toContain('Successfully logged in');
+      expect(shown).toContain('"outcome":"succeeded"');
+      expect(fs.readFileSync(`${launches}.logins`, 'utf8')).toBe(`${path.dirname(dedicated())}\n`);
+      expect(codexLaunches().map(({ account }) => account)).toEqual(['acct-new']);
+    });
 
     it('copies the dedicated login into the attempt\'s tool home, never the member\'s own, and writes the refreshed one back', async () => {
       loginDefinition('codexlogin', state);

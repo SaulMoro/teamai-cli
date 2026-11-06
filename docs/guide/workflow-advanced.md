@@ -1614,7 +1614,14 @@ workflows:
 
 ### A Codex login for step runtimes
 
-Codex rejects a refresh token used twice, so a copy of your own login that refreshes in a step would log out your other Codex sessions. `credentials: { codex: login }` uses a login teamai keeps apart instead. Create it once:
+Codex rejects a refresh token used twice, so a copy of your own login that refreshes in a step would log out your other Codex sessions. `credentials: { codex: login }` uses a login teamai keeps apart instead. The first run that needs it, in a terminal, creates it for you:
+
+```text
+$ teamai workflow start review --driver containers
+ℹ Runtime "sandbox" of driver "containers" signs Codex in on the login teamai keeps apart from your daily one, and /home/me/.teamai/logins/codex has no Codex login yet. Running CODEX_HOME=/home/me/.teamai/logins/codex codex login once to create it.
+```
+
+Codex's own sign-in then runs in your terminal, and the run goes on once it ends. An unattended run does not sign in for you: it fails at start with `credential_missing`, naming the command. To create the login ahead of time:
 
 ```sh
 CODEX_HOME=~/.teamai/logins/codex codex login

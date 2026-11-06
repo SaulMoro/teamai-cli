@@ -18,7 +18,7 @@ import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceNames, toolOf } from '../../tool-registry.js';
 import type { StepRuntime } from './step-runtime.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
-import { LOGIN_TOOLS, type LoginTool } from './login.js';
+import { ensureLogin, LOGIN_TOOLS, type LoginTool } from './login.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -438,6 +438,17 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   if (ready.ok) {
     // A login the runtime's provider keeps itself is not copied into an attempt's tool home over it.
     const engine = { ...split.engine, logins: split.engine.logins.filter((tool) => !ready.ownLogins?.includes(tool)) };
+
+    for (const tool of purpose === 'run' ? engine.logins : []) {
+      const missing = await ensureLogin(tool, { who: `Runtime "${use}" of driver "${driver.name}"`, canAsk: mode === 'attended' && canAsk });
+
+      if (missing) {
+        await runtime.dispose();
+
+        return { ok: false, failure: missing };
+      }
+    }
+
     // A sign-in found by name reaches only a runtime that execs the tool and keeps a value to it. One that launches
     // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
     const isKeepingFound = !ready.launchesAgents && ready.can.env === true;

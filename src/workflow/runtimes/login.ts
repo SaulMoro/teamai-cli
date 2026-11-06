@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
 import { getTeamaiHomeDir } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
+import { log } from '../../utils/logger.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
@@ -30,6 +32,8 @@ export type LoginTool = (typeof LOGIN_TOOLS)[number];
 const LOGIN_FILES = { codex: 'auth.json' } as const satisfies Record<LoginTool, string>;
 
 const HOME_VARIABLES = { codex: 'CODEX_HOME' } as const satisfies Record<LoginTool, string>;
+
+const TOOL_NAMES = { codex: 'Codex' } as const satisfies Record<LoginTool, string>;
 
 /** How a waiting attempt checks the lock again. */
 const WAIT_POLL_MS = 500;
@@ -204,6 +208,35 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
     if (signal.aborted) return { ok: false, failure: { code: 'login_held', message: `Stopped while waiting for the ${tool} login teamai keeps, which run ${holder.run} holds.` } };
     await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
   }
+}
+
+/**
+ * Makes sure `tool`'s dedicated home holds a login before a run that brings it starts (`who` names the runtime that
+ * does). Attended at a terminal (`canAsk`), it says why in one line and runs the tool's own login command there for
+ * the member, once; otherwise it fails `credential_missing`, naming that command.
+ */
+export async function ensureLogin(tool: LoginTool, { who, canAsk }: { who: string; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
+  const file = path.join(loginHome(tool), LOGIN_FILES[tool]);
+
+  if (await readRegular(file)) return undefined;
+  const why = `${who} signs ${TOOL_NAMES[tool]} in on the login teamai keeps apart from your daily one, and ${loginHome(tool)} has no ${TOOL_NAMES[tool]} login yet.`;
+
+  if (!canAsk) {
+    return { code: 'credential_missing', message: `${why} An unattended run does not sign in for you. Create it once with ${loginCommand(tool)}, then start again.` };
+  }
+
+  log.info(`${why} Running ${loginCommand(tool)} once to create it.`);
+  await fs.mkdir(loginHome(tool), { recursive: true });
+
+  const code = await new Promise<number>((resolve) => {
+    const child = crossSpawn(tool, ['login'], { env: { ...process.env, [HOME_VARIABLES[tool]]: loginHome(tool) }, stdio: 'inherit' });
+    child.on('error', () => resolve(127));
+    child.on('close', (exit) => resolve(exit ?? 1));
+  });
+
+  if (code === 0 && await readRegular(file)) return undefined;
+
+  return { code: 'credential_missing', message: `${loginCommand(tool)} ended with status ${code} and left no login in ${file}, so the run did not start. Run it again, then start again.` };
 }
 
 /** Releases `tool`'s login if attempt `attempt` of run `run` holds it. */
