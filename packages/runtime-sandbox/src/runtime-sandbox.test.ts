@@ -881,6 +881,25 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('answers a cancel of an exec that already ended with that end again, in the runtime that ran it and in a restarted one', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = newOp();
+    const { end } = await exec(connection, { argv: ['/bin/sh', '-c', 'echo done; exit 3'], cwd: at.worktree }, op);
+
+    expect(end).toEqual({ op, event: 'exited', code: 3, stdout: 'done\n' });
+    connection.send({ type: 'cancel', op });
+    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)))).toEqual(end);
+    const restarted = start();
+    await init(restarted, { provider: 'docker', image: IMAGE }, 'recover');
+    restarted.send({ type: 'cancel', op });
+    expect(await restarted.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)))).toEqual(end);
+    // The container stays for the step's next exec: nothing was stopped.
+    expect(engine.calls().filter(([, command]) => command === 'restart')).toEqual([]);
+  });
+
   it('answers a reattach from its journal alone, without asking the engine, even while the engine is down', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

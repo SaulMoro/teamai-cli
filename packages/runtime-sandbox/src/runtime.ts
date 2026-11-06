@@ -643,7 +643,15 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // A stop this runtime could not confirm is the one outcome a later cancel replaces.
     const isRetried = record?.outcome?.state === 'failed' && record.outcome.failure.code === CANCEL_FAILED;
 
-    if (!record || (record.outcome !== undefined && !isRetried) || pendingStops.has(op)) return;
+    if (!record || pendingStops.has(op)) return;
+
+    // A cancel of an op that already ended answers that end again.
+    if (record.outcome !== undefined && !isRetried) {
+      conclude(op, record.outcome);
+
+      return;
+    }
+
     journal.cancel(op);
 
     // A retried stop clears the failure the stop before it left, before anything else is read: until it is confirmed or
