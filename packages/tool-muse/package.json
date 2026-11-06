@@ -1,0 +1,9 @@
+{
+  "name": "@teamai/tool-muse",
+  "private": true,
+  "type": "module",
+  "description": "Muse Code: its descriptor, launch profile, token format and version detector; bundled into teamai-cli.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

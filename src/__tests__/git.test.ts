@@ -28,7 +28,7 @@ const mockGit = {
 // can assert the hang guards (block timeout + GIT_TERMINAL_PROMPT) are present.
 const simpleGitCalls: unknown[][] = [];
 const mockExecCommand = vi.hoisted(() => vi.fn());
-vi.mock('../utils/exec.js', () => ({ execCommand: mockExecCommand }));
+vi.mock('@teamai/tool-core/exec', () => ({ execCommand: mockExecCommand }));
 vi.mock('simple-git', () => ({
   simpleGit: (...args: unknown[]) => {
     simpleGitCalls.push(args);
@@ -61,7 +61,7 @@ vi.mock('../utils/git-discovery.js', () => ({
   repositoryStamp: vi.fn(async () => null),
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

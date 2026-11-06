@@ -37,7 +37,7 @@ import {
 import { hookSettingsFile, installOf, isInstalledFor, locate, ownOf, writable, type Gate, type Install } from './locate.js';
 import { samePlace } from './resources/places.js';
 import { describeInvalidToolHomes, envToolHome, ompProfile, realHost, reloadToolHomes, toolHomesPath } from './tool-home.js';
-import { hookFormatOf, hookSyntaxOf, isToolId } from './tools.js';
+import { hookFormatOf, hookSyntaxOf, isToolId } from './tool-registry.js';
 import { isCodexTool } from './utils/tool-names.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, keptTeamHookEntries, readCodexHookTrustForScope, readHookFile } from './hooks.js';
 import { codexBuildSkewMessage } from './codex-trust.js';

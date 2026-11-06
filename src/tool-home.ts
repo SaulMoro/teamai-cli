@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { homeVariables, isToolId, TOOLS, type HomeMove, type ToolDescriptor, type ToolId } from './tools.js';
+import { type ToolId, type ShippedDescriptor } from './tools.js';
+import { type HomeMove } from '@teamai/tool-core/definition';
+import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
 import { getUserHome, normalizeHomePath, usesInstallHome } from './utils/home.js';
+import { RELOCATABLE_TOOLS } from './types.js';
 
 export type Host = {
   readonly platform: NodeJS.Platform;
@@ -35,7 +38,7 @@ export type Host = {
 
 /** `env` without any variable that moves a tool's home: under an install's home, each tool's home is the install's. */
 function withoutToolHomeVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const names = new Set(Object.keys(TOOLS).filter(isToolId).flatMap(homeVariables));
+  const names = new Set(TOOL_ORDER.flatMap(homeVariables));
 
   return Object.fromEntries(Object.entries(env).filter(([name]) => !names.has(name)));
 }
@@ -67,6 +70,20 @@ export function realHost(overrides: Partial<Pick<Host, 'env' | 'home'>> = {}): H
 }
 
 /**
+ * The one variable that moves `tool`'s whole home, its session store included: the variable `teamai init` records a
+ * relocated root under (Claude Code's `CLAUDE_CONFIG_DIR`, Codex's `CODEX_HOME`), else the tool's own `env` move.
+ * Undefined when no single variable does. A step runtime sets it to the attempt's tool home.
+ */
+export function homeEnvOf(tool: ToolId): string | undefined {
+  const recorded = Object.hasOwn(RELOCATABLE_TOOLS, tool) ? RELOCATABLE_TOOLS[tool]?.envVar : undefined;
+
+  if (recorded) return recorded;
+  const { home }: ShippedDescriptor = descriptorOf(tool);
+
+  return home.moves?.by.find((move) => move.kind === 'env')?.name;
+}
+
+/**
  * A home the host env moves, and how init records it (`INIT_RECORDS`): `own`,
  * the tool's own setting; `xdg`, `XDG_CONFIG_HOME`, which moves every XDG
  * tool at once; `platform-default`, the Windows home, which is not a move.
@@ -76,14 +93,14 @@ export type EnvToolHome = { readonly dir: string; readonly variable: string; rea
 
 /**
  * Where the host env moves `tool`'s home (the first of
- * `TOOLS[tool].home.moves` that applies), or null when none does. Blank
+ * `descriptorOf(tool).home.moves` that applies), or null when none does. Blank
  * values count as unset. A tool's own variable resolves as the tool resolves
  * it: `~` expanded, a relative value against the session's directory.
  * `XDG_CONFIG_HOME` and `LOCALAPPDATA` count only when absolute, as the XDG
  * spec has it. An explicit default profile moves the home to the default one.
  */
 export function envToolHome(tool: ToolId, host: Host = realHost()): EnvToolHome | null {
-  const { home } = TOOLS[tool];
+  const { home } = descriptorOf(tool);
 
   if (!('moves' in home)) return null;
 
@@ -258,7 +275,7 @@ export function movedToolHome(tool: ToolId, host: Host = realHost()): string | n
 }
 
 function followsActiveProfile(tool: ToolId): boolean {
-  const { home }: ToolDescriptor = TOOLS[tool];
+  const { home }: ShippedDescriptor = descriptorOf(tool);
 
   return home.moves?.by.some((move) => move.kind === 'hermes-home') ?? false;
 }
@@ -341,7 +358,7 @@ export function defaultToolHome(tool: ToolId, host: Pick<Host, 'home' | 'path'>)
 
 /** The `$HOME`-relative directory a home move replaces: `moves.root`, else `home.dir`. */
 export function homeRoot(tool: ToolId): string {
-  const { home } = TOOLS[tool];
+  const { home } = descriptorOf(tool);
 
   return 'moves' in home && 'root' in home.moves ? home.moves.root : home.dir;
 }

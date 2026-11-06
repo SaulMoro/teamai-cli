@@ -36,7 +36,7 @@ steps:
 1. 结算运行。如果运行已经结束，返回 `done`。
 2. 把本驱动的、`running` 里没有列出的未结租约交还给它。重启后的驱动发送 `"running":[]`，每次调用拿回一个未结租约。
 3. 按文件顺序租出第一个就绪的步骤。子工作流的步骤位于运行它的那个步骤的位置。需要 `driver.can.workspace` 未列出的工作区模式的步骤、需要 `driver.can` 未声明的其他能力的步骤（见[要求和限制](#要求和限制)），或使用其他驱动打开的工作区的步骤，会被暂缓，改为租出下一个就绪的步骤。
-4. 每个就绪的步骤都已租出时，返回 `wait`，`reason` 指出第一个未结租约。每个就绪的步骤都被暂缓时，`reason` 逐一列出它们，以 `; ` 分隔，`held` 以 `{ step, reason, missing }` 列出它们。`missing` 指出驱动缺少什么，例如 `hitl` 或 `workspace.new`；其他驱动占用该工作区时为空。
+4. 每个就绪的步骤都已租出时，返回 `wait`，`reason` 指出第一个未结租约。每个就绪的步骤都被暂缓时，`reason` 逐一列出它们，以 `; ` 分隔，`held` 以 `{ step, reason, missing }` 列出它们。`missing` 指出驱动缺少什么，例如 `hitl` 或 `workspace.new`。因工作区被暂缓时，也会列出即使该工作区可用仍然存在的缺口；仅因其他驱动占用该工作区而暂缓时，`missing` 为空。
 
 不发送 `running` 的驱动每次调用都会拿回自己的未结租约，因此一次只运行一个步骤。
 
@@ -866,7 +866,7 @@ schemaVersion: v1alpha1
 name: release
 description: Build the package, then review it.
 timeout: 1h
-budget: { tokens: 200000 }
+budget: { tokens: 200000 }       # 运行的预算：每个步骤报告时计入
 setup:
   command: npm ci
   requires: { env: [NPM_TOKEN] }
@@ -892,7 +892,7 @@ steps:
 | `requires.strict` | `true` 让这一级的 `isolation` 和 `network` 成为下限：其下每个步骤至少得到它们，无论内层要求什么。严格的 `isolation: sandbox` 还会让步骤的每个进程都拿不到 `GITHUB_TOKEN`、`GH_TOKEN`、`GITLAB_TOKEN`、`GL_TOKEN`、`CI_JOB_TOKEN`、`SSH_AUTH_SOCK`、`GIT_ASKPASS` 和 `SSH_ASKPASS`，其下某个步骤的 `requires.env` 指定了其中之一时，pull 会拒绝它。使用 `--driver local` 时，本地驱动永远无法运行的启动会以 `requirement_unmet` 被拒绝。 | 步骤等待。严格的 sandbox 还需要 `can.env: true`。 |
 | `setup` | 驱动在它创建的每个工作区中、在步骤之前运行 `command`。setup 获得它的 `requires.env` 键；步骤只有自己也要求时才会获得。setup 以非零退出（`setup_failed`）、改动 git 会提交的文件（`setup_dirty`），或把自己某个键的值留在它写入的文件中（包括被忽略的文件，`setup_secret`）时，步骤不运行即失败，工作区被删除。步骤的 `timeout` 也约束 setup。 | 带工作区的步骤等待。 |
 | `timeout` | `500ms`、`30s`、`10m`、`2h` 或 `1d`，写在步骤或工作流文件上。超时的步骤被停止，结果为 `timeout`。写在 workflow 步骤上时，会停止其中每个步骤。写在工作流文件上时，运行以 `failed` 结束，失败码为 `timeout`。重试会重新开始计时。 | 不是能力。每个驱动都会在租约上拿到 `expiresAt`。 |
-| `budget` | `{ tokens: N }`，写在工作流文件、workflow 步骤或带 `on_limit: end_turn` 的 prompt 步骤上。其下每个步骤的输入和输出 token 从它开始时计入：运行从开始时算起，workflow 步骤从每次开始时算起，例如循环的下一轮。重试会重新开始计算预算。超过 `N` 时，其中未结束的步骤停止，并以 `budget_exceeded` 失败。 | 预算内的非交互 prompt 步骤等待，它没有 token 的成功报告以 `budget_unmeasured` 失败。交互式 prompt 由人操作，照常运行；它的报告没有 token 时，其 `unenforced` 列出 `budget`。 |
+| `budget` | `{ tokens: N }`，写在工作流文件、workflow 步骤或带 `on_limit: end_turn` 的 prompt 步骤上。其下每个步骤的输入和输出 token 从它开始时计入：运行从开始时算起，workflow 步骤从每次开始时算起，例如循环的下一轮。重试会重新开始计算预算。工作流文件或 workflow 步骤的预算在每个步骤报告时计入它的 token：超过 `N` 时，其下仍在运行的步骤停止，并以 `budget_exceeded` 失败。这期间正在运行的 prompt 不会在达到 `N` 时被停止，只有另一个步骤的报告超过它时才会。要在一个 prompt 运行时就停止它，给这个 prompt 步骤加上自己的 `budget` 和 `on_limit: end_turn`。 | 预算内的非交互 prompt 步骤等待，它没有 token 的成功报告以 `budget_unmeasured` 失败。交互式 prompt 由人操作，照常运行；它的报告没有 token 时，其 `unenforced` 列出 `budget`。 |
 | `max_turns` | 限制 prompt 步骤的智能体轮数。本地驱动只把它传给无头 Claude。 | 步骤照常运行，其 `unenforced` 列出 `max_turns`。 |
 | `permissions` | prompt 步骤上的 `unattended`：它的工具无需询问就编辑文件和运行命令。只能在严格的 `isolation: sandbox` 之下使用，可以写在步骤本身、外层步骤、`defaults`，或运行其工作流的步骤上：没有它时，启动以 `unattended_unsandboxed` 被拒绝；[步骤打印的工作流](#运行步骤打印的工作流)没有它时，该步骤以 `invalid_output` 失败。见[无人值守的 prompt](#无人值守的-prompt)。 | 步骤等待。运行唯一的驱动没有 `can.unattended` 时，该步骤以 `tool_unavailable` 失败。 |
 | `on_limit` | 在带 `timeout`、`max_turns` 或 `budget` 的 prompt 步骤上为 `end_turn`：从工具启动算起达到其中之一时，结束智能体的这一轮，而不是让步骤失败。步骤以设置了 `limit` 的状态成功并保留它的工作，所以它之后的步骤仍会运行。在带 `timeout` 或 `budget` 的 workflow 步骤上，这些是其中的 prompt 加起来可以花费的量，每次只运行一个 prompt：用完后，其未运行的步骤被跳过。`fail` 是默认值，在达到限制时让步骤失败。交还的步骤保持其第一次租约的截止时间。 | 没有 `can.end_turn` 时，步骤按 `fail` 运行，其 `unenforced` 列出 `on_limit`。 |
@@ -923,6 +923,7 @@ workflows:
 | `driver.can` 键 | 驱动 |
 |---|---|
 | `hitl` | 让人回答 HITL 请求并在交互步骤中工作。 |
+| `exec` | `false`：不运行任何命令，所以命令步骤和带 `setup` 的步骤会等待其他驱动。与其他键不同，省略 `exec` 表示驱动会运行命令。 |
 | `workspace` | 接受这些工作区模式的租约：`read-only`、`new`、`continue`、`clone`、`team`（在[团队工作区](workflow.md#团队工作区)中运行的步骤，例如 `teamai-score` 的 `publish`）。克隆步骤只通过 [`next --prepare`](#在自己的驱动里使用克隆工作区) 租出。 |
 | `env` | `true`：自己解析 `lease.envScope.provide`，移除 `lease.envScope.withhold`，并且不把值交给运行步骤的程序。`"commands"`：只对命令步骤和 setup 这样做，所以带 `requires.env` 的提示词步骤会等待。由智能体运行步骤的驱动不要声明它；如果命令由驱动自己启动，可以发送 `"commands"`。0.28.0 之前的 teamai 对 `"commands"` 返回 `invalid_json`。 |
 | `setup` | 在它创建的每个工作区以及 setup 未完成的工作区中，用 `lease.setup.envScope` 运行 `lease.setup.command`，并以上述失败码让步骤失败。工作流声明了 `setup` 时，每个带工作区的租约都携带 `setup`。 |
@@ -1240,6 +1241,390 @@ teamai workflow next <run> --json '{"claim":true,"driver":{"kind":"script","mach
 
 和所有认领一样，这个认领会撤下运行的待接手状态。对已被另一个安装实例认领的运行，不带 `claim` 的 `next` 在本机的 `teamai-reports` 检出显示这次认领后（`teamai pull` 或 `workflow resume` 之后）返回 `not_owner`，而不是从本机过时的副本租出步骤。认领在 `next` 租出任何步骤之前执行，并在 `driver.workspace` 的 origin 上检查仍在运行的运行的分支。随后它像 `resume` 一样，把每个本地分支移到运行记录的提交，无法移动时返回 `branch_diverged`。本安装实例已经拥有的运行保持原样，但不再留给运行器接手。认领被拒绝时，作为 `next` 的错误信封返回。从 agent 会话发出时，认领像 `resume` 一样遵循运行的 `invoke`：payload 无法带上本人的同意，所以 `ask` 运行返回 `confirm_needed`，本人同意后，会话用 `teamai workflow resume <run> --claim --confirmed` 继续它。遇到 `state_moved` 时，再发送一次认领。非布尔值返回 `invalid_json`，消息为 `claim must be a boolean`。运行可能被其他机器继续的驱动，要在 `changes` 和 `read` 中上报完整的提交 id。`publish` 遇到其他形式的提交值时以 `snapshot_unsupported` 拒绝，并写明字段。
 
+## 驱动定义和步骤运行时
+
+驱动定义是一个 YAML 文件，`workflow start` 和 `workflow resume` 用 `--driver <name>` 选中它。它指定运行每个步骤的步骤运行时，也可以指定提示步骤使用的工具。步骤运行时是一个程序：它为一次尝试打开一个位置，在那里运行命令或工具，再把工作带回来。它和工具自带的运行时（例如 WorkBuddy 解包的 Node）不是一回事。
+
+```yaml
+# 团队仓库里的 drivers/toy.yaml
+schemaVersion: v1alpha1
+name: toy
+description: Run steps on the team's toy runtime.
+tool: claude            # 步骤或 --tools 没有指定其他工具时，提示步骤在 Claude Code 上运行
+runtimes:
+  - use: toy            # 团队仓库里的 runtimes/toy/runtime
+    options:
+      state: /var/tmp/toy-state
+```
+
+```sh
+teamai workflow start review --driver toy
+teamai workflow resume r1a2b3c4d                 # 在 toy 上继续，即这台机器上次驱动这个运行时用的定义
+teamai workflow resume r1a2b3c4d --driver local  # 回到普通的 local；运行也会记住这一点
+```
+
+teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
+
+| 位置 | 说明 |
+| --- | --- |
+| `~/.teamai/drivers/` | 只属于你自己。`resume --next` 从不读取它。 |
+| 团队仓库的 `drivers/` 和 `drivers/<namespace>/` | 两个生效的命名空间定义同一个名字时，失败为 `driver_namespace_conflict`。 |
+| 用户作用域的团队仓库 | 只在项目里启动时查找。 |
+| teamai 自带的定义 | 每个都命名为 `teamai-<name>`。 |
+
+没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`local`、`none`、`skill` 和 `fleet` 不能用作定义名：`drivers/none.yaml` 这样的文件会以 `driver_invalid` 被拒绝。
+
+一个定义列出一个或多个运行时。teamai 按列出的顺序把每个步骤交给它们，第一个能接下的运行时运行它：
+
+```yaml
+# drivers/sandboxed.yaml
+schemaVersion: v1alpha1
+name: sandboxed
+tool: claude
+runtimes:
+  - use: sandbox          # 接下它能接的每个步骤
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      max_parallel: 2
+  - use: local            # 接下其余的，例如交互步骤或必须回答的审批
+```
+
+没有任何单个运行时能接下的步骤会失败为 `requirement_unmet`，消息列出每个运行时缺什么：
+
+```text
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+```
+
+步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。这期间，等你回答的审批或选择仍会照常提问。没有其他步骤在运行、也没有等待回答的问题时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
+
+每个定义都在本机留一个位置，给留在这里的步骤：它的 `local` 条目；没有列出时，teamai 在最后加一个 `host` 条目，所以你的运行时不能叫 `host`。`host` 用 teamai、git 和 shell 运行命令，不需要智能体 CLI，也从不接提示步骤。这个位置接下：
+
+- 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
+- teamai 自己的工作流 `teamai-score`、`teamai-share-session`、`teamai-share-learnings`、`teamai-finished-sessions` 和 `teamai-benchmark` 的命令步骤，它们在本机规划、检查和写入标签；
+- 带 `deliver: publish` 的步骤，它从这里推送到数据分支。
+
+其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 `local`。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个工作流：
+
+```yaml
+# drivers/sandbox-only.yaml
+schemaVersion: v1alpha1
+name: sandbox-only
+tool: claude
+runtimes:
+  - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行
+```
+
+打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `local` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。
+
+`use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
+
+```text
+~/.teamai/runtimes/<name>/runtime          你自己的
+runtimes/<name>/runtime                    团队仓库，或 runtimes/<namespace>/<name>/runtime
+teamai-runtime-<name>                      先找 teamai 包里自带的，再找 PATH
+```
+
+teamai 自带这些定义：
+
+| 定义 | 运行时 |
+| --- | --- |
+| `teamai-claude`、`teamai-codex`、`teamai-opencode` | `local`，提示步骤用对应的工具 |
+| `teamai-t3` | `t3`（`environment: local`、`max_parallel: 4`），然后 `local` |
+| `teamai-paseo` | `paseo`（`url: ws://127.0.0.1:6767/ws`、`max_parallel: 4`），然后 `local` |
+
+### 运行时选项
+
+运行时在 `init` 时自己检查 `options`，不接受的键会在任何步骤运行前失败为 `bad_option`。有两个键属于 teamai，运行时看不到：
+
+| 键 | 含义 |
+| --- | --- |
+| `max_parallel` | 这个运行时上同时最多有这么多次尝试。它没有空位时，步骤交给下一个运行时。`workflows.max_parallel` 仍然限制整个运行。 |
+| `credentials` | `codex: login`：步骤里的 Codex 使用 teamai 单独保存的登录，见下文。`NAME: env:VARIABLE`：步骤的工具得到 `NAME`，值在运行开始时从你的 `VARIABLE` 读取，见下文。 |
+
+不改定义也能在你的机器上调整它的选项，写在 `~/.teamai/config.yaml` 或工作区自己的 `config.yaml` 里。键逐个覆盖定义里的值，工作区的优先：
+
+```yaml
+workflows:
+  drivers:
+    teamai-t3:
+      runtimes:
+        t3:
+          max_parallel: 2
+```
+
+### 步骤运行时的 Codex 登录
+
+Codex 拒绝重复使用的刷新令牌，所以你自己登录的副本一旦在步骤里刷新，你的其他 Codex 会话就会被登出。`credentials: { codex: login }` 改用 teamai 单独保存的登录。先创建一次：
+
+```sh
+CODEX_HOME=~/.teamai/logins/codex codex login
+```
+
+teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结束后再把刷新过的文件写回去，而且只写回同一个账号的。整台机器上同一时间只有一次尝试持有这个登录。其他尝试会等待，并说明在等谁：
+
+```text
+ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
+```
+
+如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow cancel` 会先在步骤运行时上停止工具并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
+
+Codex 运行期间运行时自己停止，或之后无法关闭位置时，登录同样继续被持有，因为 Codex 可能还在那里运行。步骤失败为 `runtime_lost`，teamai 会说明怎么处理：
+
+```text
+⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
+```
+
+### 来自你环境的凭据
+
+容器里的工具读不到保存在钥匙串里的登录。改为从你的环境给它一个令牌：`NAME: env:VARIABLE` 为步骤的工具设置 `NAME`，值取自你的 `VARIABLE`。
+
+```yaml
+# drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # 来自 `claude setup-token`
+        NPM_TOKEN: env:ACME_NPM_TOKEN                          # 私有仓库，在你 shell 里用另一个名字
+  - use: local
+```
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.config/acme/claude-token)
+export ACME_NPM_TOKEN=$(security find-generic-password -s acme-npm -w)
+teamai workflow start review --driver containers
+```
+
+teamai 在运行开始或继续时读取每个变量一次。未设置的变量会在任何步骤运行前让启动停止：
+
+```text
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+```
+
+这些值去哪里：
+
+| 会得到 | 永远得不到 |
+| --- | --- |
+| 这个运行时上提示步骤的工具 | 命令步骤，或 setup |
+| 发给自己启动智能体的运行时的 prompt | 定义里的其他运行时 |
+| | 步骤扣留的名字，例如严格沙箱里的代码托管令牌 |
+| | 任何文件：运行的记录、`runtime.json`、日志。工具打印出的值在 teamai 保存的内容里会被遮盖 |
+| 这个运行时上的评审，只限它的工具在本机受限运行时读取的名字：Claude 评审得到 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`，任何评审都得到 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 和 `NODE_EXTRA_CA_CERTS` | 评审，任何其他名字：Claude 评审永远得不到 `OPENAI_API_KEY` |
+
+只有提供 `can.env` 的运行时接受凭据，因为只有它决定每个进程的环境。`local` 不接受：你的步骤本来就在你的环境里运行。两种情况都会在启动时被拒绝为 `bad_option`。
+
+团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
+
+```text
+Step runtime "toy" comes from the team repo (runtimes/toy) at revision 3f9c0a1b2d4e, which you have not accepted on this machine. It runs as you, with your files. Review /home/me/team/runtimes/toy (runtime) before you accept it.
+Run it? [y/N]
+```
+
+无人值守的运行不会询问。它失败为 `runtime_not_accepted`，什么也不启动。要接受这个修订，在终端里运行一次同样的命令。接受过的修订保存在 `~/.teamai/trust/runtimes.json`。
+
+每次尝试在运行时上得到：
+
+- 工作树，在主机上的原路径可读写。git 目录和 `.git` 指针只读。teamai 在主机上提交和推送，并关闭钩子、fsmonitor 和引用替换。
+- `attempts/<attempt>/out/`，可读写。结果文件是 `out/result.json`。
+- 提示步骤有自己的工具主目录：`attempts/<attempt>/tool-home/<tool>`，通过 `CLAUDE_CONFIG_DIR`、`CODEX_HOME` 或 `CODEBUDDY_CONFIG_DIR` 设置。提示步骤只在 Claude Code、Codex 或 CodeBuddy 上运行，并且只以无头方式运行，不能交互。评分、发布和之后续接这个会话的轮次都从这个目录读取会话。之后的轮次从它的副本开始。[自己启动智能体的运行时](#自己启动智能体的运行时)没有工具主目录：它的工具把会话保存在 `local` 保存的位置。
+- 租约提供的环境变量键、租约的 `env` 和这次尝试的标记。租约扣留的键会从运行时的环境里移除。
+- 提示步骤得到它的运行时声明的[凭据](#来自你环境的凭据)。命令步骤得不到。
+
+teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attempt>/runtime.json`。teamai 被杀掉后，`workflow resume` 会再次发送同样的 id：
+
+| 被杀掉的时机 | 继续运行时 |
+| --- | --- |
+| 运行时接受 `open` 之后 | 同一个句柄，不会打开第二个位置 |
+| 一次 exec 结束之后 | 从运行时保存的内容读取它的输出、会话和用量，工具不会再次运行 |
+| exec 运行期间 | 它被停止，步骤失败为 `runtime_interrupted`，工作会保留 |
+| 一次 prompt 结束之后 | 从运行时保存的内容读取它的输出、会话和用量，不会再次发送 prompt |
+| prompt 运行期间 | 再次发送同一个 prompt，重新连上那个智能体，步骤继续 |
+
+`workflow cancel` 会停止正在运行的 exec 或 prompt，以及它启动的所有进程。驱动被杀掉时，cancel 会让这次尝试的运行时去停止它。即使运行时无法为新工作启动（例如它的提供方宕机，或登录过期），这也能工作：teamai 以 `recover` 模式打开它，这种模式只停止并关闭它运行过的东西。
+
+无法停止工作的运行时会说明原因。teamai 随后保留位置、记录和登录，并打印运行时给出的建议：
+
+```text
+⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
+```
+
+解决原因后，再运行一次同样的 `teamai workflow cancel r48201aa`。这个运行已经取消，所以它会回答 `run_settled`，同时停止这次尝试、关闭它的位置并释放登录：
+
+```text
+Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
+```
+
+你取消时仍在运行的驱动，以及发现这样的 exec 仍在运行的 `workflow resume`，都会让步骤失败为 `runtime_lost` 并给出同样的建议，同样保留位置和登录。运行时能够停止它之后，对这个运行执行 `teamai workflow cancel` 就会停止它。
+
+### 编写步骤运行时
+
+运行时从 stdin 每行读取一个 JSON 请求，在 stdout 上用 JSON 行回答，协议版本 `1`。`src/__tests__/fixtures/runtime-toy/runtime.mjs` 是一个完整的例子，它在主机上运行步骤。它导入 `@teamai/runtime-protocol`，所以测试在运行它之前先把它打包成一个文件（`src/__tests__/helpers/toy-runtime.ts`）。
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
+← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
+← {"op":"op-5e0d11cb4777","event":"ready","display":{"label":"toy-r…-a…","url":"https://toy.example.test/places/r…-a…","fields":{"place":"toy-r…-a…"}}}
+→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"credentials":{},"cwd":"/repo"}
+← {"op":"op-83bfffde9ce3","event":"accepted"}
+← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
+← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
+```
+
+`max_parallel` 和 `credentials` 由 teamai 自己使用：它在 `init` 之前把它们从选项里去掉，所以你的运行时永远看不到它们，也不应检查它们。`init` 改为列出凭据的名字，从不带值，这样你的运行时可以只提供它能登录的工具，例如 `can.confined` 评审：
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
+```
+
+值随请求发送：在 `open` 上，以及在每个需要它们的 `exec` 或 `prompt` 上。提示的工具 exec 会得到它们，命令步骤的 exec 得到 `{}`：
+
+```text
+→ {"type":"exec","op":"op-2a7c90e14b3d","handle":"toy-r…-a…","argv":["claude","-p","…"],"env":{"CLAUDE_CONFIG_DIR":"/repo/.teamai/…/tool-home/claude",…},"unset":["GITHUB_TOKEN"],"credentials":{"CLAUDE_CODE_OAUTH_TOKEN":"sk-ant-oat01-…"},"cwd":"/repo"}
+```
+
+只把它们设置到进程的环境里，永远不要写到磁盘或日志里。重启后的 teamai 会随它重新发送的操作再次发送它们，所以你的运行时什么都不用保存。
+
+其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
+
+无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
+
+```text
+→ {"type":"close","handle":"teamai-r7-a1"}
+← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
+```
+
+exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
+
+每当 teamai 必须停止一次尝试时（例如驱动被杀掉后的 `workflow cancel`），它都会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`，这样宕机或一直不回答的提供方就不会卡住停止。用错误回答 `recover` 的运行时会再为新工作打开一次；如果这也失败，cancel 会同时给出两个失败：
+
+```text
+→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{}}
+→ {"type":"reattach","handle":"toy-r…-a…"}
+← {"event":"alive","handle":"toy-r…-a…","ops":[{"op":"op-83bfffde9ce3","state":"running"}]}
+→ {"type":"cancel","op":"op-83bfffde9ce3"}
+```
+
+无法停止某个操作时，让它以 `cancel_failed` 结束为 `failed`，消息里说明怎么处理，并在 `reattach` 时继续报告这个状态。teamai 随后不会取回这个位置，也不会关闭它。之后对同一个操作的 `cancel` 会再试一次停止：从读到它的那一刻起，在 `reattach` 时把这个操作报告为 `running`，直到这次停止被确认或再次失败，因为 teamai 会把接下来拿到的状态当作这次 cancel 的结果。不要为此使用别的代码：任何其他 `failed`，即使紧跟在 `cancel` 之后，teamai 都当作这个操作已经结束，会取回并关闭这个位置：
+
+```text
+← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
+```
+
+每个请求都要回答，包括你做不到的请求。无法回答的 `reattach`、`collect` 或 `close`（例如读不了自己的日志，或连不上提供方）要给出这个句柄的失败回复。这时不要回答 `gone`：位置可能还在。
+
+```text
+→ {"type":"reattach","handle":"teamai-r7-a1"}
+← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
+```
+
+`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的请求失败为 `runtime_unanswered`：`open` 失败，正在进行的 `exec` 或 `prompt` 以 `runtime_lost` 结束，因为它启动的东西可能还在运行。15 秒内没有收到回复的 `init`、`reattach` 或 `close`，以及 15 秒内你没有回答的 `open`、`exec` 或 `prompt` 也一样，所以要在任何耗时的工作（例如拉取镜像或启动代理）之前先发送 `accepted`。`cancel` 本身不需要回复：用操作的结果结束它即可。teamai 在等待某个 `exec` 或 `prompt` 时取消了它，如果 15 秒内你没有给出结果，它也会同样以 `runtime_lost` 结束。驱动退出后的停止通过 `reattach` 读取结果，从发出 `cancel` 起最多等 15 秒。这次尝试保留它的位置、记录和登录：
+
+```text
+Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
+```
+
+每个请求和回复都在 teamai 仓库的 `packages/runtime-protocol` 中定义为 zod schema：teamai 发送的内容用 `RuntimeRequestSchema`，运行时写出的内容用 `RuntimeMessageSchema`。
+
+`ready`、exec 或 prompt 的 `accepted` 或 `display` 事件，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，立即接受 prompt，等智能体创建好后再发送它的链接，如下面的例子所示。`display` 事件既不接受也不结束它的操作：它不算 teamai 等待 15 秒的那个回答，也不算 `cancel` 的结果。
+
+`open` 的 `view` 列出地点按与本机相同的绝对路径拿到的路径：可读写的工作树、只读的 git 路径、attempt 的结果目录和工具主目录，以及可读写的 `runDir`，即运行的临时目录，所以 `$TEAMAI_RUN_DIR` 在那里和在本机一样可用。
+
+#### 自己启动智能体的运行时
+
+T3 Code 或 Paseo 这类运行时从一个提示启动智能体，在它结束时得到会话，而不是运行工具的命令行。它在 `init` 时用 `"prompt": true` 说明这一点。如果 `can` 里还有 `"exec": false`，它就不接受命令，所以命令步骤和带 `setup` 的步骤会交给定义中的下一个运行时。带 `"exec": false` 却没有 `"prompt": true` 的运行时运行不了任何步骤，teamai 在启动时拒绝它：
+
+```yaml
+# drivers/threads.yaml
+schemaVersion: v1alpha1
+name: threads
+tool: claude
+runtimes:
+  - use: threads          # 提示步骤，每个都作为一个智能体线程
+  - use: local            # 命令、setup，以及 threads 接不了的提示
+```
+
+teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 是完整的提示：步骤指定了智能体定义时包含它的说明，还有告诉智能体把结果写到哪里的那一行。智能体写入 `lease.result`，运行时把它读回来，在 `finished` 中连同工具的会话和计费的 token 一起发送：
+
+```text
+→ {"type":"init","protocol":1,"mode":"attended","options":{}}
+← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"hitl":true,"workspace":["read-only","new","continue"],"tools":["claude","codex"]}}
+→ {"type":"open","op":"op-1c9e0f4a2b77","run":"r7a1…","attempt":"a3f0…","view":{"worktree":"/repo/.teamai/workflow-worktrees/r7a1-review-p1",…},"credentials":{}}
+← {"op":"op-1c9e0f4a2b77","event":"accepted","handle":"threads-r7a1-a3f0"}
+← {"op":"op-1c9e0f4a2b77","event":"ready","display":{"label":"review (thread)","url":"t3://thread/5e1c"}}
+→ {"type":"prompt","op":"op-83bf2a9d01e4","handle":"threads-r7a1-a3f0","cwd":"/repo/.teamai/workflow-worktrees/r7a1-review-p1","env":{"TEAMAI_WORKFLOW_ATTEMPT":"r7a1…/a3f0…",…},"unset":[],
+   "lease":{"step":"review","tool":"claude","model":{"name":"claude-opus-5-5"},"permissions":"approval-required","interactive":false,
+            "prompt":"Review the change.\n\nWrite the workflow result as JSON to /repo/.teamai/…/attempts/a3f0…/out/result.json. …",
+            "result":"/repo/.teamai/…/attempts/a3f0…/out/result.json"}}
+← {"op":"op-83bf2a9d01e4","event":"accepted"}
+← {"op":"op-83bf2a9d01e4","event":"display","display":{"label":"Review the change","url":"t3://thread/5e1c","fields":{"agent":"claude"}}}
+← {"op":"op-83bf2a9d01e4","event":"finished","session":{"tool":"claude","id":"cef86f52-1d0b-4c55-9a40-7e3d3a8b1f02"},"result":{"output":{"verdict":"approve"}},"usage":{"input":18240,"output":2310}}
+```
+
+| `lease` 字段 | 含义 |
+| --- | --- |
+| `step`、`tool` | 步骤，以及启动智能体用的工具，它是你的 `can.tools` 之一 |
+| `model` | 启动时使用的 `name` 和可选的 `effort`：步骤的，否则是它的智能体定义的；没有时用工具的默认值 |
+| `prompt`、`result` | 完整的提示，以及智能体写入结果的文件。像 teamai 自己的启动那样，让智能体无需询问就能写这一个文件：对 Claude 是 `--allowedTools=Edit(/<result>)`。不要为此改变任何模式 |
+| `resume` | 同一个工具中要继续的会话 id，用于之后的轮次。智能体继续了它时，在 `finished` 里写 `"resumed":true`。你开了新会话时不写或写 `false`，teamai 就不会把新会话连到旧会话上 |
+| `permissions` | `approval-required`；你的 `can.unattended` 接下这类步骤时为 `unattended` |
+| `interactive` | 有人在步骤中工作时为 `true`；只有声明了 `can.hitl` 的运行时会收到 |
+| `maxTurns` | 智能体的轮数上限，在你的 `can.max_turns` 提供时才有 |
+
+`env` 包含尝试的标记，例如 `TEAMAI_WORKFLOW_ATTEMPT` 和 `TEAMAI_RUN_DIR`，以及步骤 `requires.env` 的键的值。`provided` 列出这些键。如果你的运行时的工具以明文保存 env，例如它保存的智能体配置，就丢掉这些键，保留标记：
+
+```text
+→ {"type":"prompt",…,"env":{"TEAMAI_WORKFLOW_ATTEMPT":"r7a1…/a3f0…","TEAMAI_RUN_DIR":"/home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch","NPM_TOKEN":"npm_…"},"provided":["NPM_TOKEN"],…}
+```
+
+无法完成的提示以 `failed` 结束。希望步骤原样记录的原因，用 `model_unavailable`、`tool_unavailable`、`agent_unavailable` 或 `tool_failed`；其他代码 teamai 都记录为 `runtime_failed`，并在消息中带上你的代码和消息。收到 `cancel` 后，它以 `cancelled` 结束。`reattach` 把结束的提示报告为 `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`，仍在运行的报告为 `running`；用同一个 `op` 再次发送 `prompt` 会重新连上它的智能体，不会再启动一个。步骤的 `timeout` 由 teamai 自己用 `cancel` 执行。`budget` 在提示结束后按 `usage` 检查。玩具运行时的 `agent` 选项就是这样运行的。
+
+#### 回答限定提示的运行时
+
+能让智能体只读一个目录、别的都读不到的运行时，在 `init` 时用 `"confinedPrompt": true` 说明，并在 `can.confined` 里列出它限定运行的工具、级别和权限。没有 `confinedPrompt` 时，teamai 会从它的提供里去掉 `can.confined`，所以[限定在一个目录里的步骤](workflow.md#限定在一个目录里的提示步骤)（例如打分 pass 的评判）永远不会交给它。这种步骤的 `open` 没有 `view`，它的 `prompt` 带 `confined`：
+
+```text
+← {"type":"init","ok":true,"prompt":true,"confinedPrompt":true,"can":{"exec":false,"tools":["claude"],"confined":[{"level":"best-effort","access":"read","tools":["claude"]}]}}
+→ {"type":"open","op":"op-6d2e0b91c4a7","run":"r7a1…","attempt":"a9c4…","credentials":{}}
+→ {"type":"prompt","op":"op-a3d5c18e02f9","handle":"…","cwd":"/…/runs/r7a1…/evidence","lease":{…},"confined":{"dir":"/…/runs/r7a1…/evidence","level":"best-effort","access":"read","schema":{…}},…}
+← {"op":"op-a3d5c18e02f9","event":"finished","session":{…},"result":{"output":{…}},"confined":{"level":"best-effort","access":"read"}}
+```
+
+智能体只读 `dir`，读不到宿主上的其他内容。`finished` 说明运行时实际保持的级别和权限，不能高于它真正执行的。没有 `confined` 的 `finished` 让步骤失败为 `runtime_failed`，级别低于 `dir` 要求的失败为 `confined_failed`，回复不是 JSON 值的失败为 `confined_reply_invalid`。toy 运行时的 `judge` 选项按这种方式回答。
+
+`lease.prompt` 和 `cwd` 对目录的写法与 `dir` 完全相同。容器如果把 `dir` 挂载在同一路径，智能体会看到它的上级目录：它们是空的，但名字里有你的主目录、用户名和项目。要隐藏它们，就把 `dir` 挂载或复制到一个中性路径，并在 `cwd` 和提示里把 `dir` 替换掉：
+
+```text
+dir     /home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch/a9c4…
+mount   /evidence (read-only)
+prompt  "Read only the files under /home/al/…/scratch/a9c4…: …"  →  "Read only the files under /evidence: …"
+```
+
+| 错误 | 下一步 |
+| --- | --- |
+| `driver_not_found` | 添加 `drivers/<name>.yaml` 并运行 `teamai pull`，或者添加 `~/.teamai/drivers/<name>.yaml` |
+| `driver_invalid` | 修正消息里指出的文件 |
+| `driver_namespace_conflict`、`runtime_namespace_conflict` | 只在一个命名空间里保留这个名字，推送，然后运行 `teamai pull` |
+| `runtime_not_found` | 把运行时安装到上面的某个位置 |
+| `runtime_not_accepted` | 有人值守地运行一次这个命令，审查并接受这个修订 |
+| `credential_missing` | 设置消息里给出的变量，然后再次启动或继续 |
+| `bad_option` | 修正定义里的选项，或你配置里 `workflows.drivers` 下的选项 |
+| `requirement_unmet` | 让定义里的某一个运行时提供步骤要求的全部内容，或修改步骤 |
+| `login_missing` | 运行 `CODEX_HOME=~/.teamai/logins/codex codex login`，然后重试这个步骤 |
+| `login_not_written_back` | 如果 Codex 刷新过令牌，用同一条命令重新登录，然后重试这个步骤 |
+| `runtime_failed`、`runtime_interrupted` | 重试这个步骤：`teamai workflow retry <run> <step>` |
+| `runtime_lost` | 步骤运行期间运行时停止了，所以它的工具可能还在那里运行。在运行时上停止它，如果警告给出了登录锁就删除它，然后重试这个步骤 |
+
 ## 在自己的驱动里使用工作区
 
 `local` 以外领取工作区租约的驱动，要把运行的提交放在其他驱动或其他机器能找到的地方。每个驱动都遵守两条规则：
@@ -1320,7 +1705,7 @@ TeamAI 为准备 attempt 记录的内容只保存在本机：路径和文件指�
 teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}},"running":[]}'
 ```
 
-带上 `--prepare` 时，teamai 在本机为[克隆步骤](#克隆工作区)创建克隆、安装其团队资产并运行 setup，然后返回带 `cwd`（即该克隆）的租约。一次调用可能要等 setup 运行完。驱动未在 `workspace` 中列出 `clone`，或没有用 `--prepare` 请求时，克隆步骤会被暂缓，`wait.held[].missing` 列出 `workspace.clone` 或 `prepare`。以团队角色运行的克隆还需要 `can.role`。[限定在一个目录里](#在自己的驱动里运行受限步骤)的步骤不需要位置：`--prepare` 返回带 `cwd`（即它的 `confined.dir`）的租约，不为它在 checkout 中创建、设置或快照任何东西。
+带上 `--prepare` 时，teamai 在本机为[克隆步骤](#克隆工作区)创建克隆、安装其团队资产并运行 setup，然后返回带 `cwd`（即该克隆）的租约。一次调用可能要等 setup 运行完。驱动未在 `workspace` 中列出 `clone`，或没有用 `--prepare` 请求时，克隆步骤会被暂缓，`wait.held[].missing` 在缺少克隆支持时列出 `workspace.clone`，并列出提供克隆后仍然存在的缺口，例如 `prepare`、`isolation` 或 `env`。以团队角色运行的克隆还需要 `can.role`。[限定在一个目录里](#在自己的驱动里运行受限步骤)的步骤不需要位置：`--prepare` 返回带 `cwd`（即它的 `confined.dir`）的租约，不为它在 checkout 中创建、设置或快照任何东西。
 
 对每个租约，驱动：
 

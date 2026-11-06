@@ -28,18 +28,18 @@ import type { LocalConfig } from '../types.js';
 import { readWorkspaceChildren } from '../workspace-children.js';
 import { readFileSafe } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { redact } from '../utils/redact.js';
+import { redact } from '@teamai/shared/redact';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 import { agentSessionFromEnv } from '../utils/session-id.js';
 import { AgentSession } from './agent-session.js';
 import { listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import type { SubagentsRead } from './adapters/base.js';
+import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { SessionCaptures } from './captures.js';
 import { safeText, sessionArchives } from './session-cmd-shared.js';
 import { scrubSession } from './scrub.js';
 import { getRepoIdentity, SyncManager, type SessionSyncMeta } from './sync.js';
 import { firstPromptOnly, judgeSession, writeSessionEvidence, type JudgedSession } from './session-work.js';
-import type { Session } from './ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 
 type Failure = Extract<WorkflowEnvelope, { error: unknown }>;
 

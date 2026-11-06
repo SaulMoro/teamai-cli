@@ -43,7 +43,7 @@ vi.mock('../utils/learnings-publish.js', async (importOriginal) => ({
 vi.mock('../maintenance/promotion-publish.js', () => ({
   promoteAndPublish: vi.fn(async () => undefined),
 }));
-vi.mock('../utils/logger.js', async (importOriginal) => ({
+vi.mock('@teamai/tool-core/log', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/logger.js')>()),
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
 }));

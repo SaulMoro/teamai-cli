@@ -10,37 +10,51 @@ import { commandSignalPolicy, exitLike, stepEnvironment, terminalReachesCommand,
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, workflowLaunch, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
+import { writeJsonAtomic } from '../../../utils/fs.js';
 import { log } from '../../../utils/logger.js';
-import { AgentSession } from '../../../session-flow/agent-session.js';
+
+import { AgentSession, type AgentSessionRef } from '../../../session-flow/agent-session.js';
 import { openSessionArchive, type SessionArchive } from '../../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../../skill-use.js';
 import { attemptEnv } from '../../attempt-marker.js';
-import { leaseNext, type PersonHandoff, type ReportInput } from '../../engine.js';
+import { leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { LeaseWireSchema, type LeaseWire } from '../../lease-wire.js';
-import { setsLimit, type DriverCan, type Missing } from '../../requirements.js';
+import { setsLimit, type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { budgeted } from '../../limits.js';
-import { resolveCliPath } from '../../../utils/cli-path.js';
 import {
   createLocalToolAdapter,
+  toolAdapter,
   type LocalToolAdapter,
   type LocalToolResult,
   type LocalToolRun,
 } from './local-tool-adapter.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, updateRun, withRunLock, type RunId, type RunLock } from '../../store.js';
+import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
+import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
+import { localStepRuntime } from '../../runtimes/local.js';
+import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
+import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
+import { credentialSecrets, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
+import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
+import type { SoleDriver } from '../../engine.js';
+import { storeDirOf } from '../../../session-flow/adapters/index.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, cloneRoleProblem, refuseDirtyAdoptedCommand, roleNotDeliveredFailure, runPlaceSetup, sweepClones, worktreeRoleProblem, type StepEnd } from '../../place/place.js';
 import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
-import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
-import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
+import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
+import { acceptToolCommand } from '../../../tool-instances.js';
+import { instanceNames, isToolId } from '../../../tool-registry.js';
+import { launchExecutableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
-import { runConfinedStep } from '../../confined-step.js';
+import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';
 import { chooseStepModel, loadDeployedAgent, type StepModel } from '../../step-model.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
-import { isWorkflowError, stepWorkflow, WORKSPACE_MODES } from '../../types.js';
+import { isWorkflowError, stepWorkflow } from '../../types.js';
+import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import { confinedOf, contractClone, type SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
 
@@ -54,8 +68,12 @@ export function _setDriverPollMs(ms: number): void {
   pollMs = ms;
 }
 
-/** What a leased command came to: it ran, staging failed, or it was stopped or its lease ended before it could start. */
+/**
+ * What a leased command came to: it ran, staging failed or its step runtime failed it, or it was stopped or its lease
+ * ended before it could start.
+ */
 type StagedResult = { kind: 'ran'; result: CommandExit } | { kind: 'unstaged'; failure: WorkflowFailure } | { kind: 'stopped' };
+
 
 interface StagedCommand {
   exit: Promise<StagedResult>;
@@ -72,9 +90,9 @@ function startable(lease: Lease, signal: AbortSignal): boolean {
  * Stages a leased command, then starts it, as one attempt, so the driver keeps asking the run what to do while staging
  * and setup run, and a cancel reaches either phase.
  */
-function stageThenStart(lease: Lease, stage: (signal: AbortSignal) => Promise<WorkflowFailure | undefined>, start: () => GroupedCommand): StagedCommand {
+function stageThenStart(lease: Lease, stage: (signal: AbortSignal) => Promise<WorkflowFailure | undefined>, start: () => StartedCommand): StagedCommand {
   const controller = new AbortController();
-  let command: GroupedCommand | undefined;
+  let command: StartedCommand | undefined;
 
   const exit = (async (): Promise<StagedResult> => {
     const failure = await stage(controller.signal);
@@ -83,8 +101,9 @@ function stageThenStart(lease: Lease, stage: (signal: AbortSignal) => Promise<Wo
 
     if (failure) return { kind: 'unstaged', failure };
     command = start();
+    const ended = await command.exit;
 
-    return { kind: 'ran', result: await command.exit };
+    return 'exitCode' in ended ? { kind: 'ran', result: ended } : { kind: 'unstaged', failure: ended };
   })();
 
   return { exit, stop: async () => {
@@ -124,6 +143,9 @@ const WaitReplySchema = z.object({
   held: z.array(z.object({ step: z.string(), reason: z.string(), missing: z.array(z.string()) })).optional().catch(undefined),
 }).catch({});
 
+/** A step a runtime held back, as a wait names it. */
+type WaitHeld = NonNullable<z.infer<typeof WaitReplySchema>['held']>[number];
+
 /** What the driver says once it handed run `runId` to a person at `steps`, and the command that person runs. */
 function handedToPerson(runId: string, steps: readonly string[]): WorkflowEnvelope {
   const resume = `teamai workflow resume ${runId} --claim`;
@@ -137,16 +159,25 @@ function heldForConfined(held: ReadonlyArray<{ missing: readonly string[] }> | u
   return held !== undefined && held.length > 0 && held.every(({ missing }) => missing.includes('confined') || missing.includes('model'));
 }
 
-async function askHitl(hitl: LocalHitl, signal: AbortSignal): Promise<string> {
-  process.stderr.write(`Step "${hitl.step}": ${hitl.message}\nOptions: ${hitl.options.join(', ')}\n${hitl.respond}\n`);
+/** Reads the line typed at the terminal after `prompt`. Aborting `signal` closes it unanswered. */
+async function readLine(prompt: string, signal: AbortSignal): Promise<string> {
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
 
   try {
-    return await terminal.question('Choice, followed by an optional note: ', { signal });
+    return await terminal.question(prompt, { signal });
   } finally {
     terminal.close();
   }
 }
+
+async function askHitl(hitl: LocalHitl, signal: AbortSignal): Promise<string> {
+  process.stderr.write(`Step "${hitl.step}": ${hitl.message}\nOptions: ${hitl.options.join(', ')}\n${hitl.respond}\n`);
+
+  return readLine('Choice, followed by an optional note: ', signal);
+}
+
+/** Puts a prompt step's own question to the person at the terminal: their line, or none once `signal` aborts it. */
+type AskPerson = (question: string, signal: AbortSignal) => Promise<string | undefined>;
 
 /** Local tool selection and terminal behavior for one driver invocation. */
 export interface LocalDriverOptions {
@@ -166,6 +197,32 @@ export interface LocalDriverOptions {
   resolveTool?: (executable: string) => string | null;
   /** Called with the runs each report the engine took answers its settled passes started, which the caller drives. */
   started?: (runs: readonly StartedRun[]) => void;
+  /** The runtimes of the driver definition `--driver` names, in its order. Without it, the loop has one: `local`. */
+  runtimes?: DriverRuntimes;
+}
+
+/** A driver definition's runtimes, which the loop offers in turn: each step goes to the first that can take it. */
+export interface DriverRuntimes {
+  /** The definition's canonical name, recorded with each attempt. */
+  driver: string;
+  runtimes: OpenedDriver['runtimes'];
+}
+
+/**
+ * One runtime the loop offers: `local`, which launches on this machine as the loop always did, or an external one,
+ * whose steps go through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer and the
+ * lifecycle of its attempts' places.
+ */
+interface RuntimeSlot {
+  kind: 'local' | 'external';
+  use: string;
+  runtime: StepRuntime;
+  can: DriverCan;
+  /** Its prompt steps go as `prompt`, never as an exec of the tool's argv. */
+  launchesAgents: boolean;
+  engine: EngineOptions;
+  /** The values of the credentials the runtime declares, which only its prompts' tools get. */
+  credentials: Record<string, string>;
 }
 
 /** A lease as this driver runs it: what the engine sent, and what staging it adds. A step staged after `expiresAt` does not start. */
@@ -189,10 +246,6 @@ async function maskAttemptFiles(config: LocalConfig, run: RunId, secrets: Record
   });
 
   await Promise.all(attempts.map((attempt) => AttemptResult.mask(attemptResultPath(config, run, attempt), secrets)));
-}
-
-function supportedTool(value: string): value is LaunchTool {
-  return isLaunchTool(value);
 }
 
 /**
@@ -220,7 +273,7 @@ function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config:
   for (const { source, named, member: isMember } of rungs) {
     if (!named) continue;
 
-    if (isMember && !isLaunchTool(named)) {
+    if (isMember && !launchTargetOf(named)) {
       if (!LAUNCH_ORDER.some((launched) => launched === named)) {
         return { ok: false, failure: { code: 'tool_unsupported', message: `${source} is "${named}", which is not a tool teamai launches. Set it to one of: ${LAUNCH_TOOLS.join(', ')}.` } };
       }
@@ -236,7 +289,7 @@ function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config:
 }
 
 /** The tool a prompt step launches here, with the warnings its pick logs, or why it launches none. */
-type LaunchChoice = { ok: true; tool: LaunchTool; warnings: string[] } | { ok: false; failure: WorkflowFailure; tool?: string; warnings: string[] };
+type LaunchChoice = { ok: true; tool: LaunchTool; target: LaunchTarget; warnings: string[] } | { ok: false; failure: WorkflowFailure; tool?: string; warnings: string[] };
 
 /**
  * The tool teamai launches for prompt step `step` here, as {@link stepTool} picks it with `--tools` `flags`, or why
@@ -251,9 +304,11 @@ export function launchToolFor(step: Pick<WorkflowStep, 'agent' | 'tool'>, config
 
   if (!selected) return { ok: false, failure: { code: 'tool_unconfigured', message: 'No local workflow tool is configured for this prompt step' }, warnings };
 
-  if (!supportedTool(selected)) return { ok: false, failure: { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` }, tool: selected, warnings };
+  const target = launchTargetOf(selected);
 
-  return { ok: true, tool: selected, warnings };
+  if (!target) return { ok: false, failure: { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` }, tool: selected, warnings };
+
+  return { ok: true, tool: target.tool, target, warnings };
 }
 
 function ignoredCodexSettings(agent: AgentSpec): string[] {
@@ -339,21 +394,21 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
  * continued, newest first. Each is tried on this machine, then as a copy in this tool, then as a copy of the one the team
  * session archive holds. OpenCode has no flag to resume one, so its step starts a new session.
  */
-async function resumeSession(archive: SessionArchive, lease: Lease, tool: LaunchTool, cwd: string): Promise<{ id: string; resumed: SessionRef } | undefined> {
-  const to = AgentSession.platformForTool(tool);
+async function resumeSession(archive: SessionArchive, lease: Lease, target: LaunchTarget, cwd: string): Promise<{ id: string; resumed: SessionRef } | undefined> {
+  const to = AgentSession.platformForTool(target.name);
 
   if (!lease.session || !to) return undefined;
-  const resumes = launchAdapterIdOf(tool) !== 'opencode';
+  const resumes = launchAdapterIdOf(target.tool) !== 'opencode';
   const misses: string[] = [];
 
   for (const session of [lease.session, ...(lease.session.earlier ?? [])]) {
-    if (!supportedTool(session.tool)) continue;
     const from = AgentSession.platformForTool(session.tool);
 
     if (!from) continue;
     const resumed = { tool: session.tool, id: session.id };
 
-    if (launchAdapterIdOf(session.tool) === launchAdapterIdOf(tool) && resumes) {
+    // One platform is one store: a tool that shares the format but keeps its own home, as an instance does, gets a copy.
+    if (from === to && resumes) {
       const found = await AgentSession.find({ platform: from, sessionId: session.id }, { scrub: false });
 
       if (found.status === 'done') return { id: session.id, resumed };
@@ -371,7 +426,7 @@ async function resumeSession(archive: SessionArchive, lease: Lease, tool: Launch
     misses.push(restored.reason);
   }
 
-  if (misses.length > 0) log.warn(`Step "${lease.step}" starts a new ${tool} session: ${misses.join(' ')}`);
+  if (misses.length > 0) log.warn(`Step "${lease.step}" starts a new ${target.name} session: ${misses.join(' ')}`);
 
   return undefined;
 }
@@ -388,11 +443,14 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
  * checkout held as delivered at launch. A load before it, by a pass whose session this one resumes, is that pass's.
  * Undefined when the session cannot be read.
  */
-async function usedInSession(tool: LaunchTool, sessionId: string, cwd: string, teamSkills: Record<string, string[]>, launchedAt: number): Promise<Used | undefined> {
+async function usedInSession(tool: string, sessionId: string, cwd: string, teamSkills: Record<string, string[]>, launchedAt: number, storeDir?: string): Promise<Used | undefined> {
   const platform = AgentSession.platformForTool(tool);
 
   if (!platform) return undefined;
-  const found = await AgentSession.find({ platform, sessionId, cwd }, { subagents: true }).catch(() => undefined);
+  const ref: AgentSessionRef = { platform, sessionId, cwd };
+
+  if (storeDir !== undefined) ref.storeDir = storeDir;
+  const found = await AgentSession.find(ref, { subagents: true }).catch(() => undefined);
   const atOrAfterLaunch = (timestamp: string | undefined): boolean => timestamp === undefined || !(Date.parse(timestamp) < launchedAt);
 
   return found?.status === 'done'
@@ -412,6 +470,8 @@ async function promptReport(
   mode: RunMode,
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
+  askPerson: AskPerson | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string> } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -431,6 +491,17 @@ async function promptReport(
 
   if (!choice.ok) return giveUp(choice.failure, choice.tool);
   const selected = choice.tool;
+  // The name the step runs its tool by, an instance's own: its report, delivery and sessions are credited to it.
+  const { target } = choice;
+  const launched = target.name;
+
+  // A team instance's own command runs only once a person accepted it here.
+  if (target.instance) {
+    const accepted = await acceptToolCommand(target.instance, { ask: askPerson && ((question) => askPerson(question, signal)) });
+
+    if (!accepted.ok) return giveUp({ code: accepted.code, message: accepted.message }, launched);
+  }
+
   // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout. A clone has
   // its own install, never the member's config, and none when its place installs no team.
   const contract = lease.workspace;
@@ -443,13 +514,13 @@ async function promptReport(
 
     const refused = clone !== undefined
       ? prepared?.install
-        ? await cloneRoleProblem({ install: prepared.install, step, role, tools: [selected] })
+        ? await cloneRoleProblem({ install: prepared.install, step, role, tools: [launched] })
         : roleNotDeliveredFailure({ role, step, notDelivered: { copy: 'clone', gap: { kind: 'no_install' } } })
       : lease.cwd !== undefined
-        ? await worktreeRoleProblem({ dir: lease.cwd, step, role, tools: [selected] })
+        ? await worktreeRoleProblem({ dir: lease.cwd, step, role, tools: [launched] })
         : roleNotDeliveredFailure({ role, step, notDelivered: { copy: 'none' } });
 
-    if (refused !== undefined) return giveUp(refused, selected);
+    if (refused !== undefined) return giveUp(refused, launched);
   }
 
   const teamConfig = clone !== undefined
@@ -463,15 +534,16 @@ async function promptReport(
   if (lease.agent && !agent) {
     return giveUp({
       code: 'agent_unavailable',
-      message: `Agent "${lease.agent}" is not available for ${selected}. Run teamai pull and try again.`,
-    }, selected);
+      message: `Agent "${lease.agent}" is not available for ${launched}. Run teamai pull and try again.`,
+    }, launched);
   }
 
   const chosen = await chooseStepModel({
     step: lease.step, tool: selected, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config: stepConfig,
+    passesAgentFile: !onRuntime?.launchesAgents,
   });
 
-  if (!chosen.ok) return giveUp(chosen.failure, selected);
+  if (!chosen.ok) return giveUp(chosen.failure, launched);
 
   if (agent && launchAdapterIdOf(selected) === 'codex') {
     const ignored = ignoredCodexSettings(agent);
@@ -483,7 +555,63 @@ async function promptReport(
 
   const cwd = lease.cwd ?? driver.workspace;
   const resultFile = attemptResultPath(config, lock.run, lease.attempt);
-  const resume = await resumeSession(archive, lease, selected, cwd);
+  // On a step runtime that execs the tool, it keeps its session in a home of the attempt's, under the variable it reads.
+  // A runtime that launches agents its own way gives the tool its own home, where the member's sessions are found.
+  const execs = onRuntime && !onRuntime.launchesAgents ? onRuntime : undefined;
+  const variable = execs ? toolHomeVariable(selected) : undefined;
+
+  if (execs && (variable === undefined || !isExecRuntimeTool(selected))) {
+    return giveUp({
+      code: 'tool_unsupported',
+      message: `A step runtime runs prompt steps on ${EXEC_RUNTIME_TOOLS.join(', ')}, and step "${lease.step}" runs on ${selected}. Name one of them with the step's tool or --tools, or run the step with --driver local.`,
+    }, selected);
+  }
+
+  if (execs && lease.interactive) {
+    return giveUp({ code: 'tool_unsupported', message: `Step "${lease.step}" is interactive, and a step runtime runs only headless prompts. Run the step with --driver local.` }, selected);
+  }
+
+  // An instance's command is checked on this machine's PATH, which a runtime that execs its tool elsewhere never had.
+  if (execs && target.instance) {
+    return giveUp({
+      code: 'tool_unsupported',
+      message: `Step "${lease.step}" runs on ${launched}, a tool instance, and a step runtime that execs its tool runs only the tools teamai ships. Name ${selected} with the step's tool or --tools, or run the step with --driver local.`,
+    }, launched);
+  }
+
+  const toolHome = execs && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, selected) } : undefined;
+  const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(selected) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
+  let resume: { id: string; resumed: SessionRef } | undefined;
+
+  if (toolHome) {
+    await fs.mkdir(toolHome.dir, { recursive: true });
+    const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: selected, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
+
+    if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
+  } else {
+    resume = await resumeSession(archive, lease, target, cwd);
+  }
+
+  // A login the runtime brings is held by this attempt alone, on the whole machine, from before the place opens until
+  // it is written back: another attempt waits for it here, naming the attempt that holds it.
+  const login = toolHome ? execs?.logins.find((tool) => tool === selected) : undefined;
+
+  if (login && toolHome) {
+    const waitFile = loginWaitFile(attemptDir(config, lock.run, lease.attempt));
+
+    const held = await holdLogin({
+      tool: login, run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, signal,
+      onWait: async (wait) => {
+        if (!wait) return fs.rm(waitFile, { force: true });
+        log.info(`Step "${lease.step}" waits for the ${wait.tool} login teamai keeps, which attempt ${wait.holder.attempt} of run ${wait.holder.run} holds. It goes on once that attempt ends; teamai workflow cancel ${wait.holder.run} releases it.`);
+        await writeJsonAtomic(waitFile, wait);
+      },
+    });
+
+    await fs.rm(waitFile, { force: true });
+
+    if (!held.ok) return giveUp(held.failure, selected);
+  }
 
   const launchModel = (model: StepModel): LaunchModel => {
     const named: LaunchModel = { model: model.name };
@@ -498,10 +626,10 @@ async function promptReport(
   const { teamDelivery } = await import('../../../pull.js');
 
   const delivery = prepared?.install
-    ? await cloneDelivery({ install: prepared.install, without: prepared.without }, selected)
-    : teamConfig ? await teamDelivery(teamConfig, selected).catch(() => undefined) : undefined;
+    ? await cloneDelivery({ install: prepared.install, without: prepared.without }, launched)
+    : teamConfig ? await teamDelivery(teamConfig, launched).catch(() => undefined) : undefined;
 
-  const observing: ToolLaunch = { config: stepConfig, tool: selected, cwd, delivery: delivery ?? null };
+  const observing: ToolLaunch = { config: stepConfig, tool: launched, cwd, delivery: delivery ?? null };
 
   // In a clone, git reads its head without the names the place withholds, which setup could have handed a hook.
   if (clone !== undefined) observing.head = await cloneHead(config, lock.run, clone, { withhold: lease.envScope?.withhold ?? [], expiresAt: lease.expiresAt });
@@ -512,21 +640,23 @@ async function promptReport(
 
   const [observed, launch, teamSkills] = await Promise.all([
     observeLaunch(observing),
-    teamConfig ? workflowLaunch(teamConfig, selected) : undefined,
+    teamConfig ? workflowLaunch(teamConfig, launched) : undefined,
     delivery?.record?.delivered ? deliveredTeamSkills(stepConfig, cwd, delivery.record.delivered, delivery.record.rev).then((found) => found.teamSkills, () => undefined) : undefined,
   ]);
 
-  // Only headless Claude and CodeBuddy have a turn limit; any other launch reports the cap as not enforced.
+  // Only headless Claude and CodeBuddy have a turn limit, and a runtime that launches agents its own way keeps the cap it
+  // offered; any other launch reports the cap as not enforced.
   const family = launchAdapterIdOf(selected);
-  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (family === 'claude' || family === 'codebuddy');
+  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (onRuntime?.launchesAgents === true || family === 'claude' || family === 'codebuddy');
   // A turn is ended only at the limits its tool is known to keep and report: Codex states its usage only as it ends, and
   // CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
   const { limits } = lease;
   const endsAtTurns = limits?.maxTurns !== undefined && !lease.interactive && family === 'claude' ? limits.maxTurns : undefined;
-  const budget = limits?.budget !== undefined && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
+  // A runtime that launches agents its own way states usage only once the prompt ends, so the budget is checked then.
+  const budget = limits?.budget !== undefined && !onRuntime?.launchesAgents && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
   const launchedAt = Date.now();
 
-  if (lease.interactive) log.info(`Step "${lease.step}" opens ${selected} here for interactive work.`);
+  if (lease.interactive && !onRuntime) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);
 
   const input: LocalToolRun = {
     prompt: lease.prompt!,
@@ -538,6 +668,20 @@ async function promptReport(
   };
 
   if (lease.output) input.output = lease.output;
+
+  let launcher = adapter;
+
+  // On a step runtime the tool gets only the names its lease provides, over the runtime's own, and its home.
+  if (onRuntime?.launchesAgents) {
+    const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
+    input.env = scoped.env;
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials });
+  } else if (onRuntime && toolHome) {
+    const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
+    input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
+    const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
+    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: onRuntime.credentials }), (command) => command, (command) => command);
+  }
 
   if (launch) input.launch = launch;
 
@@ -556,12 +700,14 @@ async function promptReport(
 
   if (lease.permissions === 'unattended') input.unattended = true;
 
+  if (target.instance?.command) input.command = target.instance.command;
+
   const { result, durationMs } = await timedLaunch({
-    launch: lease.interactive ? adapter.runInteractive.bind(adapter) : adapter.run.bind(adapter),
+    launch: lease.interactive ? launcher.runInteractive.bind(launcher) : launcher.run.bind(launcher),
     tool: selected,
     input,
     signal,
-    unfinished: `${selected} could not complete the workflow step`,
+    unfinished: `${launched} could not complete the workflow step`,
   });
 
   const end: StepEnd = { outcome: result.exitCode === 0 && !result.failure ? 'success' : 'failed' };
@@ -571,8 +717,25 @@ async function promptReport(
     end.failure = result.failure;
   }
 
+  // A runtime lost while the tool ran may still run it, refreshing the login: the attempt keeps it, and closing its
+  // place says how to free it.
+  if (login && toolHome && result.failure?.code !== 'runtime_lost') {
+    // A runtime that failed may not have brought the tool home back, so what is there says nothing of the login.
+    const collected = !(result.failure?.code.startsWith('runtime_') === true && result.failure.code !== 'runtime_interrupted');
+    const notBack = await writeLoginBack({ tool: login, run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, collected });
+    await releaseLogin(login, { run: lock.run, attempt: lease.attempt });
+
+    if (notBack && end.outcome === 'success') {
+      end.outcome = 'failed';
+      end.message = notBack.message;
+      end.failure = notBack;
+    } else if (notBack) {
+      log.warn(notBack.message);
+    }
+  }
+
   const ran = result.started ? result : undefined;
-  const used = ran?.session && teamSkills ? await usedInSession(selected, ran.session, cwd, teamSkills, launchedAt) : undefined;
+  const used = ran?.session && teamSkills ? await usedInSession(launched, ran.session, cwd, teamSkills, launchedAt, storeDir || undefined) : undefined;
   // A tool held to no budget that stated it spent more still ended its turn there: the budget names it.
   const passedBudget = limits?.budget !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.budget.tokens;
   const stoppedBy = ran?.stoppedBy ?? (passedBudget ? 'budget' : undefined);
@@ -583,13 +746,14 @@ async function promptReport(
     ...(limits?.budget !== undefined && budget === undefined ? ['budget' as const] : []),
   ];
 
-  const body: ReportBody = { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, outcome: end.outcome };
+  const body: ReportBody = { attempt: lease.attempt, revision: lease.revision, driver, tool: launched, outcome: end.outcome };
 
   if (ran?.model) body.model = ran.model;
 
   if (ran?.session) body.session = ran.session;
 
-  if (ran && resume) body.resumed = resume.resumed;
+  // A runtime that launches agents its own way says whether it continued the session; one that says nothing did not.
+  if (ran && resume && !ran.startedFresh) body.resumed = resume.resumed;
 
   if (ran) body.durationMs = durationMs;
 
@@ -666,12 +830,12 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
 
 /**
  * What this driver declares on every `next`. Every key is set, so a new capability does not compile until it is decided.
- * It runs setup in each workspace it creates. `tools` are the tools it launches a step that names one on. It ends a
- * prompt's turn at the limits its lease carries. It runs an unattended prompt in its tool's unattended mode, and fails
- * one whose tool has none.
+ * It runs setup in each workspace it creates. `tools` are the tools it launches a prompt step on, named or picked. It
+ * ends a prompt's turn at the limits its lease carries. It runs an unattended prompt in its tool's unattended mode, and
+ * fails one whose tool has none.
  */
-function localCan({ strict, hitl, tools, confined }: { strict: StrictCan; hitl: boolean; tools: string[]; confined: ConfinedOffer[] }): Required<DriverCan> {
-  return { hitl, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true, confined };
+function localCan({ strict, hitl, tools, confined }: { strict: StrictCan; hitl: boolean; tools: string[]; confined: ConfinedOffer[] }): DecidedCan {
+  return { hitl, exec: true, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true, confined };
 }
 
 type StrictCan = Required<Pick<DriverCan, 'network' | 'isolation' | 'env'>>;
@@ -685,25 +849,44 @@ export function localStrictCan(config: LocalConfig, options: Pick<LocalDriverOpt
   return { network: false, isolation: isSandbox(config, options) ? 'sandbox' : 'none', env: true };
 }
 
-function onPath(tool: LaunchTool): boolean {
-  return resolveCliPath(executableOf(tool)) !== null;
+/** Whether the command that starts the tool `name` names is on PATH here. */
+function onPath(name: string): boolean {
+  const target = launchTargetOf(name);
+
+  return target !== undefined && launchExecutableOf(target) !== null;
 }
 
 /**
- * The tools a step of `run` names, or undefined when a `from` step may bring a workflow that names any. Looking a tool
- * up can start login shells, so the driver looks up only these.
+ * The tools the run's steps launch on: `named`, those its steps name, undefined when a `from` step may bring a workflow
+ * that names any; and `picked`, those `toolFor` picks for its prompt steps that name none, with the pick for a step that
+ * names no agent when a `from` step may bring one. Looking a tool up can start login shells, so the driver looks up only
+ * the named ones.
  */
-function namedTools(run: Pick<RunState, 'definition' | 'workflows'>): Set<string> | undefined {
+function runTools(run: Pick<RunState, 'definition' | 'workflows'>, toolFor: ToolFor) {
   const named = new Set<string>();
+  const picked = new Set<string>();
+  let bringsSteps = false;
 
-  const known = (steps: readonly WorkflowStep[]): boolean => steps.every((step) => {
-    if (step.tool !== undefined) named.add(step.tool);
-    const child = stepWorkflow(step);
+  const visit = (steps: readonly WorkflowStep[]): void => {
+    for (const step of steps) {
+      const tool = promptTool(step, toolFor);
 
-    return child?.kind !== 'from' && (child?.kind !== 'inline' || known(child.workflow.steps));
-  });
+      if (step.tool !== undefined) named.add(step.tool);
+      else if (tool !== undefined) picked.add(tool);
+      const child = stepWorkflow(step);
 
-  return [run.definition, ...Object.values(run.workflows ?? {})].every((definition) => known(definition.steps)) ? named : undefined;
+      if (child?.kind === 'from') bringsSteps = true;
+
+      if (child?.kind === 'inline') visit(child.workflow.steps);
+    }
+  };
+
+  for (const definition of [run.definition, ...Object.values(run.workflows ?? {})]) visit(definition.steps);
+  const unnamed = bringsSteps ? toolFor({}) : undefined;
+
+  if (unnamed !== undefined) picked.add(unnamed);
+
+  return { named: bringsSteps ? undefined : named, picked };
 }
 
 /**
@@ -778,9 +961,10 @@ async function removeGitLocks(gitDir: string): Promise<void> {
 
 /**
  * The flags a drive runs with: those `given`, over the ones the run `remembered` from this install's last drive, a
- * `--tools` name at a time. A flag left out keeps what the run remembers.
+ * `--tools` name at a time. A flag left out keeps what the run remembers. The driver definition is the one this drive
+ * runs on, which `workflow resume` reopens when it names none; plain `local` records none.
  */
-function drivenWith(given: Pick<LocalDriverOptions, keyof DriveOptions>, remembered: DriveOptions | undefined): DriveOptions {
+function drivenWith(given: Pick<LocalDriverOptions, 'tools' | 'autoApprove' | 'sandbox' | 'runtimes'>, remembered: DriveOptions | undefined): DriveOptions {
   const driven: DriveOptions = {};
   const tools = { ...remembered?.tools, ...given.tools };
 
@@ -791,6 +975,8 @@ function drivenWith(given: Pick<LocalDriverOptions, keyof DriveOptions>, remembe
   if (autoApprove !== undefined) driven.autoApprove = autoApprove;
 
   if (given.sandbox ?? remembered?.sandbox) driven.sandbox = true;
+
+  if (given.runtimes) driven.driver = given.runtimes.driver;
 
   return driven;
 }
@@ -834,15 +1020,143 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
+  const members = await memberTools(config);
+
+  // The tool a prompt step that names none launches on, which a runtime must offer as it must a named one: an
+  // instance by its own name, since a runtime that offers the tool it extends does not run it.
+  const toolFor: ToolFor = (step) => {
+    const choice = launchToolFor(step, config, options.tools ?? {}, members);
+
+    return choice.ok ? choice.target.name : undefined;
+  };
+
   // It launches a step that names its tool on the tools this machine has: those the run's steps name, or every one when a
   // step's output may bring a workflow later. It is the run's only driver, so a step whose tool it cannot launch fails
-  // rather than waits.
-  const named = isStarted ? namedTools(started) : undefined;
-  const tools = LAUNCH_TOOLS.filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
+  // rather than waits. A tool it picks for a step that names none, and that no step names, it offers without looking it
+  // up, as it always launched it: launching it says if it is missing.
+  const { named, picked } = isStarted ? runTools(started, toolFor) : { named: undefined, picked: new Set<string>() };
+  const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
+  const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
+  const tools = [...found, ...pickedUnlooked];
+  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', runtimes: [{ kind: 'local', use: 'local', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
-  const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined });
+  const local = localStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
+  const localReady = await local.init({ options: {}, mode });
+
+  if (!localReady.ok) return { error: { code: 'runtime_failed', message: localReady.failure.message } };
+
+  // An external runtime is offered with what it said it can. One that execs the tool launches only the tools it can give
+  // a home; one that launches agents its own way gives each its own. It keeps `can.confined` only when its init said it
+  // answers confined prompts (the stdio reader drops it otherwise).
+  const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
+    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
+    : {
+      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
+      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), remote: true },
+    });
+
+  // Every definition has a host command slot: its `local`, or else one here that takes no prompt, last. While another
+  // runtime runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs
+  // here in place of that runtime.
+  const definedSlots = defined.runtimes.map(toSlot);
+  const listedHost = definedSlots.find((slot) => slot.kind === 'local');
+
+  const hostSlot: RuntimeSlot = listedHost ?? {
+    kind: 'local', use: 'host', runtime: local, can: { ...localReady.can, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {},
+  };
+
+  const runsCommands = definedSlots.some((slot) => slot.kind === 'external' && slot.can.exec !== false);
+  const host: RuntimeSlot = runsCommands ? { ...hostSlot, can: { ...hostSlot.can, commands: 'pinned' } } : hostSlot;
+  const [firstSlot = host, ...otherSlots] = listedHost ? definedSlots.map((slot) => (slot === listedHost ? host : slot)) : [...definedSlots, host];
+  const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
+  const sole: SoleDriver = { driver: defined.driver, offers: [{ runtime: slots[0].use, can: slots[0].can }, ...otherSlots.map((slot) => ({ runtime: slot.use, can: slot.can }))] };
   const driver = driverIdentity('local', cwd);
+  // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
+  const slotOf = new Map<string, RuntimeSlot>();
+  const attemptRuns = new Map<string, AttemptRun>();
+  const localHandles = new Map<string, string>();
+
+  const runOf = (lease: Lease): AttemptRun | undefined => {
+    const slot = slotOf.get(lease.attempt);
+
+    if (slot?.kind !== 'external') return undefined;
+    const known = attemptRuns.get(lease.attempt);
+
+    if (known) return known;
+    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver });
+    attemptRuns.set(lease.attempt, created);
+
+    return created;
+  };
+
+  /** Binds a lease to the runtime it was offered on. A `local` attempt's place is opened at once: it is the host's. */
+  const bind = async (lease: Lease, slot: RuntimeSlot): Promise<void> => {
+    slotOf.set(lease.attempt, slot);
+
+    if (slot.kind !== 'local') return;
+    const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
+    const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
+
+    if (opened.kind === 'ready') localHandles.set(lease.attempt, opened.handle);
+  };
+
+  const closeRun = async (attempt: AttemptId): Promise<void> => {
+    const closing = attemptRuns.get(attempt);
+    const handle = localHandles.get(attempt);
+    const logins = slotOf.get(attempt)?.engine.logins ?? [];
+    attemptRuns.delete(attempt);
+    localHandles.delete(attempt);
+    slotOf.delete(attempt);
+    const notClosed = await closing?.close();
+
+    if (handle !== undefined) await local.close(handle);
+
+    // A closed attempt holds no login, whatever stopped it before its write-back. One whose place stays open may
+    // still run its tool, so it keeps the login until a person stops that tool.
+    if (notClosed) log.warn(notClosed.message);
+
+    for (const tool of logins) {
+      if (!notClosed) {
+        await releaseLogin(tool, { run: runId, attempt });
+        continue;
+      }
+
+      const holder = await loginHolder(tool);
+
+      if (holder?.run === runId && holder.attempt === attempt) {
+        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime, then delete ${loginLockFile(tool)}.`);
+      }
+    }
+  };
+
+  /** Whether `slot` may open another attempt under its own `max_parallel`. */
+  const slotHasRoom = (slot: RuntimeSlot): boolean => slot.engine.maxParallel === undefined
+    || [...slotOf.values()].filter((bound) => bound === slot).length < slot.engine.maxParallel;
+
+  // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time: an external one by
+  // the runtime its record names, any other to local, or, without a local runtime, to the definition's first.
+  const reconnecting: Array<{ attempt: string; slot: RuntimeSlot }> = [];
+
+  if (isStarted) {
+    for (const step of started.steps) {
+      if (step.status !== 'leased') continue;
+      const attempt = AttemptIdSchema.safeParse(step.lease.attempt);
+      const record = attempt.success ? await readAttemptRuntime(config, runId, attempt.data) : undefined;
+
+      const slot = (record && slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime))
+        ?? (record ? slots.find((candidate) => candidate.kind === 'external') : undefined)
+        ?? slots.find((candidate) => candidate.kind === 'local') ?? slots[0];
+
+      reconnecting.push({ attempt: step.lease.attempt, slot });
+    }
+  }
+
+  const abandon = async (attempt: AttemptId): Promise<void> => {
+    await abandonPlace({ config, lock, attempt });
+    await closeRun(attempt);
+  };
+
   // A driver killed before cleanup, of this run or any other, left clones behind.
   await sweepClones(config);
   const adapter = options.adapter ?? createLocalToolAdapter();
@@ -862,7 +1176,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const base = await headCommit(root);
   // The prompts that run, by attempt. A prompt that was stopped before its tool started has nothing to report.
   const prompts = new Map<string, { lease: Lease; controller: AbortController; exit: Promise<ReportBody | undefined> }>();
-  let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; line?: string }> } | undefined;
+  let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; hitl: LocalHitl; line?: string }> } | undefined;
   // A headless prompt takes a slot as a command does, so a step in another checkout starts beside it. An interactive one has the terminal.
   const busy = (): number => inFlight.size + dying.size + prompts.size;
   const interactiveRuns = (): boolean => [...prompts.values()].some(({ lease }) => lease.interactive);
@@ -881,9 +1195,64 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     void running.command.stop();
   };
 
+  let wake = (): void => {};
+
+  // A line typed at the terminal reaches every reader open on it, so one question is open at a time. A prompt step's
+  // question closes the HITL question, which stays closed until no step asks and is then asked again, and steps ask
+  // one after another. A step stopped while it waits for its turn asks nothing.
+  let stepAsks = 0;
+  let stepTurns: Promise<unknown> = Promise.resolve();
+  // Ctrl-C or Ctrl-D closed a step's question: the person stops the run, as at the HITL question, and resume goes on.
+  let isStoppedByPerson = false;
+
+  const stopByPerson = (): void => {
+    isStoppedByPerson = true;
+
+    for (const { controller } of prompts.values()) controller.abort();
+    wake();
+  };
+
+  const askPerson: AskPerson | undefined = personAnswers(mode) ? async (text, signal) => {
+    stepAsks += 1;
+    const before = stepTurns;
+
+    // A listener added to an aborted signal never fires, and a step may be stopped before it asks.
+    const stopped = new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+
+    const turn = (async () => {
+      await Promise.race([before, stopped]);
+
+      if (signal.aborted) return undefined;
+
+      if (question) {
+        const open = question;
+        question = undefined;
+        open.controller.abort();
+        await open.exit;
+      }
+
+      return readLine(text, signal).catch(() => {
+        if (!signal.aborted) stopByPerson();
+
+        return undefined;
+      });
+    })();
+
+    stepTurns = Promise.allSettled([before, turn]);
+
+    try {
+      return await turn;
+    } finally {
+      stepAsks -= 1;
+      wake();
+    }
+  } : undefined;
+
   let interactiveIgnores: readonly NodeJS.Signals[] = [];
   let signalled: NodeJS.Signals | undefined;
-  let wake = (): void => {};
   let handled: readonly NodeJS.Signals[] = [];
 
   const handle = (signals: readonly NodeJS.Signals[]): void => {
@@ -918,10 +1287,18 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   let env: WorkflowEnv | undefined;
   const seen: Record<string, string> = {};
   // Nobody answers here, so the driver offers the run to a person; once it could not, the steps only a person can take fail.
-  let handoff: PersonHandoff | undefined = canHitl ? undefined : { kind: 'offers' };
+  // A run goes to a person only when no runtime of the driver asks one.
+  let handoff: PersonHandoff | undefined = slots.some((slot) => slot.can.hitl === true) ? undefined : { kind: 'offers' };
+
+  // A runtime's credential values are masked like the team's secrets, whatever their names look like, each entry's own
+  // even when two entries of one runtime give a credential the same name.
+  const maskedCredentials: Record<string, string> = {};
+
+  for (const slot of slots) rememberSecrets(maskedCredentials, credentialSecrets(slot.use, slot.credentials));
+  const maskedValues = async (): Promise<Record<string, string>> => ({ ...env?.secrets ?? await knownSecrets(config), ...maskedCredentials });
 
   const report = async (body: ReportBody, lease: Lease, changed?: readonly string[]): Promise<WorkflowEnvelope | undefined> => {
-    const secrets = env?.secrets ?? await knownSecrets(config);
+    const secrets = await maskedValues();
     await AttemptResult.mask(attemptResultPath(config, runId, lease.attempt), secrets);
 
     const answer = changed === undefined
@@ -929,7 +1306,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       : await managedReport({ config, runId, report: body, secrets, lock, changed });
 
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
-    if (isWorkflowError(answer)) return answer.error.code === 'lease_cancelled' ? undefined : answer;
+    if (isWorkflowError(answer) && answer.error.code !== 'lease_cancelled') return answer;
+    // Its handle is closed only once the report is recorded, so a teamai killed before then reattaches to it.
+    await closeRun(lease.attempt);
+
+    if (isWorkflowError(answer)) return undefined;
     reported.add(body.attempt);
     options.started?.(StartedRunSchema.array().catch([]).parse(answer.data.started));
 
@@ -944,14 +1325,61 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   try {
     for (;;) {
       if (signalled) return { error: { code: 'interrupted', message: `Stopped by ${signalled} after every command it started exited` } };
+
+      if (isStoppedByPerson) return { error: { code: 'interrupted', message: 'A step\'s question closed without an answer. Continue with teamai workflow resume.' } };
       const running = [...inFlight.keys(), ...held.map((lease) => lease.attempt), ...prompts.keys()];
       const canTakeLease = room() && handedBack === undefined;
       const resolved = await resolveWorkflowEnv(config);
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
-      const next = await leaseNext(config, runId, driver, { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: true, prepare: true });
 
-      if (signalled) continue;
+      const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
+        running: listed, canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true, toolFor,
+      });
+
+      // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
+      // once every one was offered. An attempt left open by a loop before this one goes back to its own runtime first.
+      // `heldByAll`: what every runtime offered held back, so a step one of them holds for a person is seen whichever answered last.
+      const offered = await (async (): Promise<{ next: WorkflowEnvelope; slot: RuntimeSlot; held?: true; heldByAll?: WaitHeld[] }> => {
+        for (let reconnect = reconnecting.shift(); reconnect; reconnect = reconnecting.shift()) {
+          const next = await ask(reconnect.slot, false, [...running, ...reconnecting.map((other) => other.attempt)]);
+
+          if (isWorkflowError(next) || !('wait' in next.data)) return { next, slot: reconnect.slot };
+        }
+
+        const withRoom = canTakeLease ? slots.filter(slotHasRoom) : [];
+        let last: { next: WorkflowEnvelope; slot: RuntimeSlot } | undefined;
+        const holds: HeldSteps['runtimes'] = [];
+        const heldByAll: WaitHeld[] = [];
+
+        for (const slot of withRoom) {
+          last = { next: await ask(slot, true, running), slot };
+
+          if (isWorkflowError(last.next) || !('wait' in last.next.data)) return last;
+          const heldBySlot = WaitReplySchema.parse(last.next.data.wait).held ?? [];
+          heldByAll.push(...heldBySlot);
+          holds.push({ runtime: slot.use, held: heldBySlot.map(({ step, reason }) => ({ step, reason })) });
+        }
+
+        // Every runtime with room was offered and held its steps back: the run's details say why.
+        if (last) {
+          await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: holds });
+          // A wait that holds a step says nothing of a gate, which only a `next` that takes no lease answers.
+          const asker = holds.some((hold) => hold.held.length > 0) ? slots.find((slot) => slot.can.hitl === true) : undefined;
+
+          if (asker) {
+            const gate = await ask(asker, false, running);
+
+            if (isWorkflowError(gate) || 'hitl' in gate.data) return { next: gate, slot: asker, held: true };
+          }
+        }
+
+        return last ? { ...last, heldByAll } : { next: await ask(slots[0], false, running), slot: slots[0] };
+      })();
+
+      const { next } = offered;
+
+      if (signalled || isStoppedByPerson) continue;
       // A clone whose steps all settled is not needed any more.
       await sweepClones(config, runId);
 
@@ -960,6 +1388,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const cancelled = z.array(z.string()).safeParse(next.data.cancelled);
 
       for (const attempt of cancelled.success ? cancelled.data : []) cancel(attempt);
+
+      // A step taken, or the run ended: nothing is held back any more. A gate asked beside a held step leaves it held.
+      if (!('wait' in next.data) && !offered.held) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: [] });
 
       if ('done' in next.data) {
         question?.controller.abort();
@@ -997,7 +1428,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         }
 
         // A confined step runs in its directory, never in a checkout another attempt holds.
-        held.push(nextLease.confined ? { ...nextLease, cwd: nextLease.confined.dir } : nextLease);
+        const taken = nextLease.confined ? { ...nextLease, cwd: nextLease.confined.dir } : nextLease;
+        await bind(taken, offered.slot);
+        held.push(taken);
       }
 
       const placesBusy = (): Set<string> => new Set([
@@ -1036,6 +1469,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           () => {
             if (forwarded) handle(forwarded);
 
+            const stepRun = runOf(lease);
+
+            if (stepRun) {
+              return runtimeCommand({
+                run: stepRun, command, view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root),
+                ...runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: runId, mode }),
+              });
+            }
+
             // The lease `env` is set over the step's environment, so its values reach the shell only as variables.
             return startGroupedCommand({
               command, cwd: lease.cwd ?? root, env: { ...lease.processEnv ?? process.env, ...lease.env, ...attemptEnv(config, runId, lease.attempt, mode) }, detached, group: attemptDir(config, runId, lease.attempt),
@@ -1064,7 +1506,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         // Setup runs out of the terminal's reach, so the tool's signals are left to it only once it starts.
         interactiveIgnores = [];
-        const ignored = lease.interactive ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
+        // An interactive step on a runtime that launches agents its own way is not in this terminal.
+        const ignored = lease.interactive && slotOf.get(lease.attempt)?.launchesAgents !== true ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
         const controller = new AbortController();
 
         if (maxParallel === 1) handle(STOP_SIGNALS);
@@ -1072,11 +1515,18 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const { confined: place } = lease;
 
           if (place) {
-            await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
+            const slot = slotOf.get(lease.attempt);
+            const onRuntime = runOf(lease);
+
+            if (!onRuntime) await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
 
             if (!startable(lease, controller.signal)) return undefined;
-            const secrets = env?.secrets ?? await knownSecrets(config);
-            const ended = await runConfinedStep({ config, run: runId, lease: { ...lease, confined: place }, signal: controller.signal, secrets, ...lookup });
+            const confinedLease = { ...lease, confined: place };
+
+            const ended = onRuntime && slot
+              ? await runConfinedStepOnRuntime({ config, run: runId, lease: confinedLease, signal: controller.signal, runtime: slot.use, attemptRun: onRuntime, offers: slot.can.confined ?? [], credentials: slot.credentials, secrets: await maskedValues() })
+              : await runConfinedStep({ config, run: runId, lease: confinedLease, signal: controller.signal, secrets: await maskedValues(), ...lookup });
+
             const id = { attempt: lease.attempt, revision: lease.revision, driver };
 
             if (ended.kind === 'ran') return { ...id, ...ended.report };
@@ -1087,10 +1537,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config)) : undefined;
-          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.tool : undefined });
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined });
 
           if (!startable(lease, controller.signal)) {
-            await abandonPlace({ config, lock, attempt: lease.attempt });
+            await abandon(lease.attempt);
 
             return undefined;
           }
@@ -1098,14 +1548,16 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           if (failure) return unstaged(lease, failure);
           interactiveIgnores = ignored;
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets);
+          const stepRun = runOf(lease);
+
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true, credentials: slotOf.get(lease.attempt)?.credentials ?? {} });
         })() });
       }
 
-      if (canHitl && hitl && !question && !interactiveRuns()) {
+      if (canHitl && hitl && !question && !interactiveRuns() && stepAsks === 0) {
         const controller = new AbortController();
         question = { hitl, controller, exit: (options.question ?? askHitl)(hitl, controller.signal)
-          .then((line) => ({ kind: 'question' as const, line }), () => ({ kind: 'question' as const })) };
+          .then((line) => ({ kind: 'question' as const, hitl, line }), () => ({ kind: 'question' as const, hitl })) };
       }
 
       if ('lease' in next.data && room()) continue;
@@ -1130,7 +1582,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         }
 
         // Nobody answers here, so the run goes to a person: offered on teamai-reports, its local state kept.
-        const people = handoff?.kind === 'offers' ? (wait.held ?? []).filter(({ missing }) => missing.includes(HITL)).map(({ step }) => step) : [];
+        // A step any runtime holds back only a person can take goes to one, when no runtime of the driver asks.
+        const people = handoff?.kind === 'offers' ? [...new Set((offered.heldByAll ?? wait.held ?? []).filter(({ missing }) => missing.includes(HITL)).map(({ step }) => step))] : [];
 
         if (people.length > 0) {
           const unoffered = await offerToPerson(config, runId, cwd);
@@ -1140,7 +1593,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           continue;
         }
 
-        const reason = wait.reason ?? 'the next step is not available';
+        // What the member can change comes first: a step the policy holds on one runtime is held on every runtime that
+        // has its workspace, so the policy is named whichever runtime was offered last. Only a negotiated policy hold
+        // puts policy first in `missing`; a runtime that defers the step on its workspace puts that first.
+        const policy = (offered.heldByAll ?? []).find(({ missing }) => missing[0]?.startsWith('policy.'));
+        const reason = policy?.reason ?? wait.reason ?? 'the next step is not available';
         // A run claimed from another machine does not bring its --sandbox along: say which flag declares it here.
         const needsSandbox = !isSandbox(config, options) && wait.held?.some(({ missing }) => missing.includes(ISOLATION)) === true;
 
@@ -1164,13 +1621,21 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       clearTimeout(timer);
 
-      if (!exited) continue;
+      // What ended after the person stopped the run is not reported: the cleanup below stops the rest, and resume reruns it.
+      if (!exited || isStoppedByPerson) continue;
 
       if (exited.kind === 'question') {
-        const questionHitl = question!.hitl;
+        // A step's question closed it, and took it from the driver: it is asked again once no step asks.
+        const closedByStep = question === undefined;
+        const questionHitl = exited.hitl;
         question = undefined;
 
-        if (exited.line === undefined) return { error: { code: 'interrupted', message: 'The HITL question closed without an answer. Continue with teamai workflow resume.' } };
+        if (exited.line === undefined) {
+          if (closedByStep) continue;
+
+          return { error: { code: 'interrupted', message: 'The HITL question closed without an answer. Continue with teamai workflow resume.' } };
+        }
+
         const [choice = '', ...words] = exited.line.trim().split(/\s+/);
         const provenance = respondProvenance({ kind: 'terminal', caller: callerProvenance(process.env, { isTTY: true }) });
         const response: ResponseInput = { step: questionHitl.step, pass: questionHitl.pass, choice, provenance };
@@ -1204,7 +1669,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         if (maxParallel === 1) handle([]);
 
-        if (stopping) await abandonPlace({ config, lock, attempt: stopping.lease.attempt });
+        if (stopping) await abandon(stopping.lease.attempt);
         continue;
       }
 
@@ -1215,7 +1680,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       if (staged.kind === 'stopped') {
         // Its lease ended while it was staged: the engine stops it, and the driver leaves the copy as it found it.
-        await abandonPlace({ config, lock, attempt: exited.lease.attempt });
+        await abandon(exited.lease.attempt);
         continue;
       }
 
@@ -1239,10 +1704,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       for (const attempt of inFlight.keys()) cancel(attempt);
       await Promise.all([...dying.values()].map(async ({ lease, command }) => {
         await command.stop();
-        await abandonPlace({ config, lock, attempt: lease.attempt });
+        await abandon(lease.attempt);
       }));
     } finally {
-      await maskAttemptFiles(config, runId, env?.secrets ?? await knownSecrets(config));
+      await maskAttemptFiles(config, runId, await maskedValues());
     }
 
     await archive.close();

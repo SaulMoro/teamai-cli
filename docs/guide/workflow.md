@@ -4,6 +4,10 @@
 
 A workflow is a YAML file at `workflows/<name>.yaml` in the team repo. It runs command and prompt steps, each after the steps it needs. A command with no workspace is read-only; [Workspaces](#workspaces) is how a step changes code on its own branch. [Advanced workflows](workflow-advanced.md) covers parallel steps, loops, `for_each`, what an end does to steps that still run, and the full expression language.
 
+To run each step in a container from your team's image, see [Sandbox runtime](runtime-sandbox.md).
+To run each prompt step as a T3 Code thread you can watch, see [T3 runtime](runtime-t3.md).
+To run prompt steps as agents of a Paseo daemon, see [Paseo runtime](runtime-paseo.md).
+
 ```yaml
 schemaVersion: v1alpha1
 name: build
@@ -258,6 +262,30 @@ Inside a workspace an enclosing step opened, a read-only step runs in that works
 
 The step sees the agent files from the commit the run started at: `AGENTS.md`, `CLAUDE.md`, `.agents`, `.githooks`, every tool's project directory such as `.claude` or `.tclaude`, the project MCP files `.mcp.json` and `opencode.json`, and Copilot's agent paths under `.github`. A hook an earlier step committed does not run in a later step. The team's skills, rules, agents and MCP are then delivered into the worktree, as they are for any new worktree of this checkout. Those delivered files are not part of the step's commit. A file the step itself edits is committed.
 
+teamai commits and pushes each step's work itself, with git hooks turned off, on every driver, `--driver local` included. A step cannot plant a hook that then runs on your machine, and your own `pre-commit` and `pre-push` hooks do not run on these commits either. A check that lived in a hook is skipped:
+
+```text
+$ teamai workflow start fix-date --driver local
+ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it with: teamai workflow resume r7c1d2e3f4a5b6c7d --driver local
+{"data":{"done":{"run":"r7c1d2e3f4a5b6c7d","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+No `husky - pre-commit` line appears, and the branch is pushed even when `npm run lint` would fail. Run the check as a step, so the run fails where the hook would have stopped the commit, or keep it in CI:
+
+```yaml
+schemaVersion: v1alpha1
+name: fix-date
+description: Fix the date parser, then lint the fix.
+steps:
+  - id: fix
+    workspace: new
+    prompt: Fix the date parser.
+  - id: lint
+    needs: [fix]
+    workspace: new        # starts from the fix branch
+    command: npm ci && npm run lint
+```
+
 When the checkout has an `origin` and the step made commits, the driver pushes that branch, also when the step failed. A later attempt that adds no commit still pushes when this branch has commits `origin` does not have. That includes a first push that never landed, and an origin that has no branches yet. A failed push fails a step that succeeded with `push_failed` and keeps the worktree. A step that failed keeps its own failure, and its message adds that the push failed. With no `origin`, or when `origin` already has that commit, the run still succeeds and reports the branch.
 
 `session: continue` resumes this step's previous pass with the same tool. `session: { from: <step> }` resumes a step this one needs. A different tool resumes a copy of the session. OpenCode gets the copy but always starts fresh, because it has no flag to resume a session. A step resumes a session as the last step that continued it left it, whichever tool or machine that step ran on. A step that started a new session, such as an OpenCode step, does not change what later steps resume.
@@ -509,7 +537,7 @@ teamai workflow start judge-change --driver local
 - `<dir>` may be a template that reads inputs, `item` and the outputs of the steps the step needs. It is rendered when the step is leased, and a relative one is under `$TEAMAI_RUN_DIR`. A directory outside it, a symlink, or one without a readable `confined.json` fails the step with `confined_invalid`, which says what to fix.
 - `confined.json` is `{ "level": "verified" | "best-effort", "prefer": "<tool>" | ["<tool>", …], "schema": "<file>" }`. `verified` runs only on a tool version whose confined launch TeamAI checked, such as Claude Code 2.1.308, Codex 0.163.0 or OpenCode 2.1.2, and `best-effort` on any tool TeamAI launches confined, such as Cursor. `prefer` is tried first; a list is tried in its order. `schema` is a JSON Schema file in the directory that the reply follows. The step that writes the evidence sets the level: the workflow file cannot set or lower it.
 - The step runs one prompt, once. Pull refuses `workspace: { confined }` on a command or `workflow` step, and beside `for_each`, `scorers`, `requires.env`, `agent`, `tool`, `session`, `role`, `interactive` or `deliver`. It may set `model`: a step whose model no tool that reaches its level resolves here stays pending.
-- The local driver runs it. When only such steps are left and no tool here can run them, it stops with `confined_pending`, which names what is missing; make that tool available, then run `teamai workflow resume`. In a coding session, the skill driver runs it in the background on the session's tool when that tool reaches `verified` here, else in a fresh subagent that reads only the directory, at `best-effort`. On a host that starts no child agent, it runs the step in the background on the session's tool at `best-effort` when that tool is on PATH. With `--no-judge`, or on such a host without it, the step waits for another driver.
+- The local driver runs it, and a [driver definition](workflow-advanced.md#a-runtime-that-answers-confined-prompts) on a runtime that answers confined prompts, else, when it lists `local`, on this machine's tools. When only such steps are left and no tool here can run them, it stops with `confined_pending`, which names what is missing; make that tool available, then run `teamai workflow resume`. In a coding session, the skill driver runs it in the background on the session's tool when that tool reaches `verified` here, else in a fresh subagent that reads only the directory, at `best-effort`. On a host that starts no child agent, it runs the step in the background on the session's tool at `best-effort` when that tool is on PATH. With `--no-judge`, or on such a host without it, the step waits for another driver.
 - The step records `confined`: the tool, the model and effort the tool reported, the isolation TeamAI measured, the access the tool had, and its usage. A success with no record, or a record whose tool the lease did not offer or whose isolation is below the step's level, fails the step with `confined_report_mismatch`.
 
 ## Deliver a PR
