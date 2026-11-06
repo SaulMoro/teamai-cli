@@ -123,14 +123,14 @@ afterEach(async () => {
 });
 
 describe('teamai-runtime-paseo', () => {
-  it('offers prompt steps only, in the checkout, a new or continued worktree, or a clone or team clone teamai prepares, with no env, token count or unattended mode, for the tools the daemon can run', async () => {
+  it('offers prompt steps only, in the checkout, a new or continued worktree, or a clone or team clone teamai prepares, with the role teamai delivered there, with no env, token count or unattended mode, for the tools the daemon can run', async () => {
     // The daemon runs on this machine, where `codex login status` says Codex is signed in.
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }, codex_login: 'signed_in' });
 
     expect(await ready(start())).toEqual({
       type: 'init', ok: true, prompt: true, confinedPrompt: true,
       can: {
-        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude', 'codex', 'opencode'],
+        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude', 'codex', 'opencode'],
         confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex', 'opencode'] }],
       },
     });
