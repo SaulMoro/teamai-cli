@@ -1,4 +1,4 @@
-import type { InitCredentials, InitInstance } from '@teamai/runtime-protocol';
+import { UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
 import type { Unavailable } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
 
@@ -61,6 +61,11 @@ export const SIGN_IN = {
   },
   codebuddy: { env: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'], hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY } },
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
+
+/** `reason` cut to the longest protocol 1 takes in `unavailable`, its end marked when it is cut. */
+function fitted(reason: string): string {
+  return reason.length > UNAVAILABLE_REASON_MAX ? `${reason.slice(0, UNAVAILABLE_REASON_MAX - 1)}…` : reason;
+}
 
 /** How `tool` signs in inside a sandbox, when this runtime knows. */
 function signInOf(tool: string): SignIn | undefined {
@@ -158,8 +163,8 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
     kept,
     unusedGateways,
     unavailable: Object.fromEntries([
-      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, cannotSignIn(tool, tool)]),
-      ...served.flatMap(({ name, why }) => (why === undefined ? [] : [[name, why]])),
+      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, fitted(cannotSignIn(tool, tool))]),
+      ...served.flatMap(({ name, why }) => (why === undefined ? [] : [[name, fitted(why)]])),
     ]),
   };
 }
