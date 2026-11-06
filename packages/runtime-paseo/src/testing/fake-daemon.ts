@@ -87,6 +87,8 @@ const BehaviourSchema = z.object({
   refuse_cancel: z.string().optional(),
   /** How long the daemon takes to answer a refused cancel. */
   refuse_cancel_ms: z.number().int().nonnegative().default(0),
+  /** How long the daemon takes to answer a cancel it takes, which stops the agent at once (after `stop_lag_ms`). */
+  cancel_reply_ms: z.number().int().nonnegative().default(0),
   /** How long an agent goes on running after the daemon answered a cancel or an archive that stops it. */
   stop_lag_ms: z.number().int().nonnegative().default(0),
   /** The daemon refuses to archive a workspace with this error. */
@@ -607,8 +609,11 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         }
 
         if (agent) stop(agent, 'idle');
+        const answer = (): void => reply({ type: 'cancel_agent_response', payload: { requestId: message.requestId ?? '', agentId: message.agentId, agent: agent ? snapshot(agent) : null, error: agent ? null : `Agent not found: ${message.agentId}` } });
+        const { cancel_reply_ms: replying } = behaviour();
 
-        reply({ type: 'cancel_agent_response', payload: { requestId: message.requestId ?? '', agentId: message.agentId, agent: agent ? snapshot(agent) : null, error: agent ? null : `Agent not found: ${message.agentId}` } });
+        if (replying > 0) timers.add(setTimeout(answer, replying));
+        else answer();
 
         return;
       }

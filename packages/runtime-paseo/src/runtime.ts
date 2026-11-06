@@ -1130,6 +1130,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     if (outcome) journal.savePrompt(op, { ...found, outcome: undefined });
     journal.cancel(op);
     const following = waiting.get(op);
+    const endsBefore = ends.get(op) ?? 0;
     stopping.add(op);
 
     try {
@@ -1168,6 +1169,14 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' });
     } finally {
       stopping.delete(op);
+      // Another process recorded its end while this one cancelled it, as the runtime a prompt was resent to does when it
+      // sees the agent stop: this cancel answers with that end, since teamai waits for one, and the follow here sends none.
+      const recorded = (ends.get(op) ?? 0) === endsBefore ? journal.prompt(op) : undefined;
+
+      if (recorded && recorded.kind !== 'refused' && recorded.outcome) {
+        waiting.delete(op);
+        send(op, recorded.outcome);
+      }
     }
 
     following?.stop();

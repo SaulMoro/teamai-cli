@@ -613,6 +613,35 @@ describe('teamai-runtime-paseo', () => {
     expect(await restarted.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
   });
 
+  it('answers a retried cancel with the end a runtime following the resent prompt recorded while Paseo answered the cancel', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy' });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'display'));
+    first.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await first.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    await first.kill();
+
+    // Paseo takes the retried cancel but answers it late. The runtime the prompt is resent to cancels the agent too, is
+    // answered at once, sees the agent stop and records the end before the runtime that retried the cancel hears back.
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_000, cancel_reply_ms: 4_000 });
+    const second = start();
+    await ready(second, { mode: 'recover' });
+    second.send({ type: 'cancel', op: 'op-0000000b' });
+    await expect.poll(() => received().filter((request) => request.type === 'cancel_agent_request')).toHaveLength(2);
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_000 });
+    const restarted = start();
+    await ready(restarted);
+    restarted.send(promptRequest(handle, 'op-0000000b'));
+    expect(await restarted.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+
+    const answered = await Promise.race([second.next(isEnd('op-0000000b')), delay(6_000).then(() => 'no answer')]);
+
+    expect(answered).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+  });
+
   it('answers a cancel that comes while Paseo still creates the agent within 15 s of reading it, cancel_failed, since the agent may still start', async () => {
     behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 30_000 });
     const runtime = start();
