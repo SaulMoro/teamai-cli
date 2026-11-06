@@ -1667,6 +1667,8 @@ teamai reads each variable once, when the run starts or resumes. One that is uns
 {"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
 ```
 
+A runtime entry that declares no credential, neither an `env:` one nor a login, gets the tool sign-in variables set in your environment instead, by name: Claude's `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` (with `ANTHROPIC_BASE_URL`), Codex's `OPENAI_API_KEY` or `CODEX_API_KEY`, and CodeBuddy's `CODEBUDDY_API_KEY` or `CODEBUDDY_AUTH_TOKEN`. So the team's definition can name only the tool, and each member signs it in their own way. Their values are masked like any credential. Only a runtime that runs the tool's process itself and offers `can.env` gets them. A runtime that launches agents its own way signs them in where it runs them, and gets none.
+
 Where the values go:
 
 | Gets them | Never gets them |

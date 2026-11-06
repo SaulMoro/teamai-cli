@@ -17,6 +17,7 @@ import type { InitInstance, RuntimeFailure, RuntimeOptions } from '@teamai/runti
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceNames, toolOf } from '../../tool-registry.js';
 import type { StepRuntime } from './step-runtime.js';
+import type { ExecRuntimeTool } from './attempt.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 
 // ─── Where a step runtime comes from ─────────────────────
@@ -276,6 +277,25 @@ function credentialValues(driver: ResolvedDriver, use: string, credentials: EnvC
   return { ok: true, values };
 }
 
+/**
+ * The variables each tool a step runtime launches signs in with, and those that go with them. A runtime entry that
+ * declares no credential gets, by name, the ones set in the member's environment, so the team's definition need not
+ * pick one route for everybody.
+ */
+export const SIGN_IN_VARIABLES: Record<ExecRuntimeTool, { signIn: readonly string[]; alongside?: readonly string[] }> = {
+  claude: { signIn: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'] },
+  codex: { signIn: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
+  codebuddy: { signIn: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'] },
+};
+
+/** The values of the tools' sign-in variables set in `env`, by name, with those that go with a sign-in found. */
+function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
+  const isSet = (name: string): boolean => (env[name] ?? '') !== '';
+  const names = Object.values(SIGN_IN_VARIABLES).flatMap(({ signIn, alongside = [] }) => (signIn.some(isSet) ? [...signIn, ...alongside] : []));
+
+  return Object.fromEntries(names.filter(isSet).sort().map((name) => [name, env[name] ?? '']));
+}
+
 /** One runtime of an opened definition: `local` in teamai's process, or an external one that took its options. */
 export type OpenedRuntime =
   | { kind: 'local'; use: 'local'; engine: EngineOptions }
@@ -363,10 +383,12 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const accepted = await acceptRuntime(source, { mode, canAsk });
 
   if (!accepted.ok) return accepted;
+  const isDeclaring = split.credentials.length > 0 || split.engine.logins.length > 0;
+  const found = purpose === 'run' && !isDeclaring ? signInsFound(process.env) : {};
 
   // What the runtime tells the person is shown with the values of the credentials it gets masked, and with the team's
   // secrets, which the drive adds here as it resolves them (`masks`).
-  const masks = credentialSecrets(source.name, values.values);
+  const masks = credentialSecrets(source.name, { ...values.values, ...found });
 
   const spawned = (): StepRuntime => (source.kind === 'shipped'
     ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], cwd: checkout, secrets: masks })
@@ -385,7 +407,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   }
 
   const runtime = spawned();
-  const credentials = { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins };
+  const credentials = { env: [...split.credentials.map((credential) => credential.name), ...Object.keys(found)], logins: split.engine.logins };
   const ready = await runtime.init({ options: split.runtime, mode, credentials, instances: await runnableInstances(), checkout });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
@@ -413,9 +435,14 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   if (ready.ok) {
     // A login the runtime's provider keeps itself is not copied into an attempt's tool home over it.
     const engine = { ...split.engine, logins: split.engine.logins.filter((tool) => !ready.ownLogins?.includes(tool)) };
+    // A sign-in found by name reaches only a runtime that execs the tool and keeps a value to it. One that launches
+    // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
+    const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
+    const given = isKeepingFound ? { ...values.values, ...found } : values.values;
 
-    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: values.values, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
   }
+
   await runtime.dispose();
   const { failure } = ready;
 

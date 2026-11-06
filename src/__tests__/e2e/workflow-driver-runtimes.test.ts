@@ -1362,6 +1362,23 @@ steps:
       ? fs.readdirSync(dir, { recursive: true, encoding: 'utf8' }).map((name) => path.join(dir, name)).filter((at) => fs.statSync(at).isFile() && fs.readFileSync(at).includes(text))
       : []);
 
+    it('finds the tool\'s own sign-in variables in the member\'s environment by name when the runtime declares no credential', async () => {
+      writeDefinition('signinbyname', [{ use: 'toy', options: { state } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'signinbyname'], repo, env({ ANTHROPIC_AUTH_TOKEN: VALUE, ANTHROPIC_BASE_URL: 'https://gateway.example.test' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(noted().find((line) => line.type === 'init')).toMatchObject({ names: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'] });
+      expect(noted().filter((line) => line.handle === `toy-${runId}-${attemptOf(review)}`).map(({ type, names }) => ({ type, names }))).toEqual([
+        { type: 'open', names: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'] },
+        { type: 'exec', names: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'] },
+      ]);
+      expect([...holding(path.join(dataHome, 'workflows'), VALUE), ...holding(state, VALUE)]).toEqual([]);
+      expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
+    });
+
     it('fails at start, naming the variable, when an env credential is unset', async () => {
       credentialDefinition('tokenunset');
 

@@ -1661,6 +1661,8 @@ teamai 在运行开始或继续时读取每个变量一次。未设置的变量�
 {"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
 ```
 
+如果运行时条目没有声明任何凭据，既没有 `env:` 凭据也没有登录，它会按名字拿到你环境中已设置的工具登录变量：Claude 的 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`（连同 `ANTHROPIC_BASE_URL`），Codex 的 `OPENAI_API_KEY` 或 `CODEX_API_KEY`，以及 CodeBuddy 的 `CODEBUDDY_API_KEY` 或 `CODEBUDDY_AUTH_TOKEN`。这样团队的定义只需写出工具，每个成员用自己的方式登录。这些值和其他凭据一样会被遮盖。只有自己运行工具进程并提供 `can.env` 的运行时才会拿到它们。以自己的方式启动代理的运行时在它运行代理的地方为其登录，拿不到这些值。
+
 这些值去哪里：
 
 | 会得到 | 永远得不到 |
