@@ -844,7 +844,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const opened: PlaceRecord = {
       kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, binding,
-      ...(settle !== undefined && { settleScript: settle }), ops: {}, threads: {}, launches: {},
+      ...(settle !== undefined && { settleScript: settle }), settingsProjectId: checkout.project.id, ops: {}, threads: {}, launches: {},
     };
 
     journal.write(opened);
@@ -1087,7 +1087,7 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const project = projectSettings(readSettings(options.t3Home), opened.kind === 'worktree' ? { id: opened.projectId } : undefined);
+    const project = projectSettings(readSettings(options.t3Home), opened.kind === 'worktree' ? { id: opened.settingsProjectId ?? opened.projectId } : undefined);
     const selection = modelSelection({ provider: instance, lease, defaultModel: project.defaultModel });
 
     if (!selection.ok) {

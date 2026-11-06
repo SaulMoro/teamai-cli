@@ -469,6 +469,18 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.stderr()).toBe(`T3 Code runs the setup script "Install" of acme-app in each worktree a thread opens on, so teamai adds the step's worktree ${worktree} to T3 Code as a project of its own, where that script does not run.\n`);
     });
 
+    it('runs the thread on the worktree\'s own project in the mode the member set for the checkout\'s project', async () => {
+      const settings = scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true });
+      t3.settings({ ...settings, defaultRuntimeMode: 'auto', projectSettingsOverrides: { 'project-1': { ...settings.projectSettingsOverrides['project-1'], defaultRuntimeMode: 'approval-required' } } });
+      const runtime = await initialized();
+
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+      runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b'));
+
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]).toMatchObject({ runtimeMode: 'approval-required', projectId: expect.not.stringMatching(/^project-1$/) });
+    });
+
     it('leaves a thread unsettled, saying why once, when settling it would run the project\'s settle script in the step\'s worktree', async () => {
       t3.settings(scriptsInProject1({ name: 'Stop services', command: 'echo stopped > SETTLE_RAN.txt', runOnWorktreeCreate: false, runOnSettle: true }));
       const { runtime, handle } = await opened();
