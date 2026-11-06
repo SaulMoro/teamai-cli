@@ -1089,7 +1089,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     const known = attemptRuns.get(lease.attempt);
 
     if (known) return known;
-    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver });
+    // The step's timeout, or a turn limit's time, is the latest the attempt may run on its runtime.
+    const timeoutMs = lease.limits?.timeoutMs;
+    const deadline = lease.expiresAt ?? (timeoutMs === undefined ? undefined : new Date(Date.now() + timeoutMs).toISOString());
+    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver, ...(deadline !== undefined && { deadline }) });
     attemptRuns.set(lease.attempt, created);
 
     return created;

@@ -218,7 +218,11 @@ function isStopRefused(failure: RuntimeFailure): boolean {
   return failure.code === CANCEL_FAILED;
 }
 
-export function attemptRun({ config, run, attempt, runtime, driver }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string }): AttemptRun {
+/**
+ * `deadline` is the latest time the attempt's limits allow, which its `open` tells the runtime and which bounds what
+ * runs in the place; undefined when the attempt has no time limit, or only stops what a teamai before it left.
+ */
+export function attemptRun({ config, run, attempt, runtime, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string; deadline?: string }): AttemptRun {
   const file = recordPath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   let running: { op: OpId } | undefined;
@@ -269,10 +273,10 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
    */
   const stopLeftRunning = async (handle: string, op: OpId): Promise<RuntimeFailure | undefined> => {
     await runtime.cancel(op);
-    const deadline = Date.now() + STOP_WAIT_MS;
+    const waitUntil = Date.now() + STOP_WAIT_MS;
 
-    for (let left = STOP_WAIT_MS; left > 0; left = deadline - Date.now()) {
-      // A reattach sent just before the deadline does not extend it.
+    for (let left = STOP_WAIT_MS; left > 0; left = waitUntil - Date.now()) {
+      // A reattach sent just before the wait ends does not extend it.
       let timer: NodeJS.Timeout | undefined;
       const seen = await Promise.race([runtime.reattach(handle), new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), left); })]);
       clearTimeout(timer);
@@ -287,7 +291,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (!isUnstopped(state)) return undefined;
 
       if (state?.state === 'failed') return state.failure;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(100, deadline - Date.now())));
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, waitUntil - Date.now())));
     }
 
     return { code: 'runtime_unanswered', message: `Step runtime "${runtime.name}" still reported operation ${op} of attempt ${attempt} running ${STOP_WAIT_MS / 1000} s after teamai asked it to cancel it.` };
@@ -348,7 +352,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       await save(opening);
 
-      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(view && { view }) }, async (handle) => {
+      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(deadline !== undefined && { deadline }), ...(view && { view }) }, async (handle) => {
         const now = await current();
 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });

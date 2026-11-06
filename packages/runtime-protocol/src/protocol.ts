@@ -298,6 +298,12 @@ export const OpenRequestSchema = z.object({
    */
   tool: z.string().min(1).optional(),
   /**
+   * The latest time the attempt's limits allow, as an ISO timestamp, when it has any. teamai cancels an exec or prompt
+   * of the place still running then, fails the open when the place is not ready by then, and waits for a `collect` 15 s
+   * past it at most. Absent: the attempt has no time limit.
+   */
+  deadline: z.iso.datetime({ offset: true }).optional(),
+  /**
    * The credentials of this attempt's tool, as each of its execs and prompts also carries them: never set when the
    * place is created, only per operation. A command step's place gets none.
    */

@@ -1551,6 +1551,12 @@ Step runtime "acme" could not close the place of attempt a1, so what ran there m
 
 `open` 的 `view` 列出地点按与本机相同的绝对路径拿到的路径：可读写的工作树、只读的 git 路径、attempt 的结果目录和工具主目录，以及可读写的 `runDir`，即运行的临时目录，所以 `$TEAMAI_RUN_DIR` 在那里和在本机一样可用。
 
+带 `timeout` 的步骤会让它的 `open` 带上 `deadline`，即它的限制允许的最晚时间。到那时仍在运行的该位置的 `exec` 或 `prompt`（包括重新连上的）会被 teamai 取消；到那时位置还没 `ready`，`open` 失败；`collect` 最多等到它之后 15 秒。没有时间限制的步骤没有 `deadline`，它的工作运行多久都不受限：
+
+```text
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","deadline":"2026-11-06T15:10:00.000Z","view":{…},"credentials":{}}
+```
+
 #### 自己启动智能体的运行时
 
 T3 Code 或 Paseo 这类运行时从一个提示启动智能体，在它结束时得到会话，而不是运行工具的命令行。它在 `init` 时用 `"prompt": true` 说明这一点。如果 `can` 里还有 `"exec": false`，它就不接受命令，所以命令步骤和带 `setup` 的步骤会交给定义中的下一个运行时。带 `"exec": false` 却没有 `"prompt": true` 的运行时运行不了任何步骤，teamai 在启动时拒绝它：
