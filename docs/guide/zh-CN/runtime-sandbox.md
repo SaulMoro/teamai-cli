@@ -115,7 +115,7 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude cannot sign in inside this docker sandbox, so a step there would stop at its "Not logged in": a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again. Or remove tool from the step.
 ```
 
-命令步骤照样在 sandbox 里运行：它们不需要登录。驱动定义在 sandbox 之后列了 `local` 时，这样的步骤会改由 `local` 在这台机器的工具上运行。只列 sandbox，就能让每个提示词步骤都留在里面。
+命令步骤照样在 sandbox 里运行：它们不需要登录。驱动定义在 sandbox 之后列的 `local` 也不会接手这样的提示词步骤：它照上面那样失败，所以步骤不会因为它的工具在 sandbox 里登录不了，就改到这台机器的工具上运行。评判和交互式步骤仍由 `local` 接手。
 
 只有分配给步骤的变量名会进入容器：它的 `requires.env` 键、工作流的 `env`、teamai 的尝试标记、工具主目录变量，以及只给步骤工具的 `credentials`。你环境里的其他内容都不会进去，所以 `GH_TOKEN`、`SSH_AUTH_SOCK` 之类会留在外面。变量值从不出现在命令行里：容器创建时不带任何凭据，每次 `docker exec -e NAME` 都从容器引擎 CLI 自己的环境里读取值。变量值也不会写到磁盘上：运行时记下的每次 exec 结果里，工具打印出的凭据都会被遮盖。
 
@@ -254,7 +254,7 @@ SCOPE      TYPE      NAME        SECRET
 # drivers/teamai-sandbox.yaml，随 teamai 提供
 schemaVersion: v1alpha1
 name: teamai-sandbox
-description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge, interactive steps, and a step whose tool cannot sign in with sbx.
+description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge and interactive steps.
 runtimes:
   - use: sandbox
     options: { provider: sbx, max_parallel: 4 }   # 不写 agent：每次尝试从它自己工具的模板启动

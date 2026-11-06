@@ -115,7 +115,7 @@ in the container                                        from the host
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude cannot sign in inside this docker sandbox, so a step there would stop at its "Not logged in": a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again. Or remove tool from the step.
 ```
 
-Command steps still run in the sandbox: they need no sign-in. When the definition lists `local` after the sandbox, `local` takes such a step instead, on this machine's tool. List only the sandbox to keep every prompt step in it.
+Command steps still run in the sandbox: they need no sign-in. A `local` listed after the sandbox does not take such a prompt step either: it fails as above, so a step never runs on this machine's tool because its tool could not sign in in the sandbox. `local` still takes the judge and interactive steps.
 
 Only the names a step is given cross into the container: its `requires.env` keys, the workflow's `env`, teamai's attempt marker, the tool home variable, and, for the step's tool only, the `credentials`. Nothing else of your environment reaches it, so `GH_TOKEN`, `SSH_AUTH_SOCK` and the like stay out. Values never appear in a command line: the container is created with no credential, and each `docker exec -e NAME` reads the value from the engine CLI's own environment. Nor are they written to disk: the runtime keeps what it remembers of each exec with any credential the tool printed masked.
 
@@ -254,7 +254,7 @@ The login stays in sbx's proxy on your machine, which adds it to the tool's requ
 # drivers/teamai-sandbox.yaml, shipped with teamai
 schemaVersion: v1alpha1
 name: teamai-sandbox
-description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge, interactive steps, and a step whose tool cannot sign in with sbx.
+description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge and interactive steps.
 runtimes:
   - use: sandbox
     options: { provider: sbx, max_parallel: 4 }   # no agent: each attempt starts from its own tool's template
