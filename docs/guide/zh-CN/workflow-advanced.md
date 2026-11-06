@@ -1583,7 +1583,7 @@ teamai 自带这些定义：
 | --- | --- |
 | `teamai-claude`、`teamai-codex`、`teamai-opencode` | `local`，提示步骤用对应的工具 |
 | `teamai-t3` | `t3`（`environment: local`、`max_parallel: 4`），然后 `local` |
-| `teamai-paseo` | `paseo`（`url: ws://127.0.0.1:6767/ws`、`max_parallel: 4`），然后 `local` |
+| `teamai-paseo` | `paseo`（`max_parallel: 4`，连接你的 Paseo 配置指定的地址），然后 `local` |
 
 ### 运行时选项
 
