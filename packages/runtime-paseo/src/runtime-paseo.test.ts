@@ -157,6 +157,18 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it('does not offer OpenCode where Paseo shares OpenCode\'s own background server, which takes no environment for an agent', async () => {
+    behave({ models: { opencode: ['opencode/beam-free'] }, opencode_server: 'http://127.0.0.1:49374' });
+
+    expect(await ready(start())).toEqual({
+      type: 'init', ok: false,
+      error: {
+        code: 'tool_unavailable',
+        message: `The Paseo daemon at ${daemon.url} runs no tool teamai-runtime-paseo can use. opencode: Paseo runs it on OpenCode's background server at http://127.0.0.1:49374, which takes no environment for an agent, and teamai gives each step TEAMAI_RUN_DIR; stop that server with \`opencode service stop\` on the daemon's host, then \`paseo restart\`.`,
+      },
+    });
+  });
+
   it('offers Codex on a daemon on this machine only when `codex login status` says it is signed in', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out' });
 

@@ -49,6 +49,11 @@ const BehaviourSchema = z.object({
   codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
   /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
   codex_path: z.string().optional(),
+  /**
+   * The URL of OpenCode's own background server running on the daemon's host, which Paseo 0.15.2 shares instead of
+   * starting one per agent; its OpenCode diagnostic then names only that server (recorded).
+   */
+  opencode_server: z.string().optional(),
   /** Directories the member already has open as Paseo workspaces, as the app opens a project. */
   member_workspaces: z.array(z.string()).default([]),
   /** The default mode the providers snapshot gives a provider, over Paseo 0.14.0's own; null: none, as OpenCode's. */
@@ -444,7 +449,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       case 'provider_diagnostic_request': {
         const does = behaviour();
         const resolved = message.provider === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login) : `/usr/local/bin/${message.provider}`;
-        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: diagnosticOf(message.provider, does.sign_in[message.provider], resolved) } });
+        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: message.provider === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(message.provider, does.sign_in[message.provider], resolved) } });
 
         return;
       }

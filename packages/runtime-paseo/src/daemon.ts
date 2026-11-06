@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
-import type { RuntimeFailure } from '@teamai/runtime-protocol';
+import { RUN_DIR_ENV, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
 import type { AgentCreate } from './journal.js';
 
@@ -370,9 +370,18 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           : 'Paseo does not report whether it is signed in; run `paseo provider diagnostic claude` on the daemon\'s host to see its Auth line';
       }
 
-      case 'opencode':
+      case 'opencode': {
+        // Paseo 0.15 runs OpenCode on OpenCode's own background server when one runs on its host, and its diagnostic then
+        // names only that server. That server refuses an agent any environment, and each step's agent gets TEAMAI_RUN_DIR.
+        const shared = /^OpenCode server: (\S+)/.exec((await api.providers.diagnostic('opencode')).diagnostic)?.[1];
+
+        if (shared !== undefined) {
+          return `Paseo runs it on OpenCode's background server at ${shared}, which takes no environment for an agent, and teamai gives each step ${RUN_DIR_ENV}; stop that server with \`opencode service stop\` on the daemon's host, then \`paseo restart\``;
+        }
+
         // Paseo lists OpenCode's models from the providers it reaches, its free ones included, and none when it reaches none.
         return (await models(tool)).length > 0 ? undefined : 'reaches no model provider; run `opencode auth login` on the daemon\'s host, then `paseo restart`';
+      }
 
       case 'codex': {
         // Paseo reports no Codex sign-in, so teamai asks Codex itself, which it can only where the daemon runs. It asks the
