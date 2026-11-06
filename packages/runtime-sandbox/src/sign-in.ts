@@ -1,4 +1,5 @@
 import type { InitCredentials, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { LAUNCHABLE } from './providers/cli.js';
 
 // ─── Whether a tool can sign in inside a sandbox ─────────
 //
@@ -35,7 +36,6 @@ const CODEX_IN_A_CONTAINER = 'add codex: login to the sandbox\'s credentials, th
 const CODEBUDDY = 'add CODEBUDDY_API_KEY: env:CODEBUDDY_API_KEY to the sandbox\'s credentials';
 
 /** How each tool a step runtime launches signs in inside a sandbox, by its executable. */
-// oxlint-disable-next-line teamai/tool-facts -- the sign-in of each tool in LAUNCHABLE (providers/cli.ts) inside a sandbox; a runtime package cannot read teamai's tool registry
 export const SIGN_IN = {
   claude: {
     env: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'],
@@ -56,7 +56,7 @@ export const SIGN_IN = {
     },
   },
   codebuddy: { env: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'], hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY } },
-} satisfies Record<string, SignIn>;
+} satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
 
 /** How `tool` signs in inside a sandbox, when this runtime knows. */
 function signInOf(tool: string): SignIn | undefined {

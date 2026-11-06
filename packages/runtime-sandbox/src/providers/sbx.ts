@@ -171,7 +171,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
         return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
       }
 
-      const found = LAUNCHABLE.includes(agent) ? { ok: true as const, tools: [agent] } : await probeTools();
+      const found = LAUNCHABLE.some((tool) => tool === agent) ? { ok: true as const, tools: [agent] } : await probeTools();
 
       if (!found.ok) return found;
       const stored = await storedLogins();
