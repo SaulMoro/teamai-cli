@@ -113,10 +113,10 @@ export interface ServeOptions {
   write(message: RuntimeMessage): void;
   journal: Journal;
   /**
-   * Connects to the environment for a run in `mode`, signing in at `access` when it has no valid sign-in. `recover`
+   * Connects to the environment for a run in `mode`, signing in when it has no valid sign-in. `recover`
    * signs in never: it only stops what an earlier run left. A failure names why and what the person does about it.
    */
-  connect(how: { mode: WorkMode; access: StepMode } | { mode: 'recover' }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  connect(how: { mode: RuntimeMode }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
 }
@@ -605,7 +605,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
     const answerBy = Date.now() + INIT_WAIT_MS;
     const stepMode = parsed.data.runtime_mode ?? 'auto';
-    const connecting = options.connect({ mode: request.mode, access: stepMode });
+    const connecting = options.connect({ mode: request.mode });
     const reaching = request.mode === 'attended' ? { answered: true as const, value: await connecting } : await within(connecting, INIT_WAIT_MS);
 
     if (!reaching.answered) {
