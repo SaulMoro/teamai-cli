@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
-import { offerSignedIn } from '../sign-in.js';
+import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
@@ -191,10 +191,10 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
       const { held } = found;
 
       // A kit was looked in; sbx's own templates hold only their agent, so an instance's command is never there.
-      const missing = (command: string, tool: string): string | undefined => {
-        if (held !== undefined) return held.has(command) ? undefined : `kit ${agent} does not hold: add it to the kit`;
+      const missing: MissingCommand = (command, tool) => {
+        if (held !== undefined) return held.has(command) ? undefined : { holder: `kit ${agent}`, fix: 'add it to the kit' };
 
-        return `sbx's ${template ?? tool} template does not hold: set agent to a kit that brings it`;
+        return { holder: `sbx's ${template ?? tool} template`, fix: 'set agent to a kit that brings it' };
       };
 
       const stored = await storedLogins();
