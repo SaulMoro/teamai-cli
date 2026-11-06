@@ -423,7 +423,7 @@ Two attempts on one worktree share its Paseo workspace, which only the last of t
 Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agent is busy. It may still run in the worktree; stop it in the Paseo app.
 ```
 
-A workspace you already had open in Paseo on that directory, as your checkout may be when a read-only step runs there, is never archived: the attempt cancels its own agents instead, and your workspace stays open.
+A workspace you already had open in Paseo on that directory, as your checkout may be when a read-only step runs there, is never archived: the attempt cancels its own agents instead, and your workspace stays open. The same holds when you open that directory in Paseo while the step runs, which gives you the attempt's workspace, and start an agent there.
 
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 
