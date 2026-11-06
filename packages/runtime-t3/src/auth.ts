@@ -206,9 +206,9 @@ const DecisionSchema = z.object({ redirectTo: z.url() });
 const AUTHORIZATION_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'resource'] as const;
 
 /** Creates a pairing code with the local `t3` command for the T3 server whose data directory is `t3Home`; never says the code. */
-async function createPairingCode({ t3, t3Home, signal }: { t3: T3Command; t3Home: string; signal: AbortSignal }): Promise<string> {
+async function createPairingCode({ t3Cli, t3Home, signal }: { t3Cli: T3Command; t3Home: string; signal: AbortSignal }): Promise<string> {
   const args = ['auth', 'pairing', 'create', '--json', '--base-dir', t3Home, ...SCOPES.flatMap((scope) => ['--scope', scope]), '--ttl', '2m', '--label', CLIENT_NAME];
-  const stdout = await t3.run({ name: 'auth pairing create', args, signal });
+  const stdout = await t3Cli.run({ name: 'auth pairing create', args, signal });
 
   try {
     return PairingSchema.parse(JSON.parse(stdout)).credential;
@@ -223,8 +223,8 @@ async function createPairingCode({ t3, t3Home, signal }: { t3: T3Command; t3Home
  * the same scopes, each thread still runs in its own mode, and the grant is only their ceiling. One credential then
  * serves every run, and a run at a tighter mode never leaves a sign-in too narrow for a later Auto run.
  */
-async function approveWithPairingCode(authorizationUrl: URL, { t3, t3Home, signal }: { t3: T3Command; t3Home: string; signal: AbortSignal }): Promise<string> {
-  const code = await createPairingCode({ t3, t3Home, signal });
+async function approveWithPairingCode(authorizationUrl: URL, { t3Cli, t3Home, signal }: { t3Cli: T3Command; t3Home: string; signal: AbortSignal }): Promise<string> {
+  const code = await createPairingCode({ t3Cli, t3Home, signal });
 
   const authorization = Object.fromEntries(AUTHORIZATION_FIELDS.flatMap((field) => {
     const value = authorizationUrl.searchParams.get(field);
@@ -266,7 +266,7 @@ export type SilentSignIn = { ok: true } | { ok: false; reason: string };
  * Auto access. The SDK's flow registers the client and holds the PKCE verifier, and keeps the token in the credentials
  * file. A failure says why, in a few words, and names no code or token.
  */
-export async function signInSilently({ stateDir, resource, t3Home, t3 }: { stateDir: string; resource: URL; t3Home: string; t3: T3Command }): Promise<SilentSignIn> {
+export async function signInSilently({ stateDir, resource, t3Home, t3Cli }: { stateDir: string; resource: URL; t3Home: string; t3Cli: T3Command }): Promise<SilentSignIn> {
   // One deadline over every step, so a T3 Code that stops answering ends the attempt with a reason rather than holding init.
   const signal = AbortSignal.timeout(SILENT_SIGN_IN_MS);
   const fetchFn = (url: string | URL, init?: RequestInit): Promise<Response> => fetch(url, { ...init, signal });
@@ -275,7 +275,7 @@ export async function signInSilently({ stateDir, resource, t3Home, t3 }: { state
   // T3 accepts a loopback redirect on any port, and nobody follows this one: the decision hands the code back.
   const provider: OAuthClientProvider = {
     ...keptClient({ stateDir, resource: resource.href, redirectUrl: 'http://127.0.0.1/callback' }),
-    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { t3, t3Home, signal }); },
+    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { t3Cli, t3Home, signal }); },
   };
 
   try {

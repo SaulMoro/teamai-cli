@@ -22,7 +22,7 @@ const ModelSelectionSchema = z.object({
 
 export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
 
-const ScriptSchema = z.object({ name: z.string(), runOnWorktreeCreate: z.boolean().optional(), runOnSettle: z.boolean().optional() });
+export const ScriptSchema = z.object({ name: z.string(), runOnWorktreeCreate: z.boolean().optional(), runOnSettle: z.boolean().optional() });
 
 export type ProjectScript = z.infer<typeof ScriptSchema>;
 

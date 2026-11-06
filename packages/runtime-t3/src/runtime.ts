@@ -152,7 +152,7 @@ export interface ServeOptions {
   /** T3 Code's data directory, where the member's settings are. */
   t3Home: string;
   /** The `t3` command, which adds a project as the member does. */
-  t3: T3Command;
+  t3Cli: T3Command;
   /** Where teamai started the runtime: the checkout of the run, whose project's settings the offer follows. */
   cwd: string;
 }
@@ -798,7 +798,7 @@ export function serve(options: ServeOptions): Promise<void> {
       let refused: string | undefined;
 
       try {
-        await options.t3.run({ name: 'project add', args: ['project', 'add', '--base-dir', options.t3Home, ...(title ? ['--title', title] : []), folder] });
+        await options.t3Cli.run({ name: 'project add', args: ['project', 'add', '--base-dir', options.t3Home, ...(title ? ['--title', title] : []), folder] });
       } catch (error) {
         // A step opening beside this one may have added the folder first, which T3 refuses to add again.
         refused = (error instanceof Error ? error.message : String(error)).replace(/\.$/, '');
@@ -951,7 +951,10 @@ export function serve(options: ServeOptions): Promise<void> {
 
         if (asking) {
           const why = await whyNotStopped(s.t3, thread.threadId, Date.now() + STOP_WAIT_MS);
-          const asked = `${where} ${asking.by === 'task' ? 'delegated a task that asked' : 'asked'} for an approval, and nobody is there to give it in an unattended run.`;
+
+          const asked = asking.by === 'task'
+            ? `${where} delegated a task that asked for an approval, and nobody is there to give it in an unattended run.`
+            : `${where} asked for an approval, and nobody is there to give it in an unattended run.`;
 
           if (why === undefined) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: asked } });
 

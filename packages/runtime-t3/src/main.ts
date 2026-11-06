@@ -53,7 +53,7 @@ const connect: ServeOptions['connect'] = async (how) => {
     return { ok: false, error: { code: 't3_unavailable', message: `T3 Code at ${resource.origin} does not answer. Open T3 Code, or run \`t3 serve\`, then start the workflow again.` } };
   }
 
-  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, t3Home, t3: t3Cli }) : undefined;
+  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, t3Home, t3Cli }) : undefined;
   const silentFailure = silent?.ok === false ? silent.reason : undefined;
 
   if (how.mode !== 'attended' && !validToken(state, resource.href)) {
@@ -96,7 +96,7 @@ await serve({
   journal: journal(path.join(state, 'places')),
   connect,
   t3Home,
-  t3: t3Cli,
+  t3Cli,
   cwd: process.cwd(),
   ...(startedFrom && { startedFrom }),
 });

@@ -36,7 +36,10 @@ export interface T3Command {
 export function t3Command(env: NodeJS.ProcessEnv, t3Home: string): T3Command {
   const atHome = path.join(t3Home, 'bin', 't3');
   const candidates = [...(env['T3CODE_CLI_PATH'] ? [env['T3CODE_CLI_PATH']] : []), 't3', atHome];
-  const missing = `found no t3 command at $T3CODE_CLI_PATH${env['T3CODE_CLI_PATH'] ? '' : ' (unset)'}, on PATH, or at ${atHome}`;
+
+  const missing = env['T3CODE_CLI_PATH']
+    ? `found no t3 command at $T3CODE_CLI_PATH, on PATH, or at ${atHome}`
+    : `found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ${atHome}`;
 
   const runOne = ({ command, name, args, signal }: { command: string; name: string; args: string[]; signal: AbortSignal | undefined }): Promise<{ ran: true; stdout: string } | { ran: false }> => new Promise((resolve, reject) => {
     execFile(command, args, { encoding: 'utf8', ...(signal && { signal }) }, (error, stdout, stderr) => {
