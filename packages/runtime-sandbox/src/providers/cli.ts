@@ -17,7 +17,7 @@ export const WORKSPACES: Can['workspace'] = ['read-only', 'new', 'continue', 'cl
 
 /** The tools a step runtime can launch, as `can.tools` lists those a sandbox holds. */
 // oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
-export const LAUNCHABLE = ['claude', 'codex', 'codebuddy'];
+export const LAUNCHABLE = ['claude', 'codex', 'codebuddy'] as const;
 
 /** How the CLI ran: to its end, not at all, or past the time it was given, after which it was killed. */
 export type Ran = { kind: 'ran'; code: number; stdout: string; stderr: string } | { kind: 'unstartable' | 'timed_out'; message: string };
