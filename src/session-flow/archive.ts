@@ -14,13 +14,14 @@ import { updateReports } from '../utils/reports-branch.js';
 import { getAdapter } from './adapters/index.js';
 import { AgentSession, noAdapter, recordedToolRoots, writeCopyOnce } from './agent-session.js';
 import { SessionCaptures } from './captures.js';
-import type { Session } from './ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 import { degradeThinkingBlocks } from './migrate.js';
 import { archiveBusyMessage, authorForCwd, deriveArchiveIdentity, sessionArchiveRoot } from './session-cmd-shared.js';
 import { SyncManager, defaultSyncMeta, getRepoIdentity, type SessionSyncMeta } from './sync.js';
 
 /** A session in one tool, by the id that tool gave it. */
-export type ArchiveSessionRef = { platform: string; sessionId: string };
+/** A session to archive; `storeDir` is the store it is read from when it is not the member's, such as an attempt's tool home. */
+export type ArchiveSessionRef = { platform: string; sessionId: string; storeDir?: string };
 
 export type ArchiveRestore = { status: 'restored'; sessionId: string } | { status: 'fresh'; reason: string };
 

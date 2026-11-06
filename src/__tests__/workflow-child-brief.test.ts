@@ -6,7 +6,7 @@ import type { LocalConfig } from '../types.js';
 // oxlint-disable-next-line teamai/workflow-boundaries -- tests the child brief unit the skill driver writes
 import { readChildResult, writeChildBrief } from '../workflow/drivers/skill/child-brief.js';
 import { reportLiteral } from '../workflow/drivers/skill/literals.js';
-import { AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, attemptResultPath, RunIdSchema } from '../workflow/store.js';
 
 const roots: string[] = [];
 
@@ -53,7 +53,7 @@ describe('a child result', () => {
       repo: { localPath: path.join(root, 'repo'), remote: 'local', kind: 'self' },
       username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data'),
     };
-    const file = path.join(root, 'data', 'workflows', 'runs', run, 'attempts', attempt, 'result.json');
+    const file = attemptResultPath(config, run, attempt);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(body));
 

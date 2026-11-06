@@ -4,7 +4,7 @@ import { runConfined, type ConfinedResult } from '../tool-launch/confined.js';
 import type { ConfinedTool } from '../tool-launch/tools.js';
 import { resolveCliPath } from '../utils/cli-path.js';
 import { JudgeAnswerSchema, type JudgeAnswer } from './batch.js';
-import type { ConfinedLevel } from '../tool-launch/confined-level.js';
+import type { ConfinedLevel } from '@teamai/tool-core/launch';
 import type { ConfinedUsage } from '../tool-launch/confined-level.js';
 import type { ScoreLabel } from './label.js';
 import type { JsonValue } from '../types.js';

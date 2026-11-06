@@ -1,0 +1,60 @@
+import type { AgentAdapter } from './base.js';
+import type { SessionIdFormat } from './ids.js';
+
+/**
+ * Where a platform keeps its sessions on a machine, resolved by `sessionStoreDir` (locate.ts).
+ * - `tool-home`: `<dir>` in `home`'s root: the member's recorded `toolRoots[root]` (`root`
+ *   defaults to `home`), else that tool's home, which a recorded or env move relocates. `home` is
+ *   the tool whose `sessions` lists the platform (session-platform-facts.test.ts).
+ * - `xdg-data`: `$XDG_DATA_HOME/<child>`, else `~/.local/share/<child>`.
+ * - `ide-history`: the CodeBuddy IDE's own data directories (`listIdeHistoryRoots`).
+ */
+export type SessionStore<TTool extends string = string> =
+  | { readonly in: 'tool-home'; readonly home: TTool; readonly dir: string; readonly root?: string }
+  | { readonly in: 'xdg-data'; readonly child: string }
+  | { readonly in: 'ide-history' };
+
+/**
+ * Session storage and migration facts of one platform, declared by the family that owns it.
+ * `tool`: only on a platform no `TOOLS` entry lists in its `sessions`, the tool id its sessions
+ * are credited to (session-platform-facts.test.ts).
+ */
+export interface SessionPlatformFacts<TTool extends string = string> {
+  tool?: string;
+  store: SessionStore<TTool>;
+  /** The command that continues a session of this platform in its CLI. */
+  resume: (sessionId: string) => string;
+  thinking: boolean;
+  images: boolean;
+  nativeTools: ReadonlySet<string>;
+  legacyIdWithoutWorkspace: boolean;
+  sqliteRegistrationOnWindows: boolean;
+  idFormat: SessionIdFormat;
+  /** The tool resumes only from a store TeamAI cannot write, so its sessions are read and never written. */
+  readOnly?: true;
+}
+
+/** A platform whose store teamai resolves (`sessionStoreDir`) and hands to its adapter. */
+export type StoredPlatformDefinition<TTool extends string = string> = SessionPlatformFacts<TTool> & {
+  readonly store: Exclude<SessionStore<TTool>, { readonly in: 'ide-history' }>;
+  adapter(storeDir: string): AgentAdapter;
+  /**
+   * The adapter of an instance's own platform `platform`, in this platform's format, on the instance's store. Absent
+   * when this format's sessions cannot carry another platform id: an instance of the tool then keeps no sessions teamai reads.
+   */
+  adapterAs?(platform: string, storeDir: string): AgentAdapter;
+};
+
+/** A platform whose adapter finds its own store: the CodeBuddy IDE's history. */
+export type SelfLocatingPlatformDefinition<TTool extends string = string> = SessionPlatformFacts<TTool> & {
+  readonly store: Extract<SessionStore<TTool>, { readonly in: 'ide-history' }>;
+  adapter(): AgentAdapter;
+};
+
+/** A session platform a family declares: its facts, and the adapter it builds on its store. */
+export type SessionPlatformDefinition<TTool extends string = string> = StoredPlatformDefinition<TTool> | SelfLocatingPlatformDefinition<TTool>;
+
+/** Whether `platform`'s adapter finds its own store, so no store is resolved for it. */
+export function locatesOwnStore<TTool extends string>(platform: SessionPlatformDefinition<TTool>): platform is SelfLocatingPlatformDefinition<TTool> {
+  return platform.store.in === 'ide-history';
+}

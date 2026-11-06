@@ -2,34 +2,46 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
-import { inProductionSource, isOneOf, lintedPath, sourcePath, stringLiteralValue } from '../utils.js';
+import { z } from 'zod';
+import { inProductionSource, lintedPath, sourcePath, stringLiteralValue, workspaceRoot } from '../utils.js';
 
 /** The descriptor, the one place a per-tool fact is written. */
 const DESCRIPTOR = 'src/tools.ts';
 
-const MESSAGE = 'Per-tool facts live in TOOLS (src/tools.ts). Derive this from a descriptor field, '
+/** A family package (`packages/tool-<family>/src/`): not the contract, the test kit or the list of families. */
+const FAMILY_PACKAGE = /^packages\/tool-(?!(?:core|testing|definitions)\/)[^/]+\/src\//;
+
+/** The contract tables a family declares its tools in: their descriptors, session platforms, launch profiles and version detectors. */
+const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|LaunchAdapter|VersionDetector)\s*>>?$/;
+
+/** The one list of every family (`BUILT_IN_TOOLS`), whose keys are family names that share tool names. */
+const FAMILY_LIST = /^(?:Readonly<)?Record<\s*string\s*,\s*ToolFamily\s*>>?$/;
+
+const DEFINITIONS_PACKAGE = 'packages/tool-definitions/src/';
+
+const MESSAGE = 'Per-tool facts live in a tool family\'s descriptors (packages/tool-<family>/), read through src/tool-registry.ts. Derive this from a descriptor field, '
   + 'or key the table by every tool (Record<ToolId, ...>), so a new tool fails the type check until it is decided here.';
 
-/** @type {Map<string, ReadonlySet<string>>} */
+/** The shipped tool ids, generated from the tool registry by `node scripts/check-docs.mjs --write`. */
+const TOOL_IDS_FILE = 'oxlint-plugin-teamai/tool-ids.generated.json';
+
+const MISSING = `${TOOL_IDS_FILE} is missing or lists no tool, so teamai/tool-facts would check nothing. Run node scripts/check-docs.mjs --write.`;
+
+const ToolIdsSchema = z.array(z.string()).min(1);
+
+/** @type {Map<string, ReadonlySet<string> | undefined>} */
 const toolIdsByRoot = new Map();
 
 /**
- * The keys of `TOOLS` in the linted file's checkout: each `  <id>: {` line of the literal.
- * @param {Context} context
- * @returns {ReadonlySet<string>}
+ * The shipped tool ids of the checkout at `root`; undefined when the generated file is missing or empty.
+ * @param {string} root
+ * @returns {ReadonlySet<string> | undefined}
  */
-function toolIdsFor(context) {
-  const file = lintedPath(context);
-  const relative = sourcePath(context);
-  const root = file.slice(0, file.length - relative.length);
-  const cached = toolIdsByRoot.get(root);
-
-  if (cached) return cached;
-  const descriptor = path.join(root, DESCRIPTOR);
-  const source = fs.existsSync(descriptor) ? fs.readFileSync(descriptor, 'utf8') : '';
-  const body = source.slice(source.indexOf('export const TOOLS = {'));
-  const end = body.indexOf('\n} as const');
-  const ids = new Set([...(end < 0 ? '' : body.slice(0, end)).matchAll(/^ {2}'?([a-z][a-z0-9-]*)'?: \{$/gm)].map((match) => match[1]));
+function toolIdsAt(root) {
+  if (toolIdsByRoot.has(root)) return toolIdsByRoot.get(root);
+  const file = path.posix.join(root, TOOL_IDS_FILE);
+  const parsed = fs.existsSync(file) ? ToolIdsSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8'))) : undefined;
+  const ids = parsed?.success ? new Set(parsed.data) : undefined;
   toolIdsByRoot.set(root, ids);
 
   return ids;
@@ -72,13 +84,32 @@ function isExhaustive(types) {
   return types.some((type) => /^(?:Readonly<)?Record<\s*(?!string\s*,)/.test(type.trim()));
 }
 
+/**
+ * Whether the table is where its tools' facts are declared: a family's contract table in its own package, or the
+ * list of families in tool-definitions.
+ * @param {string} relative
+ * @param {readonly string[]} types
+ * @returns {boolean}
+ */
+function declaresFamily(relative, types) {
+  const pattern = FAMILY_PACKAGE.test(relative) ? FAMILY_TABLE : relative.startsWith(DEFINITIONS_PACKAGE) ? FAMILY_LIST : null;
+
+  return pattern !== null && types.some((type) => pattern.test(type.trim()));
+}
+
 export default defineRule({
   meta: { type: 'problem', docs: { description: 'Keep per-tool facts in the TOOLS descriptor.' } },
   create(context) {
-    if (!inProductionSource(context) || isOneOf(context, [DESCRIPTOR])) return {};
-    const ids = toolIdsFor(context);
+    if (!inProductionSource(context)) return {};
+    const file = lintedPath(context);
+    const root = workspaceRoot(path.posix.dirname(file)) ?? file.slice(0, file.length - sourcePath(context).length - 1);
 
-    if (ids.size === 0) return {};
+    const relative = path.posix.relative(root, file);
+
+    if (relative === DESCRIPTOR) return {};
+    const ids = toolIdsAt(root);
+
+    if (ids === undefined) return { Program: (node) => context.report({ node, message: MISSING }) };
 
     /** @param {ESTree.Node | null} node */
     const toolIdOf = (node) => {
@@ -100,7 +131,8 @@ export default defineRule({
         if (keyed.length < 2) return;
         const types = tableTypes(node, context);
 
-        if (types !== null && !isExhaustive(types)) context.report({ node, message: MESSAGE });
+        if (types === null || isExhaustive(types) || declaresFamily(relative, types)) return;
+        context.report({ node, message: MESSAGE });
       },
     };
   },

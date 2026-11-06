@@ -11,7 +11,7 @@ The host question asks how this coding session starts a child agent, and so how 
 
    | Option | Pick it when that way | Children at once |
    |---|---|---|
-   | `h3` | makes a worktree of its own for each child to work in, as T3 worktree tasks, Claude Code agent teams with worktrees and Codex worktrees do | up to the run's `--parallel` |
+   | `h3` | makes a worktree of its own for each child to work in, as T3 worktree tasks, Paseo worktree workspaces, Claude Code agent teams with worktrees and Codex worktrees do | up to the run's `--parallel` |
    | `h1` | runs several children in the background while you keep working | up to the run's `--parallel` |
    | `h2` | runs one child at a time, or only in the foreground | one |
    | `h4` | is none: you work each prompt step yourself | none: you work one step at a time |
