@@ -789,8 +789,11 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     if (!removed.value.ok) {
-      // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox.
-      failed(removed.value.failure);
+      const { failure } = removed.value;
+
+      // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox; a released one
+      // is forgotten, which the provider's message cannot know.
+      failed(isReleased ? { ...failure, message: `${failure.message} You released the attempt, so this runtime no longer keeps its place.` } : failure);
 
       return;
     }

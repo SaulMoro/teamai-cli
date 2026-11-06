@@ -501,7 +501,7 @@ describe('a prompt attempt in a container', () => {
     connection.send({ type: 'close', handle: HANDLE, release: true });
 
     expect(await connection.next((message) => message.handle === HANDLE && (message.event === 'closed' || message.event === 'close_failed'))).toMatchObject({
-      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringContaining(`docker rm --force`) },
+      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringMatching(/docker rm --force.*You released the attempt, so this runtime no longer keeps its place\.$/) },
     });
     expect(journalFiles()).toEqual([]);
     connection.send({ type: 'reattach', handle: HANDLE });
