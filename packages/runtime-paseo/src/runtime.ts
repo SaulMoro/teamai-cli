@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -214,9 +214,6 @@ function readResult(file: string): PromptResult | undefined {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** The longest reason protocol 1 takes for a tool init names unavailable. */
-const UNAVAILABLE_MAX = 500;
 
 /** `text` cut to `max` characters, its end marked when it is cut. */
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -587,7 +584,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       if (entry?.canRun) return [];
       const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${tool} on the daemon's PATH and sign in to it there`;
 
-      return [[tool, clip(`The Paseo daemon at ${connected.url} cannot run ${tool}: ${reason}.`, UNAVAILABLE_MAX)]];
+      return [[tool, clip(`The Paseo daemon at ${connected.url} cannot run ${tool}: ${reason}.`, UNAVAILABLE_REASON_MAX)]];
     }));
 
     daemon = connected;
