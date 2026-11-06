@@ -76,6 +76,8 @@ const PlaceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('worktree'), ...placeFields, projectId: z.string(), projectTitle: z.string(),
     binding: z.enum(['existing_worktree', 'root']).default('existing_worktree'), settleScript: z.string().optional(),
+    /** The project whose T3 settings the step's threads follow: the checkout's, when the threads run on one teamai added. */
+    settingsProjectId: z.string().optional(),
   }),
   z.object({ kind: z.literal('confined'), ...placeFields }),
 ]);
