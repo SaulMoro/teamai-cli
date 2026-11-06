@@ -116,6 +116,12 @@ async function play(threadId) {
     return;
   }
 
+  if (agent.delegates) {
+    // Each delegated task's thread names the thread that delegated it, and ends before the run that waits for it.
+    writeThread({ threadId: `${threadId}:task`, title: 'Delegated task', parentThreadId: threadId, projectId: thread.projectId, provider: thread.provider, status: 'completed', settled: false, runCount: 1 });
+    writeThread({ threadId: `${threadId}:task:task`, title: 'Delegated subtask', parentThreadId: `${threadId}:task`, projectId: thread.projectId, provider: thread.provider, status: 'completed', settled: false, runCount: 1 });
+  }
+
   if (agent.waits) {
     // The agent asks for an approval nobody gives. T3 keeps such a run `running`, with the request pending.
     update(threadId, () => ({ pendingRequestCount: 1 }));
@@ -316,7 +322,8 @@ const TOOLS = {
   // As T3 lists them: newest first, a delegated task's thread with its parent only when subagents are asked for.
   t3_thread_list: (args) => {
     const threads = fs.readdirSync(THREADS).filter((file) => file.endsWith('.json')).map((file) => JSON.parse(fs.readFileSync(path.join(THREADS, file), 'utf8')))
-      .filter((thread) => (args.includeSubagents || thread.parentThreadId === undefined) && (args.projectId === undefined || thread.projectId === args.projectId) && (args.statuses === undefined || args.statuses.includes(thread.status)));
+      .filter((thread) => (args.includeSubagents || thread.parentThreadId === undefined) && (args.projectId === undefined || thread.projectId === args.projectId) && (args.statuses === undefined || args.statuses.includes(thread.status))
+        && (args.settled === undefined || thread.settled === args.settled));
 
     return ok({ threads: threads.map((thread) => ({ threadId: thread.threadId, projectId: thread.projectId, status: thread.status, parentThreadId: thread.parentThreadId ?? null })), nextCursor: null, total: threads.length });
   },

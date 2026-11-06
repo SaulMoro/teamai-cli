@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
-import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
 // ─── teamai-runtime-t3 ───
@@ -106,29 +106,34 @@ function settledStatus(waited: Waited): Waited['status'] | undefined {
   return waited.resultRun?.status ?? waited.status;
 }
 
-/**
- * Whether the thread, or a task it delegated at any depth, holds a request for a person. T3 holds a delegated task's
- * approval on the task's own thread, while the thread that delegated it runs on, waiting for the task.
- */
-async function asksForApproval(t3: T3, threadId: string): Promise<{ by: 'thread' | 'task' } | undefined> {
-  if ((await t3.thread(threadId)).pendingRequestCount > 0) return { by: 'thread' };
-  const active = await t3.activeThreads();
+/** The threads among `listed` of the tasks `threadId` delegated, at any depth: each names the thread that delegated it. */
+function tasksOf(listed: ListedThread[], threadId: string): ListedThread[] {
   const tasks = new Set([threadId]);
 
   // Delegated tasks start after the thread that delegated them, so a pass per depth finds each one.
   for (let grew = true; grew;) {
     grew = false;
 
-    for (const listed of active) {
-      if (listed.parentThreadId && tasks.has(listed.parentThreadId) && !tasks.has(listed.threadId)) {
-        tasks.add(listed.threadId);
+    for (const one of listed) {
+      if (one.parentThreadId && tasks.has(one.parentThreadId) && !tasks.has(one.threadId)) {
+        tasks.add(one.threadId);
         grew = true;
       }
     }
   }
 
-  for (const listed of active) {
-    if (listed.threadId !== threadId && tasks.has(listed.threadId) && (listed.status === 'waiting' || (await t3.thread(listed.threadId)).pendingRequestCount > 0)) return { by: 'task' };
+  return listed.filter((one) => one.threadId !== threadId && tasks.has(one.threadId));
+}
+
+/**
+ * Whether the thread, or a task it delegated at any depth, holds a request for a person. T3 holds a delegated task's
+ * approval on the task's own thread, while the thread that delegated it runs on, waiting for the task.
+ */
+async function asksForApproval(t3: T3, threadId: string): Promise<{ by: 'thread' | 'task' } | undefined> {
+  if ((await t3.thread(threadId)).pendingRequestCount > 0) return { by: 'thread' };
+
+  for (const task of tasksOf(await t3.activeThreads(), threadId)) {
+    if (task.status === 'waiting' || (await t3.thread(task.threadId)).pendingRequestCount > 0) return { by: 'task' };
   }
 
   return undefined;
@@ -1400,8 +1405,34 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
-   * Settles each thread of `handle` that ended and that T3 holds no run of, once: a thread the runtime has not seen
-   * stop, or one the person started again, stays. A settle T3 refuses is said once, in a notice, and fails nothing.
+   * Settles the threads of the tasks `thread` delegated, at any depth, that T3 holds no run of: T3 leaves them unsettled
+   * when it settles the thread that delegated them. A list or a settle T3 refuses is said in a notice and fails nothing.
+   */
+  const settleTasks = async (handle: string, s: Reached, thread: ThreadRecord): Promise<void> => {
+    const link = `${threadLink(s.environment, thread.threadId)} ("${thread.title}")`;
+    let tasks: ListedThread[];
+
+    try {
+      tasks = tasksOf(await s.t3.unsettledThreads(), thread.threadId);
+    } catch (error) {
+      return notice(`teamai could not list the tasks the T3 thread ${link} delegated, so they stay in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}`, { handle });
+    }
+
+    for (const task of tasks) {
+      if (task.status !== null && task.status !== 'idle' && !TERMINAL.has(task.status)) continue;
+
+      try {
+        await s.t3.settle(task.threadId);
+      } catch (error) {
+        if (!(error instanceof T3Error && error.threadGone)) notice(`teamai could not settle the T3 thread ${threadLink(s.environment, task.threadId)}, a task ${link} delegated, so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}`, { handle });
+      }
+    }
+  };
+
+  /**
+   * Settles each thread of `handle` that ended and that T3 holds no run of, once, with the tasks it delegated: a thread
+   * the runtime has not seen stop, or one the person started again, stays. A settle T3 refuses is said once, in a
+   * notice, and fails nothing.
    */
   const settleEnded = async (handle: string, s: Reached): Promise<void> => {
     const known = place(handle);
@@ -1423,6 +1454,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
           if (status !== null && status !== 'idle' && !TERMINAL.has(status)) continue;
           await s.t3.settle(thread.threadId);
+          await settleTasks(handle, s, thread);
           outcome = 'settled';
         } catch (error) {
           // A thread T3 no longer has is in nobody's active threads.

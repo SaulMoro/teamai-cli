@@ -47,6 +47,8 @@ export interface FakeAgent {
   waits?: boolean;
   /** The agent delegates a task, whose own thread asks for an approval and waits for it, and waits for the task. */
   delegatedWaits?: boolean;
+  /** The agent delegates a task, which delegates one of its own; both complete before the agent does. */
+  delegates?: boolean;
   /** The agent writes no transcript. */
   noSession?: boolean;
   /** The agent's last message in the thread, which a judge's reply is. */
@@ -163,8 +165,8 @@ export interface FakeT3 {
   settings(value: Line): void;
   calls(): FakeCall[];
   threads(): FakeThread[];
-  /** A thread someone else launched, such as the person, ended at `status`. */
-  addThread(thread: { threadId: string; title: string; status: string }): void;
+  /** A thread someone else launched, such as the person, ended at `status`; a task that thread delegated names it as its parent. */
+  addThread(thread: { threadId: string; title: string; status: string; parentThreadId?: string }): void;
   /** The person deletes the thread in T3 Code: T3 answers every later call on it `thread_not_found`. */
   deleteThread(threadId: string): void;
   /** Starts the fake server, or starts it again on the same state. */

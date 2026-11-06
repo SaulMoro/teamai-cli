@@ -879,6 +879,25 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads().find((thread) => thread.threadId === 'thread-person-1')?.settled).toBe(false);
     });
 
+    // T3 leaves a delegated task's thread unsettled when it settles the thread that delegated it.
+    it('settles the tasks a step thread delegated, at any depth, with the step thread, and no task of another thread', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' }, delegates: true } });
+      t3.addThread({ threadId: 'thread-person-1', title: 'Fix the cart total', status: 'completed' });
+      t3.addThread({ threadId: 'thread-person-1:task', title: 'Check the totals', status: 'completed', parentThreadId: 'thread-person-1' });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000037'));
+      expect(await ended(runtime, 'op-00000037')).toMatchObject({ event: 'finished' });
+      const step = t3.threads().find((thread) => thread.title === `review · teamai ${RUN}`)?.threadId;
+
+      runtime.send({ type: 'collect', handle });
+      await runtime.next((line) => line['event'] === 'collected');
+
+      expect(Object.fromEntries(t3.threads().map((thread) => [thread.threadId, thread.settled]))).toEqual({
+        [`${step}`]: true, [`${step}:task`]: true, [`${step}:task:task`]: true, 'thread-person-1': false, 'thread-person-1:task': false,
+      });
+      expect(noticesOf(runtime)).toEqual([]);
+    });
+
     it('says once that a thread could not be settled, and the step still counts', async () => {
       t3.config({ organizeFails: true });
       const { runtime, handle } = await opened();
