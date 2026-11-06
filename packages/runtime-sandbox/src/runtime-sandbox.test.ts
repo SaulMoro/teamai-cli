@@ -1183,6 +1183,27 @@ describe("the containers of one runtime's journal", () => {
     expect(engine.containers()).toEqual([]);
   }, 60_000);
 
+  it('keeps running, and records the end of its exec, when the sweep warns after teamai stopped reading its stderr', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openAttempt(connection, 'a00000001');
+    leave('a00000002', { 'teamai.owner': engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? '' });
+    engine.failRemove(true);
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: `teamai-${RUN}-a00000001`, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; while [ ! -f release ]; do sleep 0.05; done; echo finished'] });
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    connection.child.stderr.destroy();
+
+    // Its sweep cannot remove a00000002 and warns on a stderr nobody reads.
+    expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
+    await vi.waitFor(() => { expect(engine.calls().filter(([, command]) => command === 'rm')).not.toEqual([]); }, { timeout: 10_000 });
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    fs.writeFileSync(path.join(at.worktree, 'release'), '');
+
+    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000)).toEqual({ op, event: 'exited', code: 0, stdout: 'finished\n' });
+  }, 60_000);
+
   it("keeps the container of another runtime's create still on its way, whose place that runtime saved first", async () => {
     const creating = start();
     await init(creating, { provider: 'docker', image: IMAGE });
