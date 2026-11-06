@@ -108,6 +108,9 @@ async function isStillRunning(live: Daemon, agentId: string, deadline: number): 
   }
 }
 
+/** Whether an op ended in a stop that may not have stopped it, which a later cancel tries again. */
+const isFailedStop = (outcome: OpState | undefined): boolean => outcome?.state === 'failed' && outcome.failure.code === CANCEL_FAILED;
+
 /** The agent id a prompt's agent gets: a UUID derived from its op, so a restarted runtime finds the same agent. */
 export function agentIdOf(op: OpId): string {
   const hex = createHash('sha256').update(`teamai-runtime-paseo/${op}`).digest('hex');
@@ -1150,13 +1153,26 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
   async function cancel(op: OpId): Promise<void> {
     const deadline = Date.now() + STOP_SETTLE_MS;
+    // A prompt that already ended, as one whose end teamai lost, answers that end again and stops nothing. Only a stop that
+    // failed is tried again; until it is confirmed or fails again, reattach reports the prompt running.
+    const unrecorded = unkept.get(op);
+
+    if (unrecorded) {
+      send(op, unrecorded);
+
+      return;
+    }
+
     const found = journal.prompt(op);
 
-    if (!found || found.kind === 'refused') return;
+    if (!found) return;
     const { outcome } = found;
 
-    // Only a stop that failed is tried again; until it is confirmed or fails again, reattach reports the prompt running.
-    if (outcome && !(outcome.state === 'failed' && outcome.failure.code === CANCEL_FAILED)) return;
+    if (found.kind === 'refused' || (outcome && !isFailedStop(outcome))) {
+      if (outcome) send(op, outcome);
+
+      return;
+    }
 
     if (outcome) journal.savePrompt(op, { ...found, outcome: undefined });
     journal.cancel(op);
@@ -1566,8 +1582,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     if ('op' in request) inFlight.set(request.op, (inFlight.get(request.op) ?? 0) + 1);
 
-    // A prompt or cancel sent again may end the op otherwise, so the outcome it could not record is no longer its state.
-    if (request.type === 'prompt' || request.type === 'cancel') unkept.delete(request.op);
+    // A prompt sent again, or a cancel that tries a failed stop again, may end the op otherwise, so the outcome it could
+    // not record is no longer its state. A cancel of any other end answers that end.
+    if (request.type === 'prompt' || (request.type === 'cancel' && isFailedStop(unkept.get(request.op)))) unkept.delete(request.op);
 
     const answered = (async () => {
       try {
