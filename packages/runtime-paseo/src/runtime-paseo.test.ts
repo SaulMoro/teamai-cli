@@ -1975,6 +1975,17 @@ describe('teamai-runtime-paseo', () => {
       expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'failed', failure: { code: 'tool_failed', message: 'The claude agent replied with no JSON value.' } });
     });
 
+    it('fails a judge whose agent replied that it hit its usage limit usage_limited, rather than blame its reply', async () => {
+      behave({ reply: "You've hit your limit · resets 3pm (Europe/Madrid)" });
+      const runtime = start();
+      await ready(runtime);
+      runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b'));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+        op: 'op-0000000b', event: 'failed', failure: { code: 'usage_limited', message: "The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid)" },
+      });
+    });
+
     it('archives the judge\'s Paseo workspace on close, and leaves the directory in place', async () => {
       behave({ reply: '{"label": "pass"}' });
       const runtime = start();
@@ -2207,6 +2218,32 @@ describe('teamai-runtime-paseo', () => {
     behave({});
     runtime.send(promptRequest(handle, 'op-0000000c'));
     expect(await runtime.next(isEnd('op-0000000c'))).toEqual({ op: 'op-0000000c', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
+  });
+
+  it.each([
+    ['Claude', 'claude', "You've hit your limit · resets 3pm (Europe/Madrid)"],
+    ['Codex', 'codex', "You've hit your usage limit. Upgrade to Pro or try again at 3:04 PM."],
+  ])('fails a step whose %s agent stops on its usage limit usage_limited, with the reset time the tool gave, whether Paseo reports it as an error or as its last message', async (_, tool, said) => {
+    behave({ codex_login: 'signed_in' });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    behave({ codex_login: 'signed_in', error: said });
+    runtime.send(promptRequest(handle, 'op-0000000b', { tool, model: undefined }));
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'failed', failure: { code: 'usage_limited', message: `The ${tool} agent hit its usage limit in Paseo: ${said}` } });
+
+    behave({ codex_login: 'signed_in', reply: said });
+    runtime.send(promptRequest(handle, 'op-0000000c', { tool, model: undefined }));
+    expect(await runtime.next(isEnd('op-0000000c'))).toEqual({ op: 'op-0000000c', event: 'failed', failure: { code: 'usage_limited', message: `The ${tool} agent hit its usage limit in Paseo: ${said}` } });
+  });
+
+  it('fails tool_failed, not usage_limited, a step whose agent writes no result after a last message that only mentions a limit', async () => {
+    behave({ reply: 'The handler now returns 429 when clients hit your rate limit.' });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
   });
 
   it('fails a step whose agent wrote its result but has no session in Paseo, saying so rather than blaming the result', async () => {

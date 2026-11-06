@@ -166,6 +166,23 @@ const noSession = (tool: string): RuntimeFailure => ({
   code: 'tool_failed', message: `Paseo reported no session for the ${tool} agent, so teamai cannot record or score its pass. Run \`teamai workflow retry\` to run it again.`,
 });
 
+/**
+ * How a tool says it stopped on its usage limit, with the reset time when it gives one: Claude Code's "You've hit your
+ * limit · resets 3pm", Codex's "You've hit your usage limit. … try again at 3:04 PM.", Claude's older "Claude AI usage
+ * limit reached|<reset>".
+ */
+const USAGE_LIMIT = /^(?:you(?:'|’)ve hit your (?:(?:usage|session|weekly|daily|monthly|5-hour) )?limit\b|claude ai usage limit reached\b)/i;
+
+/**
+ * The failure of an agent that stopped on its tool's usage limit, saying what the tool said, or undefined when it did
+ * not: the tool's own line starts its error or last message, so a reply that only mentions a limit is not one.
+ */
+function usageLimited(tool: string, said: string | null | undefined): RuntimeFailure | undefined {
+  const text = said?.trim();
+
+  return text && USAGE_LIMIT.test(text) ? { code: 'usage_limited', message: `The ${tool} agent hit its usage limit in Paseo: ${text}` } : undefined;
+}
+
 /** A confined prompt's answer: the JSON value its agent replied with. */
 const ReplySchema = z.json();
 
@@ -1052,7 +1069,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         }
 
         case 'error':
-          settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent failed in Paseo: ${end.error ?? 'no error given'}` } }, following);
+          settle(op, { op, state: 'failed', failure: usageLimited(record.tool, end.error) ?? { code: 'tool_failed', message: `The ${record.tool} agent failed in Paseo: ${end.error ?? 'no error given'}` } }, following);
 
           return;
         case 'idle': {
@@ -1071,7 +1088,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             }
 
             if (output === undefined) {
-              settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } }, following);
+              settle(op, { op, state: 'failed', failure: usageLimited(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } }, following);
 
               return;
             }
@@ -1106,7 +1123,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           }
 
           if (!result) {
-            settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } }, following);
+            // A tool that stopped on its usage limit says so in its last message, and writes no result.
+            settle(op, { op, state: 'failed', failure: usageLimited(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } }, following);
 
             return;
           }
