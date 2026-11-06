@@ -17,6 +17,8 @@ const ThreadSchema = z.object({
   title: z.string(),
   model: z.string(),
   tool: z.string(),
+  /** The provider instance it runs on, whose tool home holds its session. Absent from a record before it was kept. */
+  instanceId: z.string().optional(),
   launchedAt: z.number(),
   /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
   copy: z.string().optional(),

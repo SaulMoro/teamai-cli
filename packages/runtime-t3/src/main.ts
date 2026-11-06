@@ -7,7 +7,7 @@ import { attendedSignIn, signInOf, signInSilently, unattendedAuth, validToken } 
 import { journal } from './journal.js';
 import { serve, type ServeOptions } from './runtime.js';
 import { connectT3 } from './t3.js';
-import { t3Command, t3HomeOf } from './t3-command.js';
+import { t3Command, t3HomeOf, t3UserHomeOf } from './t3-command.js';
 
 // teamai-runtime-t3: teamai spawns it for a driver definition that uses runtime `t3` (`--driver t3`), and speaks
 // runtime protocol 1 to it over stdio. Its stdout carries only protocol lines, a line for the person as a `notice`;
@@ -99,6 +99,7 @@ await serve({
   journal: journal(path.join(state, 'places')),
   connect,
   t3Home,
+  t3UserHome: t3UserHomeOf(t3Home, getUserHome()),
   t3Cli,
   cwd: process.cwd(),
   ...(startedFrom && { startedFrom }),

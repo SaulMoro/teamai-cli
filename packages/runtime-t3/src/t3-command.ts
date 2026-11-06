@@ -23,6 +23,15 @@ export function t3HomeOf(env: NodeJS.ProcessEnv, userHome: string): string {
   return path.join(userHome, '.t3');
 }
 
+/**
+ * The home of the user T3 Code runs as, where an instance with no `homePath` keeps its tool's sessions: T3 keeps its
+ * data directory in `~/.t3` there unless T3CODE_HOME moves it. A data directory elsewhere says nothing of that home,
+ * which is then taken to be this process's.
+ */
+export function t3UserHomeOf(t3Home: string, userHome: string): string {
+  return path.basename(t3Home) === '.t3' ? path.dirname(t3Home) : userHome;
+}
+
 export interface T3Command {
   /**
    * Runs `t3 <args>` and answers its stdout; `args` name the T3 home with `--base-dir`. Throws with the reason in a few

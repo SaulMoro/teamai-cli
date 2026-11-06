@@ -7,17 +7,20 @@ import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 // ─── The tool session a T3 thread ran ───
 //
 //  T3's MCP does not name the session its provider started, so the runtime finds it where the tool keeps it: the
-//  transcript the thread's tool wrote for the step's worktree since the thread was launched. T3's default provider
-//  instances use the tool's default home. The stores are spelled here because a runtime package cannot read the
-//  tool registry (src/tool-registry.ts) and may not import a tool family; they move to tool-core's session-store
-//  lookup once it exists.
+//  transcript the thread's tool wrote for the step's worktree since the thread was launched, in the tool home the
+//  thread's provider instance runs it in (`instanceToolHome`). The stores are spelled here because a runtime package
+//  cannot read the tool registry (src/tool-registry.ts) and may not import a tool family; they move to tool-core's
+//  session-store lookup once it exists.
 //
 
-/** The T3 provider drivers this runtime runs, each with the teamai tool it is and the store its sessions are in. */
+/**
+ * The T3 provider drivers this runtime runs, each with the teamai tool it is, its tool's home under a user's home, and
+ * the store its sessions are in under a tool home.
+ */
 export const DRIVERS = {
-  claudeAgent: { tool: 'claude', sessions: () => new ClaudeCodeAdapter('claude-code', path.join(getUserHome(), '.claude', 'projects')) },
-  codex: { tool: 'codex', sessions: () => new CodexAdapter('codex', path.join(getUserHome(), '.codex', 'sessions')) },
-} as const satisfies Record<string, { tool: string; sessions(): AgentAdapter }>;
+  claudeAgent: { tool: 'claude', home: '.claude', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')) },
+  codex: { tool: 'codex', home: '.codex', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions')) },
+} as const satisfies Record<string, { tool: string; home: string; sessions(toolHome: string): AgentAdapter }>;
 
 export type Driver = keyof typeof DRIVERS;
 
@@ -43,9 +46,17 @@ export function toolOf(driver: string): ToolId | undefined {
 /** How much earlier than the launch a transcript's first record may be stamped and still be the thread's. */
 const CLOCK_SLACK_MS = 5_000;
 
-/** The id of the newest session the tool of `driver` started in `cwd` at or after `since`, or undefined when it kept none. */
-export async function sessionSince(driver: Driver, cwd: string, since: number): Promise<string | undefined> {
-  const sessions = await DRIVERS[driver].sessions().listConversations(cwd);
+/** Whether `toolHome` is the home teamai reads `driver`'s sessions in when a session names none: the tool's, in this HOME. */
+export function isDefaultToolHome(driver: Driver, toolHome: string): boolean {
+  return path.resolve(toolHome) === path.join(getUserHome(), DRIVERS[driver].home);
+}
+
+/**
+ * The id of the newest session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, or undefined
+ * when it kept none.
+ */
+export async function sessionSince({ driver, toolHome, cwd, since }: { driver: Driver; toolHome: string; cwd: string; since: number }): Promise<string | undefined> {
+  const sessions = await DRIVERS[driver].sessions(toolHome).listConversations(cwd);
   const started = sessions.filter((session) => Date.parse(session.createdAt) >= since - CLOCK_SLACK_MS);
 
   return started.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0]?.sessionId;

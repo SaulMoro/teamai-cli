@@ -918,6 +918,37 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'codex', model: 'gpt-6.1-sol', options: [{ id: 'reasoningEffort', value: 'high' }] });
     });
 
+    // T3 runs an instance's tool in the instance's own home, so scoring and resume read the session there.
+    it.each([
+      { tool: 'claude', instance: 'claudeAgent', model: 'claude-opus-5-5', where: '~/.claude-work', homePath: () => '~/.claude-work', home: () => path.join(t3.home, '.claude-work') },
+      { tool: 'codex', instance: 'codex', model: 'gpt-6.1-sol', where: '~/.codex-work', homePath: () => '~/.codex-work', home: () => path.join(t3.home, '.codex-work') },
+      { tool: 'claude', instance: 'claudeAgent', model: 'claude-opus-5-5', where: 'an absolute path', homePath: () => path.join(dir, 'accounts', 'second'), home: () => path.join(dir, 'accounts', 'second') },
+    ])('finds the session of a $tool step in the home its instance names, $where, and names that home', async ({ tool, instance, model, homePath, home }) => {
+      t3.settings({ providerInstances: { [instance]: { driver: instance, config: { homePath: homePath() } } } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000000e', { tool, model: { name: model } }));
+
+      const end = await ended(runtime, 'op-0000000e');
+      expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
+      expect(end).toMatchObject({ event: 'finished', session: { tool, id: expect.stringMatching(/^[0-9a-f-]{36}$/), home: home() } });
+    });
+
+    // A member whose shell runs teamai with another HOME, such as a script's scratch HOME, still runs T3 Code as
+    // themselves: an instance with no homePath keeps its sessions in the tool's home in T3 Code's own home.
+    it('finds the session in the tool home of T3 Code\'s own user when teamai runs with another HOME, and names that home', async () => {
+      await t3.stop();
+      t3 = fakeT3(path.join(dir, 'member'), checkout, { t3HomeInHome: true });
+      await t3.start();
+      const elsewhere = path.join(dir, 'scratch-home');
+      fs.mkdirSync(elsewhere);
+      const { runtime, handle } = await opened('attended', { HOME: elsewhere });
+
+      runtime.send(prompt(handle, 'op-0000000f'));
+
+      expect(await ended(runtime, 'op-0000000f')).toMatchObject({ event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/), home: path.join(t3.home, '.claude') } });
+    });
+
     // A T3 thread always starts a session of its own, so teamai must not link it to the one the step asked to resume.
     it('says nothing of resuming when the lease asks to resume a session, since the thread started a new one', async () => {
       const { runtime, handle } = await opened();
@@ -964,7 +995,7 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send(prompt(handle, 'op-00000012'));
 
-      expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('claude kept no session for') } });
+      expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`claude kept no session for ${worktree} in ${path.join(t3.home, '.claude')}, so the step cannot be scored or resumed.`) } });
     });
 
     it('stops the thread on cancel and ends cancelled once its run has ended', async () => {
