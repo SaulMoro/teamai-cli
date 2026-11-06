@@ -103,6 +103,34 @@ function settledStatus(waited: Waited): Waited['status'] | undefined {
   return waited.resultRun?.status ?? waited.status;
 }
 
+/**
+ * Whether the thread, or a task it delegated at any depth, holds a request for a person. T3 holds a delegated task's
+ * approval on the task's own thread, while the thread that delegated it runs on, waiting for the task.
+ */
+async function asksForApproval(t3: T3, threadId: string): Promise<{ by: 'thread' | 'task' } | undefined> {
+  if ((await t3.thread(threadId)).pendingRequestCount > 0) return { by: 'thread' };
+  const active = await t3.activeThreads();
+  const tasks = new Set([threadId]);
+
+  // Delegated tasks start after the thread that delegated them, so a pass per depth finds each one.
+  for (let grew = true; grew;) {
+    grew = false;
+
+    for (const listed of active) {
+      if (listed.parentThreadId && tasks.has(listed.parentThreadId) && !tasks.has(listed.threadId)) {
+        tasks.add(listed.threadId);
+        grew = true;
+      }
+    }
+  }
+
+  for (const listed of active) {
+    if (listed.threadId !== threadId && tasks.has(listed.threadId) && (listed.status === 'waiting' || (await t3.thread(listed.threadId)).pendingRequestCount > 0)) return { by: 'task' };
+  }
+
+  return undefined;
+}
+
 export interface Connected {
   ok: true;
   t3: T3;
@@ -909,9 +937,11 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (ended === undefined || ended === 'idle') {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
-        if (s.mode === 'unattended' && (waited.status === 'waiting' || (await s.t3.thread(thread.threadId)).pendingRequestCount > 0)) {
+        const asking = s.mode === 'unattended' ? (waited.status === 'waiting' ? { by: 'thread' } : await asksForApproval(s.t3, thread.threadId)) : undefined;
+
+        if (asking) {
           const why = await whyNotStopped(s.t3, thread.threadId, Date.now() + STOP_WAIT_MS);
-          const asked = `${where} asked for an approval, and nobody is there to give it in an unattended run.`;
+          const asked = `${where} ${asking.by === 'task' ? 'delegated a task that asked' : 'asked'} for an approval, and nobody is there to give it in an unattended run.`;
 
           if (why === undefined) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: asked } });
 

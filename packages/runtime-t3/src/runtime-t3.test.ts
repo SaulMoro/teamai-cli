@@ -1226,6 +1226,19 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ runtimeMode: 'auto', status: 'interrupted' });
     });
 
+    // T3 holds an approval a delegated task asks for on the task's own thread, not as a pending request of the step's.
+    it('fails a step whose delegated task asks for an approval in an unattended run, and stops its thread and the task', async () => {
+      t3.config({ agent: { delegatedWaits: true } });
+      const { runtime, handle } = await opened('unattended');
+
+      runtime.send(prompt(handle, 'op-00000014'));
+
+      const end = await ended(runtime, 'op-00000014');
+      const step = t3.threads().find((thread) => thread.parentThreadId === undefined);
+      expect(end).toEqual({ op: 'op-00000014', event: 'failed', failure: { code: 'tool_failed', message: `The T3 thread ${linkTo(step?.threadId)} ("review · teamai ${RUN}") delegated a task that asked for an approval, and nobody is there to give it in an unattended run.` } });
+      expect(t3.threads().map((thread) => thread.status)).toEqual(['interrupted', 'interrupted']);
+    });
+
     it('refuses a lease in unattended permissions, which its offer never takes, and launches nothing', async () => {
       const { runtime, handle } = await opened();
 
