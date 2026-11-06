@@ -15,12 +15,12 @@ import path from 'node:path';
 import { resolveMemberToolRoots } from '../config.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { isSessionPlatform, sessionPlatformFacts } from './adapters/platform-facts.js';
-import { sessionPlatformOwner, sessionPlatformsOf } from '../tools.js';
-import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from './adapters/base.js';
-import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
-import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
+import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
+import { isSessionPlatform, sessionPlatformFacts as shippedPlatformFacts } from './adapters/platform-facts.js';
+import { instancePlatform, sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
+import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from '@teamai/tool-core/sessions/base';
+import { imagePlaceholderText, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
+import { deriveTargetSessionId, legacyTargetSessionIds } from '@teamai/tool-core/sessions/ids';
 import { degradeThinkingBlocks, fidelityFromSession, type FidelityReport } from './migrate.js';
 import { scrubSession } from './scrub.js';
 import { publishedPathRoots } from './sync.js';
@@ -82,7 +82,7 @@ export type AgentSessionFindOptions = {
   subagents?: boolean;
 };
 
-export type { Subagent, SubagentsRead } from './adapters/base.js';
+export type { Subagent, SubagentsRead } from '@teamai/tool-core/sessions/base';
 
 export type AgentSessionFound =
   | {
@@ -184,6 +184,13 @@ export function noAdapter(
 
 type ToolRoots = LocalConfig['toolRoots'];
 
+/** The facts of `platform`: a shipped platform's, or for an instance's own, those of the platform whose format it keeps. */
+function sessionPlatformFacts(platform: string): ReturnType<typeof shippedPlatformFacts> {
+  const hosted = instancePlatform(platform);
+
+  return shippedPlatformFacts(platform) ?? (hosted ? shippedPlatformFacts(hosted.platform) : undefined);
+}
+
 /**
  * The member's recorded tool roots as seen from `cwd`: a relocated Claude Code or Codex keeps its
  * sessions there. Read-only, so looking a session up never sets up a project.
@@ -210,7 +217,7 @@ export function toolRootsLookup(): ToolRootsLookup {
 }
 
 function adapterFor(platform: string, use: 'read' | 'write', toolRoots: ToolRoots): AgentAdapter | AgentSessionFailure {
-  return noAdapter(platform, use) ?? ADAPTER_REGISTRY[platform](toolRoots);
+  return noAdapter(platform, use) ?? getAdapter(platform, toolRoots);
 }
 
 const messageOf = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
@@ -259,7 +266,9 @@ async function existingCopyId(
 
   if (derived) return derived;
 
-  for (const id of legacyTargetSessionIds(copyInfo)) {
+  const legacyIdWithoutWorkspace = sessionPlatformFacts(copyInfo.targetPlatform)?.legacyIdWithoutWorkspace === true;
+
+  for (const id of legacyTargetSessionIds({ ...copyInfo, legacyIdWithoutWorkspace })) {
     const found = await target.existingSessionId(id, copyInfo.cwd);
 
     if (found) return found;
@@ -307,6 +316,7 @@ export async function writeCopyOnce(
   try {
     targetId = deriveTargetSessionId({
       targetPlatform,
+      idFormat: sessionPlatformFacts(targetPlatform)?.idFormat ?? 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
       sourceCreatedAt: session.createdAt,

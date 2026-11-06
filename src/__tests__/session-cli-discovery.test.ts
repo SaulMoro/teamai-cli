@@ -12,17 +12,17 @@ import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({ hasSqlite3: true }));
 
-vi.mock('../session-flow/sqlite.js', async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import('../session-flow/sqlite.js');
+vi.mock('@teamai/tool-core/sessions/sqlite', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('@teamai/tool-core/sessions/sqlite');
   return {
     ...actual,
     findSqlite3: (...args: Parameters<typeof actual.findSqlite3>) => (mocks.hasSqlite3 ? actual.findSqlite3(...args) : null),
   };
 });
 
-import { CodexAdapter } from '../session-flow/adapters/codex.js';
-import { findSqlite3 } from '../session-flow/sqlite.js';
-import type { Session } from '../session-flow/ir.js';
+import { CodexAdapter } from '@teamai/tool-core/formats/codex';
+import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 
 let home = '';
 

@@ -123,7 +123,7 @@ import {
 import { blockingEntries, contentHash, deliveredSkillFiles, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir } from './resources/delivered-copies.js';
 import { skillOrigin, withSkillFrontmatter } from './resources/skills.js';
 import { hookSettingsFile, installOf, locate, ownOf, writable, type FilePlace } from './locate.js';
-import { mcpFormatOf } from './tools.js';
+import { mcpFormatOf } from './tool-registry.js';
 import { acquireLock, releaseLock } from './update.js';
 import { isJsonObject, type JsonObject } from './types.js';
 import { parseJson } from './utils/json.js';

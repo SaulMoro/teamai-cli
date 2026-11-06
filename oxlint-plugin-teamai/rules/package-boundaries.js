@@ -1,42 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
-import { z } from 'zod';
 
 import { importVisitors } from '../imports.js';
-import { lintedPath } from '../utils.js';
-
-const ManifestSchema = z.object({ name: z.string().optional(), private: z.boolean().optional(), workspaces: z.unknown().optional() });
-
-/**
- * The package.json at `dir`, or undefined when it is missing or unreadable.
- * @param {string} dir
- */
-function manifest(dir) {
-  const file = `${dir}/package.json`;
-
-  if (!fs.existsSync(file)) return undefined;
-  const parsed = ManifestSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8')));
-
-  return parsed.success ? parsed.data : undefined;
-}
-
-/** @type {Map<string, string | undefined>} */
-const roots = new Map();
-
-/**
- * The nearest directory at or above `dir` whose package.json declares workspaces.
- * @param {string} dir
- * @returns {string | undefined}
- */
-function workspaceRoot(dir) {
-  if (roots.has(dir)) return roots.get(dir);
-  const parent = path.posix.dirname(dir);
-  const root = manifest(dir)?.workspaces !== undefined ? dir : parent === dir ? undefined : workspaceRoot(parent);
-  roots.set(dir, root);
-
-  return root;
-}
+import { lintedPath, manifest, workspaceRoot } from '../utils.js';
 
 /** @type {Map<string, Map<string, string>>} */
 const packageNames = new Map();
@@ -65,6 +32,15 @@ function packagesByName(root) {
   return names;
 }
 
+/** A tool family's folder: every `tool-*` package but the contract, the test kit and the list of families. */
+const FAMILY = /^tool-(?!(?:core|testing|definitions)$)/;
+
+/** The one package that imports the families. */
+const DEFINITIONS = 'tool-definitions';
+
+/** The conformance kit families test with. */
+const TEST_KIT = 'tool-testing';
+
 /**
  * The `packages/<folder>` a path relative to the workspace root sits in, if any.
  * @param {string} relative
@@ -86,6 +62,7 @@ export default defineRule({
     const from = path.posix.relative(root, file);
     const own = packageFolder(from);
     const inApp = from.startsWith('src/');
+    const isTest = from.startsWith('src/__tests__/') || /\.test\.[cm]?[jt]sx?$/.test(from);
 
     if (own === undefined && !inApp) return {};
 
@@ -112,11 +89,19 @@ export default defineRule({
           return;
         }
 
-        if (!inApp) return;
-
         for (const [name, folder] of packagesByName(root)) {
-          if ((specifier === name || specifier.startsWith(`${name}/`)) && folder.startsWith('runtime-')) {
+          if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
+
+          if (inApp && folder.startsWith('runtime-')) {
             context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio. ${from} -> ${specifier}.` });
+          }
+
+          if (FAMILY.test(folder) && own !== DEFINITIONS && own !== folder) {
+            context.report({ node, message: `Only @teamai/tool-definitions imports a tool family: the app reads tools through it, and a family depends on tool-core alone. ${from} -> ${specifier}.` });
+          }
+
+          if (folder === TEST_KIT && !isTest) {
+            context.report({ node, message: `@teamai/tool-testing is test-only: import it from a *.test.ts file, so the conformance kit and vitest never ship in teamai-cli. ${from} -> ${specifier}.` });
           }
         }
       }),
