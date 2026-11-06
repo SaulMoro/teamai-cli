@@ -81,8 +81,19 @@ export type ListedThread = z.infer<typeof ListedThreadSchema>;
 
 const ThreadPageSchema = z.object({ threads: z.array(ListedThreadSchema), nextCursor: z.number().int().nullable().optional() });
 
-/** One timeline item of a thread's messages view, read in pages of text when it is long. */
-const ItemSchema = z.object({ itemId: z.string(), type: z.string(), text: z.string().nullable(), textTruncated: z.boolean(), nextTextOffset: z.number().int().nullable() });
+/** One timeline item of a thread's messages or activity view, read in pages of text when it is long. */
+const ItemSchema = z.object({
+  itemId: z.string(), type: z.string(), runId: z.string().nullable().optional(), title: z.string().nullable().optional(),
+  text: z.string().nullable(), textTruncated: z.boolean(), nextTextOffset: z.number().int().nullable(),
+});
+
+type Item = z.infer<typeof ItemSchema>;
+
+/**
+ * The title T3 gives the error item of a run its provider stopped on a spent usage limit ("Provider error" for any
+ * other); T3's MCP names neither the failure's class nor its reset time otherwise.
+ */
+export const USAGE_LIMIT_TITLE = 'Usage limit reached';
 
 const ItemPageSchema = z.object({ items: z.array(ItemSchema), nextPosition: z.number().int().nullable(), hasMore: z.boolean() });
 
@@ -164,6 +175,8 @@ export interface T3 {
   activeThreads(): Promise<ListedThread[]>;
   /** The thread's last assistant message, whole, or undefined when it wrote none. */
   lastReply(threadId: string): Promise<string | undefined>;
+  /** The error T3 recorded last for the thread's run `runId`, or for any run without one: its title and its whole text. */
+  lastError(threadId: string, runId: string | undefined): Promise<{ title: string; text: string } | undefined>;
   /** Waits up to `timeoutMs` for the thread's latest run, and the work it delegated, to settle. */
   wait(threadId: string, timeoutMs: number): Promise<Waited>;
   /**
@@ -206,6 +219,35 @@ function t3Over(client: Client): T3 {
     if (!parsed.success) throw new T3Error(tool, `T3 answered ${tool} in a shape this runtime does not read: ${z.prettifyError(parsed.error)}`);
 
     return parsed.data;
+  };
+
+  /** The last item of the thread's `view` that `matches`, read page by page. */
+  const lastItem = async (threadId: string, view: 'messages' | 'activity', matches: (item: Item) => boolean): Promise<Item | undefined> => {
+    let found: Item | undefined;
+    let afterPosition: number | undefined;
+
+    for (;;) {
+      const page = await call('t3_thread_read', { threadId, view, limit: 100, ...(afterPosition !== undefined && { afterPosition }) }, ItemPageSchema);
+      found = page.items.findLast(matches) ?? found;
+
+      if (!page.hasMore || page.nextPosition === null) return found;
+      afterPosition = page.nextPosition;
+    }
+  };
+
+  /** The whole text of `item`, which T3 sends in pages when it is long. */
+  const wholeText = async (threadId: string, item: Item): Promise<string> => {
+    let text = item.text ?? '';
+
+    for (let offset = item.textTruncated ? item.nextTextOffset : null; offset !== null;) {
+      const [part] = (await call('t3_thread_read', { threadId, itemId: item.itemId, textOffset: offset, maxCharsPerItem: 50_000 }, ItemPageSchema)).items;
+
+      if (!part) break;
+      text += part.text ?? '';
+      offset = part.textTruncated ? part.nextTextOffset : null;
+    }
+
+    return text;
   };
 
   return {
@@ -256,29 +298,14 @@ function t3Over(client: Client): T3 {
       return threads;
     },
     lastReply: async (threadId) => {
-      let reply: z.infer<typeof ItemSchema> | undefined;
-      let afterPosition: number | undefined;
+      const reply = await lastItem(threadId, 'messages', (item) => item.type === 'assistant_message');
 
-      for (;;) {
-        const page = await call('t3_thread_read', { threadId, view: 'messages', limit: 100, ...(afterPosition !== undefined && { afterPosition }) }, ItemPageSchema);
-        reply = page.items.findLast((item) => item.type === 'assistant_message') ?? reply;
+      return reply && wholeText(threadId, reply);
+    },
+    lastError: async (threadId, runId) => {
+      const error = await lastItem(threadId, 'activity', (item) => item.type === 'error' && (runId === undefined || item.runId === runId));
 
-        if (!page.hasMore || page.nextPosition === null) break;
-        afterPosition = page.nextPosition;
-      }
-
-      if (!reply) return undefined;
-      let text = reply.text ?? '';
-
-      for (let offset = reply.textTruncated ? reply.nextTextOffset : null; offset !== null;) {
-        const [part] = (await call('t3_thread_read', { threadId, itemId: reply.itemId, textOffset: offset, maxCharsPerItem: 50_000 }, ItemPageSchema)).items;
-
-        if (!part) break;
-        text += part.text ?? '';
-        offset = part.textTruncated ? part.nextTextOffset : null;
-      }
-
-      return text;
+      return error && { title: error.title ?? '', text: await wholeText(threadId, error) };
     },
     wait: (threadId, timeoutMs) => call('t3_thread_wait', { threadId, timeoutMs, untilDelegatedWorkSettled: true }, WaitedSchema, timeoutMs + 30_000),
     stop: async (threadId) => { await call('t3_thread_interrupt', { threadId, stop: true, reason: 'teamai cancelled the workflow step' }, z.object({ threadId: z.string() }).loose()); },
