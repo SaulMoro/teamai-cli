@@ -798,7 +798,7 @@ export async function unchangedOverlayPaths(dir: string, saved: string, dirty: r
  * worktree's files, nothing is put back, `saved` is kept, and the reason is returned as a clause. `runGit` runs every
  * git call.
  */
-export async function restoreUneditedConfig(dir: string, _commit: string, saved: string, runGit: Git = git): Promise<string | undefined> {
+export async function restoreUneditedConfig(dir: string, _commit: string, saved: string, runGit: Git): Promise<string | undefined> {
   // Listed before anything changes. The index stays as it is until the files are back.
   const paths = await savedConfigPaths(saved);
   const unmergedListed = await gitPaths(dir, ['diff', '--name-only', '--diff-filter=U'], runGit);
