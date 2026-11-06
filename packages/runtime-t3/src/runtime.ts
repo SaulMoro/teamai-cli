@@ -14,6 +14,7 @@ import type { SignInAccess } from './auth.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
+import { driverOfProvider, servedInstances } from './tool-instances.js';
 import { STEP_MODES, T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
@@ -53,6 +54,8 @@ const OptionsSchema = z.object({
   environment: z.literal('local'),
   /** A T3 provider instance to run every prompt on, by its id in T3 Settings → Providers; the tool's default one otherwise. */
   instance: z.string().min(1).optional(),
+  /** The T3 provider instance that runs each teamai tool or tool instance, by name; a tool instance is otherwise found by its Binary path. */
+  instances: z.record(z.string().min(1), z.string().min(1)).optional(),
   /**
    * The mode every step thread runs in, in place of the member's T3 default. `full-access` is the member's explicit
    * opt-in: threads run without asking, the sign-in asks for Full access, and every tool offered is reported so.
@@ -203,8 +206,8 @@ interface Reached {
 /** A connection that runs steps, opened by `init` in a mode for new work. */
 interface Session extends Reached {
   mode: WorkMode;
-  /** The provider instance each offered tool runs on. */
-  instances: Map<ToolId, Provider>;
+  /** The provider instance each offered tool or tool instance runs on, by its name. */
+  instances: Map<string, Provider>;
   /** The mode `runtime_mode` sets; none: the member's T3 default for the place's project. */
   runtimeMode: StepMode | undefined;
   /** The run's checkout, as `init` names it, else the folder teamai started the runtime in. */
@@ -726,7 +729,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       const message = key === 'runtime_mode'
         ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four`
-        : `Runtime t3 takes { environment: local, instance?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
+        : `Runtime t3 takes { environment: local, instance?, instances?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
 
       write({ type: 'init', ok: false, error: { code: 'bad_option', message, ...(key && { key }) } });
 
@@ -765,7 +768,8 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       const [environment, providers, here] = asking.value;
-      const project = projectSettings(readSettings(options.t3Home), here);
+      const settings = readSettings(options.t3Home);
+      const project = projectSettings(settings, here);
       const instances = instancesOf({ providers, instance: parsed.data.instance, project });
 
       if (!instances.ok) {
@@ -774,14 +778,35 @@ export function serve(options: ServeOptions): Promise<void> {
         return;
       }
 
-      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn, checkout };
-      const tools = [...instances.instances.keys()];
+      // The tool instances teamai gave, and each tool `instances` maps to a provider instance of its own.
+      const mapped = parsed.data.instances;
+      const named = [...request.instances ?? [], ...Object.keys(mapped ?? {}).filter((name) => driverOf(name) !== undefined).map((tool) => ({ name: tool, tool }))];
+
+      const served = servedInstances({
+        instances: named, mapped,
+        lookup: {
+          providers,
+          isUsable: (provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false,
+          binaryPathOf: (instanceId) => settings.providerInstances?.[instanceId]?.config?.binaryPath?.trim() || undefined,
+        },
+      });
+
+      if (!served.ok) {
+        write({ type: 'init', ok: false, error: served.failure });
+
+        return;
+      }
+
+      const runs = new Map<string, Provider>([...instances.instances, ...served.served]);
+      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn, checkout };
+      const tools = [...runs.keys()];
       // A step that names no tool runs on the member's effective T3 default, when its instance is the one offered.
-      const defaultTool = [...instances.instances].find(([, provider]) => provider.providerInstanceId === project.defaultModel?.instanceId)?.[0];
+      const defaultTool = [...runs].find(([, provider]) => provider.providerInstanceId === project.defaultModel?.instanceId)?.[0];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         // Full access is the member's opt-in, and teamai records the isolation of these steps as none.
         ...(parsed.data.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
+        ...(Object.keys(served.unavailable).length > 0 && { unavailable: served.unavailable }),
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
           // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own assets, and
@@ -979,11 +1004,7 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /** The T3 provider instance `thread` runs on: the one its launch named, else the one the session picked for its tool. */
-  const instanceIdOf = (s: Session, thread: ThreadRecord): string | undefined => {
-    const driver = driverOf(thread.tool);
-
-    return thread.instanceId ?? (driver && s.instances.get(DRIVERS[driver].tool)?.providerInstanceId);
-  };
+  const instanceIdOf = (s: Session, thread: ThreadRecord): string | undefined => thread.instanceId ?? s.instances.get(thread.tool)?.providerInstanceId;
 
   /**
    * What a failed run of `thread` says of the usage limit it stopped on: the tool, its instance and T3's own message,
@@ -1080,14 +1101,16 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (!written.ok) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ${written.why}.` } });
       const cwd = thread.copy ?? request.cwd;
-      const driver = driverOf(thread.tool);
+      const served = s.instances.get(thread.tool);
+      const driver = served ? driverOfProvider(served) : driverOf(thread.tool);
       // The session is in the tool home of the instance the thread runs on, which is the scoring and resume store.
       const instanceId = instanceIdOf(s, thread);
       const toolHome = driver && instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined;
       const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt }) : undefined;
 
       if (!driver || toolHome === undefined || !id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.` } });
-      const kept = { tool: thread.tool, id, ...(!isDefaultToolHome(driver, toolHome) && { home: toolHome }) };
+      // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
+      const kept = { tool: thread.tool, id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
 
       return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) });
     }
@@ -1173,8 +1196,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     const lease = request.lease;
-    const driver = driverOf(lease.tool);
-    const instance = driver && s.instances.get(DRIVERS[driver].tool);
+    const instance = s.instances.get(lease.tool);
 
     if (!instance) {
       refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: `T3 Code ${s.environment.label} runs ${[...s.instances.keys()].join(', ') || 'no tool this runtime runs'} here, not ${lease.tool}.` } });
