@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
-import { homeEnvOf } from '../../tool-home.js';
+import { defaultToolHome, homeEnvOf, realHost } from '../../tool-home.js';
+import { isToolId } from '../../tool-registry.js';
 import { isRecord } from '../expression.js';
 import { log } from '../../utils/logger.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
@@ -360,11 +361,18 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     return { code: 'runtime_unanswered', message: `Step runtime "${runtime.name}" still reported operation ${op} of attempt ${attempt} running ${STOP_WAIT_MS / 1000} s after teamai asked it to cancel it.` };
   };
 
-  /** Records the home outside the attempt a finished prompt's session lives in, which its runtime reported. */
+  /**
+   * Records the home outside the attempt a finished prompt's session lives in: the one its runtime reported, else, as
+   * protocol 1 reads an omitted home, the tool's default home under $HOME, whatever moved the member's own.
+   */
   const keptIn = async (end: PromptEnd): Promise<PromptEnd> => {
     const now = await current();
 
-    if (end.kind === 'finished' && end.session.home !== undefined && now) await save({ ...now, sessionHome: { tool: end.session.tool, dir: end.session.home } });
+    if (end.kind !== 'finished' || !now) return end;
+    const { tool } = end.session;
+    const home = end.session.home ?? (isToolId(tool) ? defaultToolHome(tool, realHost()) : undefined);
+
+    if (home !== undefined) await save({ ...now, sessionHome: { tool, dir: home } });
 
     return end;
   };

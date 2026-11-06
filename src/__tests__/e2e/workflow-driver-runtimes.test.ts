@@ -986,6 +986,17 @@ steps:
       expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
     });
 
+    it('reads a session whose runtime reports no home in the tool\'s default home, not in the one the member moved theirs to', async () => {
+      writeDefinition('agentdefaulthome', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentdefaulthome'], repo, env({ CLAUDE_CONFIG_DIR: path.join(sandbox, 'member-claude') }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ sessionHome: { tool: 'claude', dir: path.join(os.homedir(), '.claude') } });
+    });
+
     it('fails a prompt whose tool hit its usage limit usage_limited, with the reset time the runtime gave and the retry to run', async () => {
       writeDefinition('agentlimit', [{ use: 'toy', options: { state, agent: { fail: { code: 'usage_limited', message: 'claude hit its usage limit, which resets at 14:00.' } } } }]);
 
