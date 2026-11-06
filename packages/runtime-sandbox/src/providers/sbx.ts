@@ -43,6 +43,14 @@ const CheckedSchema = z.object({ allowed: z.boolean() });
 /** `sbx secret ls --global --json`: the services sbx's proxy holds a login for. Each secret's masked value is never read. */
 const StoredSchema = z.object({ secrets: z.array(z.object({ name: z.string() })) });
 
+/**
+ * Where an agent template keeps a tool's sign-in in its own home, by the variable that moves the tool's home: the
+ * stand-in sbx's proxy swaps for the stored login (sbx 0.51.0's claude template: `~/.claude/.credentials.json`). teamai
+ * points that variable at the attempt's tool home, where the tool would find no sign-in, so the sandbox links it there.
+ * Codex's template keeps none: it signs in from an OPENAI_API_KEY placeholder in its env.
+ */
+const TEMPLATE_SIGN_IN = { CLAUDE_CONFIG_DIR: '.claude/.credentials.json' } satisfies Record<string, string>;
+
 /** The notice sbx prints on stderr when an exec starts a sandbox it stopped while idle: sbx's line, not the step's. */
 const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
 
@@ -112,6 +120,26 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
     const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
 
     return { ok: true, tools: LAUNCHABLE.filter((tool) => found.has(tool)) };
+  };
+
+  /**
+   * Links, inside sandbox `name`, the sign-in its template keeps for each tool whose home the attempt moves into its
+   * tool home, unless that home already holds one. Only a link lands on the host's disk, pointing into the sandbox.
+   */
+  const linkSignIns = async (name: string, toolHome: Record<string, string>): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const links = Object.entries(toolHome).flatMap(([variable, dir]) => {
+      const file = Object.entries(TEMPLATE_SIGN_IN).find(([home]) => home === variable)?.[1];
+
+      return file === undefined ? [] : [file, dir];
+    });
+
+    if (links.length === 0) return { ok: true };
+    const script = 'while [ $# -gt 0 ]; do f="$HOME/$1" t="$2/$(basename "$1")"; if [ -e "$f" ] && [ ! -e "$t" ] && [ ! -L "$t" ]; then ln -s "$f" "$t" || exit 1; fi; shift 2; done';
+    const ran = await cli(['exec', name, '/bin/sh', '-c', script, 'sh', ...links], { timeoutMs: COMMAND_MS });
+
+    if (ran.kind === 'ran' && ran.code === 0) return { ok: true };
+
+    return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not give the tool in sandbox ${name} the login sbx keeps for it: ${messageOf(ran) || 'the link failed'}. Remove it with \`sbx rm --force ${name}\`, and start again.` } };
   };
 
   /** The services whose login sbx's proxy holds for every sandbox, which it injects into a tool's requests. */
@@ -204,7 +232,11 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
       const paths = mounted.mounts.map(({ at, mode }) => (mode === 'ro' ? `${at}:ro` : at));
       const created = await cli(['create', '--name', name, '--no-progress', agent, ...paths]);
 
-      if (created.kind === 'ran' && created.code === 0) return { ok: true, id: name };
+      if (created.kind === 'ran' && created.code === 0) {
+        const linked = await linkSignIns(name, view.toolHome);
+
+        return linked.ok ? { ok: true, id: name } : linked;
+      }
 
       // Another open of the same attempt created it first: that sandbox is this attempt's.
       const raced = await find(key);

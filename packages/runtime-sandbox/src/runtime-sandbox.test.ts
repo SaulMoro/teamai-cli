@@ -1981,6 +1981,20 @@ describe('an attempt in an sbx sandbox', () => {
     expect(fs.existsSync(path.join(at.toolHome, 'auth.json'))).toBe(false);
   });
 
+  it("signs Claude in on the login sbx keeps while its config dir is the attempt's tool home, with no credential on the host's disk", async () => {
+    // Claude reads its sign-in from its config dir, where sbx's template keeps the stand-in its proxy swaps for the login.
+    engine.image('claude', { claude: "const fs = require('node:fs'); const signedIn = fs.existsSync(`${process.env.CLAUDE_CONFIG_DIR}/.credentials.json`); console.log(signedIn ? 'signed in' : 'Not logged in · Please run /login'); process.exit(signedIn ? 0 : 1);" });
+    engine.secret('anthropic', true);
+    const connection = start();
+    await init(connection, { provider: 'sbx', agent: 'claude' }, 'unattended', { env: [], logins: [] });
+    const at = place();
+    await openPlace(connection, at);
+
+    expect((await exec(connection, { argv: ['claude', '-p', 'Fix it.'], env: { CLAUDE_CONFIG_DIR: at.toolHome }, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'signed in\n' });
+    // Only a link into the sandbox's own home is on the host, never the file.
+    expect(fs.lstatSync(path.join(at.toolHome, '.credentials.json')).isSymbolicLink()).toBe(true);
+  });
+
   it('runs an exec in a sandbox sbx stopped while idle, and keeps its start notice out of the stdout', async () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });
