@@ -1,4 +1,5 @@
 import type { ContainerEngine } from '../options.js';
+import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
@@ -68,7 +69,7 @@ export interface Host {
 }
 
 /** `owner`: the id of the journal whose attempts the containers are, which labels each one. */
-export function containerProvider({ engine, image, owner, host }: { engine: ContainerEngine; image: string; owner: string; host: Host }): Provider {
+export function containerProvider({ engine, image, owner, host }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host }): Provider {
   const notInstalled = engine === 'docker'
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';

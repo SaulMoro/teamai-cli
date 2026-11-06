@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { JournalId } from '../journal.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 
@@ -50,7 +51,7 @@ function namesListed(stdout: string): string[] | undefined {
 }
 
 /** `owner`: the id of the journal whose attempts the sandboxes are, which starts each one's name. */
-export function sbxProvider({ agent, owner, env }: { agent: string; owner: string; env: NodeJS.ProcessEnv }): Provider {
+export function sbxProvider({ agent, owner, env }: { agent: string; owner: JournalId; env: NodeJS.ProcessEnv }): Provider {
   const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
 
   /** What starts the name of every sandbox of this journal. */
