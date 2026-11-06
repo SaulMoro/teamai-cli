@@ -338,7 +338,13 @@ Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以
 { "provider": "codex", "modeId": "auto", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
 ```
 
-OpenCode 没有这项授权。步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，所以提示词写明 `$TEAMAI_RUN_DIR` 所指目录中的某个文件时，它的效果与在本机相同。
+OpenCode 智能体也可以写这两处：运行时通过 OpenCode 的 `external_directory` 权限放行它们，所以它只在碰工作树之外的其他东西前询问：
+
+```json
+{ "provider": "opencode", "providerOptions": { "permission": { "external_directory": { "~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out/*": "allow", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch/*": "allow" } } } }
+```
+
+步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，所以提示词写明 `$TEAMAI_RUN_DIR` 所指目录中的某个文件时，它的效果与在本机相同。
 
 有人值守的运行里，其他权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
 

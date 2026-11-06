@@ -375,7 +375,7 @@ describe('teamai-runtime-paseo', () => {
     expect(received()).toEqual([expect.objectContaining({ config: expect.objectContaining({ model: 'claude-opus-5-5', thinkingOptionId: 'high' }) })]);
   });
 
-  it('starts an OpenCode agent in its default mode build, on the daemon\'s default model when the step names none, with no grant', async () => {
+  it('starts an OpenCode agent in its default mode build, on the daemon\'s default model when the step names none, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
     await ready(runtime);
@@ -384,7 +384,9 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode' } });
     const [create] = received();
     expect(create).toMatchObject({ config: { provider: 'opencode', model: 'opencode/beam-free', modeId: 'build' } });
-    expect(create).not.toHaveProperty('config.providerOptions');
+    // OpenCode asks before it touches a directory outside its project (`external_directory: ask`): Paseo passes this rule
+    // to the agent's session, so the two teamai writes outside the worktree are allowed, and only they.
+    expect(create).toHaveProperty('config.providerOptions', { permission: { external_directory: { [`${path.join(dir, 'out')}/*`]: 'allow', [`${path.join(dir, 'run')}/*`]: 'allow' } } });
   });
 
   it('cancels a running prompt: the agent is cancelled, and the prompt ends cancelled though Paseo reports the agent idle', async () => {

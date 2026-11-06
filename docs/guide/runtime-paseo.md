@@ -338,7 +338,13 @@ A Claude agent may write two things without asking: teamai's result file, and th
 { "provider": "codex", "modeId": "auto", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
 ```
 
-OpenCode gets no such grant. Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, so a prompt that names a file in the directory `$TEAMAI_RUN_DIR` names works as it does on this machine.
+An OpenCode agent may write the same two places: the runtime allows them through OpenCode's `external_directory` permission, so it asks only before it touches anything else outside the worktree:
+
+```json
+{ "provider": "opencode", "providerOptions": { "permission": { "external_directory": { "~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out/*": "allow", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch/*": "allow" } } } }
+```
+
+Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, so a prompt that names a file in the directory `$TEAMAI_RUN_DIR` names works as it does on this machine.
 
 In an attended run, any other permission prompt waits for you in the Paseo app, or on the command line:
 
