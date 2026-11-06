@@ -467,7 +467,7 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * page to open, a slow pull, a problem that does not stop the work. It neither answers nor ends any request, so it
    * is no answer teamai waits for. teamai masks it and shows it as a warning.
    */
-  const Notice = z.object({ event: z.literal('notice'), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional(), message: z.string().min(1).max(2000) }).strict();
+  const Notice = z.object({ event: z.literal('notice'), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional(), message: z.string().min(1) }).strict();
 
   return { OpEvent, HandleEvent, Notice, Message: z.union([InitReply, OpEvent, HandleEvent, Notice, z.object({ event: z.literal('error'), message: z.string() }).strict()]) };
 }
