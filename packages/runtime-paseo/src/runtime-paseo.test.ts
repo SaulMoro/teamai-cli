@@ -287,8 +287,9 @@ describe('teamai-runtime-paseo', () => {
       type: 'agent.create.request',
       idempotencyKey: 'op-0000000b',
       config: { provider: 'claude', model: 'claude-opus-5-5', modeId: 'default', cwd: worktree, title: `teamai review · ${RUN}` },
-      labels: { 'teamai-attempt': `${RUN}/${ATTEMPT}` },
     });
+    // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
+    expect(create?.labels).toEqual({ 'teamai-attempt': `${RUN}/${ATTEMPT}`, 'teamai-run': RUN, 'teamai-step': 'review' });
     // Claude's default mode asks before any write: the result file and the run's scratch directory, and only they, are
     // allowed, as teamai's own launch allows the result file.
     expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } } });
