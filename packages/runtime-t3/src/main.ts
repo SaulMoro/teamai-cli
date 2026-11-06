@@ -44,7 +44,7 @@ function localEndpoint(): URL | undefined {
 const connect: ServeOptions['connect'] = async (how) => {
   const resource = localEndpoint();
 
-  if (!resource) return { ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, then start the workflow again.' } };
+  if (!resource) return { ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, or run `t3 serve`, then start the workflow again.' } };
 
   // A server file outlives a server that crashed, or one that is stopping: any answer at all means it listens.
   try {
