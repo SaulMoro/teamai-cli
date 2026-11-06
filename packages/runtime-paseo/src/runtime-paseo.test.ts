@@ -1595,6 +1595,7 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
   });
 
+  // Each case waits out the runtime's real 20 s limit on a question to Paseo, then opens again.
   it.each([
     ['whether a workspace is open on the worktree', { list_ms: 60_000 }],
     ['the open of the worktree as a workspace', { open_ms: 60_000 }],
@@ -1729,6 +1730,7 @@ describe('teamai-runtime-paseo', () => {
     expect(journalFiles()).toEqual([]);
   });
 
+  // It waits out the close's real 10 s wait for the open, then the open Paseo answers at 14 s.
   it('keeps forgetting an attempt released while Paseo still opened its worktree, once that open ends', async () => {
     const runtime = start();
     await ready(runtime);
