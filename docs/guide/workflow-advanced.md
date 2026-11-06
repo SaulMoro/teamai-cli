@@ -1590,6 +1590,7 @@ teamai ships these definitions:
 | `teamai-claude`, `teamai-codex`, `teamai-opencode` | `local`, with prompt steps on that tool |
 | `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`), then `local` |
 | `teamai-paseo` | `paseo` (`max_parallel: 4`, at the address your Paseo config names), then `local` |
+| `teamai-sandbox` | `sandbox` (`provider: sbx`, `max_parallel: 4`), then `local` |
 
 ### Runtime options
 

@@ -1164,6 +1164,19 @@ steps:
     for (const tool of ['codex', 'opencode']) fs.rmSync(path.join(bin, tool));
   });
 
+  it.skipIf(!fs.existsSync(path.join(ROOT, 'drivers', 'teamai-sandbox.yaml')))('resolves the shipped teamai-sandbox by either name, and starts the sandbox runtime teamai ships', async () => {
+    // No sbx on PATH, so the shipped runtime stops at init before it creates any sandbox.
+    const nodeOnly = path.join(sandbox, 'node-only-bin');
+    fs.mkdirSync(nodeOnly, { recursive: true });
+    if (!fs.existsSync(path.join(nodeOnly, 'node'))) fs.symlinkSync(process.execPath, path.join(nodeOnly, 'node'));
+
+    for (const name of ['sandbox', 'teamai-sandbox']) {
+      const ran = envelope(await runCLI(['workflow', 'start', 'oneprompt', '--driver', name], repo, env({ PATH: [bin, nodeOnly, '/usr/bin', '/bin'].join(path.delimiter) })));
+
+      expect(ran).toMatchObject({ error: { code: 'runtime_failed', message: expect.stringMatching(/^Runtime "sandbox" of driver "teamai-sandbox" did not start \(sandbox_unavailable\): sbx is not installed here/) } });
+    }
+  });
+
   it('resolves the shipped teamai-paseo by either name, and starts the Paseo runtime teamai ships', async () => {
     // No Paseo client, so the shipped runtime stops at init before it looks for any daemon.
     const missing = path.join(sandbox, 'no-paseo-client');
