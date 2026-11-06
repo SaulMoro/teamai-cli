@@ -99,7 +99,7 @@ export type StepMode = (typeof STEP_MODES)[number];
 export interface NewThread {
   title: string;
   /** None: T3 starts the thread on the member's default for the project, or their fallback once its usage is spent. */
-  modelSelection?: { instanceId: string; model: string; options?: Array<{ id: string; value: string }> };
+  modelSelection?: { instanceId: string; model: string; options?: Array<{ id: string; value: string | boolean }> };
   /** Never inherited: set from the runtime's options, whatever the caller's mode or the member's grant would let T3 use. */
   runtimeMode: StepMode;
   /** T3 answers a repeated id with the thread it launched for it, and starts no second run. */
