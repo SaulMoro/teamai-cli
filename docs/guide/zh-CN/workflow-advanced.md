@@ -1511,7 +1511,7 @@ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa h
 
 exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
 
-每当 teamai 必须停止一次尝试时（例如驱动被杀掉后的 `workflow cancel`），它都会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`，这样宕机或一直不回答的提供方就不会卡住停止。用错误回答 `recover` 的运行时会再为新工作打开一次；如果这也失败，cancel 会同时给出两个失败：
+每当 teamai 必须停止一次尝试时（例如驱动被杀掉后的 `workflow cancel`），它都会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`，这样宕机或一直不回答的提供方就不会卡住停止。这个进程可能与你的运行时的其他进程同时运行：驱动另一次运行的进程，或在 exec 运行时比被杀掉的驱动活得更久的进程。teamai 同一时间只从它的一个进程询问一次尝试的位置，所以请每条记录保存一个日志文件，先写到临时路径再重命名到位，并且每条记录只让一个进程写。用错误回答 `recover` 的运行时会再为新工作打开一次；如果这也失败，cancel 会同时给出两个失败：
 
 ```text
 → {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}

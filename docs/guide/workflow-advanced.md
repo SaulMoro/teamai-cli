@@ -1511,7 +1511,7 @@ Each `teamai workflow cancel <run>` tries the close again. When the runtime can 
 
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
 
-teamai opens your runtime in `recover` mode whenever it must stop an attempt, as `workflow cancel` does after the driver was killed. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal, so a provider that is down or never answers cannot hold the stop. A runtime that answers `recover` with an error is opened again for new work, and when that fails too, the cancel names both failures:
+teamai opens your runtime in `recover` mode whenever it must stop an attempt, as `workflow cancel` does after the driver was killed. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal, so a provider that is down or never answers cannot hold the stop. That process may run beside others of your runtime: one that drives another run, or one that outlived its killed driver while an exec ran. teamai asks about an attempt's place from one of its processes at a time, so keep one journal file per record, written to a temporary path and renamed into place, and let only one process write each record. A runtime that answers `recover` with an error is opened again for new work, and when that fails too, the cancel names both failures:
 
 ```text
 → {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
