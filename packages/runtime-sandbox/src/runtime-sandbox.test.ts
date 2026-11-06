@@ -1077,6 +1077,61 @@ describe("the containers of one runtime's journal", () => {
     expect(owner('a00000003')).toMatch(/^[0-9a-f]{16}$/);
     expect(owner('a00000003')).not.toBe(owner('a00000001'));
   }, 60_000);
+
+  /** A container of `attempt` with `labels`, as a runtime killed while the engine created it leaves one. */
+  function leave(attempt: string, labels: Record<string, string>): void {
+    const own = Object.entries(labels).flatMap(([key, value]) => ['--label', `${key}=${value}`]);
+    execFileSync(path.join(engine.bin, 'docker'), ['run', '-d', '--name', `teamai-${RUN}-${attempt}`, '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${attempt}`, ...own, '--entrypoint', '/bin/sh', IMAGE, '-c', 'sleep infinity'], { env: engine.env() });
+  }
+
+  const named = (...attempts: string[]): string[] => attempts.map((attempt) => `teamai-${RUN}-${attempt}`).sort();
+
+  it("removes, before an open creates its own, a container of this journal whose attempt it no longer records, and keeps one it records, another journal's and an unlabelled one", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openAttempt(connection, 'a00000001');
+    const owner = engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? '';
+    leave('a00000002', { 'teamai.owner': owner });
+    leave('a00000003', { 'teamai.owner': '0123456789abcdef' });
+    leave('a00000004', {});
+
+    expect(await openAttempt(connection, 'a00000005')).toMatchObject({ event: 'ready' });
+    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003', 'a00000004', 'a00000005'));
+    expect(connection.stderr()).toBe('');
+  }, 60_000);
+
+  it('opens all the same when the engine cannot remove or list what an earlier run left, with one warning each on stderr', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openAttempt(connection, 'a00000001');
+    leave('a00000002', { 'teamai.owner': engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? '' });
+    engine.failRemove(true);
+
+    expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
+    engine.failRemove(false);
+    engine.failFormat(true);
+    expect(await openAttempt(connection, 'a00000004')).toMatchObject({ event: 'ready' });
+    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000002', 'a00000003', 'a00000004'));
+    expect(connection.stderr().trim().split('\n')).toEqual([
+      expect.stringMatching(/^teamai-runtime-sandbox: warning: teamai-r0123abcd-a00000002 was left by an earlier run, and docker could not remove container .+ Remove it with `docker rm --force [0-9a-f]+`\.$/),
+      expect.stringMatching(/^teamai-runtime-sandbox: warning: docker could not list the containers this runtime's journal owns: Error: template: .+ Containers an earlier run left stay until a later open\.$/),
+    ]);
+  }, 60_000);
+
+  it("keeps the container of another runtime's create still on its way, whose place that runtime saved first", async () => {
+    const creating = start();
+    await init(creating, { provider: 'docker', image: IMAGE });
+    engine.holdCreate(4_000);
+    const held = openAttempt(creating, 'a00000001');
+    await vi.waitFor(() => { expect(engine.containers()).toEqual(named('a00000001')); }, { timeout: 10_000 });
+    engine.holdCreate(0);
+    const other = start();
+    await init(other, { provider: 'docker', image: IMAGE });
+
+    expect(await openAttempt(other, 'a00000002')).toMatchObject({ event: 'ready' });
+    expect(await held).toMatchObject({ event: 'ready' });
+    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000002'));
+  }, 60_000);
 });
 
 // A judge's tools: each lists the files it can see from its working directory, says which credential names it got

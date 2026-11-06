@@ -19,14 +19,15 @@ process.stdout.on('error', () => { stdoutOpen = false; });
 
 const uid = process.getuid?.();
 const gid = process.getgid?.();
-const state = journal(path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox'));
+const sandboxJournal = journal(path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox'));
 
 serve({
   input: process.stdin,
   write: (message: RuntimeMessage) => {
     if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
   },
-  journal: state,
+  journal: sandboxJournal,
+  warn: (line) => { process.stderr.write(`${line}\n`); },
   provider: providerOf,
 });
 
@@ -39,7 +40,7 @@ function providerOf(options: SandboxOptions): Provider {
       return containerProvider({
         engine: options.provider,
         image: options.image,
-        owner: state.owner,
+        owner: sandboxJournal.owner,
         host: { user: uid !== undefined && gid !== undefined ? { uid, gid } : undefined, selinux: fs.existsSync('/sys/fs/selinux/enforce'), env: process.env },
       });
     default: {

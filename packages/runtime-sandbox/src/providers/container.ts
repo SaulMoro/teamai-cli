@@ -146,6 +146,21 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
     find,
 
+    async owned() {
+      const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}'], { timeoutMs: COMMAND_MS });
+
+      if (!(listed.kind === 'ran' && listed.code === 0)) return sandboxFailed(`${engine} could not list the containers this runtime's journal owns: ${why(listed)}`);
+
+      return {
+        ok: true,
+        sandboxes: listed.stdout.split('\n').flatMap((line) => {
+          const [id, run, attempt] = line.trim().split(' ');
+
+          return id && run && attempt ? [{ id, run, attempt }] : [];
+        }),
+      };
+    },
+
     async create(key, view) {
       const mounted = mountsOf(engine, view);
 
