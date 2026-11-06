@@ -1,4 +1,4 @@
-import type { Can, PlaceView, RuntimeDisplay, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { Can, InitCredentials, PlaceView, RuntimeDisplay, RuntimeFailure } from '@teamai/runtime-protocol';
 
 // ─── The provider seam ───────────────────────────────────
 //
@@ -71,8 +71,11 @@ export interface Judges {
 }
 
 export interface Provider {
-  /** Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the fix. */
-  offer(): Promise<{ ok: true; can: Can } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the
+   * fix. It offers a tool only when it can sign in there with `credentials`, the names teamai gives (sign-in.ts).
+   */
+  offer(credentials: InitCredentials | undefined): Promise<{ ok: true; can: Can } | { ok: false; failure: RuntimeFailure }>;
   /**
    * The sandbox of this attempt: its id, or undefined once the technology said there is none. A lookup it could not
    * make fails with what to do, so a sandbox is never taken as absent while its technology does not answer.

@@ -93,6 +93,21 @@ describe('init', () => {
     expect(JSON.stringify(reply)).toContain('ghcr.io/acme/missing:1');
   });
 
+  it('fails with credential_missing naming CLAUDE_CODE_OAUTH_TOKEN when Claude has only a login on this machine, which never crosses into a container', async () => {
+    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: [] });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'credential_missing' } });
+    const message = String((reply.error as Message).message);
+
+    expect(message).toContain('Keychain');
+    expect(message).toContain('`claude setup-token`');
+    expect(message).toContain('CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('offers only the tools of the image that a credential or a login teamai gives signs in', async () => {
+    expect(await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude'] } });
+  });
+
   it('offers a sandbox with the tools the image holds, and declares no network', async () => {
     const reply = await init(start(), { provider: 'docker', image: IMAGE });
 
@@ -1360,7 +1375,7 @@ describe('a judge (a confined prompt) in a container of its own', () => {
 
   it.each<{ env: string[]; logins: string[] }>([
     { env: [], logins: ['claude', 'codex'] },
-    { env: ['GITHUB_TOKEN'], logins: [] },
+    { env: ['GITHUB_TOKEN'], logins: ['claude', 'codex'] },
   ])('offers no judge when it could sign none in, so teamai judges on a later runtime: $env $logins', async ({ env, logins }) => {
     const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env, logins });
 
@@ -1698,7 +1713,7 @@ console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claud
     await first.end();
     // The definition now gives this runtime no judge key, so it offers no judge.
     const second = start();
-    expect(await init(second, { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: [] })).not.toHaveProperty('confinedPrompt');
+    expect(await init(second, { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: ['codex'] })).toMatchObject({ ok: true, can: { tools: ['codex'] } });
 
     // The runtime that ran it is gone, but its judge may still run: the resent id is accepted, and its end waits for a stop.
     const resent = judge(second, { credentials, op, lease });
@@ -1938,6 +1953,46 @@ describe('an attempt in an sbx sandbox', () => {
 
     expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf "%s" "$HOME"'], env: { HOME: path.join(dir, 'elsewhere') }, cwd: at.worktree })).end)
       .toMatchObject({ event: 'exited', code: 0, stdout: expect.not.stringContaining('elsewhere') });
+  });
+
+  it.each<{ tool: string; command: string; variable: string }>([
+    { tool: 'claude', command: 'sbx run claude <any dir>', variable: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    { tool: 'codex', command: 'sbx secret set openai --oauth', variable: 'OPENAI_API_KEY' },
+  ])("fails init with credential_missing, naming the sbx command, when $tool could not sign in, so no step starts and answers \"Not logged in\"", async ({ tool, command, variable }) => {
+    const reply = await init(start(), { provider: 'sbx', agent: tool }, 'unattended', { env: ['GITHUB_TOKEN'], logins: [] });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'credential_missing' } });
+    const message = String((reply.error as Message).message);
+
+    expect(message).toContain(`${tool}: `);
+    expect(message).toContain(`\`${command}\``);
+    expect(message).toContain(`${variable}: env:${variable}`);
+    expect(engine.calls().filter(([name, subcommand]) => name === 'sbx' && subcommand === 'create')).toEqual([]);
+  });
+
+  it.each<{ tool: string; service: string; credentials: InitCredentials }>([
+    { tool: 'claude', service: 'anthropic', credentials: { env: [], logins: [] } },
+    { tool: 'codex', service: 'openai', credentials: { env: [], logins: [] } },
+  ])('offers $tool on the login sbx keeps for $service, with no credential named', async ({ tool, service, credentials }) => {
+    engine.secret(service, true);
+
+    expect(await init(start(), { provider: 'sbx', agent: tool }, 'unattended', credentials)).toMatchObject({ ok: true, can: { tools: [tool] } });
+  });
+
+  it.each<{ tool: string; credentials: InitCredentials }>([
+    { tool: 'claude', credentials: { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] } },
+    { tool: 'claude', credentials: { env: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'], logins: [] } },
+    { tool: 'codex', credentials: { env: ['CODEX_API_KEY'], logins: [] } },
+    { tool: 'codex', credentials: { env: [], logins: ['codex'] } },
+  ])('offers $tool on a credential teamai gives it by name, with no login sbx keeps: $credentials.env $credentials.logins', async ({ tool, credentials }) => {
+    expect(await init(start(), { provider: 'sbx', agent: tool }, 'unattended', credentials)).toMatchObject({ ok: true, can: { tools: [tool] } });
+  });
+
+  it('offers only the tools of a kit that can sign in', async () => {
+    engine.image('./kits/review', { claude: CLAUDE, codex: SBX_CODEX });
+    engine.secret('openai', true);
+
+    expect(await init(start(), { provider: 'sbx', agent: './kits/review' }, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['codex'] } });
   });
 
   it('offers the tools a kit brings, found in a scratch sandbox it then removes', async () => {

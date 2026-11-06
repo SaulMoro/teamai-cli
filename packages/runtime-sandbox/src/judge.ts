@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { jsonLines, reportedTokens, type ConfinedAccess } from '@teamai/tool-core/launch';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
 import type { ConfinedOffer, ConfinedPrompt, PromptLease, PromptResult, RuntimeFailure } from '@teamai/runtime-protocol';
+import { SIGN_IN } from './sign-in.js';
 
 // ─── A judge: one confined prompt, in a container of its own ───
 //
@@ -101,7 +102,7 @@ const CodexLine = z.discriminatedUnion('type', [
 const JUDGE_TOOLS = {
   claude: {
     access: 'read',
-    credentials: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'],
+    credentials: SIGN_IN.claude.env,
     endpoint: 'api.anthropic.com:443',
     baseUrlEnv: 'ANTHROPIC_BASE_URL',
     settings: ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'],
@@ -130,7 +131,7 @@ const JUDGE_TOOLS = {
   },
   codex: {
     access: 'full',
-    credentials: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+    credentials: SIGN_IN.codex.env,
     endpoint: 'api.openai.com:443',
     baseUrlEnv: 'OPENAI_BASE_URL',
     settings: [],

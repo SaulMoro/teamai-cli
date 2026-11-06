@@ -3,6 +3,7 @@ import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { offerSignedIn } from '../sign-in.js';
 import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -100,7 +101,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
   };
 
   return {
-    async offer() {
+    async offer(credentials) {
       const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}']);
 
       if (info.kind !== 'ran') return unavailable(info.message);
@@ -120,7 +121,11 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
       if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`${engine} could not start a container from ${image} (${lastLine(probe)}). Check that it runs /bin/sh, and start again.`);
       const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
-      const tools = LAUNCHABLE.filter((tool) => found.has(tool));
+      // A login on this machine never crosses into a container: a tool is offered only on a credential teamai gives it.
+      const signedIn = offerSignedIn({ tools: LAUNCHABLE.filter((tool) => found.has(tool)), provider: engine, credentials, stored: new Set() });
+
+      if (!signedIn.ok) return signedIn;
+      const { tools } = signedIn;
       // A judge's network filter runs on the image's node, so an image without it judges nothing, nor a docker that lets
       // DNS out of the judge's network. Podman judges nothing: its rootless network cannot connect the filter to it.
       const confined: ConfinedOffer[] = [];
