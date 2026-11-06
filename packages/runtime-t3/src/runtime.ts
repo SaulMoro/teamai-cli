@@ -167,7 +167,7 @@ export interface ServeOptions {
   t3Cli: T3Command;
   /** The projects teamai added for folders of its own, which it removes once it removed their folder. */
   added: AddedProjects;
-  /** Where teamai started the runtime: the checkout of the run, whose project's settings the offer follows. */
+  /** Where teamai started the runtime: the checkout of the run when `init` names none. */
   cwd: string;
 }
 
@@ -203,6 +203,8 @@ interface Session extends Reached {
   instances: Map<ToolId, Provider>;
   /** The mode `runtime_mode` sets; none: the member's T3 default for the place's project. */
   runtimeMode: StepMode | undefined;
+  /** The run's checkout, as `init` names it, else the folder teamai started the runtime in. */
+  checkout: string;
 }
 
 type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };
@@ -718,6 +720,8 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
+    // The checkout whose project's settings the offer follows.
+    const checkout = request.checkout ?? options.cwd;
     const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
     const answerBy = Date.now() + INIT_WAIT_MS;
     const connecting = options.connect({ mode: request.mode });
@@ -739,7 +743,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     try {
-      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, options.cwd)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
+      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
 
       if (!asking.answered) {
         void connected.t3.close().catch(() => {});
@@ -748,7 +752,8 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       const [environment, providers, here] = asking.value;
-      const instances = instancesOf({ providers, instance: parsed.data.instance, project: projectSettings(readSettings(options.t3Home), here) });
+      const project = projectSettings(readSettings(options.t3Home), here);
+      const instances = instancesOf({ providers, instance: parsed.data.instance, project });
 
       if (!instances.ok) {
         write({ type: 'init', ok: false, error: instances.failure });
@@ -756,15 +761,18 @@ export function serve(options: ServeOptions): Promise<void> {
         return;
       }
 
-      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn, checkout };
       const tools = [...instances.instances.keys()];
+      // A step that names no tool runs on the member's effective T3 default, when its instance is the one offered.
+      const defaultTool = [...instances.instances].find(([, provider]) => provider.providerInstanceId === project.defaultModel?.instanceId)?.[0];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
           // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own assets, and
           // this runtime cannot point it at the tool home teamai delivers a role into.
-          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools, ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
+          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools, ...(defaultTool && { default_tool: defaultTool }),
+          ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
         },
       });
     } catch (error) {
@@ -815,7 +823,7 @@ export function serve(options: ServeOptions): Promise<void> {
     let runCheckout: string | undefined;
 
     try {
-      [root, projects, runCheckout] = await Promise.all([mainCheckout(view.worktree), s.t3.projects(), mainCheckout(options.cwd).catch(() => undefined)]);
+      [root, projects, runCheckout] = await Promise.all([mainCheckout(view.worktree), s.t3.projects(), mainCheckout(s.checkout).catch(() => undefined)]);
     } catch (error) {
       fail(request.op, { code: 'open_failed', message: `Could not match the worktree ${view.worktree} to a T3 Code project: ${error instanceof Error ? error.message : String(error)}` });
 
