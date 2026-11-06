@@ -13,7 +13,8 @@
 // `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
 // `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
 // machine does; with `home` too, in that Claude home instead, which `finished` reports as the session's `home`, as a
-// T3 provider instance with its own home does. Each open records the tool its attempt's prompt runs (`open.tool`).
+// T3 provider instance with its own home does. Each open records the tool its attempt's prompt runs (`open.tool`) and
+// the attempt's deadline (`open.deadline`).
 // `agent.display` is what its agent shows once it exists, given with the prompt's acceptance; with `display_after_ms`, it
 // accepts the prompt at once with no display and sends that one as a `display` event that long after, as a runtime that
 // accepts before its slow launch and shows the agent once it exists.
@@ -226,7 +227,7 @@ function open(request) {
   handles[key] = handle;
   writeJson(file('handles.json'), handles);
   // A confined prompt's place is opened with no view of the host.
-  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null });
+  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null, deadline: request.deadline ?? null });
   noteCredentials(request, handle);
   openCredentials.set(handle, request.credentials ?? {});
 

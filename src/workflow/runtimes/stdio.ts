@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
 import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
-import { RUNTIME_PROTOCOL, type Can, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { RUNTIME_PROTOCOL, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
 
@@ -22,6 +22,26 @@ const ANSWER_WITHIN_MS = 15_000;
  * `notice`. An unattended or recover `init` has nobody to wait for, and gets `ANSWER_WITHIN_MS`.
  */
 const ATTENDED_INIT_WITHIN_MS = 10 * 60_000;
+
+/** The longest delay a Node timer keeps; a deadline further away than this is not timed. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * Runs `then` at `deadline` (ms since the epoch), or at once when it passed, and answers how to stop waiting for it.
+ * A deadline too far away for a timer is not timed.
+ */
+function atDeadline(deadline: number | undefined, then: () => void): () => void {
+  if (deadline === undefined) return () => {};
+
+  const left = Math.max(0, deadline - Date.now());
+
+  if (left > MAX_TIMER_MS) return () => {};
+
+  const timer = setTimeout(then, left);
+  timer.unref();
+
+  return () => clearTimeout(timer);
+}
 
 type HandleRequest = Extract<RuntimeRequest, { handle: string; type: 'collect' | 'reattach' | 'close' }>;
 
@@ -65,6 +85,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   let onInit: ((reply: Initialized) => void) | undefined;
   const ops = new Map<string, OpWaiter>();
   const handles = new Map<string, HandleWaiter[]>();
+  // The deadline each place was opened with, by handle, which bounds the end of what runs there and its collect.
+  const deadlines = new Map<string, number>();
   // An operation repeated while this connection still has it in flight joins it, rather than replacing its listener.
   const opening = new Map<string, { join: (onAccepted: (handle: string) => Promise<void>) => Promise<Opened> }>();
   const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
@@ -176,21 +198,27 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
     return new Promise((resolve) => {
       const waiters = handles.get(request.handle) ?? [];
-      let timer: NodeJS.Timeout | undefined;
+      // A collect brings the place's work back, which takes as long as that work is large: only its own reply, the
+      // runtime's end, or, for a place opened with a deadline, 15 s past it settles it.
+      const deadline = deadlines.get(request.handle);
+
+      const by = request.type !== 'collect' ? { at: Date.now() + ANSWER_WITHIN_MS, why: `within ${ANSWER_WITHIN_MS / 1000} s` }
+        : deadline !== undefined ? { at: Math.max(deadline, Date.now()) + ANSWER_WITHIN_MS, why: `within ${ANSWER_WITHIN_MS / 1000} s of the attempt's deadline` }
+          : undefined;
+
+      let stop = (): void => {};
 
       const waiter: HandleWaiter = {
         request,
         events: new Set([...events, 'failed']),
         settle: (answer) => {
-          clearTimeout(timer);
+          stop();
           resolve(answer);
         },
       };
 
-      // A collect brings the place's work back, which takes as long as that work is large: only its own reply or the
-      // runtime's end settles it.
-      if (request.type !== 'collect') {
-        timer = setTimeout(() => {
+      if (by !== undefined) {
+        stop = atDeadline(by.at, () => {
           const left = handles.get(request.handle) ?? [];
           const at = left.indexOf(waiter);
 
@@ -198,9 +226,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           left.splice(at, 1);
 
           if (left.length === 0) handles.delete(request.handle);
-          waiter.settle({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle} within ${ANSWER_WITHIN_MS / 1000} s.` });
-        }, ANSWER_WITHIN_MS);
-        timer.unref();
+          waiter.settle({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle} ${by.why}.` });
+        });
       }
 
       waiters.push(waiter);
@@ -217,6 +244,30 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   };
 
   const isFailure = (value: OpEvent | HandleEvent | RuntimeFailure): value is RuntimeFailure => 'code' in value && !('event' in value);
+
+  /**
+   * Cancels operation `op`. An exec or prompt this process waits on ends with the cancel's outcome; one the runtime
+   * never confirms would hold the driver, and the run's lock, forever. What it writes meanwhile does not count as that
+   * outcome.
+   */
+  const cancelOp = (op: OpId): void => {
+    const waiter = ops.get(op);
+
+    if (waiter && waiter.type !== 'open') {
+      setTimeout(() => {
+        if (ops.get(op) === waiter) waiter.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not confirm the cancel of ${waiter.type} ${op} within ${ANSWER_WITHIN_MS / 1000} s, so what it started may still run.` });
+      }, ANSWER_WITHIN_MS).unref();
+    }
+
+    send({ type: 'cancel', op });
+  };
+
+  /** Cancels exec or prompt `op` of place `handle` if it still runs at the place's deadline; the answer stops that wait. */
+  const cancelAtDeadline = (type: 'exec' | 'prompt', op: OpId, handle: string): (() => void) => atDeadline(deadlines.get(handle), () => {
+    if (!ops.has(op)) return;
+    log.warn(`Step runtime "${name}" still ran ${type} ${op} at the attempt's deadline, so teamai cancels it.`);
+    cancelOp(op);
+  });
 
   return {
     name,
@@ -278,6 +329,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
         persisted.catch(() => {});
       };
 
+      const deadline = request.deadline === undefined ? undefined : Date.parse(request.deadline);
+
       const settled = new Promise<Opened>((resolve, reject) => {
         // A caller that joins while the handle is being written adds its own write, which open also waits for.
         const settleAfterPersisted = (opened: Opened): void => {
@@ -303,6 +356,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
             const accepted = event.handle;
             handle = accepted;
 
+            if (deadline !== undefined) deadlines.set(accepted, deadline);
+
             for (const onHandle of persisters) persist(onHandle, accepted);
 
             return;
@@ -310,10 +365,19 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
           if (event.event !== 'ready' && event.event !== 'failed') return;
           ops.delete(request.op);
+          notReady();
 
           settleAfterPersisted(event.event === 'failed' ? { kind: 'failed', failure: event.failure }
             : handle === undefined ? { kind: 'failed', failure: { code: 'runtime_protocol', message: `Step runtime "${name}" reported open ${request.op} ready before it accepted it.` } }
               : { kind: 'ready', handle, ...displayOf(name, event.display) });
+        });
+
+        // A place not ready by the attempt's deadline fails the open; its handle, once accepted, stays persisted.
+        const waiting = ops.get(request.op);
+
+        const notReady = atDeadline(deadline, () => {
+          if (waiting === undefined || ops.get(request.op) !== waiting) return;
+          waiting.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not report the place of open ${request.op} ready by the attempt's deadline.` });
         });
 
         send({ type: 'open', ...request });
@@ -345,7 +409,12 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       const callers = [events];
       let accepted: ReturnType<typeof displayOf> | undefined;
 
-      const ended = new Promise<ExecEnd>((resolve) => {
+      const ended = new Promise<ExecEnd>((resolveEnd) => {
+        const resolve = (end: ExecEnd): void => {
+          pastDeadline();
+          resolveEnd(end);
+        };
+
         listen('exec', request.op, (event) => {
           if (isFailure(event)) {
             ops.delete(request.op);
@@ -401,6 +470,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           }
         });
 
+        const pastDeadline = cancelAtDeadline('exec', request.op, request.handle);
         send({ type: 'exec', ...request });
       });
 
@@ -430,6 +500,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       const ended = new Promise<PromptEnd>((resolve) => {
         const settle = (end: PromptEnd): void => {
           ops.delete(request.op);
+          pastDeadline();
           resolve(end);
         };
 
@@ -489,6 +560,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           }
         });
 
+        const pastDeadline = cancelAtDeadline('prompt', request.op, request.handle);
         send({ type: 'prompt', ...request });
       });
 
@@ -507,17 +579,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     },
 
     async cancel(op) {
-      const waiter = ops.get(op);
-
-      // An exec or prompt this process waits on ends with the cancel's outcome; one the runtime never confirms would
-      // hold the driver, and the run's lock, forever. What it writes meanwhile does not count as that outcome.
-      if (waiter && waiter.type !== 'open') {
-        setTimeout(() => {
-          if (ops.get(op) === waiter) waiter.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not confirm the cancel of ${waiter.type} ${op} within ${ANSWER_WITHIN_MS / 1000} s, so what it started may still run.` });
-        }, ANSWER_WITHIN_MS).unref();
-      }
-
-      send({ type: 'cancel', op });
+      cancelOp(op);
     },
 
     async collect(handle) {

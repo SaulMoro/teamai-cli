@@ -1217,6 +1217,89 @@ describe('a driver whose runtime stopped on a line it could not read', () => {
   });
 });
 
+describe('an attempt\'s deadline, over stdio', () => {
+  let dir: string;
+  const started: StepRuntime[] = [];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-deadline-'));
+    fs.mkdirSync(path.join(dir, 'worktree'));
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A toy with `options`, and its place opened with `deadline`. */
+  const opened = async (options: RuntimeOptions, deadline: string): Promise<{ runtime: StepRuntime; handle: string }> => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const place = await runtime.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, deadline,
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
+    }, async () => {});
+    if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
+
+    return { runtime, handle: place.handle };
+  };
+
+  const soon = (ms: number): string => new Date(Date.now() + ms).toISOString();
+
+  it('cancels an accepted exec still running at the attempt\'s deadline, which then ends cancelled', async () => {
+    const { runtime, handle } = await opened({}, soon(1_000));
+    const begun = Date.now();
+
+    const end = await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60_000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {});
+
+    expect(end).toEqual({ kind: 'cancelled' });
+    expect(Date.now() - begun).toBeLessThan(10_000);
+  });
+
+  it('cancels an accepted prompt still running at the attempt\'s deadline, a reconnected one too', async () => {
+    const { runtime, handle } = await opened({ agent: { release: path.join(dir, 'never'), output: { ok: true } } }, soon(1_000));
+    const request: PromptRequest = {
+      op: newOpId(), handle, env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
+      lease: { step: 'review', tool: 'claude', permissions: 'approval-required', interactive: false, prompt: 'Review.', result: path.join(dir, 'out', 'result.json') },
+    };
+
+    expect(await runtime.prompt(request, {})).toEqual({ kind: 'cancelled' });
+  });
+
+  it('fails a collect the runtime does not answer within 15 s past the attempt\'s deadline as runtime_unanswered', async () => {
+    const { runtime, handle } = await opened({ answer: { collect: 'silent' } }, soon(5_000));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const collected = runtime.collect(handle);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await Promise.race([collected, 'still waiting'])).toBe('still waiting');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await Promise.race([collected, 'still waiting'])).toEqual({ ok: false, failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not answer collect of ${handle} within 15 s of the attempt's deadline.` } });
+  });
+
+  it('fails an open whose place is not ready at the attempt\'s deadline as runtime_unanswered, keeping its handle', async () => {
+    // A runtime that accepts every open and never reports its place ready, as one whose image pull never ends.
+    const acceptsOnly = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      if (request.type === 'init') process.stdout.write(JSON.stringify({ type: 'init', ok: true, can: {} }) + '\\n');
+      if (request.type === 'open') process.stdout.write(JSON.stringify({ op: request.op, event: 'accepted', handle: 'h1' }) + '\\n');
+    });`;
+    const runtime = stdioStepRuntime({ name: 'slow', command: process.execPath, args: ['-e', acceptsOnly] });
+    started.push(runtime);
+    expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+    const persisted: string[] = [];
+    const op = newOpId();
+
+    const place = await runtime.open({ op, run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, deadline: soon(1_000), view: { worktree: dir, readonly: [], result: dir, runDir: dir, toolHome: {} } }, async (handle) => { persisted.push(handle); });
+
+    expect(place).toEqual({ kind: 'failed', failure: { code: 'runtime_unanswered', message: `Step runtime "slow" did not report the place of open ${op} ready by the attempt's deadline.` } });
+    expect(persisted).toEqual(['h1']);
+  });
+});
+
 describe('the stdio step runtime client', () => {
   it('waits for the handle write when the runtime dies after accepting an open, and rejects with its error', async () => {
     // A runtime that accepts every open with a handle and exits before it reports the place ready.

@@ -137,6 +137,12 @@ steps:
       planthook: `  - id: build
     workspace: new
     command: git config extensions.worktreeConfig true && git config --worktree core.hooksPath "$PLANTED_HOOKS" && echo change > planted.txt`,
+      timed: `  - id: build
+    timeout: 10m
+    command: echo built
+  - id: untimed
+    needs: [build]
+    command: echo built`,
       sleeper: `  - id: wait
     command: sleep 60 & echo $! > "$CHILD_PID"; wait`,
       rundir: `  - id: note
@@ -504,6 +510,22 @@ Judge the review.
     expect(ran.stderr).toContain('Step runtime "toy": Signed in to the toy as al.');
     expect(ran.stderr).toMatch(/Step runtime "toy", operation op-[0-9a-f]+: The key <REDACTED:ANTHROPIC_API_KEY \(credential of toy\)> expires tomorrow\./);
     expect(ran.stderr).not.toContain('sk-ant-api03-notice-7f3a91c2e5');
+  });
+
+  it('tells the runtime the latest time a step\'s timeout lets its place run, and no time for a step without one', async () => {
+    const state = path.join(sandbox, 'toy-state-timed');
+    writeDefinition('toytimed', { state });
+    const before = Date.now();
+
+    const ran = await runCLI(['workflow', 'start', 'timed', '--driver', 'toytimed'], repo, env());
+
+    succeededRun(ran);
+    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; deadline?: string | null })
+      .filter((op) => op.kind === 'open').map((op) => op.deadline ?? null);
+    const deadline = opens.find((at): at is string => at !== null);
+    expect(opens.filter((at) => at === null)).toHaveLength(1);
+    expect(Date.parse(String(deadline)) - before).toBeGreaterThan(9 * 60_000);
+    expect(Date.parse(String(deadline)) - Date.now()).toBeLessThanOrEqual(10 * 60_000);
   });
 
   it('cancels a running step with the processes it started', async () => {

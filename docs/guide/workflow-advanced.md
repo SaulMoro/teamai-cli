@@ -1809,6 +1809,12 @@ To tell the person something without answering a request, write a `notice`: a si
 
 `open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
 
+A step with a `timeout` gives its `open` a `deadline`, the latest time its limits allow. teamai cancels an `exec` or `prompt` of the place still running then, a reconnected one included, fails the `open` when the place is not `ready` by then, and waits for a `collect` 15 s past it at most. A step without a time limit has no `deadline`, and nothing bounds how long its work runs:
+
+```text
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","deadline":"2026-11-06T15:10:00.000Z","view":{…},"credentials":{}}
+```
+
 #### A runtime that launches agents its own way
 
 A runtime such as a T3 Code or Paseo one starts an agent from a prompt and learns its session when it ends, instead of running the tool's command line. It says so at `init` with `"prompt": true`. With `"exec": false` in `can` it also takes no command, so command steps and steps with `setup` go to the next runtime of the definition. A runtime with `"exec": false` and no `"prompt": true` can run no step, and teamai refuses it at start:
