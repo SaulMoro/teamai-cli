@@ -59,6 +59,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
   // An operation repeated while this connection still has it in flight joins it, rather than replacing its listener.
   const opening = new Map<string, { join: (onAccepted: (handle: string) => Promise<void>) => Promise<Opened> }>();
   const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
+  const prompting = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<PromptEnd> }>();
 
   const die = (reason: string): void => {
     if (dead) return;
@@ -402,7 +403,13 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     prompt(request, events) {
       if (dead) return Promise.resolve<PromptEnd>({ kind: 'failed', failure: dead });
 
-      return new Promise<PromptEnd>((resolve) => {
+      const inFlight = prompting.get(request.op);
+
+      if (inFlight) return inFlight.join(events);
+      const callers = [events];
+      let accepted: ReturnType<typeof displayOf> | undefined;
+
+      const ended = new Promise<PromptEnd>((resolve) => {
         const settle = (end: PromptEnd): void => {
           ops.delete(request.op);
           resolve(end);
@@ -416,12 +423,17 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
           }
 
           switch (event.event) {
-            case 'accepted':
-              events.onAccepted?.(displayOf(name, event.display));
+            case 'accepted': {
+              const shownWith = displayOf(name, event.display);
+              accepted = shownWith;
+
+              for (const caller of callers) caller.onAccepted?.(shownWith);
 
               return;
+            }
+
             case 'display':
-              showApart(events, event.display);
+              for (const caller of callers) showApart(caller, event.display);
 
               return;
             case 'finished': {
@@ -461,6 +473,19 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
         send({ type: 'prompt', ...request });
       });
+
+      prompting.set(request.op, {
+        join: (next) => {
+          callers.push(next);
+
+          if (accepted) next.onAccepted?.(accepted);
+
+          return ended;
+        },
+      });
+      void ended.then(() => { prompting.delete(request.op); });
+
+      return ended;
     },
 
     async cancel(op) {

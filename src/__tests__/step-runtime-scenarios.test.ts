@@ -473,6 +473,25 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(await runtime.prompt(request, {})).toEqual(first);
   });
 
+  it('answers a prompt id repeated while it runs with the same acceptance and outcome for each caller', async () => {
+    // The agent works until the test releases it, so the repeat arrives while the first prompt is in flight.
+    const release = path.join(dir, 'release');
+    const runtime = await start({ release, output: { verdict: 'approve' } });
+    const request = promptRequest(await opened(runtime));
+    let firstAccepted = false;
+    let repeatAccepted = false;
+    const first = runtime.prompt(request, { onAccepted: () => { firstAccepted = true; } });
+    expect(await until(() => firstAccepted)).toBe(true);
+    const repeated = runtime.prompt(request, { onAccepted: () => { repeatAccepted = true; } });
+    fs.writeFileSync(release, '');
+
+    const [firstEnd, repeatedEnd] = await Promise.all([first, repeated]);
+
+    expect(firstEnd.kind).toBe('finished');
+    expect(repeatedEnd).toEqual(firstEnd);
+    expect(repeatAccepted).toBe(true);
+  });
+
   it('ends failed when the agent cannot finish the step, naming why', async () => {
     const failure = { code: 'model_unavailable', message: 'The daemon has no model claude-opus-5-5.' };
     const runtime = await start({ fail: failure });
