@@ -32,11 +32,11 @@ name: teamai-paseo
 description: Run each prompt step as an agent of the Paseo daemon on this machine, in a worktree teamai prepares, and every other step on this machine.
 runtimes:
   - use: paseo
-    options: { url: ws://127.0.0.1:6767/ws, max_parallel: 4 }
+    options: { max_parallel: 4 }
   - use: local
 ```
 
-守护进程在其他地址，或需要其他选项时，在团队仓库或 `~/.teamai/drivers/` 里添加你自己的定义，如下面的示例所示。
+它连接你的 Paseo 配置所指的守护进程，读法与 `paseo start` 相同：`$PASEO_HOME/config.json`（默认 `~/.paseo/config.json`）中的 `daemon.listen`，没有时为 `127.0.0.1:6767`。守护进程在其他地址，或需要其他选项时，在团队仓库或 `~/.teamai/drivers/` 里添加你自己的定义，如下面的示例所示。
 
 工作流不需要任何 Paseo 专用字段：
 
@@ -213,7 +213,7 @@ evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: 
 
 | 键 | 默认值 | 含义 |
 | --- | --- | --- |
-| `url` | `ws://127.0.0.1:6767/ws` | 本机 Paseo 守护进程的 WebSocket 地址。 |
+| `url` | `$PASEO_HOME/config.json` 中 `daemon.listen` 所指的地址，没有时为 `ws://127.0.0.1:6767/ws` | Paseo 守护进程的 WebSocket 地址：`ws://`、`wss://`，Unix 套接字则为 `ws+unix://<套接字路径>:/ws`。 |
 
 `max_parallel` 是 teamai 自己的键，见 [运行时选项](workflow-advanced.md#运行时选项)。Paseo 本身没有并发上限。
 
@@ -236,7 +236,7 @@ runtimes:
 | 工具 | 何时提供 | 步骤模式 | 评判模式 |
 | --- | --- | --- | --- |
 | `claude` | 守护进程主机上的 `claude auth status` 显示 `"loggedIn": true`：账号登录或 API key 均可 | `default`（执行未允许的操作前先询问） | `default` |
-| `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`），且 `codex login status` 显示 `Logged in` | `auto` | `auto`，沙箱为 `read-only` |
+| `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`，或是 Unix 套接字），且 `codex login status` 显示 `Logged in` | `auto` | `auto`，沙箱为 `read-only` |
 | `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | `build` | `plan` |
 
 Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。这项检查看不到守护进程自己的环境，回环地址一律算作本机：请用你平时的 `CODEX_HOME` 启动守护进程，也不要让 `url` 指向通往另一台机器的隧道（`ssh -L`）。
@@ -436,4 +436,5 @@ No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `p
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
 | `tool_unavailable` | 守护进程 `claude`、`codex` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式；守护进程不在回环地址上时，Codex 也算在内。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。步骤写明的工具守护进程运行不了时，该步骤交给下一个运行时；使用定义的 `tool` 的步骤则以 `tool_unavailable` 失败，原因相同。 |
+| `paseo_config` | 没有 `url` 时，无法从 Paseo 的配置读出守护进程地址：`$PASEO_HOME/config.json` 不是 JSON，它的 `daemon` 部分不是 Paseo 写出的样子，或 `daemon.listen` 指向 Windows 命名管道。修好该文件，或设置 `url`。 |
 | `bad_option` | `url` 以外的选项。 |

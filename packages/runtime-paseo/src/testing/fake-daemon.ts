@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import {
   SessionInboundMessageSchema, WSInboundMessageSchema, WSOutboundMessageSchema, type CreationSnapshot, type WorkspaceDescriptorPayload,
@@ -150,7 +151,8 @@ function now(): string {
   return new Date().toISOString();
 }
 
-export async function startFakeDaemon({ state, port }: { state: string; port: number }): Promise<{ url: string; close(): Promise<void> }> {
+/** Where the fake listens: a TCP port on 127.0.0.1 (0 for any free one), or, with `socket`, that Unix socket instead. */
+export async function startFakeDaemon({ state, port, socket: socketPath }: { state: string; port: number; socket?: string }): Promise<{ url: string; close(): Promise<void> }> {
   fs.mkdirSync(path.join(state, 'answers'), { recursive: true });
   const stateFile = path.join(state, 'agents.json');
   const kept = fs.existsSync(stateFile) ? StateSchema.parse(JSON.parse(fs.readFileSync(stateFile, 'utf8'))) : { agents: {}, workspaces: {}, receipts: {} };
@@ -297,10 +299,13 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
     timers.add(tick);
   };
 
-  const wss = new WebSocketServer({ host: '127.0.0.1', port, path: '/ws' });
+  const server = socketPath === undefined ? undefined : http.createServer();
+  const wss = server ? new WebSocketServer({ server, path: '/ws' }) : new WebSocketServer({ host: '127.0.0.1', port, path: '/ws' });
   await new Promise<void>((resolve, reject) => {
-    wss.once('listening', resolve);
-    wss.once('error', reject);
+    const listening = server ?? wss;
+    listening.once('listening', resolve);
+    listening.once('error', reject);
+    server?.listen(socketPath);
   });
 
   wss.on('connection', (socket: WebSocket) => {
@@ -571,15 +576,16 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
     }
   }
 
-  const { port: listening } = z.object({ port: z.number() }).parse(wss.address());
+  const url = socketPath === undefined ? `ws://127.0.0.1:${z.object({ port: z.number() }).parse(wss.address()).port}/ws` : `ws+unix://${socketPath}:/ws`;
 
   return {
-    url: `ws://127.0.0.1:${listening}/ws`,
+    url,
     close: async () => {
       for (const timer of timers) clearInterval(timer);
 
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
     },
   };
 }

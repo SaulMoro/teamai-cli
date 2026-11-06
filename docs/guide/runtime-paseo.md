@@ -32,11 +32,11 @@ name: teamai-paseo
 description: Run each prompt step as an agent of the Paseo daemon on this machine, in a worktree teamai prepares, and every other step on this machine.
 runtimes:
   - use: paseo
-    options: { url: ws://127.0.0.1:6767/ws, max_parallel: 4 }
+    options: { max_parallel: 4 }
   - use: local
 ```
 
-For a daemon at another address, or other options, add a definition of your own in the team repo or in `~/.teamai/drivers/`, as the examples below do.
+It reaches the daemon your Paseo config names, as `paseo start` reads it: `daemon.listen` in `$PASEO_HOME/config.json` (`~/.paseo/config.json` by default), else `127.0.0.1:6767`. For a daemon at another address, or other options, add a definition of your own in the team repo or in `~/.teamai/drivers/`, as the examples below do.
 
 A workflow needs nothing Paseo-specific:
 
@@ -213,7 +213,7 @@ evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `url` | `ws://127.0.0.1:6767/ws` | The WebSocket address of the Paseo daemon on this machine. |
+| `url` | the address `daemon.listen` names in `$PASEO_HOME/config.json`, else `ws://127.0.0.1:6767/ws` | The WebSocket address of the Paseo daemon: `ws://`, `wss://`, or `ws+unix://<socket path>:/ws` for a Unix socket. |
 
 `max_parallel` is teamai's own key; see [Runtime options](workflow-advanced.md#runtime-options). Paseo has no cap of its own.
 
@@ -236,7 +236,7 @@ Paseo calls a tool available once its binary is on the daemon's `PATH`, signed i
 | Tool | Offered when | Step mode | Judge mode |
 | --- | --- | --- | --- |
 | `claude` | `claude auth status` on the daemon's host says `"loggedIn": true`: a login or an API key | `default` (asks before what it does not allow) | `default` |
-| `codex` | the daemon runs on this machine (`url` is a loopback address, such as `127.0.0.1` or `localhost`), and `codex login status` says `Logged in` | `auto` | `auto`, with a `read-only` sandbox |
+| `codex` | the daemon runs on this machine (`url` is a loopback address, such as `127.0.0.1` or `localhost`, or a Unix socket), and `codex login status` says `Logged in` | `auto` | `auto`, with a `read-only` sandbox |
 | `opencode` | Paseo lists a model for it: OpenCode reaches a model provider, its free models included | `build` | `plan` |
 
 Paseo does not report whether Codex is signed in, so the runtime runs `codex login status` itself, with your environment (`CODEX_HOME` or `~/.codex`). It runs the `codex` that `Resolved path` names in Paseo's diagnostic, which the daemon found on its own `PATH`, not one on teamai's. A daemon at any other address, such as one on another machine, is never offered Codex. The check cannot see the daemon's own environment, and a loopback address counts as this machine: start the daemon with the `CODEX_HOME` you use, and do not point `url` at a tunnel (`ssh -L`) to another machine.
@@ -436,4 +436,5 @@ Start the daemon, then run `teamai workflow cancel` again.
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
 | `tool_unavailable` | The daemon can run none of `claude`, `codex` and `opencode`: each is missing, signed out, or lacks its default mode, and Codex also when the daemon is not at a loopback address. The message names each installed tool and its fix, or, with none installed, says to install one. A step that names a tool the daemon cannot run goes to the next runtime; one that takes the definition's `tool` fails `tool_unavailable` with the same reason. |
+| `paseo_config` | With no `url`, the daemon's address cannot be read from Paseo's config: `$PASEO_HOME/config.json` is not JSON, its `daemon` section is not what Paseo writes, or `daemon.listen` names a Windows named pipe. Fix the file, or set `url`. |
 | `bad_option` | An option other than `url`. |
