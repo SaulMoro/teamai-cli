@@ -1752,7 +1752,7 @@ The values come in the requests, on `open` and on each `exec` or `prompt` that g
 
 Set them over the process's environment only, and never write them to disk or to a log. A teamai that restarts sends them again with the operation it resends, so your runtime needs to keep none.
 
-The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. An option it does not take fails `init` with `bad_option` and the key.
+The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. A `cancel` of an operation that already ended answers that end again and stops nothing; only `cancel_failed` is replaced (below). teamai logs a warning, with a count, for an end of an operation it no longer waits on. An option it does not take fails `init` with `bad_option` and the key.
 
 A runtime that cannot end a place answers `close` with why. teamai then treats what ran there as still running: the attempt keeps its login, and the run's details show the failure under the step as *Not closed*:
 

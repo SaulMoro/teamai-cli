@@ -469,8 +469,16 @@ function prompt(request) {
 function cancel(request) {
   const found = readJson(opPath(request.op), undefined);
 
-  // A cancel that could not stop the operation is the one outcome a later cancel replaces.
-  if (!found || (found.outcome && !found.cancelFailed)) return;
+  if (!found) return;
+
+  // A cancel of an operation that already ended answers that end again; a cancel that could not stop the operation is
+  // the one outcome a later cancel replaces.
+  if (found.outcome && !found.cancelFailed) {
+    if (found.kind === 'prompt') send(promptEnded(request.op, found.outcome));
+    else settle(request.op, found.outcome);
+
+    return;
+  }
   const { outcome: _failed, cancelFailed: _retried, ...record } = found;
 
   if (options.cancel_fails !== undefined) {

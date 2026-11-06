@@ -17,6 +17,9 @@ const DISPOSE_WAIT_MS = 2000;
  */
 const ANSWER_WITHIN_MS = 15_000;
 
+// The events that end an operation: only the first counts.
+const OP_ENDS = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
+
 /**
  * How long an attended `init` may take: a person may have a sign-in page to approve, which the runtime names in a
  * `notice`. An unattended or recover `init` has nobody to wait for, and gets `ANSWER_WITHIN_MS`.
@@ -91,6 +94,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   const opening = new Map<string, { join: (onAccepted: (handle: string) => Promise<void>) => Promise<Opened> }>();
   const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
   const prompting = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<PromptEnd> }>();
+  // Operations this connection cancelled: a cancel may race their end, and each cancel is answered with an end.
+  const cancelSent = new Set<string>();
+  // Ends of operations nothing waits on any more, which teamai ignores but counts.
+  let lateEnds = 0;
 
   const die = (reason: string): void => {
     if (dead) return;
@@ -177,7 +184,13 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     }
 
     if ('op' in message) {
-      ops.get(message.op)?.on(message);
+      const waiter = ops.get(message.op);
+
+      if (waiter) waiter.on(message);
+      else if (OP_ENDS.has(message.event) && !cancelSent.has(message.op)) {
+        lateEnds += 1;
+        log.warn(`Step runtime "${name}" answered ${message.op} with ${message.event} after teamai stopped waiting for it, which teamai ignores (${lateEnds} such ${lateEnds === 1 ? 'answer' : 'answers'} from this runtime).`);
+      }
 
       return;
     }
@@ -252,6 +265,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
    */
   const cancelOp = (op: OpId): void => {
     const waiter = ops.get(op);
+
+    cancelSent.add(op);
 
     if (waiter && waiter.type !== 'open') {
       setTimeout(() => {
