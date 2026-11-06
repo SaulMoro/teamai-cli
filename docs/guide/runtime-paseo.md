@@ -199,7 +199,15 @@ $ paseo logs 94f534b --filter tools
 { "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "good", "reasoning": "The diff changes add to return a + b and adds a node:test assertion that add(2, 3) equals 5. The session shows no commands were run, as requested; the test was added but not executed." } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
 ```
 
-Scoring reads the step's session where the daemon's agent wrote it: in the tool home of the user the daemon runs as. Run the daemon as the member who runs teamai, on the same machine. A daemon under another user, or another `HOME`, leaves the pass unlabelled, and the score run's `evidence` step says why:
+Scoring reads the step's session where the daemon's agent wrote it: in the tool home of the user the daemon runs as. For Claude, the runtime reads that home from Paseo (`configDirectory` in `claude auth status`, from Claude Code 2.1), so a daemon started with another `HOME` or `CLAUDE_CONFIG_DIR` still has its sessions archived and scored, as long as teamai can read that directory. This run's teamai had a `HOME` of its own, and the daemon ran Claude in the member's:
+
+```text
+$ teamai workflow start fix --driver paseo-only
+✔ Archived 1 step session of r2fa599b2abbe0d09 to teamai-reports (scrubbed)
+{"data":{"done":{"run":"r2fa599b2abbe0d09","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+With an older Claude, which does not report its home, or a daemon under another user, run the daemon as the member who runs teamai, on the same machine. Otherwise the pass stays unlabelled, and the score run's `evidence` step says why:
 
 ```text
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
@@ -233,7 +241,13 @@ runtimes:
 
 ## Tools, models and modes
 
-Paseo calls a tool available once its binary is on the daemon's `PATH`, signed in or not. The runtime offers a tool only when Paseo shows it can run there. Otherwise, a step on that tool runs on the next runtime. A step's agent starts in the mode Paseo sets as the tool's default (`DEFAULT MODE` in `paseo provider ls`), never a bypass mode that never asks: when that default is one, the agent starts in the nearest mode before it in Paseo's list instead. A tool whose default Paseo does not list for it is not offered. A judge starts in a mode that asks before it edits or runs anything:
+Paseo calls a tool available once its binary is on the daemon's `PATH`, signed in or not. The runtime offers a tool only when Paseo shows it can run there. Otherwise, a step on that tool runs on the next runtime. A step's agent starts in the mode Paseo sets as the tool's default (`DEFAULT MODE` in `paseo provider ls`), never a bypass mode that never asks: when that default is one, the agent starts in the nearest mode before it in Paseo's list instead, and the run says so once at start:
+
+```text
+⚠ Step runtime "paseo": Paseo starts claude in mode bypassPermissions by default, which never asks before it acts; teamai starts its claude steps in mode auto, the nearest one before it in Paseo's list that asks.
+```
+
+A tool whose default Paseo does not list for it is not offered. A judge starts in a mode that asks before it edits or runs anything:
 
 | Tool | Offered when | Step mode | Judge mode |
 | --- | --- | --- | --- |
@@ -243,18 +257,11 @@ Paseo calls a tool available once its binary is on the daemon's `PATH`, signed i
 
 Paseo does not report whether Codex is signed in, so the runtime runs `codex login status` itself, with your environment (`CODEX_HOME` or `~/.codex`). It runs the `codex` that `Resolved path` names in Paseo's diagnostic, which the daemon found on its own `PATH`, not one on teamai's. A daemon at any other address, such as one on another machine, is never offered Codex. The check cannot see the daemon's own environment, and a loopback address counts as this machine: start the daemon with the `CODEX_HOME` you use, and do not point `url` at a tunnel (`ssh -L`) to another machine.
 
-When the daemon can run none of them, the run stops before any step, and the message says what to do on the daemon's host:
+The runtime starts even when the daemon can run none of them, so the run's command steps still go to the next runtime. A step on a tool that no runtime of the driver can run fails without starting an agent, and says what to do on the daemon's host:
 
 ```text
-$ teamai workflow start fix-add --driver paseo-signed-out
-{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-signed-out\" did not start: The Paseo daemon at ws://127.0.0.1:6799/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: signed out; run `codex login` on the daemon's host."}}
-```
-
-When it can run another tool, the run starts, and a step that takes the definition's `tool` fails without starting an agent:
-
-```text
-$ teamai workflow start fix-add --driver paseo-codex
-✖ Step "fix" failed with tool_unavailable: teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon's host.
+$ teamai workflow start fix-codex --driver paseo-only
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on codex, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run codex: signed out; run `codex login` on the daemon's host. Or remove tool from the step.
 ```
 
 To check a tool yourself, ask the daemon, or Codex. `Auth` and `Resolved path` are the lines that matter:
@@ -361,6 +368,12 @@ In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so t
 ✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
+An agent that stops on its tool's usage limit fails `usage_limited`, with what the tool said, reset time included, and the command that runs the step again once the limit lifts:
+
+```text
+✖ Step "fix" failed with usage_limited: The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r3ad62eacc3c191eb fix
+```
+
 ## Interactive steps
 
 In an attended run, a step with `interactive: true` runs as a Paseo agent you work with in the Paseo app. Its prompt starts by telling the agent to work through the step with you, and to write teamai's result only once you say the step is done. The step waits while the agent sits idle between your turns, and ends once the result is written. An unattended run has nobody to work with, so the step goes to a runtime with HITL, as [HITL](workflow-advanced.md#hitl-human-in-the-loop) describes.
@@ -411,10 +424,10 @@ The place counts as closed only once Paseo reports each of the attempt's agents 
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
-A create Paseo answered with an error, as a dropped connection does, may still start its agent. Until Paseo shows that agent, the attempt stays open. Once it appears, the next `teamai workflow cancel` stops it. teamai cannot tell a create Paseo refused, so if the agent never appears, delete the record the message names, then cancel again:
+A create Paseo answered with an error, as a dropped connection does, may still start its agent. Until Paseo shows that agent, the attempt stays open. Once it appears, the next `teamai workflow cancel` stops it. teamai cannot tell a create Paseo refused, so if the agent never appears, check that nothing of the attempt runs in the worktree, then release the attempt:
 
 ```text
-Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel r3ad62eacc3c191eb again, which stops it. If it never appears in Paseo, the create was refused: delete ~/.teamai/runtime-state/paseo/ops/op-3f9c2a7b1d4e6f80.json and run teamai workflow cancel r3ad62eacc3c191eb again.
+Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel r3ad62eacc3c191eb again, which stops it. If it never appears in Paseo, the create was refused: check that nothing of the attempt runs in the worktree, then run teamai workflow cancel r3ad62eacc3c191eb --release a5c1e9d07.
 ```
 
 Two attempts on one worktree share its Paseo workspace, which only the last of them to close archives. An attempt that closes first cancels its own agents instead, a failed step's included, and leaves the other attempt's running. An agent Paseo will not cancel keeps the attempt open, so teamai can close it again:
@@ -443,6 +456,5 @@ Start the daemon, then run `teamai workflow cancel` again.
 | `client_version` | The Paseo client found is older than 0.14.0. Update Paseo, or set `PASEO_CLIENT_PATH` to a newer `@getpaseo/client` package. |
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
-| `tool_unavailable` | The daemon can run none of `claude`, `codex` and `opencode`: each is missing, signed out, or lacks its default mode, Codex also when the daemon is not at a loopback address, and OpenCode also when it reaches no model provider or Paseo runs it on OpenCode's own background server. The message names each installed tool and its fix, or, with none installed, says to install one. A step that names a tool the daemon cannot run goes to the next runtime; one that takes the definition's `tool` fails `tool_unavailable` with the same reason. |
 | `paseo_config` | With no `url`, the daemon's address cannot be read from Paseo's config: `$PASEO_HOME/config.json` is not JSON, its `daemon` section is not what Paseo writes, or `daemon.listen` names a Windows named pipe. Fix the file, or set `url`. |
 | `bad_option` | An option other than `url`. |

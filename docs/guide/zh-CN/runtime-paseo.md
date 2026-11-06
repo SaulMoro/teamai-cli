@@ -199,7 +199,15 @@ $ paseo logs 94f534b --filter tools
 { "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "good", "reasoning": "The diff changes add to return a + b and adds a node:test assertion that add(2, 3) equals 5. The session shows no commands were run, as requested; the test was added but not executed." } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
 ```
 
-评分从守护进程的智能体写入会话的地方读取步骤的会话：守护进程所属用户的工具主目录。请让守护进程以运行 teamai 的成员身份、在同一台机器上运行。守护进程以其他用户或其他 `HOME` 运行时，这一轮不会被打标签，评分运行的 `evidence` 步骤会说明原因：
+评分从守护进程的智能体写入会话的地方读取步骤的会话：守护进程所属用户的工具主目录。对 Claude，运行时从 Paseo 读取这个主目录（`claude auth status` 中的 `configDirectory`，Claude Code 2.1 起提供），所以守护进程以其他 `HOME` 或 `CLAUDE_CONFIG_DIR` 启动时，只要 teamai 能读取该目录，它的会话照样会被归档和评分。下面这次运行中，teamai 用的是自己的 `HOME`，守护进程则在成员的 `HOME` 里运行 Claude：
+
+```text
+$ teamai workflow start fix --driver paseo-only
+✔ Archived 1 step session of r2fa599b2abbe0d09 to teamai-reports (scrubbed)
+{"data":{"done":{"run":"r2fa599b2abbe0d09","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+较旧的 Claude 不报告自己的主目录；对它，或对以其他用户运行的守护进程，请让守护进程以运行 teamai 的成员身份、在同一台机器上运行。否则这一轮不会被打标签，评分运行的 `evidence` 步骤会说明原因：
 
 ```text
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
@@ -233,7 +241,13 @@ runtimes:
 
 ## 工具、模型和模式
 
-只要工具的可执行文件在守护进程的 `PATH` 上，Paseo 就称它可用，不论是否已登录。运行时只在 Paseo 表明工具能在那里运行时才提供它；否则，使用该工具的步骤交给下一个运行时。步骤的智能体以 Paseo 为该工具设定的默认模式启动（`paseo provider ls` 中的 `DEFAULT MODE`），从不使用从不询问的绕过权限模式：默认模式是这种模式时，智能体改用 Paseo 列表中排在它前面、最接近它的模式。Paseo 设定的默认模式不在它为该工具列出的模式中时，不提供该工具。评判以一个在编辑或运行任何东西前先询问的模式启动：
+只要工具的可执行文件在守护进程的 `PATH` 上，Paseo 就称它可用，不论是否已登录。运行时只在 Paseo 表明工具能在那里运行时才提供它；否则，使用该工具的步骤交给下一个运行时。步骤的智能体以 Paseo 为该工具设定的默认模式启动（`paseo provider ls` 中的 `DEFAULT MODE`），从不使用从不询问的绕过权限模式：默认模式是这种模式时，智能体改用 Paseo 列表中排在它前面、最接近它的模式，运行开始时会说明一次：
+
+```text
+⚠ Step runtime "paseo": Paseo starts claude in mode bypassPermissions by default, which never asks before it acts; teamai starts its claude steps in mode auto, the nearest one before it in Paseo's list that asks.
+```
+
+Paseo 设定的默认模式不在它为该工具列出的模式中时，不提供该工具。评判以一个在编辑或运行任何东西前先询问的模式启动：
 
 | 工具 | 何时提供 | 步骤模式 | 评判模式 |
 | --- | --- | --- | --- |
@@ -243,18 +257,11 @@ runtimes:
 
 Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。这项检查看不到守护进程自己的环境，回环地址一律算作本机：请用你平时的 `CODEX_HOME` 启动守护进程，也不要让 `url` 指向通往另一台机器的隧道（`ssh -L`）。
 
-守护进程一个工具都运行不了时，运行在任何步骤之前停止，消息说明要在守护进程主机上做什么：
+即使守护进程一个工具都运行不了，运行时也会启动，所以运行中的命令步骤照样交给下一个运行时。驱动的任何运行时都运行不了的工具的步骤不启动智能体就失败，并说明要在守护进程主机上做什么：
 
 ```text
-$ teamai workflow start fix-add --driver paseo-signed-out
-{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-signed-out\" did not start: The Paseo daemon at ws://127.0.0.1:6799/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: signed out; run `codex login` on the daemon's host."}}
-```
-
-守护进程能运行另一个工具时，运行照常开始，使用定义的 `tool` 的步骤不启动智能体就失败：
-
-```text
-$ teamai workflow start fix-add --driver paseo-codex
-✖ Step "fix" failed with tool_unavailable: teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon's host.
+$ teamai workflow start fix-codex --driver paseo-only
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on codex, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run codex: signed out; run `codex login` on the daemon's host. Or remove tool from the step.
 ```
 
 想自己检查某个工具，就问守护进程或 Codex，看 `Auth` 和 `Resolved path` 这两行：
@@ -361,6 +368,12 @@ paseo permit allow 7c483fce --all
 ✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
+智能体因工具的用量上限而停止时，步骤以 `usage_limited` 失败，消息带上工具的原话（包括重置时间），以及上限解除后重新运行该步骤的命令：
+
+```text
+✖ Step "fix" failed with usage_limited: The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r3ad62eacc3c191eb fix
+```
+
 ## 交互式步骤
 
 在有人值守的运行中，`interactive: true` 的步骤作为一个 Paseo 智能体运行，你在 Paseo 应用里与它一起完成。它的提示词开头告诉智能体与你一起完成这个步骤，并且只在你说步骤完成后才写 teamai 的结果。智能体在你两次发言之间空闲时，步骤一直等待；结果写入后步骤结束。无人值守的运行中没有人可以协作，所以该步骤交给提供 HITL 的运行时，见 [HITL](workflow-advanced.md#hitl人在回路中)。
@@ -411,10 +424,10 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
-Paseo 以错误回答的创建请求（例如连接中断时）仍可能启动它的智能体。在 Paseo 显示这个智能体之前，这次尝试保持打开。智能体出现后，下一次 `teamai workflow cancel` 会停止它。teamai 无法判断 Paseo 是否拒绝了这个创建请求，所以如果智能体一直没有出现，请删除消息里给出的记录文件，然后再次取消：
+Paseo 以错误回答的创建请求（例如连接中断时）仍可能启动它的智能体。在 Paseo 显示这个智能体之前，这次尝试保持打开。智能体出现后，下一次 `teamai workflow cancel` 会停止它。teamai 无法判断 Paseo 是否拒绝了这个创建请求，所以如果智能体一直没有出现，请先确认这次尝试在工作树中没有任何东西还在运行，然后释放这次尝试：
 
 ```text
-Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel r3ad62eacc3c191eb again, which stops it. If it never appears in Paseo, the create was refused: delete ~/.teamai/runtime-state/paseo/ops/op-3f9c2a7b1d4e6f80.json and run teamai workflow cancel r3ad62eacc3c191eb again.
+Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel r3ad62eacc3c191eb again, which stops it. If it never appears in Paseo, the create was refused: check that nothing of the attempt runs in the worktree, then run teamai workflow cancel r3ad62eacc3c191eb --release a5c1e9d07.
 ```
 
 同一个 worktree 上的两次尝试共用它的 Paseo 工作区，只有最后关闭的那次尝试会归档它。先关闭的尝试改为取消它自己的智能体（包括失败步骤的智能体），另一次尝试的智能体继续运行。Paseo 不肯取消的智能体会让这次尝试保持打开，teamai 可以再次关闭它：
@@ -443,6 +456,5 @@ No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `p
 | `client_version` | 找到的 Paseo 客户端早于 0.14.0。升级 Paseo，或把 `PASEO_CLIENT_PATH` 指向更新的 `@getpaseo/client` 包。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
-| `tool_unavailable` | 守护进程 `claude`、`codex` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式；守护进程不在回环地址上时，Codex 也算在内；OpenCode 连不上模型提供方，或 Paseo 在 OpenCode 自己的后台服务器上运行它时，OpenCode 也算在内。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。步骤写明的工具守护进程运行不了时，该步骤交给下一个运行时；使用定义的 `tool` 的步骤则以 `tool_unavailable` 失败，原因相同。 |
 | `paseo_config` | 没有 `url` 时，无法从 Paseo 的配置读出守护进程地址：`$PASEO_HOME/config.json` 不是 JSON，它的 `daemon` 部分不是 Paseo 写出的样子，或 `daemon.listen` 指向 Windows 命名管道。修好该文件，或设置 `url`。 |
 | `bad_option` | `url` 以外的选项。 |
