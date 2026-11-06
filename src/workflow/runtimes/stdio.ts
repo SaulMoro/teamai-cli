@@ -194,7 +194,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       if (waiter) waiter.on(message);
       else if (OP_ENDS.has(message.event) && !cancelSent.has(message.op)) {
         lateEnds += 1;
-        log.warn(`Step runtime "${name}" answered ${message.op} with ${message.event} after teamai stopped waiting for it, which teamai ignores (${lateEnds} such ${lateEnds === 1 ? 'answer' : 'answers'} from this runtime).`);
+        log.warn(`Step runtime "${name}" answered ${message.op} with ${message.event} after teamai stopped waiting for it, which teamai ignores (late answers from this runtime: ${lateEnds}).`);
       }
 
       return;
@@ -220,8 +220,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       // runtime's end, or, for a place opened with a deadline, 15 s past it settles it.
       const deadline = deadlines.get(request.handle);
 
-      const by = request.type !== 'collect' ? { at: Date.now() + ANSWER_WITHIN_MS, why: `within ${ANSWER_WITHIN_MS / 1000} s` }
-        : deadline !== undefined ? { at: Math.max(deadline, Date.now()) + ANSWER_WITHIN_MS, why: `within ${ANSWER_WITHIN_MS / 1000} s of the attempt's deadline` }
+      const by = request.type !== 'collect' ? { at: Date.now() + ANSWER_WITHIN_MS, message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle} within ${ANSWER_WITHIN_MS / 1000} s.` }
+        : deadline !== undefined ? { at: Math.max(deadline, Date.now()) + ANSWER_WITHIN_MS, message: `Step runtime "${name}" did not answer collect of ${request.handle} within ${ANSWER_WITHIN_MS / 1000} s of the attempt's deadline.` }
           : undefined;
 
       let stop = (): void => {};
@@ -244,7 +244,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           left.splice(at, 1);
 
           if (left.length === 0) handles.delete(request.handle);
-          waiter.settle({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle} ${by.why}.` });
+          waiter.settle({ code: 'runtime_unanswered', message: by.message });
         });
       }
 
