@@ -38,7 +38,6 @@ export function unreachable(failure: RuntimeFailure): Provider {
 
   return {
     offer: async () => ({ ok: false, failure }),
-    hostAlias: () => ({ ok: false, why: failure.message }),
     find: async (key) => kept(handleOf(key)),
     create: async (key) => kept(handleOf(key)),
     exec: async (id) => ({ kind: 'failed', failure: kept(id).failure }),
@@ -71,12 +70,18 @@ export interface Judges {
   release(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
 }
 
+/**
+ * How a sandbox reaches this machine itself: the name it has there, to which a URL credential on localhost is pointed
+ * (loopback.ts), or, as a whole sentence, why teamai knows none.
+ */
+export type HostRoute = { ok: true; alias: string } | { ok: false; refusal: string };
+
 export interface Provider {
   /**
    * Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the
    * fix. It offers a tool only when it can sign in there with `credentials`, the names teamai gives (sign-in.ts).
    */
-  offer(credentials: InitCredentials | undefined): Promise<{ ok: true; can: Can } | { ok: false; failure: RuntimeFailure }>;
+  offer(credentials: InitCredentials | undefined): Promise<{ ok: true; can: Can; host: HostRoute } | { ok: false; failure: RuntimeFailure }>;
   /**
    * The sandbox of this attempt: its id, or undefined once the technology said there is none. A lookup it could not
    * make fails with what to do, so a sandbox is never taken as absent while its technology does not answer.
@@ -90,11 +95,6 @@ export interface Provider {
   owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }> } | { ok: false; failure: RuntimeFailure }>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
-  /**
-   * The name a sandbox reaches this machine itself by, so a URL credential on localhost is pointed at it (loopback.ts),
-   * or why a sandbox cannot reach this machine, as the end of "which …". Known once `offer` answered.
-   */
-  hostAlias(): { ok: true; alias: string } | { ok: false; why: string };
   /**
    * On a provider whose own network policy decides what a sandbox reaches (sbx): whether it lets one reach `port` of
    * this machine, or how to allow it, naming the credential `variable` that needs it. The policy is never edited.

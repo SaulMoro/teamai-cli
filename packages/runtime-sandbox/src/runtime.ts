@@ -7,7 +7,7 @@ import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
 import { maskedAsGiven, onThisMachine, toAlias } from './loopback.js';
 import { parseOptions, type SandboxOptions } from './options.js';
-import { COMMAND_MS, handleOf, unreachable, type PlaceKey, type Provider } from './provider.js';
+import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type Provider } from './provider.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -34,7 +34,11 @@ type PromptRequest = z.infer<typeof PromptRequestSchema>;
 interface Ready {
   provider: Provider;
   can: Can;
+  host: HostRoute;
 }
+
+/** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
+const NOT_OFFERED: HostRoute = { ok: false, refusal: 'This sandbox runtime offered no sandbox, so it opens none.' };
 
 /** How often an exec another runtime process runs is looked at, to answer its outcome. */
 const FOLLOW_MS = 100;
@@ -83,14 +87,13 @@ type Journaled = { op: OpId } & ExecRecord;
  * created or journaled: a sandbox that has no name for this machine, or, on sbx, a policy that does not let a sandbox
  * reach that port. A keyed message names the variable, never its value.
  */
-async function hostUnreachable(credentials: Record<string, string>, provider: Provider): Promise<RuntimeFailure | undefined> {
+async function hostUnreachable(credentials: Record<string, string>, { provider, host }: Ready): Promise<RuntimeFailure | undefined> {
   const local = onThisMachine(credentials);
   const [first] = local;
 
   if (first === undefined) return undefined;
-  const route = provider.hostAlias();
 
-  if (!route.ok) return { code: 'bad_option', key: `credentials.${first.name}`, message: `${first.name} points at this machine itself, which ${route.why}. Use an address of this machine the sandbox can reach` };
+  if (!host.ok) return { code: 'bad_option', key: `credentials.${first.name}`, message: `${first.name} points at this machine itself, which a sandbox does not reach at that address. ${host.refusal} Use an address of this machine the sandbox can reach, and start again.` };
 
   for (const { name, port } of local) {
     const reached = await provider.reachesHost?.(port, name);
@@ -130,7 +133,7 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
 
 export function serve({ input, write: send, journal, warn, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
-  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
+  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
@@ -212,12 +215,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    */
   const stateOf = (exec: Journaled): OpState => (exec.outcome ? { op: exec.op, ...exec.outcome } : { op: exec.op, state: 'running' });
 
-  /** `credentials` as a sandbox of `provider` gets them: a URL on this machine itself at the name it has there. */
-  const inSandbox = (credentials: Record<string, string>, provider: Provider): Record<string, string> => {
-    const route = provider.hostAlias();
-
-    return route.ok ? toAlias(credentials, route.alias) : credentials;
-  };
+  /** `credentials` as a sandbox gets them: a URL on this machine itself at the name `host` gives it there. */
+  const inSandbox = (credentials: Record<string, string>, host: HostRoute): Record<string, string> => (host.ok ? toAlias(credentials, host.alias) : credentials);
 
   /** Writes the end of an op this process does not run: through its follower here when it has one. */
   const conclude = (op: OpId, outcome: Outcome): void => {
@@ -291,14 +290,16 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
   };
 
-  const open = async ({ op, run, attempt, view, credentials }: OpenRequest, provider: Provider): Promise<void> => {
+  const open = async ({ op, run, attempt, view, credentials }: OpenRequest, current: Ready): Promise<void> => {
+    const { provider } = current;
+
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
       write({ op, event: 'failed', failure: { code: 'bad_request', message: `Open ${op} names run "${run}" and attempt "${attempt}", which are not teamai ids.` } });
 
       return;
     }
 
-    const refused = await hostUnreachable(credentials, provider);
+    const refused = await hostUnreachable(credentials, current);
 
     if (refused) {
       write({ op, event: 'failed', failure: refused });
@@ -415,7 +416,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     return undefined;
   };
 
-  const exec = async (request: ExecRequest, provider: Provider): Promise<void> => {
+  const exec = async (request: ExecRequest, { provider, host }: Ready): Promise<void> => {
     const { op, handle } = request;
     const replayed = replay(op);
 
@@ -466,7 +467,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     // A credential the exec withholds is not set; a name the exec sets itself wins over a credential.
-    const scoped = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), provider);
+    const scoped = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), host);
     let stdout = '';
 
     const end = await provider.exec(id, { argv: request.argv, env: { ...scoped, ...request.env }, unset: request.unset, cwd: request.cwd }, (stream, data) => {
@@ -481,7 +482,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   };
 
   /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
-  const prompt = async (request: PromptRequest, { provider, can }: Ready): Promise<void> => {
+  const prompt = async (request: PromptRequest, { provider, can, host }: Ready): Promise<void> => {
     const { op, handle, confined, lease } = request;
 
     if (confined === undefined) {
@@ -509,7 +510,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    const given = inSandbox(request.credentials, provider);
+    const given = inSandbox(request.credentials, host);
     const chosen = judgeOf(lease.tool, given);
 
     if (!chosen.ok) {
@@ -771,7 +772,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
-      ready = { provider: unreachable(parsed.failure), can: {} };
+      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED };
       write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
@@ -780,7 +781,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const provider = providerFor(parsed.options);
 
     if (mode === 'recover') {
-      ready = { provider, can: {} };
+      ready = { provider, can: {}, host: NOT_OFFERED };
       write({ type: 'init', ok: true, can: {} });
 
       return;
@@ -789,7 +790,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const offered = await provider.offer(credentials);
 
     if (!offered.ok) {
-      ready = { provider: unreachable(offered.failure), can: {} };
+      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED };
       write({ type: 'init', ok: false, error: offered.failure });
 
       return;
@@ -798,7 +799,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const { confined: offers = [], ...rest } = offered.can;
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
-    ready = { provider, can };
+    ready = { provider, can, host: offered.host };
     write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }) });
   };
 
@@ -813,9 +814,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     switch (request.type) {
       case 'open':
-        return open(request, provider);
+        return open(request, ready);
       case 'exec':
-        return exec(request, provider);
+        return exec(request, ready);
       case 'prompt':
         return prompt(request, ready);
       case 'cancel':

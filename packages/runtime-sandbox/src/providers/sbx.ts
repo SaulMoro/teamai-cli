@@ -182,13 +182,11 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
       if (!signedIn.ok) return signedIn;
       const can: Can = { workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: signedIn.tools, end_turn: true, unattended: true, role: true };
 
-      return { ok: true, can };
+      // sbx's proxy answers host.docker.internal as this machine's localhost, which its policy then allows or refuses.
+      return { ok: true, can, host: { ok: true, alias: 'host.docker.internal' } };
     },
 
     find,
-
-    // sbx's proxy answers host.docker.internal as this machine's localhost, which its policy then allows or refuses.
-    hostAlias: () => ({ ok: true, alias: 'host.docker.internal' }),
 
     async reachesHost(port, variable) {
       const rule = `\`sbx policy allow network localhost:${port}\``;
