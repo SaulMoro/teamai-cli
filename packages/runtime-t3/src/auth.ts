@@ -232,9 +232,11 @@ function createPairingCode(t3Home: string, signal: AbortSignal): Promise<string>
 
 /**
  * Approves the sign-in the SDK built `authorizationUrl` for with a pairing code, as T3's page posts it, and returns the
- * authorization code T3 redirects with. `access` is the broadest mode T3 lets the sign-in's threads run in.
+ * authorization code T3 redirects with. The access is always Auto, whatever the run's runtime_mode: a tighter mode needs
+ * the same scopes, each thread still runs in its own mode, and the grant is only their ceiling. One credential then
+ * serves every run, and a run at a tighter mode never leaves a sign-in too narrow for a later Auto run.
  */
-async function approveWithPairingCode(authorizationUrl: URL, { access, t3Home, signal }: { access: StepMode; t3Home: string; signal: AbortSignal }): Promise<string> {
+async function approveWithPairingCode(authorizationUrl: URL, { t3Home, signal }: { t3Home: string; signal: AbortSignal }): Promise<string> {
   const code = await createPairingCode(t3Home, signal);
 
   const authorization = Object.fromEntries(AUTHORIZATION_FIELDS.flatMap((field) => {
@@ -246,7 +248,7 @@ async function approveWithPairingCode(authorizationUrl: URL, { access, t3Home, s
   const reply = await fetch(new URL('decision', authorizationUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorization, decision: { _tag: 'pairing-code', access, code } }),
+    body: JSON.stringify({ authorization, decision: { _tag: 'pairing-code', access: 'auto' satisfies StepMode, code } }),
     signal,
   });
 
@@ -273,11 +275,11 @@ export type SilentSignIn = { ok: true } | { ok: false; reason: string };
 
 /**
  * Signs teamai in to `resource` with no page and no question: the `t3` command on this machine creates a pairing code
- * for the T3 server whose data directory is `t3Home`, and teamai approves its own authorization request with it, at
- * `access`. The SDK's flow registers the client and holds the PKCE verifier, and keeps the token in the credentials
+ * for the T3 server whose data directory is `t3Home`, and teamai approves its own authorization request with it, with
+ * Auto access. The SDK's flow registers the client and holds the PKCE verifier, and keeps the token in the credentials
  * file. A failure says why, in a few words, and names no code or token.
  */
-export async function signInSilently({ stateDir, resource, access, t3Home }: { stateDir: string; resource: URL; access: StepMode; t3Home: string }): Promise<SilentSignIn> {
+export async function signInSilently({ stateDir, resource, t3Home }: { stateDir: string; resource: URL; t3Home: string }): Promise<SilentSignIn> {
   // One deadline over every step, so a T3 Code that stops answering ends the attempt with a reason rather than holding init.
   const signal = AbortSignal.timeout(SILENT_SIGN_IN_MS);
   const fetchFn = (url: string | URL, init?: RequestInit): Promise<Response> => fetch(url, { ...init, signal });
@@ -286,7 +288,7 @@ export async function signInSilently({ stateDir, resource, access, t3Home }: { s
   // T3 accepts a loopback redirect on any port, and nobody follows this one: the decision hands the code back.
   const provider: OAuthClientProvider = {
     ...keptClient({ stateDir, resource: resource.href, redirectUrl: 'http://127.0.0.1/callback' }),
-    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { access, t3Home, signal }); },
+    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { t3Home, signal }); },
   };
 
   try {

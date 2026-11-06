@@ -98,13 +98,13 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
     });
 
-    it('approves its silent sign-in at the run\'s runtime_mode', async () => {
+    it.each(['auto-accept-edits', 'approval-required'])('approves its silent sign-in with Auto access in a run whose runtime_mode is %s', async (runtimeMode) => {
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'approval-required' } });
+      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: runtimeMode } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
-      expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'approval-required' });
+      expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'auto' });
     });
 
     it('signs in through T3\'s page in an attended run with no t3 command, keeps the credential to itself, and a later unattended run reuses it', async () => {
