@@ -511,7 +511,9 @@ const httpServer = http.createServer((req, res) => {
 httpServer.listen(0, '127.0.0.1', () => {
   const dir = path.join(T3_HOME, 'userdata');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'server-runtime.json'), JSON.stringify({ version: 1, pid: process.pid, origin: `http://127.0.0.1:${httpServer.address().port}` }));
+  const file = path.join(dir, 'server-runtime.json');
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({ version: 1, pid: process.pid, origin: `http://127.0.0.1:${httpServer.address().port}` }));
+  fs.renameSync(`${file}.tmp`, file);
 });
 
 process.on('SIGTERM', () => { httpServer.close(); process.exit(0); });
