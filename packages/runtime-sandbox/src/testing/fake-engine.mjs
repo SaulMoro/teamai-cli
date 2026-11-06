@@ -18,7 +18,9 @@
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
-//                       exists, before it answers, as a create still on its way
+//                       exists, before it answers, as a create still on its way; a file `owned-hold` makes a `ps`
+//                       filtered by `teamai.owner` wait until it is removed (60 s at most), with a file `owned-listing`
+//                       there while it waits
 //   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
@@ -225,6 +227,15 @@ function docker() {
 
       if (one(found, '--format') !== undefined && fs.existsSync(path.join(state, 'format-fails'))) fail('Error: template: ps:1: function "Label" not defined', 125);
       const wanted = all(found, '--filter').map((filter) => filter.replace(/^label=/, '').split(/=(.*)/s).slice(0, 2));
+
+      // A list of one journal's containers waits while `owned-hold` exists, marked `owned-listing` meanwhile.
+      if (wanted.some(([key]) => key === 'teamai.owner') && fs.existsSync(path.join(state, 'owned-hold'))) {
+        fs.writeFileSync(path.join(state, 'owned-listing'), '');
+
+        for (let waited = 0; waited < 60_000 && fs.existsSync(path.join(state, 'owned-hold')); waited += 50) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+        fs.rmSync(path.join(state, 'owned-listing'), { force: true });
+      }
+
       // The fields of `--format` the providers use: the id and a label's value, empty when it has none.
       const format = one(found, '--format') ?? '{{.ID}}';
 

@@ -44,6 +44,12 @@ const FOLLOW_MS = 100;
  */
 const BOUND_MS = 10_000;
 
+/**
+ * How long a sweep of what earlier runs left may take before it says so on stderr. Nothing waits for it, so its bound is
+ * its own: each list or removal it runs ends within COMMAND_MS, and a judge's takes three in turn.
+ */
+const SWEEP_MS = 30_000;
+
 /** What `work` settled with, or `late` once `deadline` (a Date.now() time) came first. `work` goes on either way. */
 async function by<T>(deadline: number, work: Promise<T>): Promise<{ kind: 'done'; value: T } | { kind: 'late' }> {
   let timer: NodeJS.Timeout | undefined;
@@ -221,8 +227,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * it no longer records, because a close found nothing yet and forgot the place before the sandbox landed, and a judge's
    * filter and network with it. A sandbox whose attempt has a record (a create in flight included, since a place is saved
    * before its create), one whose labels name no attempt, and one labelled for another journal are left alone. A failed
-   * list or removal is one warning, never the open's failure. It runs before the open is accepted, so no close waits on
-   * it, and holds the open for BOUND_MS at most, inside the 15 s teamai gives an open to be accepted.
+   * list or removal is one warning, never the open's failure, and so is anything it throws. It starts once its open is
+   * accepted and nothing waits for it: not that open, nor a cancel or a close.
    */
   const sweep = async (provider: Provider): Promise<void> => {
     const { owned } = provider;
@@ -266,8 +272,17 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       }));
     };
 
-    if ((await by(Date.now() + BOUND_MS, sweeping())).kind === 'late') {
-      warn(`teamai-runtime-sandbox: warning: removing the containers an earlier run left took over ${BOUND_MS / 1000} s; the open goes on while it ends.`);
+    // Nothing awaits the sweep, so a throw would end this process, and the execs it runs with it.
+    const swept = (async (): Promise<void> => {
+      try {
+        await sweeping();
+      } catch (error) {
+        warn(`teamai-runtime-sandbox: warning: removing what an earlier run left failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })();
+
+    if ((await by(Date.now() + SWEEP_MS, swept)).kind === 'late') {
+      warn(`teamai-runtime-sandbox: warning: removing what an earlier run left took over ${SWEEP_MS / 1000} s; it goes on, and holds no step.`);
     }
   };
 
@@ -304,9 +319,10 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    await sweep(provider);
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
+    // Its own place is saved first, so the sweep keeps it.
+    void sweep(provider);
 
     /** The attempt's sandbox, found or created, kept under its id. */
     const make = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
