@@ -42,6 +42,14 @@ const PlaceRecordSchema = z.object({
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;
 
 /**
+ * A journal's id: the first 16 hex digits of a hash of its directory. It labels every container the journal owns and
+ * starts the name of every sbx sandbox, so a provider takes it only from `journal().owner`, never any other string.
+ */
+const JournalIdSchema = z.string().regex(/^[0-9a-f]{16}$/).brand<'JournalId'>();
+
+export type JournalId = z.infer<typeof JournalIdSchema>;
+
+/**
  * A record, or undefined when there is none. A record that cannot be read or parsed is an error naming the file, never
  * taken as absent.
  */
@@ -101,7 +109,7 @@ export function journal(root: string) {
      * This journal's id, which labels every container it owns: stable across restarts, and another for another
      * directory, so two members or two homes on one engine never take each other's containers for their own.
      */
-    owner: crypto.createHash('sha256').update(path.resolve(root)).digest('hex').slice(0, 16),
+    owner: JournalIdSchema.parse(crypto.createHash('sha256').update(path.resolve(root)).digest('hex').slice(0, 16)),
     place: (handle: string): PlaceRecord | undefined => read(placeFile(handle), PlaceRecordSchema),
     savePlace: (handle: string, place: PlaceRecord): void => write(placeFile(handle), place),
     exec: (op: OpId): ExecRecord | undefined => read(opFile(op), ExecRecordSchema),
