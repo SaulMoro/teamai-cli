@@ -5,10 +5,12 @@ import { pathToFileURL } from 'node:url';
 import type { createPaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { buildAgentDeepLink } from '@getpaseo/protocol/agent-deep-link';
+import { getUserHome } from '@teamai/tool-core/home';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type WebSocket from 'ws';
 import { z } from 'zod';
+import { clientInApp } from './app-client.js';
 
 // ─── The Paseo client ────────────────────────────────────
 //
@@ -16,7 +18,10 @@ import { z } from 'zod';
 //  from the installed Paseo when it starts, so the client always matches the member's daemon.
 //
 //    PASEO_CLIENT_PATH          the directory of an @getpaseo/client package, when set
-//    else `paseo` on PATH       its real path, then the CLI package that holds it, whose dependencies hold the client
+//    else `paseo` on PATH       its real path, then the CLI package that holds it, whose dependencies hold the client;
+//    or ~/.local/bin/paseo      or, for the Paseo app's CLI script, the client inside the app, unpacked into
+//                               ~/.teamai/runtime-state/paseo-client (app-client.ts); ~/.local/bin is where the app's
+//                               install-CLI action links the script, which PATH may not hold
 //
 //  The client's own dependencies, @getpaseo/protocol and ws, resolve from the client's directory, as its code does.
 //
@@ -88,20 +93,25 @@ function findClient(env: NodeJS.ProcessEnv): { dir: string; version: string } | 
     if (manifestOf(dir)?.name !== '@getpaseo/client') {
       return {
         code: 'client_missing',
-        message: `teamai-runtime-paseo found no Paseo client in ${given}, which PASEO_CLIENT_PATH names. Install Paseo (npm install -g @getpaseo/cli) so \`paseo\` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
+        message: `teamai-runtime-paseo found no Paseo client in ${given}, which PASEO_CLIENT_PATH names. Install the Paseo CLI from the Paseo desktop app's settings, or with npm install -g @getpaseo/cli, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
       };
     }
   } else {
-    const cli = findOnPath('paseo', { pathEnv: env.PATH });
+    const linked = path.join(getUserHome(), '.local', 'bin', 'paseo');
+    const cli = findOnPath('paseo', { pathEnv: env.PATH }) ?? (fs.existsSync(linked) ? linked : undefined);
 
     if (!cli) {
       return {
         code: 'client_missing',
-        message: 'teamai-runtime-paseo found no `paseo` on PATH to load the Paseo client from. Install Paseo (npm install -g @getpaseo/cli) so `paseo` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.',
+        message: 'teamai-runtime-paseo found no `paseo` on PATH, or in ~/.local/bin where the Paseo desktop app installs its CLI, to load the Paseo client from. Install the Paseo CLI from the Paseo desktop app\'s settings, or with npm install -g @getpaseo/cli, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.',
       };
     }
 
-    dir = clientBeside(cli);
+    const beside = clientBeside(cli);
+    const located = beside === undefined ? clientInApp(cli, path.join(getUserHome(), '.teamai', 'runtime-state', 'paseo-client')) : { dir: beside };
+
+    if (located && 'code' in located) return located;
+    dir = located?.dir;
 
     if (!dir) {
       return {

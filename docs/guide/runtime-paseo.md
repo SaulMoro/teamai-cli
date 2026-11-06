@@ -23,6 +23,8 @@ npm install -g --prefix ~/.paseo-cli @getpaseo/cli
 export PASEO_CLIENT_PATH=~/.paseo-cli/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/client
 ```
 
+With the Paseo desktop app instead, install its command-line tool from the app, which links `paseo` into `~/.local/bin`. The runtime finds it there even when teamai's `PATH` has no `~/.local/bin`. The app keeps its client inside its own archive, so the runtime unpacks the client once per app build into `~/.teamai/runtime-state/paseo-client`, checking each file against the SHA-256 the app records.
+
 teamai ships a definition that sends prompt steps to the daemon on this machine and everything else to this machine. `--driver paseo` uses it:
 
 ```yaml
@@ -437,7 +439,7 @@ Start the daemon, then run `teamai workflow cancel` again.
 
 | Code | When |
 | --- | --- |
-| `client_missing` | No Paseo client was found: no `paseo` on `PATH`, or `PASEO_CLIENT_PATH` names no `@getpaseo/client` package. Install Paseo, or set `PASEO_CLIENT_PATH`. |
+| `client_missing` | No Paseo client was found: no `paseo` on `PATH` or in `~/.local/bin`, or `PASEO_CLIENT_PATH` names no `@getpaseo/client` package. Install the Paseo CLI from the Paseo desktop app's settings or with `npm install -g @getpaseo/cli`, or set `PASEO_CLIENT_PATH`. Also when a file of the Paseo app's client does not match the SHA-256 the app records: reinstall the app. |
 | `client_version` | The Paseo client found is older than 0.14.0. Update Paseo, or set `PASEO_CLIENT_PATH` to a newer `@getpaseo/client` package. |
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
