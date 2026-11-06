@@ -1311,7 +1311,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   /**
    * Why a close keeps a place: a create it sent that Paseo has not shown the agent of, as when the create failed, may still
    * start that agent. A lookup that finds the agent confirms it, so the close stops it; one that finds none, fails or
-   * comes late proves nothing. Only the person can tell a create Paseo refused, so the failure names the record to delete.
+   * comes late proves nothing. Only the person can tell a create Paseo refused, so the failure names how to release the attempt.
    */
   const unseen = async (live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | undefined> => {
     const sent = journal.promptsOf(handle).flatMap(({ op, record }) => (record.kind === 'agent' && record.dispatched === 'unconfirmed' ? [{ op, record }] : []));
@@ -1319,7 +1319,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const missing = (await Promise.all(sent.map(async ({ op, record }) => {
       const agent = await Promise.race([live.agent(record.create.agentId).catch(() => undefined), late(deadline)]);
 
-      if (!agent || agent === 'late') return [{ op, record }];
+      if (!agent || agent === 'late') return [record];
       dispatch(op, 'confirmed');
 
       return [];
@@ -1329,10 +1329,10 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     return {
       code: 'close_failed',
-      message: missing.map(({ op, record }) => [
+      message: missing.map((record) => [
         `Paseo does not show the ${record.tool} agent ${record.create.agentId} yet, though its create was sent, so it may still start in the worktree.`,
         `Once it appears, run teamai workflow cancel ${place.run} again, which stops it.`,
-        `If it never appears in Paseo, the create was refused: delete ${journal.promptFile(op)} and run teamai workflow cancel ${place.run} again.`,
+        `If it never appears in Paseo, the create was refused: check that nothing of the attempt runs in the worktree, then run teamai workflow cancel ${place.run} --release ${place.attempt}.`,
       ].join(' ')).join(' '),
     };
   };
