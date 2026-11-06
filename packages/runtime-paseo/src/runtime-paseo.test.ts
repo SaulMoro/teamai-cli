@@ -92,6 +92,12 @@ const mayStartMessage = (agentId: string, op: string): string => `Paseo does not
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Why init names a tool unavailable on the test daemon, as teamai shows it on a step that names that tool. */
+const cannotRun = (tool: string, reason: string): string => `The Paseo daemon at ${daemon.url} cannot run ${tool}: ${reason}.`;
+
+/** Why a tool the daemon has not installed is unavailable. */
+const notInstalled = (tool: string): string => `it is not installed where the daemon finds its tools; install ${tool} on the daemon's PATH and sign in to it there`;
+
 /** Waits until `holds` does, as a state outside the runtime's own lines shows it, for at most `ms`. */
 async function until(holds: () => boolean, ms = 10_000): Promise<void> {
   for (const end = Date.now() + ms; !holds(); await delay(25)) if (Date.now() > end) throw new Error(`not so within ${ms} ms`);
@@ -138,33 +144,37 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
-  it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available', async () => {
+  it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available, and names it unavailable with how to sign it in', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, sign_in: { claude: 'signed_out' } });
 
-    expect(await ready(start())).toMatchObject({ ok: true, can: { tools: ['opencode'], confined: [{ tools: ['opencode'] }] } });
+    expect(await ready(start())).toMatchObject({
+      ok: true, can: { tools: ['opencode'], confined: [{ tools: ['opencode'] }] },
+      unavailable: { claude: cannotRun('claude', 'signed out; run `claude auth login` on the daemon\'s host'), codex: cannotRun('codex', notInstalled('codex')) },
+    });
   });
 
-  it('fails init, saying what each tool lacks and how to sign it in, when the daemon can run none of them', async () => {
+  it('starts though the daemon can run none of the tools, so command steps still run elsewhere, naming each tool unavailable with what it lacks and how to sign it in', async () => {
     // OpenCode reaches no model provider: Paseo lists no model for it, though its own free models need no sign-in.
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: [] }, sign_in: { claude: 'signed_out' }, codex_login: 'signed_out' });
 
     expect(await ready(start())).toEqual({
-      type: 'init', ok: false,
-      error: {
-        code: 'tool_unavailable',
-        message: `The Paseo daemon at ${daemon.url} runs no tool teamai-runtime-paseo can use. claude: signed out; run \`claude auth login\` on the daemon's host. codex: signed out; run \`codex login\` on the daemon's host. opencode: reaches no model provider; run \`opencode auth login\` on the daemon's host, then \`paseo restart\`.`,
+      type: 'init', ok: true, prompt: true,
+      can: { exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: [] },
+      unavailable: {
+        claude: cannotRun('claude', 'signed out; run `claude auth login` on the daemon\'s host'),
+        codex: cannotRun('codex', 'signed out; run `codex login` on the daemon\'s host'),
+        opencode: cannotRun('opencode', 'reaches no model provider; run `opencode auth login` on the daemon\'s host, then `paseo restart`'),
       },
     });
   });
 
-  it('does not offer OpenCode where Paseo shares OpenCode\'s own background server, which takes no environment for an agent', async () => {
+  it('does not offer OpenCode where Paseo shares OpenCode\'s own background server, which takes no environment for an agent, and names the remedy', async () => {
     behave({ models: { opencode: ['opencode/beam-free'] }, opencode_server: 'http://127.0.0.1:49374' });
 
-    expect(await ready(start())).toEqual({
-      type: 'init', ok: false,
-      error: {
-        code: 'tool_unavailable',
-        message: `The Paseo daemon at ${daemon.url} runs no tool teamai-runtime-paseo can use. opencode: Paseo runs it on OpenCode's background server at http://127.0.0.1:49374, which takes no environment for an agent, and teamai gives each step TEAMAI_RUN_DIR; stop that server with \`opencode service stop\` on the daemon's host, then \`paseo restart\`.`,
+    expect(await ready(start())).toMatchObject({
+      ok: true, can: { tools: [] },
+      unavailable: {
+        opencode: cannotRun('opencode', 'Paseo runs it on OpenCode\'s background server at http://127.0.0.1:49374, which takes no environment for an agent, and teamai gives each step TEAMAI_RUN_DIR; stop that server with `opencode service stop` on the daemon\'s host, then `paseo restart`'),
       },
     });
   });
@@ -192,7 +202,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { codex: ['gpt-6.1-sol'] } });
 
     expect(await ready(start({ PATH: `${bin}${path.delimiter}${String(process.env.PATH)}` }))).toMatchObject({
-      ok: false, error: { code: 'tool_unavailable', message: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` did not answer \(.+\); run it on the daemon's host to see why\.$/) },
+      ok: true, unavailable: { codex: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` did not answer \(.+\); run it on the daemon's host to see why\.$/) },
     });
   });
 
@@ -209,8 +219,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { codex: ['gpt-6.1-sol'] }, codex_path: resolved });
 
     expect(await ready(start({ PATH: `${bin}${path.delimiter}${String(process.env.PATH)}` }))).toMatchObject({
-      ok: false,
-      error: { code: 'tool_unavailable', message: expect.stringContaining(` codex: Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why.`) },
+      ok: true, unavailable: { codex: cannotRun('codex', `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why`) },
     });
     expect(fs.existsSync(ran)).toBe(false);
   });
@@ -237,7 +246,7 @@ describe('teamai-runtime-paseo', () => {
     fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nsh -c 'echo $$ > ${native}; exec sleep 60' &\nwait\n`, { mode: 0o755 });
     behave({ models: { codex: ['gpt-6.1-sol'] }, codex_path: path.join(bin, 'codex') });
 
-    expect(await ready(start())).toMatchObject({ ok: false, error: { code: 'tool_unavailable', message: expect.stringContaining('login status` did not answer') } });
+    expect(await ready(start())).toMatchObject({ ok: true, unavailable: { codex: expect.stringContaining('login status` did not answer') } });
     const pid = Number(fs.readFileSync(native, 'utf8'));
     await expect.poll(() => {
       try {
@@ -254,8 +263,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { codex: ['gpt-6.1-sol'] }, codex_login: 'unknown' });
 
     expect(await ready(start())).toMatchObject({
-      ok: false,
-      error: { code: 'tool_unavailable', message: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` gave no sign-in answer \(exit 2: error: unrecognized subcommand: status\); run it on the daemon's host to see why\.$/) },
+      ok: true, unavailable: { codex: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` gave no sign-in answer \(exit 2: error: unrecognized subcommand: status\); run it on the daemon's host to see why\.$/) },
     });
   });
 
@@ -264,12 +272,9 @@ describe('teamai-runtime-paseo', () => {
     // 0.0.0.0 reaches the fake on this machine, but names no loopback address, as a daemon on another host is named.
     const url = daemon.url.replace('127.0.0.1', '0.0.0.0');
 
-    expect(await ready(start(), { options: { url } })).toEqual({
-      type: 'init', ok: false,
-      error: {
-        code: 'tool_unavailable',
-        message: `The Paseo daemon at ${url} runs no tool teamai-runtime-paseo can use. codex: teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one.`,
-      },
+    expect(await ready(start(), { options: { url } })).toMatchObject({
+      ok: true, can: { tools: [] },
+      unavailable: { codex: `The Paseo daemon at ${url} cannot run codex: teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one.` },
     });
   });
 
@@ -277,16 +282,16 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { claude: ['claude-opus-5-5'] }, sign_in: { claude: 'unreported' } });
 
     expect(await ready(start())).toMatchObject({
-      ok: false, error: { code: 'tool_unavailable', message: expect.stringContaining('claude: Paseo does not report whether it is signed in; run `paseo provider diagnostic claude` on the daemon\'s host to see its Auth line.') },
+      ok: true, unavailable: { claude: cannotRun('claude', 'Paseo does not report whether it is signed in; run `paseo provider diagnostic claude` on the daemon\'s host to see its Auth line') },
     });
   });
 
-  it('fails init, saying to install one, when the daemon has none of the tools installed', async () => {
+  it('starts though the daemon has none of the tools installed, naming each unavailable with how to install it', async () => {
     behave({ models: {} });
 
-    expect(await ready(start())).toEqual({
-      type: 'init', ok: false,
-      error: { code: 'tool_unavailable', message: `The Paseo daemon at ${daemon.url} has none of claude, codex or opencode installed. Install one on the daemon's host, and sign in to it there.` },
+    expect(await ready(start())).toMatchObject({
+      ok: true, can: { tools: [] },
+      unavailable: { claude: cannotRun('claude', notInstalled('claude')), codex: cannotRun('codex', notInstalled('codex')), opencode: cannotRun('opencode', notInstalled('opencode')) },
     });
   });
 
