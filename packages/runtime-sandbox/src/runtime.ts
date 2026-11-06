@@ -61,6 +61,8 @@ export interface RuntimeDeps {
   /** Writes one protocol line; once teamai stops reading, a line goes nowhere and the runtime goes on. */
   write: (message: RuntimeMessage) => void;
   journal: Journal;
+  /** Writes one line for a person, never a protocol line: a warning on stderr. */
+  warn: (line: string) => void;
   /** The provider the options choose. */
   provider: (options: SandboxOptions) => Provider;
 }
@@ -119,7 +121,7 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
   return 'op' in message && 'event' in message && ['exited', 'finished', 'cancelled', 'failed'].includes(message.event);
 }
 
-export function serve({ input, write: send, journal, provider: providerFor }: RuntimeDeps): void {
+export function serve({ input, write: send, journal, warn, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
   /** The ops this process runs, each with what resolves once its end is written. */
@@ -214,6 +216,51 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
   /** The place's sandbox: the id the journal kept, or the one its labels find when a runtime died before keeping it. */
   const sandboxOf = async (place: PlaceRecord, provider: Provider): ReturnType<Provider['find']> => (place.id === undefined ? provider.find(place) : { ok: true, id: place.id });
 
+  /**
+   * Removes what a runtime killed while the engine created a sandbox can leave: a sandbox of this journal whose attempt
+   * it no longer records, because a close found nothing yet and forgot the place before the sandbox landed. A sandbox
+   * whose attempt has a record (a create in flight included, since a place is saved before its create), one whose labels
+   * name no attempt, and one labelled for another journal are left alone. A failed list or removal is one warning, never
+   * the open's failure. It runs before the open is accepted, so no close waits on it, and holds the open for BOUND_MS at
+   * most, inside the 15 s teamai gives an open to be accepted.
+   */
+  const sweep = async (provider: Provider): Promise<void> => {
+    const { owned } = provider;
+
+    if (owned === undefined) return;
+
+    const sweeping = async (): Promise<void> => {
+      const listed = await owned();
+
+      if (!listed.ok) {
+        warn(`teamai-runtime-sandbox: warning: ${listed.failure.message}. Containers an earlier run left stay until a later open.`);
+
+        return;
+      }
+
+      const orphans = listed.sandboxes.filter((key) => {
+        if (!RUN_ID.test(key.run) || !ATTEMPT_ID.test(key.attempt)) return false;
+
+        try {
+          return journal.place(sandboxName(key)) === undefined;
+        } catch {
+          // A record it cannot read may be this attempt's: its sandbox stays.
+          return false;
+        }
+      });
+
+      await Promise.all(orphans.map(async ({ id, ...key }) => {
+        const removed = await provider.destroy(id);
+
+        if (!removed.ok) warn(`teamai-runtime-sandbox: warning: ${sandboxName(key)} was left by an earlier run, and ${removed.failure.message}`);
+      }));
+    };
+
+    if ((await by(Date.now() + BOUND_MS, sweeping())).kind === 'late') {
+      warn(`teamai-runtime-sandbox: warning: removing the containers an earlier run left took over ${BOUND_MS / 1000} s; the open goes on while it ends.`);
+    }
+  };
+
   const open = async ({ op, run, attempt, view, credentials }: OpenRequest, provider: Provider): Promise<void> => {
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
       write({ op, event: 'failed', failure: { code: 'bad_request', message: `Open ${op} names run "${run}" and attempt "${attempt}", which are not teamai ids.` } });
@@ -247,6 +294,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
       return;
     }
 
+    await sweep(provider);
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
 
