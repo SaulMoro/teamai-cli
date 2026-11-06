@@ -168,8 +168,8 @@ const HoldPidSchema = z.coerce.number().int().positive();
 
 /**
  * How old a hold on a directory's open may grow before another open takes it over: its runtime may be stuck on a Paseo
- * that never answers, or gone with its pid in use since. An open that held it that long journaled whether the workspace
- * is the member's before it asked Paseo to make one, so the open that takes over decides the same.
+ * that never answers, or gone with its pid in use since. Whichever of the two journals first whether the workspace is the
+ * member's decides it for the other, which reads it before it decides.
  */
 const HOLD_STALE_MS = 60_000;
 

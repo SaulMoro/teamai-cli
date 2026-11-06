@@ -664,10 +664,22 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         }
 
         try {
-          try {
-            member ??= await live.isOpen(place.cwd);
-          } catch (error) {
-            return unopened(error instanceof Error ? error.message : String(error));
+          if (member === undefined) {
+            let isOpenThere: boolean;
+
+            try {
+              isOpenThere = await live.isOpen(place.cwd);
+            } catch (error) {
+              return unopened(error instanceof Error ? error.message : String(error));
+            }
+
+            // An open that took this one's hold over while Paseo was slow to answer decided first, and may have made
+            // teamai's own workspace there since, which Paseo then answers open.
+            try {
+              member = journal.memberOn(place.cwd, handle) ?? isOpenThere;
+            } catch (error) {
+              return unjournaled(error instanceof Error ? error.message : String(error));
+            }
           }
 
           try {
