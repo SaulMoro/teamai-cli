@@ -344,9 +344,12 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   if (!accepted.ok) return accepted;
 
+  // What the runtime tells the person is shown with the values of the credentials it gets masked.
+  const secrets = credentialSecrets(source.name, values.values);
+
   const spawned = (): StepRuntime => (source.kind === 'shipped'
-    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file] })
-    : stdioStepRuntime({ name: source.name, command: source.executable }));
+    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], secrets })
+    : stdioStepRuntime({ name: source.name, command: source.executable, secrets }));
 
   let notRecovered: RuntimeFailure | undefined;
 

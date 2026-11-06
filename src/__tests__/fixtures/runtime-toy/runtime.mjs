@@ -36,6 +36,10 @@
 // until a later cancel stops it. With `stop_ms`, a stop completes that long after the cancel, and the operation is
 // reported running until then. With `stray`, an exec it accepts also starts a process that shares the toy's stdout and
 // stderr and outlives it, which writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
+//
+// `notice` sends a notice before it answers a request, by request type (`{"init":"…","exec":"…"}`), naming the
+// request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, so a
+// test reads what teamai shows of a secret a runtime echoes.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -43,7 +47,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -613,6 +617,15 @@ function answeredOtherwise(request) {
   return true;
 }
 
+/** Sends the notice `notice` sets for `request`'s type, about its operation or handle, with the credentials it brought spelled out. */
+function noticeFor(request) {
+  const text = (request.type === 'init' ? request.options?.notice : options?.notice)?.[request.type];
+
+  if (typeof text !== 'string') return;
+  const message = text.replace(/\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => request.credentials?.[name] ?? '');
+  send({ event: 'notice', ...(request.op !== undefined ? { op: request.op } : request.handle !== undefined ? { handle: request.handle } : {}), message });
+}
+
 /** The failure reply to a request the toy could not answer: for its handle, or for its operation. */
 function failedReply(request, error) {
   const failure = { code: 'toy_failed', message: error instanceof Error ? error.message : String(error) };
@@ -648,6 +661,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 
     return;
   }
+
+  noticeFor(request);
 
   if (answeredOtherwise(request)) return;
 
