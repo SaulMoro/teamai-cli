@@ -409,7 +409,7 @@ sbx ls -q
 | `bad_option` | `options` 里有键或值写错了（`sbx` 写了 `agent: shell`），或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
 | `sandbox_failed` | 无法创建或查找这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
-| 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>` |
+| 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>`。确认其中已没有任何东西在运行后，`teamai workflow cancel <run> --release <attempt>` 会放开这次尝试：即使运行时无法删除这个位置，也会忘掉它，信息里仍会给出 `rm --force` 命令 |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
 
 ## 这个版本还不支持

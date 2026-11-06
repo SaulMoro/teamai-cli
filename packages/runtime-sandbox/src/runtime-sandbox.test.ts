@@ -430,6 +430,35 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('forgets the place of a released attempt when the engine cannot remove its container, still answering close_failed with how to remove it', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openPlace(connection, place());
+    engine.failRemove(true);
+    connection.send({ type: 'close', handle: HANDLE, release: true });
+
+    expect(await connection.next((message) => message.handle === HANDLE && (message.event === 'closed' || message.event === 'close_failed'))).toMatchObject({
+      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringContaining(`docker rm --force`) },
+    });
+    expect(journalFiles()).toEqual([]);
+    connection.send({ type: 'reattach', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toEqual({ event: 'gone', handle: HANDLE });
+  });
+
+  it("forgets the place of a released attempt whose record it cannot read, still answering the close's failure", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    await exec(connection, { argv: ['/bin/sh', '-c', 'echo ran'], cwd: at.worktree });
+    const record = journalFiles().find((file) => file.includes(`${path.sep}ops${path.sep}`)) ?? '';
+    fs.writeFileSync(record, '{"handle":');
+    connection.send({ type: 'close', handle: HANDLE, release: true });
+
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
+    expect(journalFiles()).toEqual([]);
+  });
+
   it('stops an exec still running when teamai closes its place, ends it as cancelled, then answers closed', async () => {
     engine.stopLag(1_000);
     const connection = start();
@@ -1119,6 +1148,23 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'accepted', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
     await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
     expect(engine.containers()).toEqual([]);
+    expect(journalFiles()).toEqual([]);
+  }, 60_000);
+
+  it('keeps no record of a released attempt whose container lands after its close gave up waiting for it', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    engine.holdCreate(12_000);
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(engine.containers()).toEqual([HANDLE]); }, { timeout: 10_000 });
+
+    connection.send({ type: 'close', handle: HANDLE, release: true });
+
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'accepted', 15_000)).toMatchObject({ event: 'close_failed', handle: HANDLE });
+    await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
     expect(journalFiles()).toEqual([]);
   }, 60_000);
 

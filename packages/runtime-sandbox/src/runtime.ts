@@ -337,7 +337,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       if (!found.ok) return found;
       const created = found.id === undefined ? await provider.create(key, view, tool) : { ok: true as const, id: found.id };
 
-      if (created.ok) journal.savePlace(handle, { ...key, id: created.id });
+      // A place a released close forgot meanwhile stays forgotten: its sandbox is left to a later open's sweep.
+      if (created.ok && journal.place(handle) !== undefined) journal.savePlace(handle, { ...key, id: created.id });
 
       return created;
     };
@@ -547,7 +548,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return undefined;
       }
 
-      journal.savePlace(handle, { ...place, id: created.id });
+      // A place a released close forgot meanwhile stays forgotten, as an open's does.
+      if (journal.place(handle) !== undefined) journal.savePlace(handle, { ...place, id: created.id });
 
       if (!journal.isCancelled(op)) return created.id;
       // A creation a cancel or a close overtook removes the container it made before it settles; the filter and the
@@ -732,16 +734,23 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * Removes the place, within BOUND_MS: an op still running there is marked cancelled, a sandbox or a judge's container
    * this process is still creating there is waited for so the removal finds whatever it made, and each running op's own
    * end is written before `closed`. Past the bound, or when the removal fails, the journal keeps the place for a later
-   * close.
+   * close, unless the person released the attempt (`release`): then it is forgotten all the same.
    */
-  const close = async (handle: string, provider: Provider): Promise<void> => {
+  const close = async (handle: string, provider: Provider, isReleased: boolean): Promise<void> => {
     const deadline = Date.now() + BOUND_MS;
     const ops = journal.opsOf(handle);
     const known = journal.place(handle);
 
-    const overdue = (what: string): void => write({
-      event: 'close_failed', handle,
-      failure: { code: 'sandbox_failed', message: `Closing ${handle} took over ${BOUND_MS / 1000} s: ${what}, so what ran there may still run, and the place stays this attempt's. Run \`teamai workflow cancel ${known?.run ?? '<run>'}\` again to close it${known ? `, or ${provider.removal(known)}` : ''}.` },
+    const failed = (failure: RuntimeFailure): void => {
+      if (isReleased) journal.forget(handle);
+      write({ event: 'close_failed', handle, failure });
+    };
+
+    const overdue = (what: string): void => failed({
+      code: 'sandbox_failed',
+      message: isReleased
+        ? `Closing ${handle} took over ${BOUND_MS / 1000} s: ${what}, so what ran there may still run. You released the attempt, so this runtime no longer keeps its place${known ? `: ${provider.removal(known)}` : ''}.`
+        : `Closing ${handle} took over ${BOUND_MS / 1000} s: ${what}, so what ran there may still run, and the place stays this attempt's. Run \`teamai workflow cancel ${known?.run ?? '<run>'}\` again to close it${known ? `, or ${provider.removal(known)}` : ''}.`,
     });
 
     const stopping = ops.flatMap(({ op }) => {
@@ -769,7 +778,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     if (!removed.value.ok) {
       // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox.
-      write({ event: 'close_failed', handle, failure: removed.value.failure });
+      failed(removed.value.failure);
 
       return;
     }
@@ -853,7 +862,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       case 'reattach':
         return reattach(request.handle, provider);
       case 'close':
-        return close(request.handle, provider);
+        return close(request.handle, provider, request.release === true);
       default: {
         const unhandled: never = request;
 
@@ -889,9 +898,29 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
           write({ op: request.op, event: 'failed', failure });
 
           return;
+        case 'close': {
+          if (request.release !== true) {
+            write({ event: 'failed', handle: request.handle, failure });
+
+            return;
+          }
+
+          // A place the person released is forgotten all the same, however much of its record can be read.
+          let unforgotten = '';
+
+          try {
+            journal.forget(request.handle);
+          } catch (forgetting) {
+            unforgotten = ` Its records could not be removed either: ${forgetting instanceof Error ? forgetting.message : String(forgetting)}`;
+          }
+
+          write({ event: 'failed', handle: request.handle, failure: { ...failure, message: `${message}${unforgotten}` } });
+
+          return;
+        }
+
         case 'collect':
         case 'reattach':
-        case 'close':
           // A journal it cannot read is not a place it knows is gone, and the place stays for a later close.
           write({ event: 'failed', handle: request.handle, failure });
 
