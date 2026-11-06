@@ -131,7 +131,9 @@ const CONFINED_READING: Readonly<Record<PaseoTool, string>> = {
  * What a step's agent may write without asking besides its worktree: teamai's result file, as teamai's own launch allows
  * it on a POSIX host, and the run's scratch directory, which the place gives read-write at its own path. Claude's
  * default mode asks before any write, so those two are allowed, and only they. Codex's `auto` sandbox writes the
- * worktree, so the result file's directory and the run directory are added to it. OpenCode gets no grant.
+ * worktree, so the result file's directory and the run directory are added to it. OpenCode asks before it touches a
+ * directory outside its project (`external_directory: ask`), so the same two are allowed by OpenCode's own rule, which
+ * Paseo sets on the agent's session.
  */
 function stepGrant(tool: PaseoTool, result: string, runDir: string): AgentCreate['config']['options'] {
   switch (tool) {
@@ -142,7 +144,7 @@ function stepGrant(tool: PaseoTool, result: string, runDir: string): AgentCreate
       return { sandbox_workspace_write: { writable_roots: [path.dirname(result), runDir] } };
 
     case 'opencode':
-      return undefined;
+      return { permission: { external_directory: { [`${path.dirname(result)}/*`]: 'allow', [`${runDir}/*`]: 'allow' } } };
 
     default: {
       const unhandled: never = tool;
