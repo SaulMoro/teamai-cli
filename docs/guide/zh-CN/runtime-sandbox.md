@@ -125,10 +125,10 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 ⚠ Step runtime "sandbox", operation op-3c1e9a7f2b40: claude signs in here on the login sbx keeps (anthropic in `sbx secret ls`), so the gateway ANTHROPIC_BASE_URL names in your shell is not used in this sandbox. To use it there, add ANTHROPIC_BASE_URL: env:ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN: env:ANTHROPIC_AUTH_TOKEN to the sandbox's credentials.
 ```
 
-**团队的工具实例也在这里运行。** 像 `tools/acme-claude.yaml`（`extends: claude`、`command: acme-claude`）这样的实例，只要它的工具能在沙箱里登录、沙箱里也有它的命令（镜像里有，或在 sbx 上由 kit 提供，`agent: ./kits/acme`），就会被提供。teamai 随后在沙箱里运行 `acme-claude`，并把实例的 home 变量指向这次尝试的工具 home。没有自己 `command` 的实例，或者命令就是它的工具本身的实例，在它的工具能运行的地方都能运行。sbx 自带的模板只包含它的 agent，所以在 `teamai-sandbox` 上这样的步骤会在开始前停下，而不是通过 `local` 在这台机器上运行 `acme-claude`：
+**团队的工具实例也在这里运行。** 像 `tools/acme-claude.yaml`（`extends: claude`、`command: acme-claude`）这样的实例，只要它的工具能在沙箱里登录、沙箱里也有它的命令（镜像里有，或在 sbx 上由 kit 提供，`agent: ./kits/acme`），就会被提供，即使沙箱里没有 `claude` 本身。teamai 随后在沙箱里运行 `acme-claude`，并把实例的 home 变量指向这次尝试的工具 home。没有自己 `command` 的实例，或者命令就是它的工具本身的实例，在它的工具能运行的地方都能运行。sbx 自带的模板只包含它的 agent，所以在 `teamai-sandbox` 上这样的步骤会在开始前停下，而不是通过 `local` 在这台机器上运行 `acme-claude`：
 
 ```text
-✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: sandbox: acme-claude runs acme-claude, which sbx's claude template does not hold: set agent to a kit that brings it, or run the step with --driver local. Or remove tool from the step.
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: sandbox: acme-claude runs acme-claude, which is not in sbx's claude template: set agent to a kit that brings it, or run the step with --driver local. Or remove tool from the step.
 ```
 
 只有分配给步骤的变量名会进入容器：它的 `requires.env` 键、工作流的 `env`、teamai 的尝试标记、工具主目录变量，以及只给步骤工具的 `credentials`。你环境里的其他内容都不会进去，所以 `GH_TOKEN`、`SSH_AUTH_SOCK` 之类会留在外面。变量值从不出现在命令行里：容器创建时不带任何凭据，每次 `docker exec -e NAME` 都从容器引擎 CLI 自己的环境里读取值。变量值也不会写到磁盘上：运行时记下的每次 exec 结果里，工具打印出的凭据都会被遮盖。

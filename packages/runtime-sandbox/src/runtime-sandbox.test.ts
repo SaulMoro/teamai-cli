@@ -140,10 +140,9 @@ describe('the tool instances teamai passes at init', () => {
     const instances = [ACME_CLAUDE, { name: 'acme-review', tool: 'claude', command: 'acme-review' }, { name: 'acme-codex', tool: 'codex', command: 'acme-codex' }] satisfies InitInstance[];
     const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] }, instances);
 
-    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'acme-claude'] } });
-    // An instance of a tool the image does not hold is left out as that tool is.
-    expect(Object.keys(reply.unavailable as Message)).toEqual(['acme-review']);
-    expect(String((reply.unavailable as Message)['acme-review'])).toMatch(new RegExp(`acme-review.*image ${IMAGE}.*--driver local`));
+    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'acme-claude'] }, unavailable: { 'acme-codex': expect.stringContaining('acme-codex, an instance of codex, cannot sign in') } });
+    expect(Object.keys(reply.unavailable as Message)).toEqual(['acme-review', 'acme-codex']);
+    expect(String((reply.unavailable as Message)['acme-review'])).toBe(`acme-review runs acme-review, which is not in image ${IMAGE}: add it to the image, or run the step with --driver local.`);
   });
 
   it("leaves out an instance whose tool cannot sign in, with that tool's sign-in", async () => {
@@ -174,6 +173,14 @@ describe('the tool instances teamai passes at init', () => {
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude'] } });
     expect(reason).toHaveLength(UNAVAILABLE_REASON_MAX);
     expect(reason.endsWith('…')).toBe(true);
+  });
+
+  it("offers an instance whose command the image holds without its tool's own executable, and says why one that runs that executable cannot run", async () => {
+    const wrapperOnly = 'ghcr.io/acme/wrapper:1';
+    engine.image(wrapperOnly, { 'acme-claude': ACME_CLAUDE_COMMAND });
+    const reply = await init(start(), { provider: 'docker', image: wrapperOnly }, 'unattended', { env: ['ANTHROPIC_API_KEY'], logins: [] }, [ACME_CLAUDE, { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }]);
+
+    expect(reply).toMatchObject({ ok: true, can: { tools: ['acme-claude'] }, unavailable: { 'claude-work': expect.stringContaining(`claude-work runs claude, which is not in image ${wrapperOnly}`) } });
   });
 
   it('offers an instance with no command of its own wherever its tool is offered', async () => {

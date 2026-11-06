@@ -194,7 +194,10 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
       // that agent's.
       const missing: MissingCommand = (command, tool) => {
         if (held !== undefined) return held.has(command) ? undefined : { holder: `kit ${agent}`, fix: 'add it to the kit' };
-        const own = template ?? tool;
+        const launched = LAUNCHABLE.find((each) => each === tool);
+        const own = template ?? (launched && TEMPLATE_OF[launched]);
+
+        if (own === undefined) return { holder: 'any template sbx ships', fix: 'set agent to a kit that brings it' };
 
         return command === own ? undefined : { holder: `sbx's ${own} template`, fix: 'set agent to a kit that brings it' };
       };

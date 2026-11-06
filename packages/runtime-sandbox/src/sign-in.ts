@@ -98,9 +98,9 @@ interface SignedIn {
 }
 
 /**
- * Where an instance's `command` is missing in the sandbox of an attempt on `tool`: what does not hold it (`holder`, such
- * as "image ghcr.io/acme/agent:1") and how to add it there (`fix`, such as "add it to the image"); undefined when the
- * sandbox holds it.
+ * Where the command an instance runs (its own, or its tool's executable) is missing in the sandbox of an attempt on
+ * `tool`: what does not hold it (`holder`, such as "image ghcr.io/acme/agent:1") and how to add it there (`fix`, such
+ * as "add it to the image"); undefined when the sandbox holds it.
  */
 export type MissingCommand = (command: string, tool: string) => { holder: string; fix: string } | undefined;
 
@@ -109,9 +109,9 @@ export type MissingCommand = (command: string, tool: string) => { holder: string
  * for its service (`stored`); each other tool is `unavailable`, with how to sign it in. An older teamai names no
  * credentials: every tool is offered, as before. `env` is the member's, which a kept login replaces a gateway of.
  *
- * Each of `instances` whose tool the sandbox holds is offered under its own name too, when its tool signs in there (an
- * instance keeps its own login: teamai copies its tool's into no instance's home) and the sandbox holds its `command`
- * (`missing`); otherwise it is `unavailable`, with why. teamai launches an offered instance's command, with its home
+ * Each of `instances` of a tool this runtime launches is offered under its own name too, when its tool signs in there
+ * (an instance keeps its own login: teamai copies its tool's into no instance's home) and the sandbox holds its
+ * `command`, or else its tool's executable (`missing`); otherwise it is `unavailable`, with why. teamai launches an offered instance's command, with its home
  * variable at the attempt's tool home.
  */
 export function offerSignedIn({ tools, provider, credentials, stored, env = {}, instances, missing }: {
@@ -150,15 +150,18 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
 
   const cannotSignIn = (tool: string): string => `${tool} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`;
 
-  /** Each instance of a tool the sandbox holds, with why it is not offered, or undefined when it is. */
-  const verdicts = instances.filter((instance) => tools.includes(instance.tool)).map(({ name, tool, command }) => {
+  /**
+   * Each instance of a tool this runtime launches, with why it is not offered, or undefined when it is. It runs its own
+   * command, or else its tool's executable, so the sandbox need hold only that one.
+   */
+  const verdicts = instances.filter((instance) => signInOf(instance.tool) !== undefined).map(({ name, tool, command = tool }) => {
     if (!isGivenSignIn(tool, credentials, name) && !isStored(tool)) {
       return { name, why: `${name}, an instance of ${tool}, cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.` };
     }
 
-    const missingAt = command === undefined ? undefined : missing(command, tool);
+    const missingAt = missing(command, tool);
 
-    return { name, why: missingAt && `${name} runs ${command}, which ${missingAt.holder} does not hold: ${missingAt.fix}, or run the step with --driver local.` };
+    return { name, why: missingAt && `${name} runs ${command}, which is not in ${missingAt.holder}: ${missingAt.fix}, or run the step with --driver local.` };
   });
 
   return {
