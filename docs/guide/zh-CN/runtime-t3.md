@@ -21,7 +21,11 @@ runtimes:
 
 ## 快速开始
 
-**1. 在这台机器上打开 T3 Code**，或运行 `t3 serve`。如果仓库还不是 T3 项目，第一次运行会添加它，和 `t3 project add ~/src/acme-app` 一样。
+**1. 在这台机器上打开 T3 Code**，或运行 `t3 serve`。如果仓库还不是 T3 项目，第一次运行会添加它，和 `t3 project add ~/src/acme-app` 一样，并给出提示：
+
+```text
+⚠ Step runtime "t3", operation op-7110631d3e39: Adding /Users/you/src/acme-app to T3 Code as a project, so its steps can run there.
+```
 
 **2. 写一个 `workspace: new` 的提示词步骤，并在提示词里写清结果的样子。** agent 读的是提示词，不是 `output` 块：只说“把数量放进 output.sections”时，Claude 写成了 `markdown_sections`，步骤以 `invalid_output` 失败。
 
@@ -77,7 +81,7 @@ af508185-8908-4575-a1d0-f3c6f67cddec
 
 teamai 把凭据保存在 `~/.teamai/runtime-state/t3/credentials.json`（权限 0600），之后的运行复用它。T3 在 30 天后让它过期，下一次运行会用同样的方式重新登录。要撤销它，运行 `t3 auth session revoke <id>`。
 
-teamai 运行它找到的第一个 `t3`：`$T3CODE_CLI_PATH`（T3 在自己的线程里设置它），然后是 PATH 上的 `t3`，然后是 T3 数据目录里的 `bin/t3`（`~/.t3/bin/t3`，或 `$T3CODE_HOME` 下的）。如果一个都找不到，或者 T3 拒绝了配对码，运行会改为打开 T3 的登录页面。在 T3 Code 里创建一个配对码，选 **Auto** 权限，输入配对码并批准。你选的权限是步骤线程能运行的最宽模式。
+teamai 运行它找到的第一个 `t3`：`$T3CODE_CLI_PATH`（T3 在自己的线程里设置它），然后是 PATH 上的 `t3`，然后是 T3 数据目录里的 `bin/t3`（`~/.t3/bin/t3`，或 `$T3CODE_HOME` 下的）。如果一个都找不到，或者 T3 拒绝了配对码，运行会改为打开 T3 的登录页面，并打印页面链接，以防浏览器没有打开。在 T3 Code 里创建一个配对码，选 **Auto** 权限，输入配对码并批准。你选的权限是步骤线程能运行的最宽模式。
 
 **4. 在 T3 里看步骤运行。** `inventory` 在你的机器上运行。`review` 以 `review · teamai r928e2fc23ab9bd62` 出现在项目的线程列表里。它的第一条消息说明它属于哪个运行：
 
@@ -112,11 +116,11 @@ open 't3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149…'
 | 仍在运行，或是在等你的交互式步骤 | 留在活动列表里 |
 | 步骤在 teamai 看到线程停止之前就结束了（T3 没有停止它，或 teamai 失去了对它的跟踪） | 留在活动列表里，方便你停止它；关闭步骤的位置时会先停止它 |
 
-teamai 只处理它自己启动的线程。如果 T3 拒绝把某个线程标记为已处理，步骤照样有效，线程留在活动列表里。
+teamai 只处理它自己启动的线程，以及这些线程委派的任务的线程。如果 T3 拒绝把某个线程标记为已处理，步骤照样有效，线程留在活动列表里。
 
 ## 步骤线程会问你多少
 
-步骤线程是独立的线程，所以只有你能回应它的请求。它以你在 T3 Code 里设置的默认模式启动：项目自己的设置优先，其次是全局设置，都没有时是 Auto。它从不沿用你启动运行时所在线程的模式，也从不以 Full access 运行。你的默认模式是 Full access 时，它以 Auto 运行。
+步骤线程是独立的线程，所以只有你能回应它的请求。它以你在 T3 Code 里设置的默认模式启动：项目自己的设置优先，其次是全局设置，都没有时是 Auto。它从不沿用你启动运行时所在线程的模式，也从不以 Full access 运行。你的默认模式是 Full access 时，它以 Auto 运行，并给出提示。
 
 | 模式 | 你在线程里看到什么 |
 | --- | --- |
@@ -177,7 +181,7 @@ workflows:
 
 T3 在线程打开的每个 worktree 里运行项目的 **setup** 脚本（“Run on worktree creation”），在线程被标为已处理（settle）时运行它的 **settle** 脚本。步骤的 worktree 由 teamai 自己准备，所以这两个脚本都不会为步骤运行：
 
-- 项目有 setup 脚本时，teamai 把步骤的 worktree 作为一个独立项目添加到 T3 Code，标题为 `acme-app · teamai <run>`，线程在那里运行。运行结束后这个项目留在 T3 Code 里，所以它的线程和链接仍然可用。不再需要时，在 T3 Code 里删除它。
+- 项目有 setup 脚本时，teamai 把步骤的 worktree 作为一个独立项目添加到 T3 Code，标题为 `acme-app · teamai <run>`，线程在那里运行。teamai 删除步骤的 worktree 后，会从 T3 Code 删除这个项目及其线程。它从不重命名或删除你运行时所在的项目。
 - 项目有 settle 脚本时，teamai 不会把步骤的线程标为已处理：它留在你的活动线程里。
 
 ## 只用 T3 为一次 pass 评分
@@ -284,13 +288,14 @@ teamai workflow cancel r70d31098c8884803
 | `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | 某个步骤的启动请求没有得到回复，而且无法连接 T3 Code 来查找那个线程。 | 打开 T3 Code，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | 某个步骤的启动请求没有得到回复，而你之后重新登录了 T3，所以 teamai 无法查找那个线程。 | 如果消息里提到的线程还在运行，在 T3 Code 里停止它，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… journal_unreadable: Runtime t3 cannot read its record of t3-r70d…, ~/.teamai/runtime-state/t3/places/….json …` | teamai 记录步骤线程的文件已损坏，所以它不知道该停止哪些线程，并保留这个位置。 | 在 T3 Code 里停止这次运行的线程，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
-| `… kept no session for …` | 工具没有为这个 worktree 保存会话记录，所以步骤无法评分。 | 检查实例是否使用工具的默认目录（`~/.claude`、`~/.codex`）。 |
+| `… kept no session for <worktree> in <home> …` | 工具没有在实例的目录里为这个 worktree 保存会话记录：该目录是实例在 T3 里设置的 home path，否则是 `~/.claude` 或 `~/.codex`。所以步骤无法评分。 | 在 T3 Code 的 Settings → Providers 里检查实例的 home path。 |
+| `✖ Step "review" failed with usage_limited: claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): …` | 实例达到了提供方的用量上限。T3 知道重置时间时，冒号后的 T3 消息会写明。 | 等到重置，或换一个 `instance`，然后运行消息末尾给出的重试命令。 |
 
 ## 目前还不支持
 
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程。T3 只为在另一个已链接环境上创建的线程保留父线程链接。
 - 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
 - 带 `session: continue` 或 `session.from` 的步骤会开始一段新的对话，和 OpenCode 一样：T3 无法在已有会话上启动线程。
-- 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。带 `role`、`env` 或 `setup` 的步骤会交给 `local`。
+- 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。文件夹被删除后，下一个关闭的 T3 步骤会删除这个项目。带 `role`、`env` 或 `setup` 的步骤会交给 `local`。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
 - 不提供 `permissions: unattended` 的步骤。它们需要一个工具在沙箱中运行的线程，后续版本会加入。

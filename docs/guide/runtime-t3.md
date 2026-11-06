@@ -21,7 +21,11 @@ runtimes:
 
 ## Quick start
 
-**1. Open T3 Code on this machine**, or run `t3 serve`. If the repository is not a T3 project yet, the first run adds it, as `t3 project add ~/src/acme-app` would.
+**1. Open T3 Code on this machine**, or run `t3 serve`. If the repository is not a T3 project yet, the first run adds it, as `t3 project add ~/src/acme-app` would, and says so:
+
+```text
+⚠ Step runtime "t3", operation op-7110631d3e39: Adding /Users/you/src/acme-app to T3 Code as a project, so its steps can run there.
+```
 
 **2. Write a prompt step with `workspace: new`, and spell out the result in the prompt.** The agent reads the prompt, not the `output` block: told only to "put the count in output.sections", Claude wrote `markdown_sections`, and the step failed `invalid_output`.
 
@@ -77,7 +81,7 @@ af508185-8908-4575-a1d0-f3c6f67cddec
 
 teamai keeps the credential in `~/.teamai/runtime-state/t3/credentials.json` (mode 0600). Later runs reuse it. When T3 expires it after 30 days, the next run signs in again the same way. To revoke it, run `t3 auth session revoke <id>`.
 
-teamai runs the first `t3` it finds: `$T3CODE_CLI_PATH` (T3 sets it in its own threads), then `t3` on your PATH, then `bin/t3` in T3's data directory (`~/.t3/bin/t3`, or under `$T3CODE_HOME`). If it finds none, or T3 refuses the code, the run opens T3's sign-in page instead. Create a pairing code in T3 Code, pick **Auto** access, enter the code and approve. The access you pick is the broadest mode a step thread can run in.
+teamai runs the first `t3` it finds: `$T3CODE_CLI_PATH` (T3 sets it in its own threads), then `t3` on your PATH, then `bin/t3` in T3's data directory (`~/.t3/bin/t3`, or under `$T3CODE_HOME`). If it finds none, or T3 refuses the code, the run opens T3's sign-in page instead, and prints its link in case no browser opens. Create a pairing code in T3 Code, pick **Auto** access, enter the code and approve. The access you pick is the broadest mode a step thread can run in.
 
 **4. Watch the step in T3.** `inventory` runs on your machine. `review` appears in the project's thread list as `review · teamai r928e2fc23ab9bd62`. Its first message says which run it belongs to:
 
@@ -112,11 +116,11 @@ Once a step ends, teamai settles its thread. The thread leaves your list of acti
 | still runs, or is an interactive step waiting for you | stays active |
 | ended before teamai saw its thread stop (T3 did not stop it, or teamai lost track of it) | stays active, so you can stop it; closing the step's place stops it first |
 
-teamai settles only the threads it launched. If T3 refuses to settle one, the step still counts and the thread stays active.
+teamai settles only the threads it launched, and the threads of the tasks they delegated. If T3 refuses to settle one, the step still counts and the thread stays active.
 
 ## How much a step thread asks you
 
-A step thread is a thread of its own, so nobody but you can answer its requests. It starts in the default mode you set in T3 Code: the project's own setting if it has one, else the global one, else Auto. It never takes the mode of the thread you started the run from, and never runs in Full access. When your default is Full access, it runs in Auto.
+A step thread is a thread of its own, so nobody but you can answer its requests. It starts in the default mode you set in T3 Code: the project's own setting if it has one, else the global one, else Auto. It never takes the mode of the thread you started the run from, and never runs in Full access. When your default is Full access, it runs in Auto, and the run says so.
 
 | Mode | What you see in the thread |
 | --- | --- |
@@ -177,7 +181,7 @@ A step's `model: { name, effort }` picks the model, and `effort` becomes the opt
 
 T3 runs a project's **setup** script ("Run on worktree creation") in each worktree a thread opens on, and its **settle** script when a thread is settled. teamai prepares the step's worktree itself, so neither runs for a step:
 
-- When the project has a setup script, teamai adds the step's worktree to T3 Code as a project of its own, titled `acme-app · teamai <run>`, and runs the thread there. That project stays in T3 Code after the run, so its thread and link keep working. Remove it in T3 Code once you no longer need it.
+- When the project has a setup script, teamai adds the step's worktree to T3 Code as a project of its own, titled `acme-app · teamai <run>`, and runs the thread there. Once teamai removes the step's worktree, it removes that project and its thread from T3 Code. It never renames or removes the project you run from.
 - When the project has a settle script, teamai does not settle the step's thread: it stays in your active threads.
 
 ## Score a pass with only T3
@@ -284,13 +288,14 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | A step's launch got no answer, and T3 Code could not be reached to look the thread up. | Open T3 Code, then `teamai workflow cancel <run>` again. |
 | `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | A step's launch got no answer, and you have signed in to T3 again since, so teamai cannot look the thread up. | In T3 Code, stop the thread the message names if it runs, delete the file the message names, then `teamai workflow cancel <run>` again. |
 | `… journal_unreadable: Runtime t3 cannot read its record of t3-r70d…, ~/.teamai/runtime-state/t3/places/….json …` | The file where teamai keeps a step's threads is damaged, so it cannot tell which threads to stop, and it keeps the place. | Stop the run's threads in T3 Code, delete the file the message names, then `teamai workflow cancel <run>` again. |
-| `… kept no session for …` | The tool kept no transcript for the worktree, so the step could not be scored. | Check that the instance uses the tool's default home (`~/.claude`, `~/.codex`). |
+| `… kept no session for <worktree> in <home> …` | The tool kept no transcript for the worktree in the instance's home: its home path in T3, else `~/.claude` or `~/.codex`. So the step could not be scored. | Check the instance's home path in T3 Code under Settings → Providers. |
+| `✖ Step "review" failed with usage_limited: claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): …` | The instance reached its provider's usage limit. T3's message after the colon says when it resets, when T3 knows. | Wait for the reset, or switch `instance`, then run the retry command the message ends with. |
 
 ## What it does not do yet
 
 - A step's thread is a thread of its own, not a child of the thread that started the run. T3 keeps a parent link only for a thread launched on another, linked environment.
 - It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
 - A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
-- A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. A step with a `role`, `env` or `setup` goes to `local`.
+- A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A step with a `role`, `env` or `setup` goes to `local`.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.
