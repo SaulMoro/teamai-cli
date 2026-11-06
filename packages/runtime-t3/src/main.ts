@@ -7,6 +7,7 @@ import { attendedSignIn, signInOf, signInSilently, unattendedAuth, validToken } 
 import { journal } from './journal.js';
 import { serve, type ServeOptions } from './runtime.js';
 import { connectT3 } from './t3.js';
+import { t3Command, t3HomeOf } from './t3-command.js';
 
 // teamai-runtime-t3: teamai spawns it for a driver definition that uses runtime `t3` (`--driver t3`), and speaks
 // runtime protocol 1 to it over stdio. Its stdout carries only protocol lines; anything for a person goes to stderr.
@@ -22,7 +23,12 @@ process.stderr.on('error', () => {});
 const state = path.join(getUserHome(), '.teamai', 'runtime-state', 't3');
 
 /** T3 Code's data directory on this machine, where its server says where it listens. */
-const t3Home = process.env['T3CODE_HOME'] || path.join(getUserHome(), '.t3');
+const t3Home = t3HomeOf(process.env, getUserHome());
+
+const t3Cli = t3Command(process.env, t3Home);
+
+/** How long T3 Code's server gets to answer at all before the run counts it as not running. */
+const REACH_MS = 3_000;
 
 /** The MCP endpoint of the T3 Code server on this machine, from the file the server writes while it runs. */
 function localEndpoint(): URL | undefined {
@@ -40,7 +46,14 @@ const connect: ServeOptions['connect'] = async (how) => {
 
   if (!resource) return { ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, then start the workflow again.' } };
 
-  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, t3Home }) : undefined;
+  // A server file outlives a server that crashed, or one that is stopping: any answer at all means it listens.
+  try {
+    await fetch(resource, { method: 'HEAD', signal: AbortSignal.timeout(REACH_MS) });
+  } catch {
+    return { ok: false, error: { code: 't3_unavailable', message: `T3 Code at ${resource.origin} does not answer. Open T3 Code, or run \`t3 serve\`, then start the workflow again.` } };
+  }
+
+  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, t3Home, t3: t3Cli }) : undefined;
   const silentFailure = silent?.ok === false ? silent.reason : undefined;
 
   if (how.mode !== 'attended' && !validToken(state, resource.href)) {
@@ -67,7 +80,7 @@ const connect: ServeOptions['connect'] = async (how) => {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
 
-    return { ok: false, error: { code: 't3_unavailable', message: `Could not connect to T3 Code at ${resource.origin}: ${detail}` } };
+    return { ok: false, error: { code: 't3_unavailable', message: `Could not connect to T3 Code at ${resource.origin} (${detail.replace(/\.$/, '')}). Open T3 Code, or run \`t3 serve\`, then start the workflow again.` } };
   } finally {
     signIn?.close();
   }
