@@ -52,6 +52,11 @@ const BehaviourSchema = z.object({
    * `configDirectory`, beside its `projectsDirectory` (recorded on 2.1.318). Absent: an older Claude that reports neither.
    */
   claude_home: z.string().optional(),
+  /**
+   * The Codex home of the daemon's Codex: a Codex agent writes its session's rollout there as Codex does,
+   * `sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<session id>.jsonl` (recorded on codex-cli 0.167.0). Absent: none written.
+   */
+  codex_home: z.string().optional(),
   /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
   codex_path: z.string().optional(),
   /**
@@ -268,6 +273,13 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       }
 
       Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : `fake-session-${agent.id}` });
+
+      if (agent.provider === 'codex' && does.codex_home !== undefined && agent.sessionId) {
+        const at = new Date();
+        const day = path.join(does.codex_home, 'sessions', String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
+        fs.mkdirSync(day, { recursive: true });
+        fs.writeFileSync(path.join(day, `rollout-${at.toISOString().slice(0, 19).replaceAll(':', '-')}-${agent.sessionId}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id: agent.sessionId, cwd: agent.cwd } })}\n`);
+      }
     }
 
     changed(agent);
