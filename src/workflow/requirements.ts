@@ -153,7 +153,7 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * A driver's `can` as the engine reads it: the protocol's keys, and three the local loop sets on the runtimes of a
  * driver definition, which no driver or runtime declares over the wire.
  * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
- * - `prompt: false`: it takes no prompt step, as the host command slot of a definition with no `local`.
+ * - `prompt: false`: it takes no prompt step, only answer steps, as the host command slot of a definition with no `local`.
  * - `commands: 'pinned'`: of command steps, it takes only those pinned to the host, since another runtime of the
  *   definition runs commands. A prompt it takes still brings its setup, which runs where the prompt runs.
  */
@@ -372,6 +372,11 @@ export interface Offer {
    * pinned.
    */
   pinned?: boolean;
+  /**
+   * An answer step, which the local loop answers with the member's tool on this host whatever runtime takes the lease:
+   * pinned with it, and taken by a slot that runs no prompt step. Absent: not one.
+   */
+  answer?: boolean;
   /** The team role the step's copy runs with: its clone's, or the step's own in a worktree copy. */
   role?: string;
 }
@@ -445,8 +450,8 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
     ...personGap(offer.interactive, can),
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
-    ...(offer.pinned && can.remote ? ['host' as const] : []),
-    ...(offer.executor === 'prompt' && can.prompt === false ? ['prompt' as const] : []),
+    ...((offer.pinned || offer.answer) && can.remote ? ['host' as const] : []),
+    ...(offer.executor === 'prompt' && !offer.answer && can.prompt === false ? ['prompt' as const] : []),
     ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),

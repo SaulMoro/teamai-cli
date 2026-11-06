@@ -1681,8 +1681,10 @@ function offerTerms(
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
-    // teamai's bookkeeping, and the publish contract, which only this host keeps, never run on an external runtime.
+    // teamai's bookkeeping and the publish contract, which only this host keeps, never run on an external runtime; nor
+    // does an answer, which the member's tool gives here (`answer`).
     pinned: (step.command !== undefined && DefaultWorkflows.named(scope.workflow) !== undefined) || (plan?.contract !== undefined && isPublishContract(plan.contract)),
+    answer: step.answer !== undefined,
     ...role,
   }, context.can, context.allow, context.facts);
 
@@ -1776,15 +1778,20 @@ function isPlainLocal(sole: SoleDriver): boolean {
   return sole.driver === 'local' && sole.offers.length === 1;
 }
 
-/** Each step of `definition` a runtime offering `can` holds back for a strict key, with the first key it lacks, as describe holds it. */
-function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): Map<string, 'isolation' | 'network'> {
+/**
+ * Each step of `definition` a runtime offering `can` holds back for a strict key, with the first key it lacks, as
+ * describe holds it, or `never` for a step that runtime never takes: one pinned to this host off it, or a prompt step on
+ * the host slot.
+ */
+function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): Map<string, 'isolation' | 'network' | 'never'> {
   const none = new Set<string>();
   const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
-  const held = new Map<string, 'isolation' | 'network'>();
+  const held = new Map<string, 'isolation' | 'network' | 'never'>();
 
   for (const { step, missing } of facts.held) {
     if (missing.includes('isolation')) held.set(step, 'isolation');
     else if (missing.includes('network')) held.set(step, 'network');
+    else if (missing.includes('host') || missing.includes('prompt')) held.set(step, 'never');
   }
 
   return held;
@@ -1808,11 +1815,25 @@ async function confinedFor(
  * of its runtimes lacks it. A step one runtime can take for them is judged at `next`.
  */
 function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, sole: SoleDriver): string | undefined {
-  const [mine, ...others] = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
-  const step = [...mine].find(([id]) => others.every((held) => held.has(id)));
+  const helds = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
+  const [mine = new Map<string, 'isolation' | 'network' | 'never'>(), ...others] = helds;
+  // A step every runtime holds, at least one of them for a strict key: the others may never take it at all.
+  const id = [...mine.keys()].find((step) => others.every((held) => held.has(step)) && helds.some((held) => held.get(step) !== 'never'));
 
-  if (!step) return undefined;
-  const first = { step: step[0], key: step[1] };
+  if (id === undefined) return undefined;
+  const at = sole.offers.findIndex((_, index) => helds[index]?.get(id) !== 'never');
+  const key = helds[at]?.get(id) === 'network' ? 'network' : 'isolation';
+  const first = { step: id, key };
+  const strictOn = sole.offers[at]?.runtime;
+
+  // Pinned to this host, it is judged on this host's slot alone.
+  if (helds.some((held) => held.get(id) === 'never') && (strictOn === 'host' || strictOn === 'local') && !isPlainLocal(sole)) {
+    const here = `runtime ${strictOn} of driver "${sole.driver}"`;
+
+    return key === 'isolation'
+      ? `Step "${id}" requires strict isolation, and it runs only on this machine, on ${here}, which is not a sandbox. Run the workflow in CI or a container with --sandbox.`
+      : `Step "${id}" strictly requires no network, and it runs only on this machine, on ${here}, which cannot deny it. Run the workflow where this machine's runtime declares can.network.`;
+  }
 
   if (isPlainLocal(sole)) {
     return first.key === 'isolation'

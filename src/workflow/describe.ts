@@ -193,6 +193,7 @@ export function describeWorkflow(input: {
       maxTurns: step.maxTurns, setup: hasContract ? scope.setup : undefined,
       tool: step.tool,
       unattended: step.permissions === 'unattended',
+      answer: step.answer !== undefined,
     }, can, allow, env);
 
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });

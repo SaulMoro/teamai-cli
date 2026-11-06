@@ -1107,7 +1107,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), remote: true },
     });
 
-  // Every definition has a host command slot: its `local`, or else one here that takes no prompt, last. While another
+  // Every definition has a host command slot: its `local`, or else one here that takes no prompt step but answer steps, last. While another
   // runtime runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs
   // here in place of that runtime.
   const definedSlots = defined.runtimes.map(toSlot);

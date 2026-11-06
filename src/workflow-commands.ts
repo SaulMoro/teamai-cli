@@ -935,19 +935,22 @@ async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
 
 /**
  * The run's only driver as a start checks its strict requirements before the run exists: `local` alone, or each runtime
- * of the definition `opened`, local giving what `localStrict` says and an external one what it offered. Unsaid is not met.
+ * of the definition `opened`, local giving what `localStrict` says and an external one what it offered, off this host.
+ * A definition with no `local` has the host slot last, which gives what `localStrict` says and takes no prompt step.
+ * Unsaid is not met.
  */
 function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<typeof localStrictCan>): SoleDriver {
   if (!opened) return { driver: 'local', offers: [{ runtime: 'local', can: localStrict }] };
 
   const offer = (entry: OpenedDriver['runtimes'][number]): SoleDriver['offers'][number] => ({
     runtime: entry.use,
-    can: entry.kind === 'local' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false },
+    can: entry.kind === 'local' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false, remote: true },
   });
 
   const [first, ...rest] = opened.runtimes;
+  const host = opened.runtimes.some((entry) => entry.kind === 'local') ? [] : [{ runtime: 'host', can: { ...localStrict, prompt: false as const } }];
 
-  return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer)] };
+  return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer), ...host] };
 }
 
 /** Aborts on the first SIGINT or SIGTERM, so `teamai benchmark try` stops the setup or check it runs. A second one ends the process. */

@@ -1559,9 +1559,10 @@ Every definition keeps a slot on this machine for the steps that stay here: its 
 
 - command and setup steps, when no runtime of the definition runs commands (`"exec": false`);
 - the command steps of every workflow teamai ships, such as `teamai-score` and `teamai-share-session`, which plan, check and write labels on this machine, and of a team file that replaces one under its name;
-- a step with `deliver: publish`, which pushes to a data branch from here.
+- a step with `deliver: publish`, which pushes to a data branch from here;
+- an `answer:` step, which your own AI tool answers on this machine, so it needs that tool installed here. `workflow start` refuses it with `requirement_unmet` under strict `defaults.requires` this machine does not meet.
 
-No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to `local`. So a definition of external runtimes alone runs and judges every workflow on a machine with no agent CLI:
+No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to `local`. So a definition of external runtimes alone runs and judges every workflow with no `answer:` step on a machine with no agent CLI:
 
 ```yaml
 # drivers/sandbox-only.yaml

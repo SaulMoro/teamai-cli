@@ -335,6 +335,35 @@ Judge the review.
     expect(fs.existsSync(launches)).toBe(false);
   });
 
+  it('refuses at start a strict sandbox answer step, which only this host answers, though a runtime of the definition is a sandbox', async () => {
+    writeDefinition('sandboxanswer', [{ use: 'toy', options: { state, can: { isolation: 'sandbox' } } }]);
+    // An answer step takes no requires of its own; the workflow's defaults apply to it.
+    fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'asksandboxed.yaml'), `schemaVersion: v1alpha1
+name: asksandboxed
+description: asksandboxed
+defaults:
+  requires: { isolation: sandbox, strict: true }
+steps:
+  - id: ask
+    answer: Name one risk in this repository.
+    output:
+      text: string
+`);
+    await runCLI(['pull'], repo);
+    const runs = (): string[] => (fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []);
+    const before = runs();
+
+    const ran = await runCLI(['workflow', 'start', 'asksandboxed', '--driver', 'sandboxanswer'], repo, env({ TEAMAI_AI_TOOL: 'claude', FAKE_TOOL_REPLY: 'Unpinned dependencies.' }));
+
+    const refused = envelope(ran);
+    expect(refused, ran.stderr).toMatchObject({ error: { code: 'requirement_unmet' } });
+    const message = 'error' in refused ? refused.error.message : '';
+    expect(message).toContain('Step "ask" requires strict isolation');
+    expect(message).toContain('runtime host of driver "sandboxanswer"');
+    expect(runs()).toEqual(before);
+    expect(toyOpens()).toBe(0);
+  });
+
   it('refuses at start a strict sandbox step that no runtime of the definition is, naming the driver and its runtimes', async () => {
     writeDefinition('nosandbox', [{ use: 'toy', options: { state } }, { use: 'local' }]);
     const runs = (): string[] => (fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []);

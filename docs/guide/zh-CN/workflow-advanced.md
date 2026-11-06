@@ -1553,9 +1553,10 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 
 - 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
 - teamai 自带的每个工作流（如 `teamai-score` 和 `teamai-share-session`）的命令步骤，它们在本机规划、检查和写入标签；以同名团队文件替换某个自带工作流时，其命令步骤同样如此；
-- 带 `deliver: publish` 的步骤，它从这里推送到数据分支。
+- 带 `deliver: publish` 的步骤，它从这里推送到数据分支；
+- `answer:` 步骤，由你自己的 AI 工具在本机回答，所以本机需要装有该工具。若 `defaults.requires` 是本机达不到的严格要求，`workflow start` 会以 `requirement_unmet` 拒绝。
 
-其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 `local`。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个工作流：
+其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 `local`。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个没有 `answer:` 步骤的工作流：
 
 ```yaml
 # drivers/sandbox-only.yaml
