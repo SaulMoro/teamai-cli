@@ -364,11 +364,11 @@ teamai workflow resume r7c41d09e2b6a5f13 --driver containers
 teamai workflow retry r7c41d09e2b6a5f13 review      # goes on from the work the stopped pass kept
 ```
 
-A runtime killed while `docker run` or `podman run` creates a container can leave that container behind with no attempt that still owns it. Each attempt's container carries a `teamai.owner` label naming the teamai home that created it, and the next `open` on that engine removes, with `--force`, every container of this home whose attempt is no longer recorded. Containers of another member or another home, and containers with no `teamai.owner` label, are never touched. When a list or removal fails, it prints one warning on stderr and the step goes on. sbx sandboxes carry no labels, so they are not swept: remove a leftover with `sbx rm --force <sandbox>`.
+A runtime killed while `docker run` or `podman run` creates a container can leave that container behind with no attempt that still owns it. Each container carries a `teamai.owner` label naming the teamai home that created it, and the next step that opens a container on that engine removes, with `--force`, every container of this home whose attempt is no longer recorded, and a judge's filter and network with it. Containers of another member or another home, and containers with no `teamai.owner` label, are never touched. When a list or removal fails, it prints one warning on stderr and the step goes on. sbx sandboxes carry no labels, so they are not swept: remove a leftover with `sbx rm --force <sandbox>`.
 
 ```sh
 docker ps -a --filter label=teamai.owner --format '{{.Names}} {{.Label "teamai.owner"}}'
-# teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    its attempt closed before it landed: the next open on docker removes it
+# teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    its attempt closed before it landed: the next step on docker removes it
 ```
 
 ## Errors
