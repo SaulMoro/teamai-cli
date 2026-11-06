@@ -17,7 +17,7 @@ import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type Runtim
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceNames, toolOf } from '../../tool-registry.js';
 import type { StepRuntime } from './step-runtime.js';
-import type { ExecRuntimeTool } from './attempt.js';
+import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 
 // ─── Where a step runtime comes from ─────────────────────
@@ -285,6 +285,16 @@ function variablesOf({ signIn, alongside = [] }: SignInVariables): string[] {
   return [...signIn, ...alongside];
 }
 
+/**
+ * `credentials` as the process of `tool` gets them: a sign-in variable teamai found by name (`found`) goes only to the
+ * tool it signs in, so a Claude exec never gets the member's OpenAI key. Declared credentials go to every tool.
+ */
+export function credentialsForTool(credentials: Record<string, string>, found: readonly string[], tool: string): Record<string, string> {
+  const own = new Set(isExecRuntimeTool(tool) ? variablesOf(SIGN_INS[tool]) : []);
+
+  return Object.fromEntries(Object.entries(credentials).filter(([name]) => !found.includes(name) || own.has(name)));
+}
+
 /** The values of the tools' sign-in variables set in `env`, by name, with those that go with a sign-in found. */
 function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
   const isSet = (name: string): boolean => (env[name] ?? '') !== '';
@@ -300,9 +310,10 @@ export type OpenedRuntime =
    * `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. `credentials`: the values
    * of the credentials it declares from the member's environment, by name, in memory only. `masks`: the values its
    * notices are masked with, by label: those credentials', and each team secret the drive adds once it resolves it.
-   * `unavailable`: the tools it cannot run now, with why.
+   * `found`: the names among `credentials` teamai found in the member's environment rather than the definition declared,
+   * which go only to the tool each signs in (`credentialsForTool`). `unavailable`: the tools it cannot run now, with why.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; masks: Record<string, string>; unavailable?: Record<string, string> };
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; unavailable?: Record<string, string> };
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
 export interface OpenedDriver {
@@ -398,7 +409,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const recovered = await recovering.init({ options: split.runtime, mode: 'recover', checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {}, masks } };
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {}, found: [], masks } };
     await recovering.dispose();
     notRecovered = recovered.failure;
   }
@@ -440,7 +451,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const foundHere = Object.fromEntries(Object.entries(found).filter(([name]) => !ownLoginVariables.has(name)));
     const given = isKeepingFound ? { ...values.values, ...foundHere } : values.values;
 
-    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
   }
 
   await runtime.dispose();

@@ -1450,6 +1450,22 @@ steps:
       expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
     });
 
+    it('sends a Claude step only Claude\'s sign-in variables found by name, never another tool\'s', async () => {
+      writeDefinition('signinpertool', [{ use: 'toy', options: { state } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'signinpertool'], repo, env({ ANTHROPIC_API_KEY: VALUE, OPENAI_API_KEY: 'toy-openai-value', CODEBUDDY_API_KEY: 'toy-codebuddy-value' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      // init names every one found, since teamai cannot know which tool a step will take before the runtime offers.
+      expect(noted().find((line) => line.type === 'init')).toMatchObject({ names: ['ANTHROPIC_API_KEY', 'CODEBUDDY_API_KEY', 'OPENAI_API_KEY'] });
+      expect(noted().filter((line) => line.handle === `toy-${runId}-${attemptOf(review)}`).map(({ type, names }) => ({ type, names }))).toEqual([
+        { type: 'open', names: ['ANTHROPIC_API_KEY'] },
+        { type: 'exec', names: ['ANTHROPIC_API_KEY'] },
+      ]);
+    });
+
     // The Claude step's own variables go unless the provider keeps Claude's login; another tool's never matter here.
     it.each([
       { ownLogins: ['claude'], claudeNames: [] },

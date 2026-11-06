@@ -36,7 +36,7 @@ import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS,
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
-import { credentialSecrets, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
+import { credentialSecrets, credentialsForTool, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
@@ -231,6 +231,8 @@ interface RuntimeSlot {
   engine: EngineOptions;
   /** The values of the credentials the runtime declares, which only its prompts' tools get. */
   credentials: Record<string, string>;
+  /** The names of `credentials` found in the member's environment, each only for the tool it signs in. */
+  found: readonly string[];
   /** The tools it cannot run now, with the runtime's reason. */
   unavailable?: Record<string, string>;
 }
@@ -512,7 +514,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; defaultTool?: string } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -722,7 +724,7 @@ async function promptReport(
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
-    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: onRuntime.credentials }), (command) => command, (command) => command);
+    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool) }), (command) => command, (command) => command);
   }
 
   if (launch) input.launch = launch;
@@ -1117,9 +1119,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const unproven = (can: DriverCan): boolean => (can.fullAccess?.length ?? 0) > 0 && can.isolation !== 'sandbox';
 
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
-    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
+    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] }
     : {
-      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
+      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
       ...(entry.unavailable && { unavailable: entry.unavailable }),
       can: {
         ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(toolOf(tool)?.base ?? tool)), remote: true,
@@ -1140,7 +1142,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const listedHost = definedSlots.find((slot) => slot.kind === 'local');
 
   const hostSlot: RuntimeSlot = listedHost ?? {
-    kind: 'local', use: 'host', runtime: local, can: { ...localReady.can, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {},
+    kind: 'local', use: 'host', runtime: local, can: { ...localReady.can, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
   };
 
   const runsCommands = definedSlots.some((slot) => slot.kind === 'external' && slot.can.exec !== false);
@@ -1700,7 +1702,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });
         })() });
       }
 
