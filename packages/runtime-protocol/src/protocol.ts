@@ -100,6 +100,9 @@ const CredentialsSchema = EnvSchema.default({});
  */
 export const CANCEL_FAILED = 'cancel_failed';
 
+/** The most characters a reason in `init`'s `unavailable` holds: cut a longer one to fit. */
+export const UNAVAILABLE_REASON_MAX = 500;
+
 /** A runtime's options, as a driver definition gives them; the runtime validates them at `init`. */
 export const RuntimeOptionsSchema = z.record(z.string(), z.json());
 
@@ -457,7 +460,7 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
     z.object({
       type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(),
       // The tools it cannot run now, each with why and what the person does about it; it still offers the rest.
-      unavailable: z.record(z.string().min(1), z.string().min(1).max(500)).optional(),
+      unavailable: z.record(z.string().min(1), z.string().min(1).max(UNAVAILABLE_REASON_MAX)).optional(),
       // The tools it runs without permission prompts, because an option of its definition or of the member set that.
       permissions: z.record(z.string().min(1), z.literal('full-access')).optional(),
       // Of the logins `init.credentials.logins` names, the tools whose login its provider keeps itself, so teamai
