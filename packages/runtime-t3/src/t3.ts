@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { z } from 'zod';
+import { ScriptSchema } from './settings.js';
 
 // ─── A T3 Code environment, over its MCP endpoint ───
 //
@@ -29,7 +30,7 @@ export type Provider = z.infer<typeof ProviderSchema>;
 /** A project as `t3_project_list` lists it; one T3 deleted keeps its row with `deletedAt` set. Its scripts are read loosely. */
 const ProjectSchema = z.object({
   id: z.string().min(1), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional(),
-  scripts: z.array(z.object({ name: z.string(), runOnWorktreeCreate: z.boolean().optional(), runOnSettle: z.boolean().optional() })).optional().catch(undefined),
+  scripts: z.array(ScriptSchema).optional().catch(undefined),
 });
 
 export type Project = z.infer<typeof ProjectSchema>;
