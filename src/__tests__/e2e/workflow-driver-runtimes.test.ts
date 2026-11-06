@@ -853,7 +853,8 @@ Judge the review.
   });
 
   it('resolves the shipped teamai-t3, teamai-claude, teamai-codex and teamai-opencode, by either name', async () => {
-    const t3 = envelope(await runCLI(['workflow', 'start', 'oneprompt', '--driver', 't3'], repo, env()));
+    // A T3 home of its own, so a T3 Code the developer runs is never found, nor signed in to through their t3 command.
+    const t3 = envelope(await runCLI(['workflow', 'start', 'oneprompt', '--driver', 't3'], repo, env({ T3CODE_HOME: path.join(sandbox, 't3-home') })));
     // The definition and its shipped t3 runtime resolved: what is missing is a T3 Code server on this machine.
     expect(t3).toMatchObject({ error: { code: 'runtime_failed', message: expect.stringContaining('Runtime "t3" of driver "teamai-t3" did not start (t3_unavailable): T3 Code is not running on this machine.') } });
 
