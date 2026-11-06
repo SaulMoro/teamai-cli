@@ -6,7 +6,7 @@ import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
 import { parseOptions, type SandboxOptions } from './options.js';
-import { handleOf, unreachable, type PlaceKey, type Provider } from './provider.js';
+import { COMMAND_MS, handleOf, unreachable, type PlaceKey, type Provider } from './provider.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -46,9 +46,10 @@ const BOUND_MS = 10_000;
 
 /**
  * How long a sweep of what earlier runs left may take before it says so on stderr. Nothing waits for it, so its bound is
- * its own: each list or removal it runs ends within COMMAND_MS, and a judge's takes three in turn.
+ * its own: past its slowest sound run, a list then a judge's container, filter and network removed in turn, each within
+ * COMMAND_MS.
  */
-const SWEEP_MS = 30_000;
+const SWEEP_MS = 5 * COMMAND_MS;
 
 /** What `work` settled with, or `late` once `deadline` (a Date.now() time) came first. `work` goes on either way. */
 async function by<T>(deadline: number, work: Promise<T>): Promise<{ kind: 'done'; value: T } | { kind: 'late' }> {
