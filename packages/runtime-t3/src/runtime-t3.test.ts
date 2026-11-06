@@ -1507,6 +1507,33 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()[0]?.status).toBe('running');
       }, 40_000);
 
+      // A record written after its place closed would be a place no close removes.
+      it('writes no record for a place a close removed while a cancel still looked its launch up', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-0000007b'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ launchMs: 13_000 });
+
+        const second = start();
+        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        await second.next((line) => line['type'] === 'init');
+        const cancelledAt = Date.now();
+        second.send({ type: 'cancel', op: 'op-0000007b' });
+        expect(await second.next((line) => line['op'] === 'op-0000007b', 20_000)).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+
+        t3.config({ launchMs: 0 });
+        second.send({ type: 'close', handle: first.handle });
+        expect(await second.next((line) => line['handle'] === first.handle, 20_000)).toEqual({ event: 'closed', handle: first.handle });
+        const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+        expect(fs.readdirSync(places)).toEqual([]);
+
+        // The cancel's lookup answers 13 s after it was sent.
+        await new Promise((resolve) => { setTimeout(resolve, Math.max(cancelledAt + 14_500 - Date.now(), 0)); });
+        expect(fs.readdirSync(places)).toEqual([]);
+      }, 40_000);
+
       it('finds and stops the thread when teamai cancels the prompt after the runtime that launched it exited first', async () => {
         t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
         const first = await opened();
