@@ -1086,7 +1086,7 @@ describe("the containers of one runtime's journal", () => {
 
   const named = (...attempts: string[]): string[] => attempts.map((attempt) => `teamai-${RUN}-${attempt}`).sort();
 
-  it("removes, before an open creates its own, a container of this journal whose attempt it no longer records, and keeps one it records, another journal's and an unlabelled one", async () => {
+  it("removes, once an open is accepted, a container of this journal whose attempt it no longer records, and keeps one it records, another journal's and an unlabelled one", async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
     await openAttempt(connection, 'a00000001');
@@ -1096,7 +1096,7 @@ describe("the containers of one runtime's journal", () => {
     leave('a00000004', {});
 
     expect(await openAttempt(connection, 'a00000005')).toMatchObject({ event: 'ready' });
-    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003', 'a00000004', 'a00000005'));
+    await vi.waitFor(() => { expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003', 'a00000004', 'a00000005')); }, { timeout: 10_000 });
     expect(connection.stderr()).toBe('');
   }, 60_000);
 
@@ -1112,8 +1112,10 @@ describe("the containers of one runtime's journal", () => {
     docker('run', '-d', '--name', judged, '--label', `teamai.run=${RUN}`, '--label', 'teamai.attempt=a00000002', ...owner, '--network', `${judged}-net`, '--entrypoint', '/bin/sh', IMAGE, '-c', 'sleep infinity');
 
     expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
-    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
-    expect(engine.networks()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
+      expect(engine.networks()).toEqual([]);
+    }, { timeout: 10_000 });
     expect(connection.stderr()).toBe('');
   }, 60_000);
 
@@ -1128,8 +1130,10 @@ describe("the containers of one runtime's journal", () => {
     docker('run', '-d', '--name', `${judged}-proxy`, '--label', `teamai.run=${RUN}`, '--label', 'teamai.judge=a00000002', ...owner, '--entrypoint', 'node', IMAGE, '-e', '');
 
     expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
-    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
-    expect(engine.networks()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
+      expect(engine.networks()).toEqual([]);
+    }, { timeout: 10_000 });
     expect(connection.stderr()).toBe('');
   }, 60_000);
 
@@ -1141,14 +1145,42 @@ describe("the containers of one runtime's journal", () => {
     engine.failRemove(true);
 
     expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
+    await vi.waitFor(() => { expect(connection.stderr()).toContain('was left by an earlier run'); }, { timeout: 10_000 });
     engine.failRemove(false);
     engine.failFormat(true);
     expect(await openAttempt(connection, 'a00000004')).toMatchObject({ event: 'ready' });
+    await vi.waitFor(() => { expect(connection.stderr()).toContain('could not list'); }, { timeout: 10_000 });
     expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000002', 'a00000003', 'a00000004'));
     expect(connection.stderr().trim().split('\n')).toEqual([
       expect.stringMatching(/^teamai-runtime-sandbox: warning: teamai-r0123abcd-a00000002 was left by an earlier run, and docker could not remove container .+ Remove it with `docker rm --force [0-9a-f]+`\.$/),
       expect.stringMatching(/^teamai-runtime-sandbox: warning: docker could not list the containers this runtime's journal owns: Error: template: .+ Containers an earlier run left stay until a later open\.$/),
     ]);
+  }, 60_000);
+
+  it('accepts and readies an open, then cancels and closes it, while the list of what earlier runs left is still held', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    engine.holdOwned(true);
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+
+    // No slow work comes before accepted: the sweep starts after it, and nothing waits for it.
+    expect(await connection.next((message) => message.op === op && message.event === 'accepted', 5_000)).toMatchObject({ handle: HANDLE });
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'ready' });
+    const running = newOp();
+    connection.send({ type: 'exec', op: running, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    connection.send({ type: 'cancel', op: running });
+    expect(await connection.next((message) => message.op === running && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toEqual({ op: running, event: 'cancelled' });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 5_000)).toEqual({ event: 'closed', handle: HANDLE });
+    // The list is still held: it neither ended nor failed with a warning.
+    expect(engine.isListingOwned()).toBe(true);
+    expect(connection.stderr()).toBe('');
+    engine.holdOwned(false);
+    await vi.waitFor(() => { expect(engine.isListingOwned()).toBe(false); }, { timeout: 10_000 });
+    expect(engine.containers()).toEqual([]);
   }, 60_000);
 
   it("keeps the container of another runtime's create still on its way, whose place that runtime saved first", async () => {
