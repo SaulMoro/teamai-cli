@@ -173,6 +173,8 @@ export interface T3 {
   thread(threadId: string): Promise<ThreadShell>;
   /** Every thread whose run still goes, in every project, delegated tasks' threads included. */
   activeThreads(): Promise<ListedThread[]>;
+  /** Every thread not settled yet, in every project, delegated tasks' threads included. */
+  unsettledThreads(): Promise<ListedThread[]>;
   /** The thread's last assistant message, whole, or undefined when it wrote none. */
   lastReply(threadId: string): Promise<string | undefined>;
   /** The error T3 recorded last for the thread's run `runId`, or for any run without one: its title and its whole text. */
@@ -219,6 +221,20 @@ function t3Over(client: Client): T3 {
     if (!parsed.success) throw new T3Error(tool, `T3 answered ${tool} in a shape this runtime does not read: ${z.prettifyError(parsed.error)}`);
 
     return parsed.data;
+  };
+
+  /** The threads `t3_thread_list` lists in every project, delegated tasks' included, with `filter`, page by page. */
+  const listThreads = async (filter: ToolArguments): Promise<ListedThread[]> => {
+    const threads: ListedThread[] = [];
+    let cursor: number | null | undefined = 0;
+
+    while (cursor !== null && cursor !== undefined) {
+      const page: z.infer<typeof ThreadPageSchema> = await call('t3_thread_list', { allProjects: true, includeSubagents: true, ...filter, cursor, limit: 100 }, ThreadPageSchema);
+      threads.push(...page.threads);
+      cursor = page.nextCursor;
+    }
+
+    return threads;
   };
 
   /** The last item of the thread's `view` that `matches`, read page by page. */
@@ -285,18 +301,8 @@ function t3Over(client: Client): T3 {
     }, LaunchedSchema),
     send: async (threadId, message, clientRequestId) => { await call('t3_thread_send', { threadId, message, mode: 'auto', clientRequestId }, z.object({}).loose()); },
     thread: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, maxCharsPerItem: 1 }, z.object({ thread: ThreadShellSchema }))).thread,
-    activeThreads: async () => {
-      const threads: ListedThread[] = [];
-      let cursor: number | null | undefined = 0;
-
-      while (cursor !== null && cursor !== undefined) {
-        const page: z.infer<typeof ThreadPageSchema> = await call('t3_thread_list', { allProjects: true, includeSubagents: true, statuses: [...ACTIVE_STATUSES], cursor, limit: 100 }, ThreadPageSchema);
-        threads.push(...page.threads);
-        cursor = page.nextCursor;
-      }
-
-      return threads;
-    },
+    activeThreads: () => listThreads({ statuses: [...ACTIVE_STATUSES] }),
+    unsettledThreads: () => listThreads({ settled: false }),
     lastReply: async (threadId) => {
       const reply = await lastItem(threadId, 'messages', (item) => item.type === 'assistant_message');
 
