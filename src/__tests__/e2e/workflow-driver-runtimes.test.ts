@@ -1275,7 +1275,7 @@ steps:
     for (const tool of ['codex', 'opencode']) fs.rmSync(path.join(bin, tool));
   });
 
-  it.skipIf(!fs.existsSync(path.join(ROOT, 'drivers', 'teamai-sandbox.yaml')))('resolves the shipped teamai-sandbox by either name, and starts the sandbox runtime teamai ships', async () => {
+  it('resolves the shipped teamai-sandbox by either name, and starts the sandbox runtime teamai ships', async () => {
     // No sbx on PATH, so the shipped runtime stops at init before it creates any sandbox.
     const nodeOnly = path.join(sandbox, 'node-only-bin');
     fs.mkdirSync(nodeOnly, { recursive: true });
