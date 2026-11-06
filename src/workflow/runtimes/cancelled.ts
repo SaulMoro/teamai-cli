@@ -3,6 +3,7 @@ import { resolveRunMode } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import type { RunStatus } from '../types.js';
+import { existingCheckout } from '../run-location.js';
 import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { attemptRun, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
@@ -45,9 +46,11 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   if (release !== undefined && !left.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
 
   const stopped: StoppedAttempts = { status: state.status, closed: [], released: [] };
+  // Each runtime starts in the run's checkout, or, once that folder is gone, where this cancel runs.
+  const checkout = await existingCheckout(state) ?? process.cwd();
 
   for (const attempt of left) {
-    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout: state.checkout ?? process.cwd() });
+    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout });
 
     if (ended === 'running') stillRunning.add(attempt);
     else if (ended !== 'none') stopped[ended].push(attempt);

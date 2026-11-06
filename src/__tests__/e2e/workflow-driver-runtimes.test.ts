@@ -724,6 +724,28 @@ steps:
     expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
   });
 
+  it('finds a run whose checkout folder was removed, so cancel closes the place its runtime kept and retry answers for its step', async () => {
+    writeDefinition('goneplace', [{ use: 'toy', options: { state, close_fails: true } }]);
+    // A run started in a folder of the checkout that is gone by the time the person cancels it.
+    const checkout = path.join(repo, `gone-${path.basename(state)}`);
+    fs.mkdirSync(checkout);
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'goneplace'], checkout, env());
+    const runId = runOf(ran);
+    const attempt = attemptOf(readRunState(runId).steps[0]);
+    writeDefinition('goneplace', [{ use: 'toy', options: { state } }]);
+    fs.rmSync(checkout, { recursive: true });
+
+    const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+    expect(envelope(cancelled), cancelled.stderr).toEqual({ data: { run: { id: runId, status: 'succeeded' }, closed: [attempt] } });
+    expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+
+    // Retry finds the run too: it answers for the step, which succeeded, not that the run's config cannot be read.
+    const retried = await runCLI(['workflow', 'retry', runId, 'review'], repo, env());
+
+    expect(envelope(retried), retried.stderr).toMatchObject({ error: { code: 'not_retryable' } });
+  });
+
   it('records why each runtime holds a step back, which the run\'s details show once the driver stops', async () => {
     setMemberWorkflows({ allow: { network: false } });
     writeDefinition('both', [{ use: 'toy', options: { state } }, { use: 'local' }]);
