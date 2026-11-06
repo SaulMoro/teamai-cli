@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import assert from 'node:assert/strict';
 import { check } from '../doc-check.js';
@@ -697,6 +698,37 @@ function definitionProblem(example: Example): string | undefined {
 
   return undefined;
 }
+
+/** A block's first line saying it shows a definition teamai ships, in English or Chinese: `# drivers/<name>.yaml, shipped with teamai`. */
+const SHIPPED_DEFINITION = /^#\s*drivers\/([A-Za-z0-9._-]+\.yaml)(?:, shipped with teamai|，随 teamai 提供)\s*$/;
+
+// Every definition teamai ships parses, and a guide block that says it shows one shows it as it is: word for word in
+// English, and as the same YAML on a page whose comments are translated.
+await check('every shipped driver definition parses, and a guide block naming it as shipped equals it', () => {
+  const shipped = new Map(fs.readdirSync(path.join(ROOT, 'drivers')).filter((file) => file.endsWith('.yaml')).map((file) => [file, fs.readFileSync(path.join(ROOT, 'drivers', file), 'utf8')]));
+
+  const unparsed = [...shipped].flatMap(([file, source]) => {
+    const parsed = parseDriverDefinition(`drivers/${file}`, source);
+
+    return parsed.ok ? [] : [`drivers/${file}: ${parsed.failure.message}`];
+  });
+
+  const differing = guidePages(/\.md$/).flatMap((page) => examplesOf(page).flatMap((example) => {
+    const [heading = '', ...body] = example.source.split('\n');
+    const file = SHIPPED_DEFINITION.exec(heading)?.[1];
+
+    if (file === undefined) return [];
+    const source = shipped.get(file);
+
+    if (source === undefined) return [`${example.label}: teamai ships no drivers/${file}`];
+    const shown = body.join('\n');
+    const isSame = page.includes('/zh-CN/') ? isDeepStrictEqual(parseDocument(shown).toJS(), parseDocument(source).toJS()) : shown.trim() === source.trim();
+
+    return isSame ? [] : [`${example.label}: differs from drivers/${file}`];
+  }));
+
+  assert.deepEqual([...unparsed, ...differing], []);
+});
 
 // Guide pages only: a design note may show a definition with fields it proposes.
 await check('every driver definition a guide page shows passes the definition schema and teamai\'s runtime options', () => {

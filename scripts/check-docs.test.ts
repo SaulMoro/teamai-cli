@@ -19,7 +19,8 @@ const TOOL_IDS = 'oxlint-plugin-teamai/tool-ids.generated.json';
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
-  for (const name of ['docs', 'skill-data', 'skills', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  // The shipped driver definitions are checked against the guide blocks that show them.
+  for (const name of ['docs', 'skill-data', 'skills', 'drivers', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
