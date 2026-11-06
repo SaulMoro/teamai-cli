@@ -387,6 +387,8 @@ export function serve(options: ServeOptions): Promise<void> {
   const running = new Map<OpId, Running>();
   /** Ops teamai cancelled before this process saw their prompt. */
   const cancelledEarly = new Set<OpId>();
+  /** The ends this process answered but could not journal, until the op runs here again: they stand in for the record's. */
+  const unkept = new Map<OpId, OpState>();
   /** Ops whose cancel failed on a record it could not read, which may have been another place's. */
   const cancelledUnread = new Set<OpId>();
   /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
@@ -561,7 +563,8 @@ export function serve(options: ServeOptions): Promise<void> {
     try {
       record(state.handle, ended, { threadEnded });
     } catch (error) {
-      process.stderr.write(`Runtime t3 could not record how ${ended.op} ended, so a reattach reports it running: ${error instanceof Error ? error.message : String(error)}\n`);
+      unkept.set(ended.op, ended);
+      process.stderr.write(`Runtime t3 could not record how ${ended.op} ended, so only this process reports that end: ${error instanceof Error ? error.message : String(error)}\n`);
     }
 
     answerEnded(ended.op, ended);
@@ -848,7 +851,7 @@ export function serve(options: ServeOptions): Promise<void> {
     handleOf.set(request.op, request.handle);
     const read = journal.read(request.handle);
     const opened = read.kind === 'found' ? read.place : undefined;
-    const ended = opened?.ops[request.op];
+    const ended = unkept.get(request.op) ?? opened?.ops[request.op];
 
     /** The acceptance shows the step's thread when the journal holds it already, so the run details link it during the run. */
     const accept = (thread: ThreadRecord | undefined): void => {
@@ -995,6 +998,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const state: Running = { handle: request.handle, run: opened.run, title };
     running.set(request.op, state);
+    unkept.delete(request.op);
     const finish = (outcome: OpState, threadEnded = false): void => endRunning(state, outcome, { threadEnded });
 
     try {
@@ -1127,7 +1131,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     let known = read.kind === 'found' ? read.place : undefined;
-    const retained = known?.ops[op];
+    const retained = unkept.get(op) ?? known?.ops[op];
 
     // A runtime before this one launched the thread and died, maybe before T3 answered the launch, or a stop failed
     // before; teamai cancels before it reattaches.
@@ -1151,6 +1155,7 @@ export function serve(options: ServeOptions): Promise<void> {
     // the op is journaled running, so a record that cannot be written leaves no owner behind to swallow the next cancel.
     const owner: Running = { handle: at, run, title: (known.threads[op] ?? known.launches[op])?.title ?? op, cancelBy: deadline, thread: known.threads[op] };
     running.set(op, owner);
+    unkept.delete(op);
 
     const answer = (ended: OpState, threadEnded: boolean): void => endRunning(owner, ended, { threadEnded });
 
@@ -1394,7 +1399,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
         const latest = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt)[0];
         const display = session && (latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment));
-        write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops), ...(display && { display }) });
+        write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops).map(({ op }) => unkept.get(op) ?? known.ops[op]), ...(display && { display }) });
 
         return;
       }
