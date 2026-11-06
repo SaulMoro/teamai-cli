@@ -40,26 +40,42 @@ export function isPaseoTool(tool: string): tool is PaseoTool {
 }
 
 /** The tools this runtime runs, in the order it offers them. */
-export const PASEO_TOOLS: readonly PaseoTool[] = Object.keys(CONFINED_MODES).filter(isPaseoTool);
+export const PASEO_TOOLS = ['claude', 'codex', 'opencode'] as const satisfies readonly PaseoTool[];
 
 /**
  * The Paseo mode a step's agent starts in: the one Paseo sets as the tool's default, as the member's own agents start
  * in, or none, so Paseo starts the tool as it does when it sets no default (OpenCode). A default that never asks is
  * never taken: the step starts in the nearest mode before it in Paseo's list that asks, and `insteadOf` names the
- * default it passed over, for the start to say so once a runtime can.
+ * default it passed over, for the start to say so once a runtime can. A mode the runtime's `mode` option names is taken
+ * as it is, one that never asks included, which `bypass` marks.
  */
-export type StepMode = { id?: undefined } | { id: string; insteadOf?: string };
+export type StepMode = { id?: undefined } | { id: string; insteadOf?: string } | { id: string; bypass: true };
+
+/** The Paseo mode the runtime's `mode` option names for each tool it sets. */
+export type ConfiguredModes = Partial<Record<PaseoTool, string>>;
 
 /** A mode as Paseo lists it, in its order: `dangerous` is how Paseo marks one that never asks. */
 type ListedMode = { id: string; colorTier?: string };
 
 const isBypass = (mode: ListedMode): boolean => mode.colorTier === 'dangerous';
 
-/** The mode a step of `tool` starts in, from Paseo's default and its list, or why the tool cannot be offered. */
-function stepModeOf(tool: PaseoTool, defaultMode: string | null | undefined, modes: ListedMode[]): StepMode | { cannot: string } {
+/**
+ * The mode a step of `tool` starts in: the one the runtime's `mode` option names, else from Paseo's default and its
+ * list, or why the tool cannot be offered.
+ */
+function stepModeOf(tool: PaseoTool, { defaultMode, configured, modes }: { defaultMode: string | null | undefined; configured: string | undefined; modes: ListedMode[] }): StepMode | { cannot: string } {
+  const listed = modes.map((mode) => mode.id).join(', ') || 'none';
+
+  if (configured !== undefined) {
+    const named = modes.find((mode) => mode.id === configured);
+
+    if (!named) return { cannot: `the runtime's mode option names ${configured} for it, which Paseo does not list for ${tool} (${listed}); name one of those` };
+
+    return isBypass(named) ? { id: named.id, bypass: true } : { id: named.id };
+  }
+
   if (defaultMode === null || defaultMode === undefined) return {};
   const at = modes.findIndex((mode) => mode.id === defaultMode);
-  const listed = modes.map((mode) => mode.id).join(', ') || 'none';
 
   if (at === -1) return { cannot: `Paseo sets its default mode to ${defaultMode}, which it does not list for ${tool} (${listed}); run \`paseo provider ls\` on the daemon's host to see its modes` };
   const chosen = modes[at];
@@ -273,7 +289,7 @@ export interface Daemon {
   serverId: string;
   version: string;
   /** The tools whose provider the daemon has installed, each one it can run when signed in and Paseo gives it a mode a step can start in. */
-  installedTools(): Promise<InstalledTool[]>;
+  installedTools(configured: ConfiguredModes): Promise<InstalledTool[]>;
   models(tool: PaseoTool): Promise<Model[]>;
   /** Whether Paseo has an active workspace on a directory, as one the member opened in the app; fails with no answer in 20 s. */
   isOpen(cwd: string): Promise<boolean>;
@@ -472,7 +488,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
     url,
     serverId,
     version,
-    async installedTools() {
+    async installedTools(configured) {
       // The snapshot carries each provider's default mode, which the member's own agents start in.
       const [{ providers }, { entries }] = await Promise.all([api.providers.listAvailable(), api.providers.snapshot()]);
       const installed = providers.filter((entry) => entry.available).map((entry) => entry.provider).filter(isPaseoTool);
@@ -482,7 +498,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         if (!signedIn.canRun) return { tool, canRun: false, reason: signedIn.problem };
         const modes = (await api.providers.listModes(tool)).modes ?? [];
-        const stepMode = stepModeOf(tool, entries.find((entry) => entry.provider === tool)?.defaultModeId, modes);
+        const stepMode = stepModeOf(tool, { defaultMode: entries.find((entry) => entry.provider === tool)?.defaultModeId, configured: configured[tool], modes });
 
         return 'cannot' in stepMode ? { tool, canRun: false, reason: stepMode.cannot } : { tool, canRun: true, modes: modes.map((mode) => mode.id), stepMode, ...(signedIn.home !== undefined && { home: signedIn.home }) };
       }));

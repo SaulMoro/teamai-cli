@@ -64,6 +64,11 @@ interface Launch {
 const OptionsSchema = z.object({
   /** The daemon's WebSocket address, for a daemon Paseo's own config on this machine does not name (`daemonUrl`). */
   url: z.string().regex(/^(?:wss?|ws\+unix):\/\/\S+$/, 'The Paseo url is a ws://, wss:// or ws+unix:// address, such as ws://127.0.0.1:6767/ws').optional(),
+  /**
+   * The Paseo mode each tool's agents start in, over Paseo's default. A mode that never asks, such as Claude's
+   * bypassPermissions, is the member's explicit opt-in to full access, which init reports in `permissions`.
+   */
+  mode: z.partialRecord(z.enum(PASEO_TOOLS), z.string().min(1), { error: 'mode maps claude, codex or opencode to a Paseo mode' }).optional(),
 }).strict();
 
 /** How long an attended step waits between looks at a permission request a person has not answered yet. */
@@ -531,8 +536,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     if (!options.success) {
       const issue = options.error.issues[0];
-      const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0];
-      write({ type: 'init', ok: false, error: { code: 'bad_option', message: `teamai-runtime-paseo takes option url only: ${issue?.message ?? 'bad options'}`, ...(key !== undefined && { key: String(key) }) } });
+      // The option a nested issue sits under, else the unknown option itself.
+      const key = issue?.path[0] ?? (issue?.code === 'unrecognized_keys' ? issue.keys[0] : undefined);
+      write({ type: 'init', ok: false, error: { code: 'bad_option', message: `teamai-runtime-paseo takes options url and mode only: ${issue?.message ?? 'bad options'}`, ...(key !== undefined && { key: String(key) }) } });
 
       return;
     }
@@ -573,7 +579,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    const installed = await connected.installedTools();
+    const installed = await connected.installedTools(options.data.mode ?? {});
     const tools = installed.flatMap((entry) => (entry.canRun ? [entry] : []));
 
     // It starts though it can run no tool, so the run's command steps still go to the next runtime: each tool it cannot
@@ -594,7 +600,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     for (const entry of tools) {
       const { stepMode } = entry;
 
-      if (stepMode.id !== undefined && stepMode.insteadOf !== undefined) {
+      if (stepMode.id !== undefined && 'insteadOf' in stepMode && stepMode.insteadOf !== undefined) {
         write({ event: 'notice', message: `Paseo starts ${entry.tool} in mode ${stepMode.insteadOf} by default, which never asks before it acts; teamai starts its ${entry.tool} steps in mode ${stepMode.id}, the nearest one before it in Paseo's list that asks.` });
       }
     }
@@ -608,14 +614,18 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return [entry.tool, entry.modes.includes(confinedMode) ? { runs: 'steps-and-judges' } : { runs: 'steps', noJudge: `has no ${confinedMode} mode, which teamai judges it in` }];
     }));
     const judges = tools.flatMap(({ tool }) => (offers.get(tool)?.runs === 'steps-and-judges' ? [tool] : []));
+    // The tools the member opted into a mode that never asks: teamai warns once and records their steps' isolation none.
+    const permissions = Object.fromEntries(tools.flatMap(({ tool, stepMode }) => ('bypass' in stepMode ? [[tool, 'full-access' as const]] : [])));
 
     write({
       type: 'init', ok: true, prompt: true,
       ...(judges.length > 0 && { confinedPrompt: true }),
       ...(Object.keys(unavailable).length > 0 && { unavailable }),
+      ...(Object.keys(permissions).length > 0 && { permissions }),
       can: {
         // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
-        // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.
+        // unattended: a step that may run without asking needs a strict sandbox, which the daemon's host is not, so none
+        // starts here, not even in a mode the member opted into that never asks.
         // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
         // role: Paseo runs a project's worktree setup only in a worktree it creates itself, or when asked to run it; this
         // runtime only opens the copy teamai prepared, so nothing delivers the member's own assets over the role's.
