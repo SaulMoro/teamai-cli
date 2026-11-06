@@ -1,4 +1,5 @@
 import type { InitCredentials } from '@teamai/runtime-protocol';
+import type { Unavailable } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
 
 // ─── Whether a tool can sign in inside a sandbox ─────────
@@ -73,7 +74,7 @@ export function isGivenSignIn(tool: string, credentials: InitCredentials): boole
  * for its service (`stored`); each other tool is `unavailable`, with how to sign it in. An older teamai names no
  * credentials: every tool is offered, as before.
  */
-export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): { tools: string[]; unavailable: Record<string, string> } {
+export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): { tools: string[]; unavailable: Unavailable } {
   if (credentials === undefined) return { tools: [...tools], unavailable: {} };
 
   const isStored = (tool: string): boolean => {
