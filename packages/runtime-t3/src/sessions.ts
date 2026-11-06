@@ -43,8 +43,8 @@ export function toolOf(driver: string): ToolId | undefined {
   return isDriver(driver) ? DRIVERS[driver].tool : undefined;
 }
 
-/** How much earlier than the launch a transcript's first record may be stamped and still be the thread's. */
-const CLOCK_SLACK_MS = 5_000;
+/** How much earlier than the launch a record the thread's work left (a transcript, a delegated task) may be stamped and still be its. */
+export const CLOCK_SLACK_MS = 5_000;
 
 /** Whether `toolHome` is the home teamai reads `driver`'s sessions in when a session names none: the tool's, in this HOME. */
 export function isDefaultToolHome(driver: Driver, toolHome: string): boolean {

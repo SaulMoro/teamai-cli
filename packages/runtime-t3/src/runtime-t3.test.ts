@@ -1164,6 +1164,26 @@ describe('teamai-runtime-t3', () => {
       expect(noticesOf(runtime)).toEqual([]);
     });
 
+    // T3 lists threads by their last change, newest first; a task the step delegated changed after the step was launched.
+    it('lists only the threads changed since the step was launched to settle its tasks, however many the person left unsettled', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' }, delegates: true } });
+      const lastWeek = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
+
+      for (let index = 0; index < 250; index += 1) t3.addThread({ threadId: `thread-person-${index}`, title: `Older work ${index}`, status: 'completed', updatedAt: lastWeek });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000038'));
+      expect(await ended(runtime, 'op-00000038')).toMatchObject({ event: 'finished' });
+      const step = t3.threads().find((thread) => thread.title === `review · teamai ${RUN}`)?.threadId;
+
+      runtime.send({ type: 'collect', handle });
+      await runtime.next((line) => line['event'] === 'collected');
+
+      const settled = Object.fromEntries(t3.threads().filter((thread) => thread.threadId.startsWith(`${step}`)).map((thread) => [thread.threadId, thread.settled]));
+      expect(settled).toEqual({ [`${step}`]: true, [`${step}:task`]: true, [`${step}:task:task`]: true });
+      expect(t3.threads().filter((thread) => thread.threadId.startsWith('thread-person-') && thread.settled)).toEqual([]);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_list' && call.args['settled'] === false)).toHaveLength(1);
+    });
+
     it('says once that a thread could not be settled, and the step still counts', async () => {
       t3.config({ organizeFails: true });
       const { runtime, handle } = await opened();
