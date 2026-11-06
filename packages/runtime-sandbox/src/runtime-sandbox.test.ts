@@ -200,6 +200,32 @@ describe('a prompt attempt in a container', () => {
     expect(engine.calls().find(([name, command, detached]) => name === 'podman' && command === 'run' && detached === '-d')?.join(' ')).toContain('--userns keep-id');
   });
 
+  it.each<{ engine: string; os: string; alias: string }>([
+    { engine: 'docker', os: 'Docker Desktop', alias: 'host.docker.internal' },
+    { engine: 'podman', os: 'Docker Desktop', alias: 'host.containers.internal' },
+  ])("gives a step a base URL on this machine itself as $engine's host alias, port and path kept", async ({ engine: provider, alias }) => {
+    const connection = start();
+    await init(connection, { provider, image: IMAGE });
+    const at = place();
+    const credentials = { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://localhost:4000/v1' };
+
+    expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL"'], credentials, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: `http://${alias}:4000/v1` });
+  });
+
+  it("refuses a step whose base URL points at this machine itself on Docker on Linux, before it creates the container, naming the variable and never its value", async () => {
+    const connection = start({ FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS' });
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://localhost:4000' }, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    const failed = await connection.next((message) => message.op === op && (message.event === 'failed' || message.event === 'ready'));
+
+    expect(failed).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'credentials.ANTHROPIC_BASE_URL' } });
+    expect(JSON.stringify(failed)).not.toContain('localhost');
+    expect(engine.containers()).toEqual([]);
+  });
+
   it("runs the image's tool, not the host's", async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
@@ -1384,16 +1410,32 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(reply.can).not.toHaveProperty('confined');
   });
 
-  it.each([
-    ['ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000'],
-    ['ANTHROPIC_BASE_URL', 'http://localhost:4000/v1'],
-    ['OPENAI_BASE_URL', 'http://[::1]:8080/v1'],
-    ['OPENAI_BASE_URL', 'https://127.8.9.10/v1'],
-    ['ANTHROPIC_BASE_URL', 'http://localhost.:4000'],
-    ['OPENAI_BASE_URL', 'http://[::ffff:127.0.0.1]:8080/v1'],
-    ['ANTHROPIC_BASE_URL', 'http://0.0.0.0:4000'],
-  ])("refuses a judge whose %s points at this machine's loopback, naming the variable and never its value", async (name, value) => {
+  // Every spelling of this machine itself, with the port its host alias keeps.
+  const LOOPBACK: Array<[string, string, string]> = [
+    ['ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000', 'http://host.docker.internal:4000'],
+    ['ANTHROPIC_BASE_URL', 'http://localhost:4000/v1', 'http://host.docker.internal:4000/v1'],
+    ['OPENAI_BASE_URL', 'http://[::1]:8080/v1', 'http://host.docker.internal:8080/v1'],
+    ['OPENAI_BASE_URL', 'https://127.8.9.10/v1', 'https://host.docker.internal/v1'],
+    ['ANTHROPIC_BASE_URL', 'http://localhost.:4000', 'http://host.docker.internal:4000'],
+    ['OPENAI_BASE_URL', 'http://[::ffff:127.0.0.1]:8080/v1', 'http://host.docker.internal:8080/v1'],
+    ['ANTHROPIC_BASE_URL', 'http://0.0.0.0:4000', 'http://host.docker.internal:4000'],
+  ];
+
+  it.each(LOOPBACK)("lets a judge whose %s points at this machine itself (%s) reach only that port of the host, through Docker Desktop's host alias", async (name, value, rewritten) => {
     const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const credentials = { ANTHROPIC_API_KEY: 'judge-key-1', OPENAI_API_KEY: 'judge-key-2', [name]: value };
+    await openJudge(connection, credentials);
+
+    expect(await judge(connection, { tool: name.startsWith('OPENAI') ? 'codex' : 'claude', credentials })).toMatchObject({ event: 'finished' });
+    const proxyRun = engine.calls().find((call) => call.includes(`${HANDLE}-proxy`) && call.includes('-d')) ?? [];
+    const url = new URL(rewritten);
+
+    expect(proxyRun.slice(-2)).toEqual(['3128', `host.docker.internal:${url.port || (url.protocol === 'http:' ? '80' : '443')}`]);
+  });
+
+  it.each(LOOPBACK)("refuses a judge whose %s points at this machine itself on Docker on Linux, which gives no host alias, naming the variable and never its value", async (name, value) => {
+    const connection = start({ FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS' });
     await init(connection, { provider: 'docker', image: IMAGE });
     const opened = await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1', OPENAI_API_KEY: 'judge-key-2', [name]: value });
 
@@ -1401,21 +1443,10 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     const message = String((opened.failure as Message).message);
 
     expect(message).toContain(name);
-    expect(message).toContain('host.docker.internal');
+    expect(message).toContain('Linux');
     expect(message).not.toContain(new URL(value).hostname.replace(/\.$/, ''));
     expect(engine.containers()).toEqual([]);
     expect(engine.networks()).toEqual([]);
-  });
-
-  it("refuses a step whose base URL points at this machine's loopback, before it creates the container", async () => {
-    const connection = start();
-    await init(connection, { provider: 'docker', image: IMAGE });
-    const at = place();
-    const op = newOp();
-    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://localhost:4000' }, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
-
-    expect(await connection.next((message) => message.op === op && (message.event === 'failed' || message.event === 'ready'))).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'credentials.ANTHROPIC_BASE_URL' } });
-    expect(engine.containers()).toEqual([]);
   });
 
   it('mounts the evidence at /evidence alone, and names it there in the prompt, so the judge never sees where it lives on the host', async () => {
@@ -1986,6 +2017,33 @@ describe('an attempt in an sbx sandbox', () => {
     { tool: 'codex', credentials: { env: [], logins: ['codex'] } },
   ])('offers $tool on a credential teamai gives it by name, with no login sbx keeps: $credentials.env $credentials.logins', async ({ tool, credentials }) => {
     expect(await init(start(), { provider: 'sbx', agent: tool }, 'unattended', credentials)).toMatchObject({ ok: true, can: { tools: [tool] } });
+  });
+
+  it("gives a step a base URL on this machine itself as host.docker.internal when sbx's policy lets a sandbox reach that port", async () => {
+    engine.allowNetwork('localhost:4000');
+    const connection = start();
+    await init(connection, { provider: 'sbx', agent: 'claude' });
+    const at = place();
+    const credentials = { ANTHROPIC_AUTH_TOKEN: 'gateway-token-1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:4000/anthropic' };
+
+    expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
+    expect((await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL"'], credentials, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'http://host.docker.internal:4000/anthropic' });
+  });
+
+  it("fails the open, naming the sbx rule with the real port, when sbx's policy does not let a sandbox reach it, and never edits the policy", async () => {
+    engine.allowNetwork('localhost:4000');
+    const connection = start();
+    await init(connection, { provider: 'sbx', agent: 'claude' });
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { ANTHROPIC_AUTH_TOKEN: 'gateway-token-1', ANTHROPIC_BASE_URL: 'http://localhost:8317' }, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    const ready = await connection.next((message) => message.op === op && (message.event === 'failed' || message.event === 'ready'));
+
+    expect(ready).toMatchObject({ event: 'failed', failure: { code: 'sandbox_unavailable', message: expect.stringContaining('`sbx policy allow network localhost:8317`') } });
+    expect(String((ready.failure as Message).message)).toContain('ANTHROPIC_BASE_URL');
+    expect(engine.containers()).toEqual([]);
+    // Only the read-only `policy ls` and `policy check` ran: no rule was added, removed or reset.
+    expect(engine.calls().filter(([name, command, action]) => name === 'sbx' && command === 'policy' && !['ls', 'check'].includes(action ?? ''))).toEqual([]);
   });
 
   it('offers only the tools of a kit that can sign in', async () => {
