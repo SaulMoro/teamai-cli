@@ -1753,10 +1753,52 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-0000007a')).toMatchObject({ op: 'op-0000007a', event: 'finished' });
       fs.chmodSync(places, 0o700);
-      expect(runtime.stderr()).toMatch(/^Runtime t3 could not record how op-0000007a ended, so a reattach reports it running: .*EACCES/m);
+      expect(runtime.stderr()).toMatch(/^Runtime t3 could not record how op-0000007a ended, so only this process reports that end: .*EACCES/m);
       runtime.send({ type: 'close', handle });
       await runtime.next((line) => line['event'] === 'closed');
       expect(runtime.lines.filter((line) => line['op'] === 'op-0000007a').map((line) => line['event'])).toEqual(['accepted', 'display', 'finished']);
+    });
+
+    it('reports the end of a prompt it could not record to a reattach, a cancel and a repeated prompt in the same process, never another end', async () => {
+      const release = path.join(dir, 'release');
+      t3.config({ agent: { release, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000007c'));
+      await runtime.next((line) => line['op'] === 'op-0000007c' && line['event'] === 'display');
+      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+      fs.chmodSync(places, 0o500);
+      fs.writeFileSync(release, '');
+      const end = await ended(runtime, 'op-0000007c');
+      fs.chmodSync(places, 0o700);
+      expect(end).toMatchObject({ event: 'finished' });
+
+      runtime.send({ type: 'reattach', handle });
+
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000007c', state: 'finished' }] });
+      runtime.send({ type: 'cancel', op: 'op-0000007c' });
+      expect(await ended(runtime, 'op-0000007c')).toEqual(end);
+      const launches = t3.calls().filter((call) => call.tool === 't3_thread_launch').length;
+      runtime.send(prompt(handle, 'op-0000007c'));
+      expect(await ended(runtime, 'op-0000007c')).toEqual(end);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toHaveLength(launches);
+    });
+
+    // A cancelled end, unlike a finished one, cannot be rebuilt by following the stopped thread again.
+    it('answers a repeated prompt with a cancelled end it could not record, not with the stopped thread\'s own end', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000007d'));
+      await runtime.next((line) => line['op'] === 'op-0000007d' && line['event'] === 'display');
+      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+      fs.chmodSync(places, 0o500);
+      runtime.send({ type: 'cancel', op: 'op-0000007d' });
+      const end = await ended(runtime, 'op-0000007d');
+      fs.chmodSync(places, 0o700);
+      expect(end).toEqual({ op: 'op-0000007d', event: 'cancelled' });
+
+      runtime.send(prompt(handle, 'op-0000007d'));
+
+      expect(await ended(runtime, 'op-0000007d')).toEqual(end);
     });
 
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
