@@ -695,8 +695,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       pendingStops.delete(op);
 
       // The runtime process that ran the op, which teamai may no longer read, recorded its end while this stop ran:
-      // this cancel answers with it, since nothing else here would.
-      if ((endsWritten.get(op) ?? 0) === endsBefore) {
+      // this cancel answers with it, since nothing else here would. An op this process runs ends through finish only.
+      if (!running.has(op) && (endsWritten.get(op) ?? 0) === endsBefore) {
         const recorded = journal.exec(op)?.outcome;
 
         if (recorded !== undefined) conclude(op, recorded);
