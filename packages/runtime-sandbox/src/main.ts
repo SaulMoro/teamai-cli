@@ -34,7 +34,7 @@ serve({
 function providerOf(options: SandboxOptions): Provider {
   switch (options.provider) {
     case 'sbx':
-      return sbxProvider({ agent: options.agent, env: process.env });
+      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env });
     case 'docker':
     case 'podman':
       return containerProvider({
