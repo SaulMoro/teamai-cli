@@ -225,63 +225,60 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   /**
    * Removes what a runtime killed while the engine created a sandbox can leave: a sandbox of this journal whose attempt
    * it no longer records, because a close found nothing yet and forgot the place before the sandbox landed, and a judge's
-   * filter and network with it. A sandbox whose attempt has a record (a create in flight included, since a place is saved
-   * before its create), one whose labels name no attempt, and one labelled for another journal are left alone. A failed
-   * list or removal is one warning, never the open's failure, and so is anything it throws. It starts once its open is
-   * accepted and nothing waits for it: not that open, nor a cancel or a close.
+   * filter and network with it. The provider tells this journal's sandboxes by their `teamai.owner` label, or on sbx by
+   * their name's prefix. A sandbox whose attempt has a record (a create in flight included, since a place is saved before
+   * its create), one that names no attempt, and another journal's are left alone. A failed list or removal is one
+   * warning, never the open's failure, and so is anything it throws. It starts once its open is accepted and nothing
+   * waits for it: not that open, nor a cancel or a close.
    */
   const sweep = async (provider: Provider): Promise<void> => {
     const { owned } = provider;
 
     if (owned === undefined) return;
 
-    const sweeping = async (): Promise<void> => {
-      const listed = await owned();
-
-      if (!listed.ok) {
-        warn(`teamai-runtime-sandbox: warning: ${listed.failure.message}. Containers an earlier run left stay until a later open.`);
-
-        return;
-      }
-
-      const orphans = listed.sandboxes.filter((key) => {
-        if (!RUN_ID.test(key.run) || !ATTEMPT_ID.test(key.attempt)) return false;
-
-        try {
-          return journal.place(handleOf(key)) === undefined;
-        } catch {
-          // A record it cannot read may be this attempt's: its sandbox stays.
-          return false;
-        }
-      });
-
-      // An attempt's containers (a judge's and its filter) go before its network, which is removed once.
-      const byAttempt = new Map<string, { key: PlaceKey; ids: string[] }>();
-
-      for (const { id, run, attempt } of orphans) {
-        const name = handleOf({ run, attempt });
-        byAttempt.set(name, { key: { run, attempt }, ids: [...(byAttempt.get(name)?.ids ?? []), id] });
-      }
-
-      await Promise.all([...byAttempt].map(async ([name, { key, ids }]) => {
-        const destroyed = await Promise.all(ids.map((id) => provider.destroy(id)));
-        // A step's container has no filter or network, so their removal finds nothing and succeeds.
-        const removed = destroyed.find((done) => !done.ok) ?? (provider.judges ? await provider.judges.release(key) : { ok: true as const });
-
-        if (!removed.ok) warn(`teamai-runtime-sandbox: warning: ${name} was left by an earlier run, and ${removed.failure.message}`);
-      }));
-    };
-
-    // Nothing awaits the sweep, so a throw would end this process, and the execs it runs with it.
-    const swept = (async (): Promise<void> => {
+    // Nothing awaits it, so a throw would end this process, and the execs it runs with it.
+    const removeOrphans = async (): Promise<void> => {
       try {
-        await sweeping();
+        const listed = await owned();
+
+        if (!listed.ok) {
+          warn(`teamai-runtime-sandbox: warning: ${listed.failure.message}. Sandboxes an earlier run left stay until a later open.`);
+
+          return;
+        }
+
+        const orphans = listed.sandboxes.filter((key) => {
+          if (!RUN_ID.test(key.run) || !ATTEMPT_ID.test(key.attempt)) return false;
+
+          try {
+            return journal.place(handleOf(key)) === undefined;
+          } catch {
+            // A record it cannot read may be this attempt's: its sandbox stays.
+            return false;
+          }
+        });
+
+        // An attempt's containers (a judge's and its filter) go before its network, which is removed once.
+        const byAttempt = new Map<string, { key: PlaceKey; ids: string[] }>();
+
+        for (const { id, run, attempt } of orphans) {
+          const handle = handleOf({ run, attempt });
+          byAttempt.set(handle, { key: { run, attempt }, ids: [...(byAttempt.get(handle)?.ids ?? []), id] });
+        }
+
+        await Promise.all([...byAttempt.values()].map(async ({ key, ids }) => {
+          const destroyed = await Promise.all(ids.map((id) => provider.destroy(id)));
+          // A step's container has no filter or network, so their removal finds nothing and succeeds.
+          const removed = destroyed.find((done) => !done.ok) ?? (provider.judges ? await provider.judges.release(key) : { ok: true as const });
+
+          if (!removed.ok) warn(`teamai-runtime-sandbox: warning: ${provider.display(key).label} was left by an earlier run, and ${removed.failure.message}`);
+        }));
       } catch (error) {
         warn(`teamai-runtime-sandbox: warning: removing what an earlier run left failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-    })();
+    };
 
-    if ((await by(Date.now() + SWEEP_MS, swept)).kind === 'late') {
+    if ((await by(Date.now() + SWEEP_MS, removeOrphans())).kind === 'late') {
       warn(`teamai-runtime-sandbox: warning: removing what an earlier run left took over ${SWEEP_MS / 1000} s; it goes on, and holds no step.`);
     }
   };

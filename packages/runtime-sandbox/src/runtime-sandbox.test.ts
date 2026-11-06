@@ -1152,8 +1152,8 @@ describe("the containers of one runtime's journal", () => {
     await vi.waitFor(() => { expect(connection.stderr()).toContain('could not list'); }, { timeout: 10_000 });
     expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000002', 'a00000003', 'a00000004'));
     expect(connection.stderr().trim().split('\n')).toEqual([
-      expect.stringMatching(/^teamai-runtime-sandbox: warning: teamai-r0123abcd-a00000002 was left by an earlier run, and docker could not remove container .+ Remove it with `docker rm --force [0-9a-f]+`\.$/),
-      expect.stringMatching(/^teamai-runtime-sandbox: warning: docker could not list the containers this runtime's journal owns: Error: template: .+ Containers an earlier run left stay until a later open\.$/),
+      expect.stringMatching(/^teamai-runtime-sandbox: warning: teamai-r0123abcd-a00000002 \(docker\) was left by an earlier run, and docker could not remove container .+ Remove it with `docker rm --force [0-9a-f]+`\.$/),
+      expect.stringMatching(/^teamai-runtime-sandbox: warning: docker could not list the containers this runtime's journal owns: Error: template: .+ Sandboxes an earlier run left stay until a later open\.$/),
     ]);
   }, 60_000);
 
