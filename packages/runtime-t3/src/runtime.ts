@@ -795,16 +795,26 @@ export function serve(options: ServeOptions): Promise<void> {
       if (listed) return { ok: true, project: listed };
       process.stderr.write(`${why}\n`);
 
+      let refused: string | undefined;
+
       try {
         await options.t3.run({ name: 'project add', args: ['project', 'add', '--base-dir', options.t3Home, ...(title ? ['--title', title] : []), folder] });
+      } catch (error) {
+        // A step opening beside this one may have added the folder first, which T3 refuses to add again.
+        refused = (error instanceof Error ? error.message : String(error)).replace(/\.$/, '');
+      }
+
+      try {
         projects = await s.t3.projects();
       } catch (error) {
-        return { ok: false, reason: (error instanceof Error ? error.message : String(error)).replace(/\.$/, '') };
+        return { ok: false, reason: refused ?? (error instanceof Error ? error.message : String(error)).replace(/\.$/, '') };
       }
 
       const added = projectOf(projects, folder);
 
-      return added ? { ok: true, project: added } : { ok: false, reason: 't3 project add finished, and T3 Code still lists no such project' };
+      if (added) return { ok: true, project: added };
+
+      return { ok: false, reason: refused ?? 't3 project add finished, and T3 Code still lists no such project' };
     };
 
     const checkout = await projectFor(root, { why: `Adding ${root} to T3 Code as a project, so its steps can run there.` });
