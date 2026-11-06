@@ -10,8 +10,8 @@ import {
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
-import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
-import { projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
+import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
+import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
@@ -154,6 +154,8 @@ export interface ServeOptions {
   startedFrom?: string;
   /** T3 Code's data directory, where the member's settings are. */
   t3Home: string;
+  /** The home of the user T3 Code runs as, where a provider instance with no `homePath` keeps its tool's sessions. */
+  t3UserHome: string;
   /** The `t3` command, which adds a project as the member does. */
   t3Cli: T3Command;
   /** Where teamai started the runtime: the checkout of the run, whose project's settings the offer follows. */
@@ -997,11 +999,15 @@ export function serve(options: ServeOptions): Promise<void> {
       if (!written.ok) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ${written.why}.` } });
       const cwd = thread.copy ?? request.cwd;
       const driver = driverOf(thread.tool);
-      const id = driver && await sessionSince(driver, cwd, thread.launchedAt);
+      // The session is in the tool home of the instance the thread runs on, which is the scoring and resume store.
+      const instanceId = thread.instanceId ?? (driver && s.instances.get(DRIVERS[driver].tool)?.providerInstanceId);
+      const toolHome = driver && instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined;
+      const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt }) : undefined;
 
-      if (!id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}, so the step cannot be scored or resumed.` } });
+      if (!driver || toolHome === undefined || !id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.` } });
+      const kept = { tool: thread.tool, id, ...(!isDefaultToolHome(driver, toolHome) && { home: toolHome }) };
 
-      return stopped({ op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) });
+      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) });
     }
   };
 
@@ -1169,7 +1175,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = (threadId: string, copy: string | undefined, model: string | undefined): ThreadRecord => {
-        const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, launchedAt, ...(copy && { copy }) };
+        const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }) };
         const now = place(request.handle) ?? opened;
         const { [request.op]: _answered, ...launches } = now.launches;
         // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
@@ -1256,7 +1262,12 @@ export function serve(options: ServeOptions): Promise<void> {
     const now = place(known.handle);
     const base = now ?? known;
     const { [op]: _resolved, ...launches } = base.launches;
-    const thread: ThreadRecord | undefined = threadId === undefined ? undefined : { threadId, title: launch.title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, launchedAt: launch.launchedAt };
+
+    const thread: ThreadRecord | undefined = threadId === undefined ? undefined : {
+      threadId, title: launch.title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, launchedAt: launch.launchedAt,
+      ...(launch.modelSelection && { instanceId: launch.modelSelection.instanceId }),
+    };
+
     const resolved: PlaceRecord = { ...base, launches, ...(thread && { threads: { ...base.threads, [op]: thread } }) };
 
     if (now) journal.write(resolved);

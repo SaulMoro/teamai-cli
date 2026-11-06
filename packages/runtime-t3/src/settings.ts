@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { DRIVERS, type Driver } from './sessions.js';
 
 // ─── The member's T3 Code settings, as T3 resolves them for one project ───
 //
@@ -45,6 +46,8 @@ const SettingsSchema = z.object({
   projectSettingsOverrides: lenient(z.record(z.string(), OverrideSchema.catch({}))),
   providerInstances: lenient(z.record(z.string(), z.object({
     enabled: lenient(z.boolean().nullable()),
+    /** Where the instance runs its tool: `homePath`, and for Codex `shadowHomePath`, which T3 runs it in when set. */
+    config: lenient(z.object({ homePath: lenient(z.string()), shadowHomePath: lenient(z.string()) }).catch({})),
   }).catch({}))),
 });
 
@@ -71,6 +74,20 @@ export function readSettings(t3Home: string): Read {
   } catch {
     return {};
   }
+}
+
+/**
+ * The home the provider instance `instanceId` runs `driver`'s tool in, as T3 resolves it: the instance's `homePath`
+ * (for Codex, its `shadowHomePath` first), with `~` as the home of the user T3 Code runs as, `userHome`; else the
+ * tool's own home there.
+ */
+export function instanceToolHome(settings: Read, { instanceId, driver, userHome }: { instanceId: string; driver: Driver; userHome: string }): string {
+  const config = settings.providerInstances?.[instanceId]?.config;
+  const own = (driver === 'codex' ? config?.shadowHomePath?.trim() || config?.homePath?.trim() : config?.homePath?.trim()) ?? '';
+
+  if (own === '') return path.join(userHome, DRIVERS[driver].home);
+
+  return path.resolve(own === '~' ? userHome : own.startsWith('~/') ? path.join(userHome, own.slice(2)) : own);
 }
 
 /** The settings of `project` as T3 resolves them: the project's override first, then the global setting. */

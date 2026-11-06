@@ -170,11 +170,15 @@ export interface FakeT3 {
   stop(): Promise<void>;
 }
 
-/** A fake T3 Code server over `dir`, serving the project at `workspaceRoot`, with a member token for the runtime. */
-export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
+/**
+ * A fake T3 Code server over `dir`, serving the project at `workspaceRoot`, with a member token for the runtime.
+ * `t3HomeInHome`: T3's data directory is `~/.t3` in the member's home, where T3 Code keeps it unless T3CODE_HOME
+ * moves it, rather than a directory beside that home.
+ */
+export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = false }: { t3HomeInHome?: boolean } = {}): FakeT3 {
   const state = path.join(dir, 't3-state');
-  const t3Home = path.join(dir, 't3-home');
   const home = path.join(dir, 'home');
+  const t3Home = t3HomeInHome ? path.join(home, '.t3') : path.join(dir, 't3-home');
   const bin = path.join(dir, 't3-bin');
   let server: ChildProcess | undefined;
   fs.mkdirSync(state, { recursive: true });

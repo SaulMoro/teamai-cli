@@ -21,7 +21,8 @@
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
 //   T3CODE_HOME/scratch/        a scratch thread's new folder, as T3 makes one for a launch with `scratch: true`
-//   FAKE_T3_HOME                the member's home, where the agent's tool keeps its transcripts
+//   FAKE_T3_HOME                the member's home, as T3 Code's server has it, where the agent's tool keeps its transcripts:
+//                               in the tool's home there, or in the home the provider instance's settings name
 //   T3CODE_HOME/userdata/settings.json   the member's T3 settings, read on every launch and settle as T3 reads them:
 //                               the default model and the project scripts, the project's override first
 
@@ -163,7 +164,19 @@ function canWrite(dir) {
   }
 }
 
-/** The transcript the thread's tool keeps, in its own layout under HOME. */
+/**
+ * The tool home the thread's provider instance runs its tool in, as T3 resolves it: the instance's `homePath` (for
+ * Codex, its `shadowHomePath` first), `~` being the server's home, else the tool's default home there.
+ */
+function toolHomeOf(thread) {
+  const instance = settings().providerInstances?.[thread.instanceId]?.config ?? {};
+  const own = (thread.provider === 'codex' ? instance.shadowHomePath?.trim() || instance.homePath?.trim() : instance.homePath?.trim()) ?? '';
+  const expanded = own === '~' ? HOME : own.startsWith('~/') ? path.join(HOME, own.slice(2)) : own;
+
+  return own === '' ? path.join(HOME, thread.provider === 'codex' ? '.codex' : '.claude') : path.resolve(expanded);
+}
+
+/** The transcript the thread's tool keeps, in its own layout in its tool home. */
 function writeTranscript(thread) {
   const sessionId = createHash('sha256').update(thread.threadId).digest('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*$/, '$1-$2-$3-$4-$5');
   const cwd = fs.realpathSync(thread.worktreePath);
@@ -171,7 +184,7 @@ function writeTranscript(thread) {
 
   if (thread.provider === 'codex') {
     const day = at.slice(0, 10).split('-');
-    const dir = path.join(HOME, '.codex', 'sessions', ...day);
+    const dir = path.join(toolHomeOf(thread), 'sessions', ...day);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `rollout-${at.replace(/[:.]/g, '-')}-${sessionId}.jsonl`), [
       JSON.stringify({ timestamp: at, type: 'session_meta', payload: { id: sessionId, timestamp: at, cwd, originator: 'codex_exec', cli_version: '0.50.0' } }),
@@ -181,7 +194,7 @@ function writeTranscript(thread) {
     return;
   }
 
-  const dir = path.join(HOME, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  const dir = path.join(toolHomeOf(thread), 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
     JSON.stringify({ type: 'user', sessionId, cwd, timestamp: at, uuid: randomUUID(), message: { role: 'user', content: thread.message } }),
