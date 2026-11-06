@@ -78,6 +78,11 @@ export interface Provider {
    * make fails with what to do, so a sandbox is never taken as absent while its technology does not answer.
    */
   find(key: PlaceKey): Promise<{ ok: true; id: string | undefined } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * The sandboxes labelled as this runtime's journal's whose labels name a run and an attempt, each with them, within
+   * COMMAND_MS. A provider whose sandboxes carry no owner has none: nothing of it is ever swept.
+   */
+  owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }> } | { ok: false; failure: RuntimeFailure }>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /** The sandboxes of judges, on a provider that can confine one; a provider without them offers no confined prompt. */

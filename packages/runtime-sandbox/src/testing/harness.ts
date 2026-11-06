@@ -49,6 +49,10 @@ export interface FakeEngine {
   stopDelay(ms: number): void;
   /** Makes every later run of `command` (`run`, `rm`, …) wait `ms` before it does anything; 0 lets it run at once again. */
   delay(command: string, ms: number): void;
+  /** Makes `ps --format` fail, as an engine that cannot render the format, or work again. */
+  failFormat(shouldFail: boolean): void;
+  /** Makes every later `run -d` wait `ms` once its container exists, before it answers; 0 answers at once again. */
+  holdCreate(ms: number): void;
   /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
@@ -110,6 +114,13 @@ export function fakeEngine(dir: string): FakeEngine {
     },
     delay(command, ms) {
       fs.writeFileSync(path.join(state, `delay-${command}`), String(ms));
+    },
+    failFormat(shouldFail) {
+      if (shouldFail) fs.writeFileSync(path.join(state, 'format-fails'), '');
+      else fs.rmSync(path.join(state, 'format-fails'), { force: true });
+    },
+    holdCreate(ms) {
+      fs.writeFileSync(path.join(state, 'create-hold'), String(ms));
     },
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
