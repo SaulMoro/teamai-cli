@@ -190,11 +190,13 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
       if (!found.ok) return found;
       const { held } = found;
 
-      // A kit was looked in; sbx's own templates hold only their agent, so an instance's command is never there.
+      // A kit was looked in; sbx's own templates hold only their agent, so an instance's command is there only when it is
+      // that agent's.
       const missing: MissingCommand = (command, tool) => {
         if (held !== undefined) return held.has(command) ? undefined : { holder: `kit ${agent}`, fix: 'add it to the kit' };
+        const own = template ?? tool;
 
-        return { holder: `sbx's ${template ?? tool} template`, fix: 'set agent to a kit that brings it' };
+        return command === own ? undefined : { holder: `sbx's ${own} template`, fix: 'set agent to a kit that brings it' };
       };
 
       const stored = await storedLogins();

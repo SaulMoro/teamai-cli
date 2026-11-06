@@ -2389,9 +2389,10 @@ describe('an attempt in an sbx sandbox', () => {
     engine.image('./kits/acme', { claude: CLAUDE, 'acme-claude': ACME_CLAUDE_COMMAND });
 
     expect(await init(start(), { provider: 'sbx', agent: './kits/acme' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE])).toMatchObject({ ok: true, can: { tools: ['claude', 'acme-claude'] } });
-    const reply = await init(start(), { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE]);
+    // An instance whose command is its tool's own runs in that tool's template.
+    const reply = await init(start(), { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE, { name: 'claude-fast', tool: 'claude', command: 'claude' }]);
 
-    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude'] }, unavailable: { 'acme-claude': expect.stringMatching(/acme-claude.*sbx's claude template.*agent.*kit.*--driver local/) } });
+    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'claude-fast'] }, unavailable: { 'acme-claude': expect.stringMatching(/acme-claude.*sbx's claude template.*agent.*kit.*--driver local/) } });
   });
 
   it("signs a Claude instance in on the login sbx keeps, in the instance's own home", async () => {
