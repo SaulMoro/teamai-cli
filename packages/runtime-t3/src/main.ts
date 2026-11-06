@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/tool-core/home';
 import { z } from 'zod';
+import { addedProjects } from './added-projects.js';
 import { attendedSignIn, signInOf, signInSilently, unattendedAuth, validToken } from './auth.js';
 import { journal } from './journal.js';
 import { serve, type ServeOptions } from './runtime.js';
@@ -101,6 +102,7 @@ await serve({
   t3Home,
   t3UserHome: t3UserHomeOf(t3Home, getUserHome()),
   t3Cli,
+  added: addedProjects(path.join(state, 'added-projects.json')),
   cwd: process.cwd(),
   ...(startedFrom && { startedFrom }),
 });

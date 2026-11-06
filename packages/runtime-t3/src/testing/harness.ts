@@ -161,6 +161,8 @@ export interface FakeT3 {
   /** Where the running server listens, as T3 writes it in its runtime file. */
   origin(): string;
   config(change: Partial<FakeT3Config>): void;
+  /** The projects T3 has now, as the `t3` command's adds and removes left them; a removed one keeps its row with `deletedAt`. */
+  projects(): FakeT3Config['projects'];
   /** Writes the member's T3 settings, `userdata/settings.json` in T3's data directory. */
   settings(value: Line): void;
   calls(): FakeCall[];
@@ -214,9 +216,11 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
     origin: () => z.object({ origin: z.string() }).parse(JSON.parse(fs.readFileSync(runtimeFile, 'utf8'))).origin,
     commandRuns: () => (fs.existsSync(runs) ? fs.readFileSync(runs, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.array(z.string()).parse(JSON.parse(line))) : []),
     config(change) {
-      current = { ...current, ...change };
+      current = { ...JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8')), ...change };
       write();
     },
+    projects: () => z.object({ projects: z.array(z.object({ id: z.string(), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional() }).loose()) })
+      .parse(JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8'))).projects,
     settings(value) {
       fs.mkdirSync(path.join(t3Home, 'userdata'), { recursive: true });
       fs.writeFileSync(path.join(t3Home, 'userdata', 'settings.json'), JSON.stringify(value));
@@ -279,6 +283,21 @@ if (args.slice(0, 2).join(' ') === 'project add') {
   fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify(config));
   if (config.projectAddRaced) { process.stderr.write("ProjectAlreadyExistsError: An active project already exists for '" + root + "'.\\n"); process.exit(1); }
   process.stdout.write('Added project ' + project.id + ' (' + project.title + ') at ' + root + '.\\n');
+  process.exit(0);
+}
+if (args.slice(0, 2).join(' ') === 'project remove') {
+  // As T3 does with --force: the project goes, with its threads.
+  const config = JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8'));
+  const id = args[args.length - 1];
+  const project = config.projects.find((one) => one.id === id && !one.deletedAt);
+  if (!project) { process.stderr.write('ProjectNotFoundError: No project ' + id + '.\\n'); process.exit(1); }
+  if (!args.includes('--force')) { process.stderr.write('The project has threads; pass --force to delete them too.\\n'); process.exit(1); }
+  project.deletedAt = new Date().toISOString();
+  fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify(config));
+  for (const file of fs.readdirSync(path.join(state, 'threads'))) {
+    if (file.endsWith('.json') && JSON.parse(fs.readFileSync(path.join(state, 'threads', file), 'utf8')).projectId === id) fs.rmSync(path.join(state, 'threads', file));
+  }
+  process.stdout.write('Removed project ' + id + '.\\n');
   process.exit(0);
 }
 if (args.slice(0, 3).join(' ') !== 'auth pairing create' || !args.includes('--json')) { process.stderr.write('Unknown command.\\n'); process.exit(2); }
