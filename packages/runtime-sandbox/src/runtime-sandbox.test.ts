@@ -1764,7 +1764,10 @@ console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claud
     await first.end();
     // The definition now gives this runtime no judge key, so it offers no judge.
     const second = start();
-    expect(await init(second, { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: ['codex'] })).toMatchObject({ ok: true, can: { tools: ['codex'] } });
+    const reinit = await init(second, { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: ['codex'] });
+
+    expect(reinit).toMatchObject({ ok: true, can: { tools: ['codex'] } });
+    expect(reinit).not.toHaveProperty('confinedPrompt');
 
     // The runtime that ran it is gone, but its judge may still run: the resent id is accepted, and its end waits for a stop.
     const resent = judge(second, { credentials, op, lease });
