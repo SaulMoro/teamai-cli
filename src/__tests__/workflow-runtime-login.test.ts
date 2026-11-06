@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
-import { attemptRun, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
+import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
 import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
@@ -276,5 +276,16 @@ describe('a tool home seeded from the attempt whose session a step resumes', () 
     expect(seeded).toEqual({ tool: 'codex', id: session });
     expect(fs.existsSync(path.join(next, 'sessions', '2026', '11', '04', `rollout-2026-11-04T10-00-00-${session}.jsonl`))).toBe(true);
     expect(fs.existsSync(path.join(next, 'auth.json'))).toBe(false);
+  });
+});
+
+describe('the session store of an attempt whose runtime reported where it kept the session', () => {
+  it('reads a Codex session in the home the runtime reported, such as a daemon\'s under another HOME, not in the member\'s own', async () => {
+    const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
+    const reported = path.join(root, 'daemon-home', '.codex');
+    fs.mkdirSync(attemptDir(config, RUN, FIRST), { recursive: true });
+    fs.writeFileSync(path.join(attemptDir(config, RUN, FIRST), 'runtime.json'), JSON.stringify({ runtime: 'paseo', driver: 'd', phase: 'closed', open: { op: newOpId(), handle: 'h1' }, sessionHome: { tool: 'codex', dir: reported } }));
+
+    expect(await attemptSessionStore(config, RUN, FIRST)).toBe(path.join(reported, 'sessions'));
   });
 });
