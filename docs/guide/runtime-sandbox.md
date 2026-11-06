@@ -119,7 +119,7 @@ Command steps still run in the sandbox: they need no sign-in. A `local` listed a
 
 On sbx, a tool sbx keeps a login for signs in on that login, even when your shell sets one of its variables, such as `ANTHROPIC_BASE_URL` for a gateway. A variable the definition names in `credentials` still goes to the step's tool.
 
-When your shell sets `ANTHROPIC_BASE_URL`, the first Claude step that `workflow start` or `resume` runs in the sandbox says so, once:
+When your shell sets `ANTHROPIC_BASE_URL`, the first Claude step each teamai command runs in the sandbox says so, once:
 
 ```text
 ⚠ Step runtime "sandbox", operation op-3c1e9a7f2b40: claude signs in here on the login sbx keeps (anthropic in `sbx secret ls`), so the gateway ANTHROPIC_BASE_URL names in your shell is not used in this sandbox. To use it there, add ANTHROPIC_BASE_URL: env:ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN: env:ANTHROPIC_AUTH_TOKEN to the sandbox's credentials.
