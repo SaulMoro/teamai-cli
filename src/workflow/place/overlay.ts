@@ -3,7 +3,7 @@ import type { PullDelivery, PullOutcome } from '../../pull.js';
 import { pathExists } from '../../utils/fs.js';
 import type { Executor } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
-import { applyBaseConfig, hooksPath, recordConfigOverlay, restoreUneditedConfig } from '../worktree.js';
+import { applyBaseConfig, git, hooksPath, recordConfigOverlay, restoreUneditedConfig, type Git } from '../worktree.js';
 import { setUpWorktreeRole, worktreeRoleProblem } from './role-copy.js';
 
 /**
@@ -26,7 +26,7 @@ export async function applyOverlay({ root, dir, configCommit, saved, resume, ste
   const refused = role !== undefined ? await worktreeRoleProblem({ dir, step, role, tools: set.tools, delivery }) : undefined;
 
   if (refused && role !== undefined) {
-    const unrestored = await restoreOverlay({ dir, configCommit, saved, unfinished: true });
+    const unrestored = await restoreOverlay({ dir, configCommit, saved, unfinished: true, run: git });
 
     if (!unrestored) return refused;
 
@@ -42,8 +42,9 @@ export async function applyOverlay({ root, dir, configCommit, saved, resume, ste
  * Puts back each branch agent file the step left unchanged. Why they are not back, when git could not list the copy's
  * files. An overlay already restored, whose `saved` is gone, has nothing left to put back. An overlay a killed process
  * left `unfinished` had no step run over it, so every agent file in the copy is the overlay's, and all are put back.
+ * `run` is the git it runs: `untrustedGit` once a step ran in the copy, so nothing that step planted in its config runs.
  */
-export async function restoreOverlay({ dir, configCommit, saved, unfinished }: { dir: string; configCommit: string; saved: string; unfinished?: true }): Promise<string | undefined> {
+export async function restoreOverlay({ dir, configCommit, saved, unfinished, run }: { dir: string; configCommit: string; saved: string; unfinished?: true; run: Git }): Promise<string | undefined> {
   // A copy aside cut short left the branch's files in the copy.
   if (unfinished) await fs.rm(`${saved}.partial`, { recursive: true, force: true });
 
@@ -51,7 +52,7 @@ export async function restoreOverlay({ dir, configCommit, saved, unfinished }: {
 
   if (unfinished) await recordConfigOverlay(dir, saved);
 
-  return restoreUneditedConfig(dir, configCommit, saved);
+  return restoreUneditedConfig(dir, configCommit, saved, run);
 }
 
 /** What a step's failure adds when git could not list its copy `dir` to put the branch's agent files back. */
