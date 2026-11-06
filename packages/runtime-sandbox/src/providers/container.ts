@@ -77,6 +77,10 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
   const { run: cli, why } = cliOf({ name: engine, env: host.env, notInstalled });
 
+  // Docker Desktop names this machine host.docker.internal in every container, and Podman host.containers.internal;
+  // Docker on Linux names it nothing. Known once `offer` read what the engine is.
+  let hostAlias: ReturnType<Provider['hostAlias']> = engine === 'podman' ? { ok: true, alias: 'host.containers.internal' } : { ok: false, why: 'this container cannot reach until teamai-runtime-sandbox has asked docker what it runs on' };
+
   const lastLine = (ran: Ran): string => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : '');
 
   const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
@@ -102,11 +106,14 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
   return {
     async offer(credentials) {
-      const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}']);
+      const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}|{{.OperatingSystem}}']);
 
       if (info.kind !== 'ran') return unavailable(info.message);
 
       if (info.code !== 0) return unavailable(notRunning(info));
+      const [version = '', system = ''] = info.stdout.trim().split('|');
+
+      if (engine === 'docker') hostAlias = system === 'Docker Desktop' ? { ok: true, alias: 'host.docker.internal' } : { ok: false, why: `this container cannot reach: Docker Engine on Linux (${system || 'here'}) gives no host alias, as Docker Desktop does` };
       const present = await cli(['image', 'inspect', '--format', '{{.Id}}', image]);
 
       if (present.kind !== 'ran' || present.code !== 0) {
@@ -130,7 +137,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       // DNS out of the judge's network. Podman judges nothing: its rootless network cannot connect the filter to it.
       const confined: ConfinedOffer[] = [];
 
-      const judges = found.has('node') && engine === 'docker' && dnsStaysInside(info.stdout) ? tools : [];
+      const judges = found.has('node') && engine === 'docker' && dnsStaysInside(version) ? tools : [];
 
       for (const tool of judges) {
         const access = judgeTool(tool)?.access;
@@ -151,6 +158,8 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
     },
 
     find,
+
+    hostAlias: () => hostAlias,
 
     async owned() {
       const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}{{.Label "teamai.judge"}}'], { timeoutMs: COMMAND_MS });

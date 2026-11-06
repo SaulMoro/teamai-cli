@@ -26,6 +26,10 @@
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
 //   FAKE_ENGINE_VERSION optional: the server version `info` reports, 27.3.1 when unset
+//   FAKE_ENGINE_OS      optional: the OperatingSystem docker's `info` reports, "Docker Desktop" when unset
+//
+//  sbx answers `policy check network --json <target>` from a file `allowed-network` in its state directory, one
+//  `localhost:<port>` per line, as `sbx policy allow network` adds them; host.docker.internal is checked as localhost.
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -164,7 +168,8 @@ function docker() {
       const format = rest[rest.indexOf('--format') + 1] ?? '';
 
       if (format.includes(engine === 'podman' ? 'ServerVersion' : 'Version.Version')) fail(`Error: template: info:1:2: executing "info" at <${format}>: can't evaluate field`, 125);
-      process.stdout.write(`${process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1')}\n`);
+      const version = process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1');
+      process.stdout.write(`${format.replace('{{.ServerVersion}}', version).replace('{{.Version.Version}}', version).replace('{{.OperatingSystem}}', process.env.FAKE_ENGINE_OS ?? 'Docker Desktop')}\n`);
       break;
     }
 
@@ -355,9 +360,19 @@ function sbx() {
   const sandboxes = () => fs.readdirSync(containers).map(readContainer).filter((container) => container !== undefined);
 
   switch (command) {
-    case 'policy':
-      process.stdout.write('local-policy   local   all   network: 195 allow\n');
-      break;
+    case 'policy': {
+      if (rest[0] !== 'check') {
+        process.stdout.write('local-policy   local   all   network: 195 allow\n');
+        break;
+      }
+
+      // `sbx policy check network --json <target>`, as sbx 0.51.0 answers it: exit 1 when it is not allowed.
+      const target = rest.at(-1).replace(/^host\.docker\.internal:/, 'localhost:');
+      const allowed = fs.existsSync(path.join(state, 'allowed-network')) && fs.readFileSync(path.join(state, 'allowed-network'), 'utf8').split('\n').includes(target);
+      process.stdout.write(`${JSON.stringify({ action: 'net:connect:tcp', allowed, context: 'global', resource_value: target, target, type: 'network', ...(!allowed && { reason: 'No matching allow rule (default deny)' }) })}\n`);
+      process.exit(allowed ? 0 : 1);
+    }
+
     case 'secret': {
       // `sbx secret ls --global --json`, as sbx 0.51.0 prints it: each stored secret's scope, type and service, its value masked.
       if (rest[0] !== 'ls' || !rest.includes('--json')) fail(`fake sbx: unsupported secret command ${rest.join(' ')}`, 125);

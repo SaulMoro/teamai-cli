@@ -38,6 +38,7 @@ export function unreachable(failure: RuntimeFailure): Provider {
 
   return {
     offer: async () => ({ ok: false, failure }),
+    hostAlias: () => ({ ok: false, why: failure.message }),
     find: async (key) => kept(handleOf(key)),
     create: async (key) => kept(handleOf(key)),
     exec: async (id) => ({ kind: 'failed', failure: kept(id).failure }),
@@ -89,6 +90,16 @@ export interface Provider {
   owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }> } | { ok: false; failure: RuntimeFailure }>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * The name a sandbox reaches this machine itself by, so a URL credential on localhost is pointed at it (loopback.ts),
+   * or why a sandbox cannot reach this machine, as the end of "which …". Known once `offer` answered.
+   */
+  hostAlias(): { ok: true; alias: string } | { ok: false; why: string };
+  /**
+   * On a provider whose own network policy decides what a sandbox reaches (sbx): whether it lets one reach `port` of
+   * this machine, or how to allow it, naming the credential `variable` that needs it. The policy is never edited.
+   */
+  reachesHost?(port: number, variable: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** The sandboxes of judges, on a provider that can confine one; a provider without them offers no confined prompt. */
   judges?: Judges;
   /** Runs one process in the sandbox, streaming its output, until it ends. */

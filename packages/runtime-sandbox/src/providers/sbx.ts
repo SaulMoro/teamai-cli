@@ -37,6 +37,9 @@ const CLI_SETTING = /^(?:HOME|XDG_[A-Z_]+|SBX_[A-Z0-9_]*|DOCKER_[A-Z0-9_]*)$/;
 
 const ListedSchema = z.array(z.looseObject({ name: z.string() }));
 
+/** `sbx policy check network --json <target>`: whether the member's policy lets a sandbox reach it (sbx 0.51.0). */
+const CheckedSchema = z.object({ allowed: z.boolean() });
+
 /** `sbx secret ls --global --json`: the services sbx's proxy holds a login for. Each secret's masked value is never read. */
 const StoredSchema = z.object({ secrets: z.array(z.object({ name: z.string() })) });
 
@@ -155,6 +158,27 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: Journ
     },
 
     find,
+
+    // sbx's proxy answers host.docker.internal as this machine's localhost, which its policy then allows or refuses.
+    hostAlias: () => ({ ok: true, alias: 'host.docker.internal' }),
+
+    async reachesHost(port, variable) {
+      const rule = `\`sbx policy allow network localhost:${port}\``;
+      const ran = await cli(['policy', 'check', 'network', '--json', `localhost:${port}`], { timeoutMs: COMMAND_MS });
+      let checked: z.infer<typeof CheckedSchema> | undefined;
+
+      try {
+        checked = ran.kind === 'ran' ? CheckedSchema.parse(JSON.parse(ran.stdout)) : undefined;
+      } catch {
+        checked = undefined;
+      }
+
+      if (checked?.allowed === true) return { ok: true };
+
+      if (checked?.allowed === false) return unavailable(`${variable} points at port ${port} of this machine, which your sbx network policy does not let a sandbox reach. Allow it once with ${rule}, and start again.`);
+
+      return unavailable(`sbx could not tell whether your network policy lets a sandbox reach port ${port} of this machine, which ${variable} points at (${messageOf(ran) || 'it printed no answer'}). If it does not, allow it with ${rule}, and start again.`);
+    },
 
     async owned() {
       const listed = await list();

@@ -63,6 +63,8 @@ export interface FakeEngine {
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
   policy(isInitialized: boolean): void;
+  /** Adds an allow rule for `target` (`localhost:<port>`) to sbx's network policy, as `sbx policy allow network` would. */
+  allowNetwork(target: string): void;
   /** Every argv the engine was run with, as `[engine, ...args]`. */
   calls(): string[][];
   /** The containers (and sbx sandboxes) that exist, by name. */
@@ -143,6 +145,9 @@ export function fakeEngine(dir: string): FakeEngine {
 
       if (isSet) fs.writeFileSync(path.join(state, 'secrets', service), '');
       else fs.rmSync(path.join(state, 'secrets', service), { force: true });
+    },
+    allowNetwork(target) {
+      fs.appendFileSync(path.join(state, 'allowed-network'), `${target}\n`);
     },
     policy(isInitialized) {
       if (isInitialized) fs.rmSync(path.join(state, 'no-policy'), { force: true });
