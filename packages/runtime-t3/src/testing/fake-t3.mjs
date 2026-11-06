@@ -48,8 +48,9 @@ const config = () => JSON.parse(fs.readFileSync(path.join(STATE, 'config.json'),
 const threadFile = (id) => path.join(THREADS, `${encodeURIComponent(id)}.json`);
 const readThread = (id) => (fs.existsSync(threadFile(id)) ? JSON.parse(fs.readFileSync(threadFile(id), 'utf8')) : undefined);
 
+// T3 stamps a thread's updatedAt on every change, and lists threads by it, newest first.
 const writeThread = (thread) => {
-  fs.writeFileSync(`${threadFile(thread.threadId)}.tmp`, JSON.stringify(thread));
+  fs.writeFileSync(`${threadFile(thread.threadId)}.tmp`, JSON.stringify({ ...thread, updatedAt: new Date().toISOString() }));
   fs.renameSync(`${threadFile(thread.threadId)}.tmp`, threadFile(thread.threadId));
 };
 
@@ -323,9 +324,14 @@ const TOOLS = {
   t3_thread_list: (args) => {
     const threads = fs.readdirSync(THREADS).filter((file) => file.endsWith('.json')).map((file) => JSON.parse(fs.readFileSync(path.join(THREADS, file), 'utf8')))
       .filter((thread) => (args.includeSubagents || thread.parentThreadId === undefined) && (args.projectId === undefined || thread.projectId === args.projectId) && (args.statuses === undefined || args.statuses.includes(thread.status))
-        && (args.settled === undefined || thread.settled === args.settled));
+        && (args.settled === undefined || thread.settled === args.settled))
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.threadId.localeCompare(left.threadId));
 
-    return ok({ threads: threads.map((thread) => ({ threadId: thread.threadId, projectId: thread.projectId, status: thread.status, parentThreadId: thread.parentThreadId ?? null })), nextCursor: null, total: threads.length });
+    const cursor = args.cursor ?? 0;
+    const page = threads.slice(cursor, cursor + (args.limit ?? 50));
+    const nextCursor = cursor + page.length < threads.length ? cursor + page.length : null;
+
+    return ok({ threads: page.map((thread) => ({ threadId: thread.threadId, projectId: thread.projectId, status: thread.status, parentThreadId: thread.parentThreadId ?? null, updatedAt: thread.updatedAt })), nextCursor, total: threads.length });
   },
   t3_thread_read: (args) => {
     const thread = readThread(args.threadId);

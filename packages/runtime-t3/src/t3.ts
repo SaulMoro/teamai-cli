@@ -74,8 +74,11 @@ export type ThreadShell = z.infer<typeof ThreadShellSchema>;
 /** The statuses of a thread whose run still goes, as `t3_thread_list` filters on them. */
 const ACTIVE_STATUSES = ['preparing', 'queued', 'starting', 'running', 'waiting'] as const;
 
-/** A thread `t3_thread_list` lists: a delegated task's thread names the thread that delegated it. */
-const ListedThreadSchema = z.object({ threadId: z.string(), status: z.string().nullable(), parentThreadId: z.string().nullable().optional() });
+/**
+ * A thread `t3_thread_list` lists: a delegated task's thread names the thread that delegated it. T3 lists threads by
+ * when they last changed, `updatedAt`, newest first.
+ */
+const ListedThreadSchema = z.object({ threadId: z.string(), status: z.string().nullable(), parentThreadId: z.string().nullable().optional(), updatedAt: z.string().optional() });
 
 export type ListedThread = z.infer<typeof ListedThreadSchema>;
 
@@ -174,8 +177,11 @@ export interface T3 {
   thread(threadId: string): Promise<ThreadShell>;
   /** Every thread whose run still goes, in every project, delegated tasks' threads included. */
   activeThreads(): Promise<ListedThread[]>;
-  /** Every thread not settled yet, in every project, delegated tasks' threads included. */
-  unsettledThreads(): Promise<ListedThread[]>;
+  /**
+   * Every thread not settled yet that changed at or after `since` (ms since the epoch), in every project, delegated
+   * tasks' threads included. T3 lists the newest first, so the listing stops at the first thread that changed before.
+   */
+  unsettledThreadsSince(since: number): Promise<ListedThread[]>;
   /** The thread's last assistant message, whole, or undefined when it wrote none. */
   lastReply(threadId: string): Promise<string | undefined>;
   /** The error T3 recorded last for the thread's run `runId`, or for any run without one: its title and its whole text. */
@@ -224,15 +230,20 @@ function t3Over(client: Client): T3 {
     return parsed.data;
   };
 
-  /** The threads `t3_thread_list` lists in every project, delegated tasks' included, with `filter`, page by page. */
-  const listThreads = async (filter: ToolArguments): Promise<ListedThread[]> => {
+  /**
+   * The threads `t3_thread_list` lists in every project, delegated tasks' included, with `filter`, page by page; with
+   * `since`, only those that changed at or after it, which T3 lists first. A thread that names no change time counts as
+   * changed since.
+   */
+  const listThreads = async (filter: ToolArguments, since?: number): Promise<ListedThread[]> => {
     const threads: ListedThread[] = [];
     let cursor: number | null | undefined = 0;
+    const isOlder = (thread: ListedThread): boolean => since !== undefined && thread.updatedAt !== undefined && Date.parse(thread.updatedAt) < since;
 
     while (cursor !== null && cursor !== undefined) {
       const page: z.infer<typeof ThreadPageSchema> = await call('t3_thread_list', { allProjects: true, includeSubagents: true, ...filter, cursor, limit: 100 }, ThreadPageSchema);
-      threads.push(...page.threads);
-      cursor = page.nextCursor;
+      threads.push(...page.threads.filter((thread) => !isOlder(thread)));
+      cursor = page.threads.some(isOlder) ? null : page.nextCursor;
     }
 
     return threads;
@@ -303,7 +314,7 @@ function t3Over(client: Client): T3 {
     send: async (threadId, message, clientRequestId) => { await call('t3_thread_send', { threadId, message, mode: 'auto', clientRequestId }, z.object({}).loose()); },
     thread: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, maxCharsPerItem: 1 }, z.object({ thread: ThreadShellSchema }))).thread,
     activeThreads: () => listThreads({ statuses: [...ACTIVE_STATUSES] }),
-    unsettledThreads: () => listThreads({ settled: false }),
+    unsettledThreadsSince: (since) => listThreads({ settled: false }, since),
     lastReply: async (threadId) => {
       const reply = await lastItem(threadId, 'messages', (item) => item.type === 'assistant_message');
 

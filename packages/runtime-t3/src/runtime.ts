@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { AddedProjects } from './added-projects.js';
 import type { SignInAccess } from './auth.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
-import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
+import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider, servedInstances } from './tool-instances.js';
 import { STEP_MODES, T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
@@ -1483,7 +1483,8 @@ export function serve(options: ServeOptions): Promise<void> {
     let tasks: ListedThread[];
 
     try {
-      tasks = tasksOf(await s.t3.unsettledThreads(), thread.threadId);
+      // The tasks it delegated started after it, so only threads that changed since its launch can be theirs.
+      tasks = tasksOf(await s.t3.unsettledThreadsSince(thread.launchedAt - CLOCK_SLACK_MS), thread.threadId);
     } catch (error) {
       return notice(`teamai could not list the tasks the T3 thread ${link} delegated, so they stay in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}`, { handle });
     }
