@@ -130,10 +130,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`${engine} could not start a container from ${image} (${lastLine(probe)}). Check that it runs /bin/sh, and start again.`);
       const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
       // A login on this machine never crosses into a container: a tool is offered only on a credential teamai gives it.
-      const signedIn = offerSignedIn({ tools: LAUNCHABLE.filter((tool) => found.has(tool)), provider: engine, credentials, stored: new Set() });
-
-      if (!signedIn.ok) return signedIn;
-      const { tools } = signedIn;
+      const { tools, unavailable: notSignedIn } = offerSignedIn({ tools: LAUNCHABLE.filter((tool) => found.has(tool)), provider: engine, credentials, stored: new Set() });
       // A judge's network filter runs on the image's node, so an image without it judges nothing, nor a docker that lets
       // DNS out of the judge's network. Podman judges nothing: its rootless network cannot connect the filter to it.
       const confined: ConfinedOffer[] = [];
@@ -155,7 +152,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
         ...(confined.length > 0 && { confined }),
       };
 
-      return { ok: true, can, host: route };
+      return { ok: true, can, host: route, unavailable: notSignedIn };
     },
 
     find,
