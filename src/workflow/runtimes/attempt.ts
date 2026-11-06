@@ -230,8 +230,9 @@ function isStopRefused(failure: RuntimeFailure): boolean {
 }
 
 /**
- * `deadline` is the latest time the attempt's limits allow, which its `open` tells the runtime and which bounds what
- * runs in the place; undefined when the attempt has no time limit, or only stops what a teamai before it left.
+ * `deadline` is the lease's expiry, the latest time the attempt's limits allow, which its `open` tells the runtime and
+ * which bounds what runs in the place; undefined when the attempt has no such limit, or only stops what a teamai before
+ * it left.
  */
 export function attemptRun({ config, run, attempt, runtime, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string; deadline?: string }): AttemptRun {
   const file = recordPath(config, run, attempt);

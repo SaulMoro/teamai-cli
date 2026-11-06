@@ -137,6 +137,12 @@ steps:
       planthook: `  - id: build
     workspace: new
     command: git config extensions.worktreeConfig true && git config --worktree core.hooksPath "$PLANTED_HOOKS" && echo change > planted.txt`,
+      turned: `  - id: review
+    timeout: 10m
+    on_limit: end_turn
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`,
       timed: `  - id: build
     timeout: 10m
     command: echo built
@@ -526,6 +532,18 @@ Judge the review.
     expect(opens.filter((at) => at === null)).toHaveLength(1);
     expect(Date.parse(String(deadline)) - before).toBeGreaterThan(9 * 60_000);
     expect(Date.parse(String(deadline)) - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+  });
+
+  it('gives no deadline to a step whose timeout ends the agent\'s turn, since the driver ends that turn itself', async () => {
+    const state = path.join(sandbox, 'toy-state-turned');
+    writeDefinition('toyturned', { state });
+
+    const ran = await runCLI(['workflow', 'start', 'turned', '--driver', 'toyturned'], repo, env());
+
+    succeededRun(ran);
+    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; deadline?: string | null })
+      .filter((op) => op.kind === 'open').map((op) => op.deadline ?? null);
+    expect(opens).toEqual([null]);
   });
 
   it('cancels a running step with the processes it started', async () => {

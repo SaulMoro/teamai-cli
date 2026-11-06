@@ -1557,7 +1557,7 @@ To tell the person something without answering a request, write a `notice`: a si
 
 `open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
 
-A step with a `timeout` gives its `open` a `deadline`, the latest time its limits allow. teamai cancels an `exec` or `prompt` of the place still running then, a reconnected one included, fails the `open` when the place is not `ready` by then, and waits for a `collect` 15 s past it at most. A step without a time limit has no `deadline`, and nothing bounds how long its work runs:
+A step with a `timeout` that fails it gives its `open` a `deadline`, the latest time its limits allow. The step's own timeout stops its work first; teamai cancels an `exec` or `prompt` of the place still running 15 s past the `deadline`, a reconnected one included, fails the `open` when the place is not `ready` by the `deadline`, and waits for a `collect` 15 s past it at most. A step without a time limit, or whose limit ends the agent's turn (`on_limit: end_turn`), has no `deadline`:
 
 ```text
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","deadline":"2026-11-06T15:10:00.000Z","view":{…},"credentials":{}}

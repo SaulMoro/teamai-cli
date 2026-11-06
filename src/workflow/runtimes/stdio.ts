@@ -277,12 +277,19 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     send({ type: 'cancel', op });
   };
 
-  /** Cancels exec or prompt `op` of place `handle` if it still runs at the place's deadline; the answer stops that wait. */
-  const cancelAtDeadline = (type: 'exec' | 'prompt', op: OpId, handle: string): (() => void) => atDeadline(deadlines.get(handle), () => {
-    if (!ops.has(op)) return;
-    log.warn(`Step runtime "${name}" still ran ${type} ${op} at the attempt's deadline, so teamai cancels it.`);
-    cancelOp(op);
-  });
+  /**
+   * Cancels exec or prompt `op` of place `handle` if it still runs 15 s past the place's deadline; the answer stops that
+   * wait. The step's own limit, and the lease's expiry, stop it first: this only bounds a stop that never came.
+   */
+  const cancelAtDeadline = (type: 'exec' | 'prompt', op: OpId, handle: string): (() => void) => {
+    const deadline = deadlines.get(handle);
+
+    return atDeadline(deadline === undefined ? undefined : deadline + ANSWER_WITHIN_MS, () => {
+      if (!ops.has(op)) return;
+      log.warn(`Step runtime "${name}" still ran ${type} ${op} 15 s past the attempt's deadline, so teamai cancels it.`);
+      cancelOp(op);
+    });
+  };
 
   return {
     name,

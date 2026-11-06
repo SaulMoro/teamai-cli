@@ -1248,24 +1248,46 @@ describe('an attempt\'s deadline, over stdio', () => {
 
   const soon = (ms: number): string => new Date(Date.now() + ms).toISOString();
 
-  it('cancels an accepted exec still running at the attempt\'s deadline, which then ends cancelled', async () => {
-    const { runtime, handle } = await opened({}, soon(1_000));
-    const begun = Date.now();
+  it('leaves an exec still running at the attempt\'s deadline to the step\'s own limit, and cancels it 15 s past the deadline', async () => {
+    const { runtime, handle } = await opened({}, soon(5_000));
+    const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const op = newOpId();
 
-    const end = await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60_000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {});
+    let accepted = (): void => {};
+    const isAccepted = new Promise<void>((resolve) => { accepted = resolve; });
 
-    expect(end).toEqual({ kind: 'cancelled' });
-    expect(Date.now() - begun).toBeLessThan(10_000);
+    const end = runtime.exec({ op, handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60_000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, { onAccepted: () => accepted() });
+    await isAccepted;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await Promise.race([end, 'still running'])).toBe('still running');
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
+
+    expect(await end).toEqual({ kind: 'cancelled' });
+    expect(warned.mock.calls.map(([line]) => line)).toEqual([`Step runtime "toy" still ran exec ${op} 15 s past the attempt's deadline, so teamai cancels it.`]);
+    warned.mockRestore();
   });
 
-  it('cancels an accepted prompt still running at the attempt\'s deadline, a reconnected one too', async () => {
-    const { runtime, handle } = await opened({ agent: { release: path.join(dir, 'never'), output: { ok: true } } }, soon(1_000));
+  it('cancels an accepted prompt still running 15 s past the attempt\'s deadline', async () => {
+    const { runtime, handle } = await opened({ agent: { release: path.join(dir, 'never'), output: { ok: true } } }, soon(5_000));
     const request: PromptRequest = {
       op: newOpId(), handle, env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
       lease: { step: 'review', tool: 'claude', permissions: 'approval-required', interactive: false, prompt: 'Review.', result: path.join(dir, 'out', 'result.json') },
     };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-    expect(await runtime.prompt(request, {})).toEqual({ kind: 'cancelled' });
+    let accepted = (): void => {};
+    const isAccepted = new Promise<void>((resolve) => { accepted = resolve; });
+
+    const end = runtime.prompt(request, { onAccepted: () => accepted() });
+    await isAccepted;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await Promise.race([end, 'still running'])).toBe('still running');
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
+
+    expect(await end).toEqual({ kind: 'cancelled' });
   });
 
   it('fails a collect the runtime does not answer within 15 s past the attempt\'s deadline as runtime_unanswered', async () => {
