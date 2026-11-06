@@ -1740,6 +1740,8 @@ A driver that still runs when you cancel, and a `workflow resume` that finds suc
 
 A runtime reads one JSON request per line on stdin and answers with JSON lines on stdout, protocol `1`. `src/__tests__/fixtures/runtime-toy/runtime.mjs` is a complete one that runs steps on the host. It imports `@teamai/runtime-protocol`, so the tests bundle it into one file before they run it (`src/__tests__/helpers/toy-runtime.ts`).
 
+teamai reads every reply strictly, the `init` reply included: a key it does not know is a reply it cannot read, and the runtime does not start. Protocol `1` has not been released yet, and teamai ships its runtimes with the engine, so a key a runtime adds lands together with the teamai that reads it, and the protocol stays `1`.
+
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
 ← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}

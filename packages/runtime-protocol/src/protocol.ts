@@ -475,6 +475,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * launches agents its own way, so teamai sends it each prompt step as a `prompt`, never as an `exec` of the tool.
    * With `can.exec: false` it runs no command: command steps, and steps with setup, go to the next runtime.
    * `confinedPrompt: true` says it answers a `prompt` with `confined`; without it, teamai drops `can.confined`.
+   * Read strictly, as every reply is: a key teamai does not know fails the start. Protocol 1 has not been released, and
+   * teamai ships its runtimes with the engine, so a new key lands with the teamai that reads it and the protocol stays 1.
    */
   const InitReply = z.discriminatedUnion('ok', [
     z.object({

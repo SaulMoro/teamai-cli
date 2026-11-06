@@ -1734,6 +1734,8 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 运行时从 stdin 每行读取一个 JSON 请求，在 stdout 上用 JSON 行回答，协议版本 `1`。`src/__tests__/fixtures/runtime-toy/runtime.mjs` 是一个完整的例子，它在主机上运行步骤。它导入 `@teamai/runtime-protocol`，所以测试在运行它之前先把它打包成一个文件（`src/__tests__/helpers/toy-runtime.ts`）。
 
+teamai 严格读取每个回复，包括 `init` 的回复：它不认识的键会让回复无法读取，运行时也就不会启动。协议 `1` 还没有发布，而 teamai 和引擎一起发布它的运行时，所以运行时新增的键会和读取它的 teamai 一起落地，协议仍然是 `1`。
+
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
 ← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
