@@ -18,9 +18,10 @@ import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 //  the git paths the view names are mounted read-only at their own paths: `git status` works, `git commit` cannot
 //  write. No credential goes in at create: each exec brings its own, by name, from this process's environment. A
 //  login stored with `sbx secret set` stays in the host's proxy, which injects it into the requests; the sandbox holds
-//  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is the
-//  handle: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none), so
-//  its name carries the journal that owns it, the id a container's `teamai.owner` label carries. sbx's network policy
+//  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is its
+//  id: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none), so
+//  its name carries the journal that owns it, the id a container's `teamai.owner` label carries, and an open sweeps the
+//  sandboxes `sbx ls` lists under this journal's prefix as it sweeps containers by their label. sbx's network policy
 //  lets a sandbox reach every host it allows, so this provider offers no judge, which must reach its model provider only.
 //
 
@@ -60,14 +61,21 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: strin
 
   const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
 
-  const find: Provider['find'] = async (key) => {
+  /** Every sandbox name `sbx ls --json` lists, within COMMAND_MS, or what sbx said instead. */
+  const list = async (): Promise<{ ok: true; names: string[] } | { ok: false; message: string }> => {
     const ran = await cli(['ls', '--json'], { timeoutMs: COMMAND_MS });
-    const name = nameOf(key);
     const names = ran.kind === 'ran' && ran.code === 0 ? namesListed(ran.stdout) : undefined;
 
-    if (names !== undefined) return { ok: true, id: names.includes(name) ? name : undefined };
+    return names !== undefined ? { ok: true, names } : { ok: false, message: messageOf(ran) || 'it printed no list' };
+  };
 
-    return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not list its sandboxes: ${messageOf(ran) || 'it printed no list'}. Sandbox ${name} stays this attempt's until sbx answers again (\`sbx daemon start\`); to remove it now, run \`sbx rm --force ${name}\`.` } };
+  const find: Provider['find'] = async (key) => {
+    const listed = await list();
+    const name = nameOf(key);
+
+    if (listed.ok) return { ok: true, id: listed.names.includes(name) ? name : undefined };
+
+    return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not list its sandboxes: ${listed.message}. Sandbox ${name} stays this attempt's until sbx answers again (\`sbx daemon start\`); to remove it now, run \`sbx rm --force ${name}\`.` } };
   };
 
   const remove = async (name: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
@@ -117,6 +125,22 @@ export function sbxProvider({ agent, owner, env }: { agent: string; owner: strin
     },
 
     find,
+
+    async owned() {
+      const listed = await list();
+
+      if (!listed.ok) return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not list the sandboxes this runtime's journal owns: ${listed.message}` } };
+      const journalPrefix = `teamai-${owner}-`;
+
+      return {
+        ok: true,
+        sandboxes: listed.names.flatMap((name) => {
+          const [run, attempt, ...more] = name.startsWith(journalPrefix) ? name.slice(journalPrefix.length).split('-') : [];
+
+          return run && attempt && more.length === 0 ? [{ id: name, run, attempt }] : [];
+        }),
+      };
+    },
 
     async create(key, view) {
       const mounted = mountsOf('sbx', view);

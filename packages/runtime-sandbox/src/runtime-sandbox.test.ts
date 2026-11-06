@@ -1786,15 +1786,21 @@ describe('an attempt in an sbx sandbox', () => {
     expect(new Set(engine.calls().filter(([tool]) => tool === 'sbx').flat().filter((arg) => arg.startsWith('teamai-')))).toEqual(new Set([name]));
   });
 
-  it('removes no sandbox at open that it has no record of, since an sbx sandbox carries no label to say which journal it is', async () => {
+  it("removes, at an open, a sandbox named for this journal whose attempt it no longer records, and keeps one it records, another journal's and one named the old way", async () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });
-    const left = `teamai-${RUN}-a00000009`;
-    execFileSync(path.join(engine.bin, 'sbx'), ['create', '--name', left, '--no-progress', 'claude'], { env: engine.env() });
+    await openPlace(connection, place());
+    const own = sandbox();
+    const journalPrefix = own.slice(0, -`${RUN}-${ATTEMPT}`.length);
+    // What a runtime killed while sbx created a sandbox leaves, for this journal, another journal, and an older teamai.
+    const left = [`${journalPrefix}${RUN}-a00000002`, `teamai-0123456789abcdef-${RUN}-a00000003`, `teamai-${RUN}-a00000004`];
+
+    for (const name of left) execFileSync(path.join(engine.bin, 'sbx'), ['create', '--name', name, '--no-progress', 'claude'], { env: engine.env() });
 
     expect((await openPlace(connection, place())).ready).toMatchObject({ event: 'ready' });
-    expect(engine.containers().sort()).toEqual([sandbox(), left].sort());
-    expect(sandbox()).toMatch(SANDBOX);
+    await vi.waitFor(() => { expect(engine.containers().sort()).toEqual([own, ...left.slice(1)].sort()); }, { timeout: 10_000 });
+    expect(engine.calls()).toContainEqual(['sbx', 'rm', '--force', left[0]]);
+    expect(connection.stderr()).toBe('');
   });
 
   it("opens one sandbox per attempt from the agent's template, at the place's host paths, git paths read-only, with no credential, and shows it in the dashboard", async () => {
