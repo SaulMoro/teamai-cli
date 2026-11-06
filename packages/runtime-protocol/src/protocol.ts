@@ -458,6 +458,9 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
       unavailable: z.record(z.string().min(1), z.string().min(1).max(500)).optional(),
       // The tools it runs without permission prompts, because an option of its definition or of the member set that.
       permissions: z.record(z.string().min(1), z.literal('full-access')).optional(),
+      // Of the logins `init.credentials.logins` names, the tools whose login its provider keeps itself, so teamai
+      // copies none of them into an attempt's tool home.
+      ownLogins: z.array(z.string().min(1)).optional(),
     }).strict(),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }).strict(),
   ]);

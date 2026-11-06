@@ -168,7 +168,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     if ('type' in message) {
       onInit?.(message.ok
         ? {
-          ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }),
+          ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }), ...(message.ownLogins && { ownLogins: message.ownLogins }),
           can: { ...offered(message.can, message.confinedPrompt === true), ...(message.permissions && { fullAccess: Object.keys(message.permissions) }) },
         }
         : { ok: false, failure: message.error });

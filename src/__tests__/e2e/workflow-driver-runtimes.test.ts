@@ -1606,6 +1606,18 @@ span('end');
       expect(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct-daily', refresh_token: 'r900' } });
     });
 
+    it('copies no login into the attempt\'s tool home when the runtime\'s provider keeps its own Codex login', async () => {
+      loginDefinition('codexownlogin', state, { own_logins: ['codex'] });
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexownlogin'], repo, env());
+
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      // The fake Codex reads its login in its home, and finds none there, as the provider brings it instead.
+      expect(fs.existsSync(path.join(attemptDir(runId, attemptOf(review)), 'tool-home', 'codex', 'auth.json')), ran.stderr).toBe(false);
+      expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r1' });
+    });
+
     it('fails the step, naming the lock to delete, when the login lock is not one teamai can read', async () => {
       loginDefinition('codexbadlock', state);
       fs.mkdirSync(path.dirname(lockFile()), { recursive: true });

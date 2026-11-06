@@ -410,7 +410,12 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     };
   }
 
-  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: values.values, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
+  if (ready.ok) {
+    // A login the runtime's provider keeps itself is not copied into an attempt's tool home over it.
+    const engine = { ...split.engine, logins: split.engine.logins.filter((tool) => !ready.ownLogins?.includes(tool)) };
+
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: values.values, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
+  }
   await runtime.dispose();
   const { failure } = ready;
 
