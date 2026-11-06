@@ -9,7 +9,7 @@ import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
 import { RUN_DIR_ENV, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
-import type { AgentCreate } from './journal.js';
+import { paseoKeyOf, type AgentCreate } from './journal.js';
 
 // ─── The Paseo daemon ────────────────────────────────────
 //
@@ -276,26 +276,16 @@ export interface Daemon {
 }
 
 /**
- * A directory as Paseo compares it to find its workspace: resolved and normalised, never through its links, so a
- * checkout opened under another path is another workspace. Paseo folds case for a Windows path.
- */
-function asPaseoKeys(directory: string): string {
-  const resolved = path.resolve(directory);
-
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-/**
  * Whether Paseo has an active workspace that an open of `cwd` finds, reading every page of its workspaces: one on the
  * same path, and not a background one, which Paseo leaves out of that match.
  */
 async function isOpenIn(api: PaseoApi, cwd: string): Promise<boolean> {
-  const wanted = asPaseoKeys(cwd);
+  const wanted = paseoKeyOf(cwd);
 
   for (let cursor: string | undefined; ;) {
     const listed = await api.workspaces.list({ page: { limit: 200, ...(cursor !== undefined && { cursor }) } });
 
-    if (listed.entries.some((entry) => entry.archivingAt === null && !entry.background && asPaseoKeys(entry.workspaceDirectory) === wanted)) return true;
+    if (listed.entries.some((entry) => entry.archivingAt === null && !entry.background && paseoKeyOf(entry.workspaceDirectory) === wanted)) return true;
     const next = listed.pageInfo.nextCursor;
 
     if (!listed.pageInfo.hasMore || !next) return false;

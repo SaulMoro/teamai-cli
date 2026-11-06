@@ -1507,6 +1507,27 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
   });
 
+  it('archives the workspace a second attempt opened through a link to the checkout, which Paseo keeps apart from the member\'s that a first attempt found there', async () => {
+    const link = path.join(dir, 'checkout-link');
+    fs.symlinkSync(worktree, link);
+    behave({ output: { ok: true }, member_workspaces: [worktree] });
+    const runtime = start();
+    await ready(runtime);
+    await opened(runtime);
+    const viaLink = openRequest('op-0000000c', 'a4567cdef');
+    runtime.send({ ...viaLink, view: { ...viaLink.view, worktree: link } });
+    const accepted = await runtime.next(isOp('op-0000000c', 'accepted'));
+    const handle = 'handle' in accepted ? String(accepted.handle) : '';
+    await runtime.next((line) => isOp('op-0000000c', 'ready')(line) || isOp('op-0000000c', 'failed')(line));
+    const linked = (JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { workspaces: Record<string, string> }).workspaces[link];
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(linked).toBeDefined();
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: linked }]);
+  });
+
   it('answers close_failed when Paseo will not archive the workspace, and keeps the attempt to close again', async () => {
     behave({ output: { ok: true }, refuse_archive: 'Workspace is busy' });
     const runtime = start();

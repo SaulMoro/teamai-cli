@@ -134,7 +134,20 @@ function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
   return schema.parse(JSON.parse(text));
 }
 
-/** A directory with its links resolved, as Paseo names a workspace's, or as given when it is gone. */
+/**
+ * A directory as Paseo compares it to find its workspace: resolved and normalised, never through its links, so a
+ * checkout opened under another path is another workspace. Paseo folds case for a Windows path.
+ */
+export function paseoKeyOf(directory: string): string {
+  const resolved = path.resolve(directory);
+
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * A directory with its links resolved, or as given when it is gone: one directory however it is reached, which Paseo
+ * may still open as two workspaces (`paseoKeyOf`).
+ */
 export function resolvedDir(directory: string): string {
   try {
     return fs.realpathSync(directory);
@@ -264,13 +277,14 @@ export function journal(root: string) {
       ? true
       : place.workspace
         ? place.workspace.id === id
-        : place.kind === 'worktree' && directory !== undefined && resolvedDir(place.cwd) === resolvedDir(directory))).map(({ handle }) => handle),
+        : place.kind === 'worktree' && directory !== undefined && paseoKeyOf(place.cwd) === paseoKeyOf(directory))).map(({ handle }) => handle),
     /**
      * Whether the workspace on `directory` is the member's, as another attempt's place there decided it, which the
-     * workspace a new open finds open may be teamai's own for: undefined when no place there decided it.
+     * workspace a new open finds open may be teamai's own for: undefined when no place there decided it. A place that
+     * reached the directory through another path has another workspace, as Paseo keys them, so it decides nothing here.
      */
     memberOn: (directory: string, except: string): boolean | undefined => places()
-      .flatMap(({ handle, place }) => (handle !== except && place?.kind === 'worktree' && resolvedDir(place.cwd) === resolvedDir(directory)
+      .flatMap(({ handle, place }) => (handle !== except && place?.kind === 'worktree' && paseoKeyOf(place.cwd) === paseoKeyOf(directory)
         ? [place.member] : []))
       .find((member) => member !== undefined),
     /**
