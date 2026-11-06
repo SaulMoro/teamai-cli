@@ -1,7 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { parse } from 'yaml';
+import { z } from 'zod';
 import type { InitCredentials } from '@teamai/runtime-protocol';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
@@ -9,6 +12,8 @@ import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type Fake
 // The runtime through its stdio entry point, as teamai spawns it, on a fake docker / podman (testing/fake-engine.mjs).
 
 const IMAGE = 'ghcr.io/acme/agent:1';
+/** The teamai-cli checkout, whose drivers/ holds the definitions teamai ships. */
+const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLAUDE = "if (process.argv.includes('--version')) console.log('2.1.0 (Claude Code)')";
 
 let executable: string;
@@ -1939,6 +1944,17 @@ describe('an attempt in an sbx sandbox', () => {
     }
 
     expect(templates).toEqual(['claude', 'codex', 'shell']);
+  });
+
+  it('starts on the options of the teamai-sandbox definition teamai ships, on sbx, with each tool sbx keeps a login for', async () => {
+    const shipped = z.object({ name: z.string(), runtimes: z.array(z.object({ use: z.string(), options: z.record(z.string(), z.json()).default({}) })) })
+      .parse(parse(fs.readFileSync(path.join(REPO, 'drivers', 'teamai-sandbox.yaml'), 'utf8')));
+    // teamai reads max_parallel and credentials itself, and strips them before init.
+    const { max_parallel: _maxParallel, credentials: _credentials, ...options } = shipped.runtimes[0]?.options ?? {};
+    engine.secret('anthropic', true);
+
+    expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox' }, { use: 'local' }] });
+    expect(await init(start(), options, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
   });
 
   it('runs a Claude step from the claude template with no agent, and a command step in that same sandbox', async () => {
