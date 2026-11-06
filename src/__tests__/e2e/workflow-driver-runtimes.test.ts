@@ -628,6 +628,30 @@ steps:
       expect(sent?.provided).toEqual(['WORKFLOW_TEAM_TOKEN']);
     });
 
+    it('masks the team\'s secret a runtime echoes in a notice, as it masks the step\'s other output', async () => {
+      const secrets = path.join(repo, '.teamai', 'env', 'secrets.yaml');
+      fs.mkdirSync(path.dirname(secrets), { recursive: true });
+      fs.writeFileSync(secrets, 'secrets:\n  - key: WORKFLOW_NOTICE_TOKEN\n');
+      // The other tests share this repository: they run without the team's secret.
+      onTestFinished(async () => {
+        fs.rmSync(secrets);
+        await runCLI(['pull'], repo);
+      });
+      writeFlow('teamnotice', `  - id: review
+    prompt: Review the repository with the team's token.
+    requires: { env: [WORKFLOW_NOTICE_TOKEN] }
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('agentnotice', [{ use: 'toy', options: { state, agent: { output: { ok: true } }, notice: { prompt: 'Signed in with {WORKFLOW_NOTICE_TOKEN}.' } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'teamnotice', '--driver', 'agentnotice'], repo, env({ WORKFLOW_NOTICE_TOKEN: 'team-notice-value-5c1e' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(ran.stderr).toMatch(/Step runtime "toy", operation op-[0-9a-f]+: Signed in with <REDACTED:WORKFLOW_NOTICE_TOKEN>\./);
+      expect(ran.stderr).not.toContain('team-notice-value-5c1e');
+    });
+
     it('links no session a runtime started fresh to the one its step asked to resume', async () => {
       writeFlow('followed', `  - id: review
     prompt: Review the repository without changing it.

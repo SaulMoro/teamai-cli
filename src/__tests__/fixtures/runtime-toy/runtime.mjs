@@ -40,8 +40,8 @@
 // stderr and outlives it, which writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
 //
 // `notice` sends a notice before it answers a request, by request type (`{"init":"…","exec":"…"}`), naming the
-// request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, so a
-// test reads what teamai shows of a secret a runtime echoes.
+// request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, or of
+// NAME in its env, so a test reads what teamai shows of a secret a runtime echoes.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -631,12 +631,12 @@ function answeredOtherwise(request) {
   return true;
 }
 
-/** Sends the notice `notice` sets for `request`'s type, about its operation or handle, with the credentials it brought spelled out. */
+/** Sends the notice `notice` sets for `request`'s type, about its operation or handle, with the credentials and env it brought spelled out. */
 function noticeFor(request) {
   const text = (request.type === 'init' ? request.options?.notice : options?.notice)?.[request.type];
 
   if (typeof text !== 'string') return;
-  const message = text.replace(/\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => request.credentials?.[name] ?? '');
+  const message = text.replace(/\{([A-Z_][A-Z0-9_]*)\}/g, (_, name) => request.credentials?.[name] ?? request.env?.[name] ?? '');
   send({ event: 'notice', ...(request.op !== undefined ? { op: request.op } : request.handle !== undefined ? { handle: request.handle } : {}), message });
 }
 

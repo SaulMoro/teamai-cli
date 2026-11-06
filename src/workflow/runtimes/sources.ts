@@ -279,10 +279,11 @@ export type OpenedRuntime =
   | { kind: 'local'; use: 'local'; engine: EngineOptions }
   /**
    * `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. `credentials`: the values
-   * of the credentials it declares from the member's environment, by name, in memory only. `unavailable`: the tools it
-   * cannot run now, with why.
+   * of the credentials it declares from the member's environment, by name, in memory only. `masks`: the values its
+   * notices are masked with, by label: those credentials', and each team secret the drive adds once it resolves it.
+   * `unavailable`: the tools it cannot run now, with why.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; unavailable?: Record<string, string> };
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; masks: Record<string, string>; unavailable?: Record<string, string> };
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
 export interface OpenedDriver {
@@ -345,12 +346,13 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   if (!accepted.ok) return accepted;
 
-  // What the runtime tells the person is shown with the values of the credentials it gets masked.
-  const secrets = credentialSecrets(source.name, values.values);
+  // What the runtime tells the person is shown with the values of the credentials it gets masked, and with the team's
+  // secrets, which the drive adds here as it resolves them (`masks`).
+  const masks = credentialSecrets(source.name, values.values);
 
   const spawned = (): StepRuntime => (source.kind === 'shipped'
-    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], secrets })
-    : stdioStepRuntime({ name: source.name, command: source.executable, secrets }));
+    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], secrets: masks })
+    : stdioStepRuntime({ name: source.name, command: source.executable, secrets: masks }));
 
   let notRecovered: RuntimeFailure | undefined;
 
@@ -359,7 +361,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const recovered = await recovering.init({ options: split.runtime, mode: 'recover' });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {} } };
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {}, masks } };
     await recovering.dispose();
     notRecovered = recovered.failure;
   }
@@ -389,7 +391,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     };
   }
 
-  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: values.values, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
+  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: values.values, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
   await runtime.dispose();
   const { failure } = ready;
 

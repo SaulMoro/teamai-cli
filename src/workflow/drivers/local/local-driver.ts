@@ -1405,6 +1405,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
 
+      // A runtime's notice is masked as the step's output is, with the team's secrets too.
+      for (const entry of defined.runtimes) if (entry.kind === 'external') rememberSecrets(entry.masks, turn.secrets);
+
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
         running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true, isOneAtATime, toolFor,
       });
