@@ -474,6 +474,15 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(end.kind === 'finished' ? end.result.failure : 'not finished').toBeUndefined();
   });
 
+  it('answers closed to a close of a place it already closed, after a prompt ran there', async () => {
+    const runtime = await start({ output: { verdict: 'approve' } });
+    const handle = await opened(runtime);
+    expect(await runtime.prompt(promptRequest(handle), {})).toMatchObject({ kind: 'finished' });
+
+    expect(await runtime.close(handle)).toEqual({ ok: true });
+    expect(await runtime.close(handle)).toEqual({ ok: true });
+  });
+
   it('answers a repeated prompt id with the same outcome', async () => {
     const runtime = await start({ output: { verdict: 'approve' } });
     const request = promptRequest(await opened(runtime));
