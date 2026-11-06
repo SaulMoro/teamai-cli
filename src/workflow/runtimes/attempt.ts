@@ -3,7 +3,10 @@ import path from 'node:path';
 import { z } from 'zod';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { homeEnvOf } from '../../tool-home.js';
+import { isRecord } from '../expression.js';
+import { log } from '../../utils/logger.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 import type { LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
@@ -163,6 +166,51 @@ export async function seedToolHome({ config, run, attempt, tool, sessions }: { c
   }
 
   return undefined;
+}
+
+/**
+ * The member's own model choices for each tool, which an attempt's tool home starts with: the settings file under the
+ * tool's home, and the keys of it that choose the model. No other key is copied: never an `env`, a credential, a hook,
+ * a permission rule or an MCP server.
+ */
+const MODEL_CHOICES: Record<ExecRuntimeTool, { file: string; format: 'json' | 'toml'; keys: readonly string[] } | undefined> = {
+  claude: { file: 'settings.json', format: 'json', keys: ['model', 'effortLevel', 'modelSettings'] },
+  codex: { file: 'config.toml', format: 'toml', keys: ['model', 'model_reasoning_effort'] },
+  // Not decided yet: a CodeBuddy attempt home starts with none of the member's settings.
+  codebuddy: undefined,
+};
+
+/**
+ * Starts the tool home `dir` of an attempt on `tool` with the member's model choices, read from `memberHome`, the
+ * member's own home of that tool. A home that already has the settings file, from a predecessor or a restart, keeps it.
+ * A step's own `model` still wins, as the launch names it.
+ */
+export async function seedMemberModel({ tool, dir, memberHome }: { tool: ExecRuntimeTool; dir: string; memberHome: string }): Promise<void> {
+  const choices = MODEL_CHOICES[tool];
+
+  if (choices === undefined) return;
+  const target = path.join(dir, choices.file);
+
+  if (await fs.access(target).then(() => true, () => false)) return;
+  const text = await fs.readFile(path.join(memberHome, choices.file), 'utf8').catch(() => undefined);
+
+  if (text === undefined) return;
+  let parsed: unknown;
+
+  try {
+    parsed = choices.format === 'json' ? JSON.parse(text) : parseToml(text);
+  } catch (error) {
+    log.warn(`Could not read your ${tool} model choices from ${path.join(memberHome, choices.file)} (${error instanceof Error ? error.message : String(error)}), so the step's ${tool} starts with its own defaults.`);
+
+    return;
+  }
+
+  if (!isRecord(parsed)) return;
+  const picked = Object.fromEntries(choices.keys.flatMap((key) => (parsed[key] === undefined ? [] : [[key, parsed[key]]])));
+
+  if (Object.keys(picked).length === 0) return;
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(target, choices.format === 'json' ? `${JSON.stringify(picked, null, 2)}\n` : stringifyToml(picked), { flag: 'wx' });
 }
 
 /** The variable `tool`'s session store follows, set to its home in the attempt, or undefined for a tool no exec runtime runs. */

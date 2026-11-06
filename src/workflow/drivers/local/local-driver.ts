@@ -32,7 +32,7 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
-import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
@@ -45,7 +45,8 @@ import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoo
 import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/member-tools.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
-import { acceptToolCommand } from '../../../tool-instances.js';
+import { acceptToolCommand, instanceHomeDir } from '../../../tool-instances.js';
+import { toolHome as memberToolHome } from '../../../tool-home.js';
 import { instanceNames, isToolId, toolOf } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
@@ -621,6 +622,9 @@ async function promptReport(
   if (toolHome) {
     await fs.mkdir(toolHome.dir, { recursive: true });
     const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: launched, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
+
+    // The tool starts on the member's own model choices, from their home of it, or of the instance.
+    if (isExecRuntimeTool(selected)) await seedMemberModel({ tool: selected, dir: toolHome.dir, memberHome: target.instance?.home ? instanceHomeDir(target.instance.home) : memberToolHome(selected) });
 
     if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
   } else {

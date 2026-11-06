@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import { parse, stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
@@ -544,6 +545,44 @@ steps:
     const [build, review] = readRunState(runOf(ran)).steps;
     expect(build, ran.stderr).toMatchObject({ id: 'build', status: 'succeeded', runtime: 'host' });
     expect(review).toMatchObject({ id: 'review', status: 'succeeded', runtime: 'toy' });
+  });
+
+  it.each([
+    {
+      tool: 'claude', variable: 'CLAUDE_CONFIG_DIR', file: 'settings.json',
+      member: JSON.stringify({ model: 'opus', effortLevel: 'high', modelSettings: { opus: { thinking: true } }, env: { MEMBER_TOKEN: 'kept-home' }, permissions: { allow: ['Bash'] }, hooks: { Stop: [] }, mcpServers: { db: {} } }),
+      seeded: { model: 'opus', effortLevel: 'high', modelSettings: { opus: { thinking: true } } },
+    },
+    {
+      tool: 'codex', variable: 'CODEX_HOME', file: 'config.toml',
+      member: 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\napproval_policy = "never"\n\n[mcp_servers.db]\ncommand = "db"\n\n[shell_environment_policy.set]\nMEMBER_TOKEN = "kept-home"\n',
+      seeded: { model: 'gpt-5.5', model_reasoning_effort: 'high' },
+    },
+  ])('starts a $tool attempt home with the member\'s model choices and nothing else of their settings', async ({ tool, variable, file, member, seeded }) => {
+    writeFlow(`${tool}seeded`, `  - id: review
+    tool: ${tool}
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    const memberFile = path.join(os.homedir(), `.${tool}`, file);
+    const before = fs.existsSync(memberFile) ? fs.readFileSync(memberFile, 'utf8') : undefined;
+    fs.mkdirSync(path.dirname(memberFile), { recursive: true });
+    fs.writeFileSync(memberFile, member);
+    onTestFinished(() => (before === undefined ? fs.rmSync(memberFile, { force: true }) : fs.writeFileSync(memberFile, before)));
+    if (tool === 'codex') {
+      fs.writeFileSync(path.join(bin, 'codex'), fakeTool({ tool: 'codex', version: 'codex-cli 0.40.0', homeVariable: variable, sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+      onTestFinished(() => fs.rmSync(path.join(bin, 'codex'), { force: true }));
+    }
+    writeDefinition(`toy${tool}seeded`, [{ use: 'toy', options: { state } }]);
+
+    const ran = await runCLI(['workflow', 'start', `${tool}seeded`, '--driver', `toy${tool}seeded`], repo, env());
+
+    const runId = runOf(ran);
+    const [review] = readRunState(runId).steps;
+    const homeFile = path.join(attemptDir(runId, attemptOf(review)), 'tool-home', tool, file);
+    const text = fs.readFileSync(homeFile, 'utf8');
+    expect(tool === 'claude' ? JSON.parse(text) : parseToml(text), ran.stderr).toEqual(seeded);
   });
 
   it('warns once that a runtime runs steps in full access on this machine, and records their isolation as none', async () => {

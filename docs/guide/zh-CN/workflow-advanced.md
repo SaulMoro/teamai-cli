@@ -1686,7 +1686,7 @@ Run it? [y/N]
 
 - 工作树，在主机上的原路径可读写。git 目录和 `.git` 指针只读。teamai 在主机上提交和推送，并关闭钩子、fsmonitor 和引用替换。
 - `attempts/<attempt>/out/`，可读写。结果文件是 `out/result.json`。
-- 提示步骤有自己的工具主目录：`attempts/<attempt>/tool-home/<tool>`，通过 `CLAUDE_CONFIG_DIR`、`CODEX_HOME` 或 `CODEBUDDY_CONFIG_DIR` 设置。提示步骤只在 Claude Code、Codex 或 CodeBuddy 上运行，并且只以无头方式运行，不能交互。评分、发布和之后续接这个会话的轮次都从这个目录读取会话。之后的轮次从它的副本开始。[自己启动智能体的运行时](#自己启动智能体的运行时)没有工具主目录：它的工具把会话保存在 `local` 保存的位置。
+- 提示步骤有自己的工具主目录：`attempts/<attempt>/tool-home/<tool>`，通过 `CLAUDE_CONFIG_DIR`、`CODEX_HOME` 或 `CODEBUDDY_CONFIG_DIR` 设置。提示步骤只在 Claude Code、Codex 或 CodeBuddy 上运行，并且只以无头方式运行，不能交互。评分、发布和之后续接这个会话的轮次都从这个目录读取会话。之后的轮次从它的副本开始。新的主目录带着你自己为该工具选的模型，不带你设置里的其他内容：Claude 取 `settings.json` 的 `model`、`effortLevel` 和 `modelSettings`，Codex 取 `config.toml` 的 `model` 和 `model_reasoning_effort`。步骤自己的 `model` 仍然优先。[自己启动智能体的运行时](#自己启动智能体的运行时)没有工具主目录：它的工具把会话保存在 `local` 保存的位置。
 - 租约提供的环境变量键、租约的 `env` 和这次尝试的标记。租约扣留的键会从运行时的环境里移除。
 - 提示步骤得到它的运行时声明的[凭据](#来自你环境的凭据)。命令步骤得不到。
 
