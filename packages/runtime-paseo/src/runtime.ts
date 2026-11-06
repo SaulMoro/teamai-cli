@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, DEFAULT_MODES, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place, PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -61,8 +61,8 @@ interface Launch {
 //
 
 const OptionsSchema = z.object({
-  /** The daemon's WebSocket address. */
-  url: z.string().regex(/^wss?:\/\/\S+$/, 'The Paseo url is a ws:// or wss:// address, such as ws://127.0.0.1:6767/ws').default('ws://127.0.0.1:6767/ws'),
+  /** The daemon's WebSocket address, for a daemon Paseo's own config on this machine does not name (`daemonUrl`). */
+  url: z.string().regex(/^(?:wss?|ws\+unix):\/\/\S+$/, 'The Paseo url is a ws://, wss:// or ws+unix:// address, such as ws://127.0.0.1:6767/ws').optional(),
 }).strict();
 
 /** How long an attended step waits between looks at a permission request a person has not answered yet. */
@@ -217,8 +217,11 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
   let daemon: Daemon | undefined;
   let mode: 'attended' | 'unattended' = 'attended';
-  /** In recover mode, the daemon's url: the runtime connects to it only once a cancel or close needs it. */
-  let recoverAt: string | undefined;
+  /**
+   * In recover mode, the daemon's url, or why it could not be read: the runtime connects to it only once a cancel or
+   * close needs it.
+   */
+  let recoverAt: { url: string } | RuntimeFailure | undefined;
   /** The connection a recover-mode cancel or close is making, which the next one shares. */
   let reaching: Promise<Daemon | RuntimeFailure> | undefined;
 
@@ -229,9 +232,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
    */
   const reach = (): Promise<Daemon | RuntimeFailure | undefined> => {
     if (daemon) return Promise.resolve(daemon);
-    const url = recoverAt;
 
-    if (url === undefined) return Promise.resolve(undefined);
+    if (!recoverAt || 'code' in recoverAt) return Promise.resolve(recoverAt);
+    const { url } = recoverAt;
 
     reaching ??= (async () => {
       const client = await loadClient(process.env);
@@ -254,7 +257,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const reached = await Promise.race([reach(), late(deadline)]);
 
     return reached === 'late'
-      ? { code: 'daemon_unreachable', message: `No Paseo daemon answered at ${recoverAt ?? 'the runtime\'s url'} within ${STOP_SETTLE_MS / 1000} s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address.` }
+      ? { code: 'daemon_unreachable', message: `No Paseo daemon answered at ${recoverAt && !('code' in recoverAt) ? recoverAt.url : 'the runtime\'s url'} within ${STOP_SETTLE_MS / 1000} s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address.` }
       : reached;
   };
 
@@ -468,13 +471,25 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
+    // The daemon the definition names, else the one the member's Paseo config names.
+    const address = options.data.url === undefined ? daemonUrl(process.env) : { url: options.data.url };
+
     if (request.mode === 'recover') {
-      // Only to stop what it ran: no sign-in or tool check, and no connection until a cancel or close needs one.
-      recoverAt = options.data.url;
+      // Only to stop what it ran: no sign-in or tool check, and no connection until a cancel or close needs one. A config
+      // it cannot read fails each stop that needs the daemon, naming why, never the init that stops nothing.
+      recoverAt = address;
       write({ type: 'init', ok: true, can: {} });
 
       return;
     }
+
+    if ('code' in address) {
+      write({ type: 'init', ok: false, error: address });
+
+      return;
+    }
+
+    const { url } = address;
 
     const client = await loadClient(process.env);
 
@@ -484,7 +499,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    const connected = await connect(options.data.url, client);
+    const connected = await connect(url, client);
 
     if ('code' in connected) {
       write({ type: 'init', ok: false, error: connected });
