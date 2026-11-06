@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { OpIdSchema, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
@@ -1569,6 +1570,38 @@ describe('teamai-runtime-paseo', () => {
     expect(cancelMs).toBeLessThan(10_500);
     expect(closeMs).toBeLessThan(10_500);
     daemon = await startFakeDaemon({ state: daemonState, port: 0 });
+  }, 40_000);
+
+  it('answers a recover-mode cancel within 10 s while the daemon\'s address accepts connections and never answers, and stops the agent on a retry once the daemon is back', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'display'));
+    await first.kill();
+    const { url } = daemon;
+    const port = Number(new URL(url).port);
+    await daemon.close();
+    // A host that takes the connection and never says hello, as a hung daemon or a firewall that holds it does.
+    const sockets = new Set<net.Socket>();
+    const silent = net.createServer((socket) => sockets.add(socket));
+    await new Promise<void>((resolve) => silent.listen(port, '127.0.0.1', resolve));
+    const recovering = start();
+    await ready(recovering, { mode: 'recover', options: { url } });
+    const asked = Date.now();
+
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toMatchObject({ op: 'op-0000000b', event: 'failed', failure: { code: 'cancel_failed' } });
+    expect(Date.now() - asked).toBeLessThan(10_500);
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => silent.close(() => resolve()));
+    daemon = await startFakeDaemon({ state: daemonState, port });
+
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
   }, 40_000);
 
   it('refuses to close a place whose record it cannot read, and never calls it gone', async () => {

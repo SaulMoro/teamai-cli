@@ -233,39 +233,41 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   let reaching: Promise<Daemon | RuntimeFailure> | undefined;
 
   /**
-   * The daemon a cancel or close needs: the one init connected to, or, in recover mode, one connected on first need, so
-   * a daemon that is down or a tool signed out since never keeps teamai from stopping what it ran. Undefined: init did
-   * not connect to one.
+   * The daemon a stop needs by `deadline`: the one init connected to, or, in recover mode, one connected on first need,
+   * so a daemon that is down or a tool signed out since never keeps teamai from stopping what it ran, or why none
+   * answered by then. Undefined: init did not connect to one. A connection that misses a stop's deadline is not shared
+   * with the next stop, which connects afresh, so a daemon that is back by then is reached.
    */
-  const reach = (): Promise<Daemon | RuntimeFailure | undefined> => {
-    if (daemon) return Promise.resolve(daemon);
+  const reachBy = async (deadline: number): Promise<Daemon | RuntimeFailure | undefined> => {
+    if (daemon) return daemon;
 
-    if (!recoverAt || 'code' in recoverAt) return Promise.resolve(recoverAt);
+    if (!recoverAt || 'code' in recoverAt) return recoverAt;
     const { url } = recoverAt;
 
-    reaching ??= (async () => {
-      const client = await loadClient(process.env);
-      const connected = 'code' in client ? client : await connect(url, client);
+    const shared = reaching;
+    const abandon = new AbortController();
 
-      if ('code' in connected) reaching = undefined;
-      else daemon = connected;
+    const connecting = shared ?? (async () => {
+      const client = await loadClient(process.env);
+      const connected = 'code' in client ? client : await connect(url, client, abandon.signal);
+
+      if (!('code' in connected)) daemon = connected;
 
       return connected;
     })();
 
-    return reaching;
-  };
+    reaching = connecting;
+    const reached = await Promise.race([connecting, late(deadline)]);
 
-  /**
-   * The daemon a stop needs, as `reach` gives it, or why none answered by `deadline`: a recover-mode connection to a
-   * daemon that is down takes the client's own 10 s, which would run past a stop's.
-   */
-  const reachBy = async (deadline: number): Promise<Daemon | RuntimeFailure | undefined> => {
-    const reached = await Promise.race([reach(), late(deadline)]);
+    // A connection that failed, or missed this deadline, is not the next stop's; a later one may have replaced it. One
+    // this stop began, and it ran out of time for, is dropped then, so none goes on past the stop that wanted it.
+    if ((reached === 'late' || 'code' in reached) && reaching === connecting) reaching = undefined;
 
-    return reached === 'late'
-      ? { code: 'daemon_unreachable', message: `No Paseo daemon answered at ${recoverAt && !('code' in recoverAt) ? recoverAt.url : 'the runtime\'s url'} within ${STOP_SETTLE_MS / 1000} s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address.` }
-      : reached;
+    if (reached !== 'late') return reached;
+
+    if (!shared) abandon.abort();
+
+    return { code: 'daemon_unreachable', message: `No Paseo daemon answered at ${url} within ${STOP_SETTLE_MS / 1000} s. Start it with \`paseo start\`, or set the runtime's url option to the daemon's address.` };
   };
 
   /** What init offered of each tool the daemon has installed. */

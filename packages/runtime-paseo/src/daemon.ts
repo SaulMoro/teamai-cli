@@ -297,8 +297,11 @@ const nodeWebSocket = (WebSocket: PaseoClient['WebSocket']): WebSocketFactory =>
   };
 };
 
-/** Connects to the daemon at `url` through the installed `paseo` client and checks it runs what this runtime needs, or says why it cannot be used. */
-export async function connect(url: string, paseo: PaseoClient): Promise<Daemon | RuntimeFailure> {
+/**
+ * Connects to the daemon at `url` through the installed `paseo` client and checks it runs what this runtime needs, or says
+ * why it cannot be used. It waits at most 10 s for the daemon's answer, and stops waiting once `abandoned` aborts.
+ */
+export async function connect(url: string, paseo: PaseoClient, abandoned?: AbortSignal): Promise<Daemon | RuntimeFailure> {
   const client: DaemonClient = new paseo.DaemonClient({
     url,
     clientId: 'teamai-runtime-paseo',
@@ -311,14 +314,17 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
 
   let timer: NodeJS.Timeout | undefined;
 
-  const timedOut = new Promise<'timeout'>((resolve) => {
+  const timedOut = new Promise<'timeout' | 'abandoned'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), CONNECT_TIMEOUT_MS);
+    abandoned?.addEventListener('abort', () => resolve('abandoned'), { once: true });
   });
 
   try {
-    const connected = await Promise.race([client.connect().then(() => 'connected' as const), timedOut]);
+    const connected = abandoned?.aborted ? 'abandoned' : await Promise.race([client.connect().then(() => 'connected' as const), timedOut]);
 
     if (connected === 'timeout') throw new Error(`no answer in ${CONNECT_TIMEOUT_MS / 1000} s`);
+
+    if (connected === 'abandoned') throw new Error('the stop that asked for it ran out of time');
   } catch (error) {
     await client.close().catch(() => {});
 
