@@ -65,7 +65,8 @@ describe('teamai-runtime-t3', () => {
       expect(reply).toEqual({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         can: {
-          exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'codex'],
+          exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false,
+          workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude', 'codex'],
           confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex'] }],
         },
       });
@@ -333,7 +334,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     // teamai quotes a keyed option failure inside a sentence of its own and ends it, so these messages bring no full stop.
-    it.each(['full-access', 'yolo'])('refuses `runtime_mode: %s`, which would not tighten a step thread\'s mode', async (runtimeMode) => {
+    it.each(['full-access', 'yolo'])('refuses `runtime_mode: %s`, a mode it never starts a thread in', async (runtimeMode) => {
       signIn(t3);
       const runtime = start();
 
@@ -343,7 +344,7 @@ describe('teamai-runtime-t3', () => {
         type: 'init', ok: false,
         error: {
           code: 'bad_option', key: 'runtime_mode',
-          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two`,
+          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access; runtime_mode sets it to auto, auto-accept-edits or approval-required. Remove it, or set one of those three`,
         },
       });
       expect(t3.calls()).toEqual([]);
@@ -397,29 +398,186 @@ describe('teamai-runtime-t3', () => {
       fs.mkdirSync(path.dirname(result), { recursive: true });
     });
 
-    it('fails open for a checkout that is not a T3 project, saying how to add it', async () => {
-      t3.config({ projects: [] });
-      const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
-      await runtime.next((line) => line['type'] === 'init');
+    /** Opens the place of an attempt whose folder is `folder` on `runtime`, and answers how the open ended. */
+    const openOn = async (runtime: Connection, folder: string, op = OPEN): Promise<Line> => {
+      runtime.send({ type: 'open', op, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree: folder, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      await runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
 
-      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted');
+    };
 
-      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] === 'failed')).toEqual({
-        op: OPEN, event: 'failed',
-        failure: { code: 'not_a_t3_project', message: `${checkout} is not a project in T3 Code fake-laptop. Add it in T3 Code (Add project, then pick that folder), then start the workflow again.` },
+    const initialized = async (options: Line = {}, env: Record<string, string> = {}): Promise<Connection> => {
+      const runtime = start(env);
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options } });
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+
+      return runtime;
+    };
+
+    /** The project script settings that make T3 run `script` in the folder of every thread in project-1. */
+    const scriptsInProject1 = (script: { name: string; command: string; runOnWorktreeCreate: boolean; runOnSettle?: boolean }) => ({
+      projectSettingsFolded: true, projectSettingsOverrides: { 'project-1': { defaultProjectScripts: [{ id: 'one', icon: 'configure', ...script }] } },
+    });
+
+    describe('in a checkout that is no T3 project yet', () => {
+      it('adds it to T3 Code with the t3 command, as the member, saying so, and runs the step there', async () => {
+        t3.config({ projects: [] });
+        const runtime = await initialized();
+
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+        expect(t3.commandRuns()).toContainEqual(['project', 'add', '--base-dir', t3.t3Home, checkout]);
+        expect(runtime.stderr()).toBe(`Adding ${checkout} to T3 Code as a project, so its steps can run there.\n`);
+
+        const handle = `t3-${RUN}-a1b2c3d4`;
+        runtime.send(prompt(handle, 'op-0000000b'));
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+        expect(t3.threads()[0]).toMatchObject({ projectId: expect.stringMatching(/^project-/), workspace: 'existing_worktree', worktreePath: worktree });
+      });
+
+      it('fails open when the t3 command cannot add it, naming the command that does', async () => {
+        t3.config({ projects: [], projectAddFails: 4 });
+        const runtime = await initialized();
+
+        expect(await openOn(runtime, worktree)).toEqual({
+          op: OPEN, event: 'failed',
+          failure: { code: 'not_a_t3_project', message: `${checkout} is not a project in T3 Code fake-laptop, and teamai could not add it (t3 project add exited with status 4: Could not add the project). Add it in T3 Code (Add project), or run t3 project add ${checkout}, then start the workflow again.` },
+        });
+      });
+
+      it('adds it again when T3 deleted the project it had', async () => {
+        t3.config({ projects: [{ id: 'project-old', title: 'acme-app', workspaceRoot: checkout, deletedAt: '2026-10-01T09:00:00.000Z' }] });
+        const runtime = await initialized();
+
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+        expect(t3.commandRuns()).toContainEqual(['project', 'add', '--base-dir', t3.t3Home, checkout]);
       });
     });
 
-    it('does not count a project T3 deleted', async () => {
-      t3.config({ projects: [{ id: 'project-old', title: 'acme-app', workspaceRoot: checkout, deletedAt: '2026-10-01T09:00:00.000Z' }] });
-      const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
-      await runtime.next((line) => line['type'] === 'init');
+    // T3 runs a project's setup script in every worktree a thread binds, before the agent starts, so its output would be
+    // committed as the step's work. A thread on a project's own folder runs no setup script.
+    it('runs the step on a project of its own for the worktree when T3 would run the project\'s setup script in it, and nothing of that script lands there', async () => {
+      t3.settings(scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true }));
+      const runtime = await initialized();
 
-      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+      runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b'));
 
-      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] === 'failed')).toMatchObject({ failure: { code: 'not_a_t3_project' } });
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished', result: { output: { verdict: 'approve' } } });
+      expect(t3.commandRuns()).toContainEqual(['project', 'add', '--base-dir', t3.t3Home, '--title', `acme-app · teamai ${RUN}`, worktree]);
+      expect(t3.threads()[0]).toMatchObject({ workspace: 'root', worktreePath: worktree, projectId: expect.not.stringMatching(/^project-1$/) });
+      expect(fs.existsSync(path.join(worktree, 'SETUP_RAN.txt'))).toBe(false);
+      expect(runtime.stderr()).toBe(`T3 Code runs the setup script "Install" of acme-app in each worktree a thread opens on, so teamai adds the step's worktree ${worktree} to T3 Code as a project of its own, where that script does not run.\n`);
+    });
+
+    it('leaves a thread unsettled, saying why once, when settling it would run the project\'s settle script in the step\'s worktree', async () => {
+      t3.settings(scriptsInProject1({ name: 'Stop services', command: 'echo stopped > SETTLE_RAN.txt', runOnWorktreeCreate: false, runOnSettle: true }));
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000000b'));
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+
+      runtime.send({ type: 'collect', handle });
+      await runtime.next((line) => line['event'] === 'collected');
+      runtime.send({ type: 'close', handle });
+      await runtime.next((line) => line['event'] === 'closed');
+
+      const [thread] = t3.threads();
+      expect(thread?.settled).toBe(false);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_organize')).toEqual([]);
+      expect(fs.existsSync(path.join(worktree, 'SETTLE_RAN.txt'))).toBe(false);
+      expect(runtime.stderr()).toBe(`teamai leaves the T3 thread ${linkTo(thread?.threadId)} ("review · teamai ${RUN}") in T3 Code's active threads: settling it would run the project's script "Stop services" in the step's folder.\n`);
+    });
+
+    // A read-only step reads the checkout where it is, as on local, and a clone is a folder of its own: each is a
+    // project's own folder, where T3 runs no setup script.
+    it('runs a read-only step on the checkout itself, as a thread of the checkout\'s project', async () => {
+      t3.settings(scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true }));
+      const runtime = await initialized();
+
+      expect(await openOn(runtime, checkout)).toMatchObject({ event: 'ready' });
+      runtime.send({ ...prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b'), cwd: checkout });
+
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+      expect(t3.threads()[0]).toMatchObject({ projectId: 'project-1', workspace: 'root', worktreePath: checkout });
+      expect(t3.commandRuns()).toEqual([]);
+      expect(fs.existsSync(path.join(checkout, 'SETUP_RAN.txt'))).toBe(false);
+    });
+
+    it('runs a step in a clone teamai prepared on a project it adds for the clone', async () => {
+      const clone = path.join(dir, 'clones', `${RUN}-a1b2c3d4`);
+      execFileSync('git', ['clone', '-q', checkout, clone]);
+      const runtime = await initialized();
+
+      expect(await openOn(runtime, clone)).toMatchObject({ event: 'ready' });
+      runtime.send({ ...prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b'), cwd: clone });
+
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+      expect(t3.commandRuns()).toContainEqual(['project', 'add', '--base-dir', t3.t3Home, clone]);
+      expect(t3.threads()[0]).toMatchObject({ projectId: expect.not.stringMatching(/^project-1$/), workspace: 'root', worktreePath: clone });
+    });
+
+    describe('with no mode or model set for the step', () => {
+      it.each<{ set: string; settings: Line; options: Line; mode: string }>([
+        { set: 'the member\'s T3 default mode', settings: { defaultRuntimeMode: 'approval-required' }, options: {}, mode: 'approval-required' },
+        { set: 'the project\'s default mode, over the global one', settings: { defaultRuntimeMode: 'approval-required', projectSettingsOverrides: { 'project-1': { defaultRuntimeMode: 'auto-accept-edits' } } }, options: {}, mode: 'auto-accept-edits' },
+        { set: 'runtime_mode, over the member\'s default', settings: { defaultRuntimeMode: 'approval-required' }, options: { runtime_mode: 'auto' }, mode: 'auto' },
+        { set: 'no default at all', settings: {}, options: {}, mode: 'auto' },
+      ])('starts the thread in $set', async ({ settings, options, mode }) => {
+        t3.settings(settings);
+        const { runtime, handle } = await opened('attended', {}, options);
+        runtime.send(prompt(handle, 'op-0000000b'));
+
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['runtimeMode']).toBe(mode);
+        expect(runtime.stderr()).toBe('');
+      });
+
+      it('starts threads in Auto, never in full access, when that is the member\'s T3 default, and says so once', async () => {
+        t3.settings({ defaultRuntimeMode: 'full-access' });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-0000000b'));
+        runtime.send(prompt(handle, 'op-0000000c', { step: 'second' }));
+
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+        expect(await ended(runtime, 'op-0000000c')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_launch').map((call) => call.args['runtimeMode'])).toEqual(['auto', 'auto']);
+        expect(runtime.stderr()).toBe('T3\'s default mode is Full access; teamai starts its threads in Auto instead.\n');
+      });
+
+      // T3 applies the member's default, its options, and their fallback once its usage is spent, only to a launch that names no model.
+      it('names no model when the step\'s tool runs on the instance of the member\'s default, so T3 applies that default, and shows the model T3 chose', async () => {
+        t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-0000000b', { model: undefined }));
+
+        expect(await runtime.next((line) => line['op'] === 'op-0000000b' && line['event'] === 'display')).toMatchObject({ display: { fields: { model: 'claude-sonnet-5-5' } } });
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('modelSelection');
+        expect(t3.threads()[0]).toMatchObject({ provider: 'claudeAgent', model: 'claude-sonnet-5-5' });
+      });
+
+      it('runs a tool on the instance of the project\'s default model, over the global default', async () => {
+        t3.config({ providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work', displayName: 'Claude (work)' }, CODEX] });
+        t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, projectSettingsOverrides: { 'project-1': { defaultModelSelection: { instanceId: 'claude-work', model: 'claude-opus-5-5' } } } });
+        const runtime = connect(executable, t3, {}, checkout);
+        connections.push(runtime);
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b', { model: { name: 'claude-sonnet-5-5' } }));
+
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claude-work', model: 'claude-sonnet-5-5' });
+      });
+
+      it('offers no tool whose instance the member turned off for the checkout\'s project, though it is on globally', async () => {
+        t3.settings({ projectSettingsOverrides: { 'project-1': { providerInstances: { codex: { enabled: false } } } } });
+        const runtime = connect(executable, t3, {}, checkout);
+        connections.push(runtime);
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude'] } });
+      });
     });
 
     it('runs as a T3 thread of its own on the attempt\'s worktree, then ends finished with the result and the session', async () => {

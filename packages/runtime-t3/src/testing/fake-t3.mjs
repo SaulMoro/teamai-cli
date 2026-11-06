@@ -22,7 +22,10 @@
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
 //   T3CODE_HOME/scratch/        a scratch thread's new folder, as T3 makes one for a launch with `scratch: true`
 //   FAKE_T3_HOME                the member's home, where the agent's tool keeps its transcripts
+//   T3CODE_HOME/userdata/settings.json   the member's T3 settings, read on every launch and settle as T3 reads them:
+//                               the default model and the project scripts, the project's override first
 
+import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -55,6 +58,33 @@ const update = (id, change) => {
 };
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/** The member's T3 settings, as the test wrote them. */
+const settings = () => {
+  const file = path.join(T3_HOME, 'userdata', 'settings.json');
+
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+};
+
+/** The scripts of a project, as T3 resolves them: the project's override, then the global ones once folded, then its own. */
+function scriptsOf(projectId) {
+  const all = settings();
+  const override = all.projectSettingsOverrides?.[projectId]?.defaultProjectScripts;
+
+  if (override !== undefined) return override;
+
+  if (all.projectSettingsFolded) return all.defaultProjectScripts ?? [];
+  const own = config().projects.find((project) => project.id === projectId)?.scripts ?? [];
+
+  return own.length > 0 ? own : all.defaultProjectScripts ?? [];
+}
+
+/** Runs the project script `which` picks in `cwd`, as T3 runs it in a terminal there. */
+function runScript(projectId, which, cwd) {
+  const script = scriptsOf(projectId).find(which);
+
+  if (script && cwd) execFileSync('/bin/sh', ['-c', script.command], { cwd });
+}
 
 /** The agent of one run: it works, then writes the result file and its transcript, and the run completes. */
 async function play(threadId) {
@@ -182,25 +212,36 @@ function launch(args) {
 
   const existing = readThread(threadId);
 
-  if (existing) return ok({ threadId, link: link(threadId), status: existing.status });
-  const provider = config().providers.find((one) => one.providerInstanceId === args.modelSelection?.instanceId);
+  if (existing) return ok({ threadId, link: link(threadId), status: existing.status, modelSelection: { instanceId: existing.instanceId, model: existing.model } });
+  // A launch from outside a thread that names no model starts on the member's default, the project's first.
+  const all = settings();
+  const projectDefault = all.projectSettingsOverrides?.[args.projectId]?.defaultModelSelection;
+  const modelSelection = args.modelSelection ?? (projectDefault !== undefined ? projectDefault : all.defaultModelSelection);
 
-  if (!provider) return fail(`No provider instance ${args.modelSelection?.instanceId}.`);
+  if (!modelSelection) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'invalid_request', message: 'Pass modelSelection: the project has no default model.' }));
+  const provider = config().providers.find((one) => one.providerInstanceId === modelSelection.instanceId);
+
+  if (!provider) return fail(`No provider instance ${modelSelection.instanceId}.`);
 
   // A scratch thread gets a new, empty folder of its own.
   const scratch = args.scratch === true ? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
 
   if (scratch) fs.mkdirSync(scratch, { recursive: true });
   const idle = args.message === undefined;
+  // A thread binds the project's own folder (`root`, the default), or one of its worktrees, where T3 runs the project's setup script.
+  const strategy = args.workspaceStrategy ?? { type: 'root' };
+  const folder = scratch ?? (strategy.type === 'existing_worktree' ? strategy.worktreePath : config().projects.find((project) => project.id === args.projectId)?.workspaceRoot);
+
+  if (strategy.type === 'existing_worktree') runScript(args.projectId, (script) => script.runOnWorktreeCreate, folder);
 
   writeThread({
-    threadId, title: args.title, message: args.message, worktreePath: scratch ?? args.workspaceStrategy?.worktreePath, projectId: scratch ? 'scratch-project' : args.projectId,
-    provider: provider.driverKind, model: args.modelSelection?.model, runtimeMode: args.runtimeMode, status: idle ? 'idle' : 'starting', settled: false, runCount: idle ? 0 : 1,
+    threadId, title: args.title, message: args.message, worktreePath: folder, projectId: scratch ? 'scratch-project' : args.projectId, workspace: scratch ? 'scratch' : strategy.type,
+    provider: provider.driverKind, instanceId: provider.providerInstanceId, model: modelSelection.model, runtimeMode: args.runtimeMode, status: idle ? 'idle' : 'starting', settled: false, runCount: idle ? 0 : 1,
   });
 
   if (!idle) void play(threadId);
 
-  return ok({ threadId, link: link(threadId), status: idle ? null : 'starting' });
+  return ok({ threadId, link: link(threadId), status: idle ? null : 'starting', modelSelection: { instanceId: provider.providerInstanceId, model: modelSelection.model } });
 }
 
 const TOOLS = {
@@ -297,6 +338,8 @@ const TOOLS = {
     if (!readThread(args.threadId)) return notFound(args.threadId);
 
     if (config().organizeFails) return fail(`Thread ${args.threadId} cannot be organized now.`);
+
+    if (args.action === 'settle') runScript(readThread(args.threadId).projectId, (script) => script.runOnSettle, readThread(args.threadId).worktreePath);
     update(args.threadId, () => ({ settled: args.action === 'settle' }));
     sequence += 1;
 
