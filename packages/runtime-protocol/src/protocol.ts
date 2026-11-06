@@ -104,6 +104,22 @@ export const CANCEL_FAILED = 'cancel_failed';
 /** The most characters a reason in `init`'s `unavailable` holds: cut a longer one to fit. */
 export const UNAVAILABLE_REASON_MAX = 500;
 
+/**
+ * The environment variables each tool a step runtime launches signs in with (`signIn`), and those that go with a sign-in
+ * (`alongside`), by tool. teamai finds them by name in the member's environment and gives each tool only its own; a
+ * runtime that checks whether a tool can sign in reads the same names.
+ */
+export interface SignInVariables {
+  signIn: readonly string[];
+  alongside?: readonly string[];
+}
+
+export const SIGN_IN_VARIABLES: Readonly<Record<'claude' | 'codex' | 'codebuddy', SignInVariables>> = {
+  claude: { signIn: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'] },
+  codex: { signIn: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
+  codebuddy: { signIn: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'] },
+};
+
 /** A runtime's options, as a driver definition gives them; the runtime validates them at `init`. */
 export const RuntimeOptionsSchema = z.record(z.string(), z.json());
 

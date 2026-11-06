@@ -6,8 +6,8 @@ import { ATTEMPT_ENV, LAUNCHED_BY_ENV, RUN_MODE_ENV } from '../../launch-context
 import { TOOLS } from '../../tools.js';
 import { homeVariables, isToolId } from '../../tool-registry.js';
 import { GIT_REPOSITORY_ENV } from '../../utils/git-env.js';
-import { SIGN_IN_VARIABLES } from '../../workflow/runtimes/sources.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
+import { SIGN_IN_VARIABLES } from '@teamai/runtime-protocol';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),
 // and recall, contribute and session save read that id through

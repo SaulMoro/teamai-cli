@@ -13,7 +13,7 @@ import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import type { InitInstance, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
+import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceNames, toolOf } from '../../tool-registry.js';
 import type { StepRuntime } from './step-runtime.js';
@@ -277,26 +277,18 @@ function credentialValues(driver: ResolvedDriver, use: string, credentials: EnvC
   return { ok: true, values };
 }
 
-/**
- * The variables each tool a step runtime launches signs in with, and those that go with them. A runtime entry that
- * declares no credential gets, by name, the ones set in the member's environment, so the team's definition need not
- * pick one route for everybody.
- */
-export const SIGN_IN_VARIABLES: Record<ExecRuntimeTool, { signIn: readonly string[]; alongside?: readonly string[] }> = {
-  claude: { signIn: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'] },
-  codex: { signIn: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
-  codebuddy: { signIn: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'] },
-};
+/** The sign-in variables of each tool an exec runtime launches: the protocol must name every one. */
+const SIGN_INS: Readonly<Record<ExecRuntimeTool, SignInVariables>> = SIGN_IN_VARIABLES;
 
 /** A tool's sign-in variables and those that go with them. */
-function variablesOf({ signIn, alongside = [] }: (typeof SIGN_IN_VARIABLES)[ExecRuntimeTool]): string[] {
+function variablesOf({ signIn, alongside = [] }: SignInVariables): string[] {
   return [...signIn, ...alongside];
 }
 
 /** The values of the tools' sign-in variables set in `env`, by name, with those that go with a sign-in found. */
 function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
   const isSet = (name: string): boolean => (env[name] ?? '') !== '';
-  const names = Object.values(SIGN_IN_VARIABLES).flatMap((variables) => (variables.signIn.some(isSet) ? variablesOf(variables) : []));
+  const names = Object.values(SIGN_INS).flatMap((variables) => (variables.signIn.some(isSet) ? variablesOf(variables) : []));
 
   return Object.fromEntries(names.filter(isSet).sort().map((name) => [name, env[name] ?? '']));
 }
@@ -444,7 +436,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
     const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
     // A tool whose login the runtime's provider keeps signs in on that login, not on what the member's environment holds.
-    const ownLoginVariables = new Set(Object.entries(SIGN_IN_VARIABLES).flatMap(([tool, variables]) => (ready.ownLogins?.includes(tool) ? variablesOf(variables) : [])));
+    const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, variables]) => (ready.ownLogins?.includes(tool) ? variablesOf(variables) : [])));
     const foundHere = Object.fromEntries(Object.entries(found).filter(([name]) => !ownLoginVariables.has(name)));
     const given = isKeepingFound ? { ...values.values, ...foundHere } : values.values;
 
