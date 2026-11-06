@@ -2438,6 +2438,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
           if (options.runMode) granted.runMode = options.runMode;
 
+          // The runtime of a driver definition the step goes to, the host command slot included, is kept with its pass.
+          if (options.alone?.offering !== undefined && options.alone.driver !== 'local') granted.runtime = options.alone.offering;
+
           if (unenforced.length > 0) granted.unenforced = unenforced;
 
           if (confined?.kind === 'grant') granted.confined = { level: confined.lease.level, tools: confined.lease.tools };
@@ -3363,6 +3366,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       used: report.used,
       unenforced: unenforced.length > 0 ? unenforced : undefined,
       runMode: step.lease.runMode,
+      runtime: step.lease.runtime,
       outcomes: outcomes.length > 0 ? outcomes : undefined,
       limit: report.limit,
       confined: report.confined,

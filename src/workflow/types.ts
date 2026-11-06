@@ -431,6 +431,11 @@ export interface StepLease {
   leasedAt?: string;
   /** The run mode the driver runs the lease in, as its `next` reported it, so the pass keeps it however it settles. */
   runMode?: RunMode;
+  /**
+   * The runtime of the driver definition the lease was offered on, as its `use` names it, or `host`, the definition's
+   * host command slot. Absent for a driver that runs no definition.
+   */
+  runtime?: string;
   /** The turn limits the lease carried, for a driver that ends the turn at them. */
   limits?: TurnLimits;
   /** The terms a confined step was last leased with, which its report is checked against. Absent on a lease issued before teamai kept them. */

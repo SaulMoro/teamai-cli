@@ -536,6 +536,16 @@ steps:
     expect(fs.existsSync(launches)).toBe(false);
   });
 
+  it('records the runtime each step ran on: the host command slot for a command a prompt runtime does not run', async () => {
+    writeDefinition('agentandhost', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'agentandhost'], repo, env());
+
+    const [build, review] = readRunState(runOf(ran)).steps;
+    expect(build, ran.stderr).toMatchObject({ id: 'build', status: 'succeeded', runtime: 'host' });
+    expect(review).toMatchObject({ id: 'review', status: 'succeeded', runtime: 'toy' });
+  });
+
   it('warns once that a runtime runs steps in full access on this machine, and records their isolation as none', async () => {
     writeFlow('worktreed', `  - id: review
     tool: claude
