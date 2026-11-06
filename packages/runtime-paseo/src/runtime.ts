@@ -1408,6 +1408,17 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     };
   };
 
+  /** Forgets a place the person released though its close failed: its prompts' follows stop, and its record goes. */
+  function forgetReleased(handle: string): void {
+    for (const { op } of journal.promptsOf(handle)) {
+      const following = waiting.get(op);
+      waiting.delete(op);
+      following?.stop();
+    }
+
+    journal.forget(handle);
+  }
+
   /**
    * Ends an attempt's place once nothing it started runs. A place whose agent may still run is kept, so teamai can close
    * it again: one the runtime cannot stop, or any place while it reaches no daemon, as after a restart whose init failed.
@@ -1418,16 +1429,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const prompts = journal.promptsOf(handle);
 
     const closeFailed = (failure: RuntimeFailure): void => {
-      if (release) {
-        for (const { op } of journal.promptsOf(handle)) {
-          const following = waiting.get(op);
-          waiting.delete(op);
-          following?.stop();
-        }
-
-        journal.forget(handle);
-      }
-
+      if (release) forgetReleased(handle);
       write({ event: 'close_failed', handle, failure });
     };
 
@@ -1699,7 +1701,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           let kept = '';
 
           try {
-            if (request.release) journal.forget(request.handle);
+            if (request.release) forgetReleased(request.handle);
           } catch (forgetting) {
             kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} writable, then release it again.`;
           }
