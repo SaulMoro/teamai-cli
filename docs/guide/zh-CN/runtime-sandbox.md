@@ -81,7 +81,7 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 | 键 | 示例 | 含义 |
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`、`docker` 或 `podman` |
-| `agent` | `claude` | 仅 `sbx`，且必填：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。裸的 `shell` 模板里没有 agent，所以会被拒绝。 |
+| `agent` | `claude` | 仅 `sbx`：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。不写时，每次尝试从它自己工具的模板启动：Claude 步骤用 `claude`，Codex 步骤用 `codex`，命令步骤用裸的 `shell`。`agent: shell` 会被拒绝，因为那个模板里没有 agent。 |
 | `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
 | `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
 
@@ -109,11 +109,13 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 - 工具把会话保存在这次尝试的工具主目录里，所以这一轮的 `teamai-score` 运行能根据它的记录评判它，带 `session: { from: … }` 的后续步骤也能恢复它。
 - 命令步骤也在容器里运行，即使驱动定义在 sandbox 之后还列了 `local`。只有 teamai 自己的簿记工作，比如 `teamai-score` 运行收集证据和写标签的步骤，在这台机器上运行。
 
-**工具只在能登录的地方运行。** macOS 钥匙串或 `~/.claude` 里的 Claude 登录、你日常用的 `~/.codex`，都不会进入容器。所以只有当 `credentials` 写了某个工具的登录键（Claude 是 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`；Codex 是 `OPENAI_API_KEY`、`CODEX_API_KEY` 或 `codex: login`），或者在 sbx 上 sbx 替它保存了登录时，sandbox 才提供这个工具。一个都登录不了时，运行会在任何步骤之前停下，而不是停在 Claude 自己的 "Not logged in"：
+**工具只在能登录的地方运行。** macOS 钥匙串或 `~/.claude` 里的 Claude 登录、你日常用的 `~/.codex`，都不会进入容器。所以只有当 `credentials` 写了某个工具的登录键（Claude 是 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`；Codex 是 `OPENAI_API_KEY`、`CODEX_API_KEY` 或 `codex: login`），或者在 sbx 上 sbx 替它保存了登录时，sandbox 才提供这个工具。用了登录不了的工具的步骤会在开始之前失败，并说明怎样给这个工具登录，而不是停在 Claude 自己的 "Not logged in"：
 
 ```text
-{"error":{"code":"runtime_failed","message":"Runtime \"sandbox\" of driver \"containers\" did not start (credential_missing): No tool in this docker sandbox can sign in, so every step there would stop at the tool's own \"Not logged in\". claude: a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again."}}
+✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude cannot sign in inside this docker sandbox, so a step there would stop at its "Not logged in": a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again. Or remove tool from the step.
 ```
+
+命令步骤照样在 sandbox 里运行：它们不需要登录。驱动定义在 sandbox 之后列了 `local` 时，这样的步骤会改由 `local` 在这台机器的工具上运行。只列 sandbox，就能让每个提示词步骤都留在里面。
 
 只有分配给步骤的变量名会进入容器：它的 `requires.env` 键、工作流的 `env`、teamai 的尝试标记、工具主目录变量，以及只给步骤工具的 `credentials`。你环境里的其他内容都不会进去，所以 `GH_TOKEN`、`SSH_AUTH_SOCK` 之类会留在外面。变量值从不出现在命令行里：容器创建时不带任何凭据，每次 `docker exec -e NAME` 都从容器引擎 CLI 自己的环境里读取值。变量值也不会写到磁盘上：运行时记下的每次 exec 结果里，工具打印出的凭据都会被遮盖。
 
@@ -224,7 +226,7 @@ Linux 上的 Docker Engine 不给你的机器这样的名字，所以在那里�
 
 ## sbx（Docker Sandboxes）
 
-使用 `provider: sbx` 时，每次尝试都在一个有自己内核的微型虚拟机里运行，来自你指定的 agent 的模板。不需要构建镜像。
+使用 `provider: sbx` 时，每次尝试都在一个有自己内核的微型虚拟机里运行，来自步骤工具的模板（或者你指定的 `agent` 的模板）。不需要构建镜像。
 
 **1. 每台机器做一次：** 安装 Docker Sandboxes、登录、设置网络策略，并用 sbx 给你的工具登录。没有网络策略时 sbx 不会创建任何沙箱，teamai 也从不替你设置。
 
@@ -246,23 +248,39 @@ SCOPE      TYPE      NAME        SECRET
 
 登录留在你机器上 sbx 的代理里，由代理加到工具的请求上，每个新沙箱都会复用它：你的环境里不需要令牌，这次尝试的工具主目录里也没有 `auth.json`。API key 也一样：`sbx secret set anthropic`。
 
-**2. 添加驱动定义。** 它不需要 credentials：
+**2. 用 `--driver sandbox` 运行工作流。** teamai 自带这个驱动定义，你不需要自己写：
 
 ```yaml
-# drivers/sbx.yaml：用 sbx 替你保存的登录运行 Claude
+# drivers/teamai-sandbox.yaml，随 teamai 提供
 schemaVersion: v1alpha1
-name: sbx
-tool: claude
+name: teamai-sandbox
+description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps, and teamai's own steps on this machine.
 runtimes:
   - use: sandbox
-    options:
-      provider: sbx
-      agent: claude                      # 不需要 credentials：sbx 的代理替 Claude 登录
-  - use: local                           # 负责评判：sbx 不提供评判
+    options: { provider: sbx, max_parallel: 4 }   # 不写 agent：每次尝试从它自己工具的模板启动
+  - use: local                                     # 负责评判：sbx 不提供评判
 ```
 
+```sh
+teamai workflow start fix --driver sandbox
+sbx ls                                   # 运行时：一个命令步骤，再一个 Claude 步骤
+```
+
+```text
+SANDBOX                                               AGENT    STATUS      PORTS   WORKSPACE
+teamai-5f0c2a9e1d7b4c38-r1742da096cbb2f40-a0206b5e3   shell    ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-r1742da096cbb2f40-build-p1-…, …
+teamai-5f0c2a9e1d7b4c38-r1742da096cbb2f40-a9953a8d7   claude   ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-r1742da096cbb2f40-fix-p1-…, …
+```
+
+```text
+✔ Archived 1 step session of r1742da096cbb2f40 to teamai-reports (scrubbed)
+{"data":{"done":{"run":"r1742da096cbb2f40","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+想固定模板、让每个步骤都留在 sandbox 里，或者写明 credentials 时，再写你自己的驱动定义：
+
 ```yaml
-# drivers/sbx-codex.yaml：用 sbx 替你保存的登录运行 Codex
+# drivers/sbx-codex.yaml：用 sbx 替你保存的登录运行 Codex 步骤，这台机器上什么都不运行
 schemaVersion: v1alpha1
 name: sbx-codex
 tool: codex
@@ -271,25 +289,18 @@ runtimes:
     options:
       provider: sbx
       agent: codex                       # 不需要 credentials：sbx 的代理替 Codex 登录
-  - use: local                           # 负责评分步骤的评判：sbx 不提供评判
 ```
 
-两种方式都没给工具登录的成员，会在任何步骤开始之前拿到 sbx 命令：
+两种方式都没给工具登录时，用这个工具的步骤会拿到 sbx 命令，运行里的命令步骤照样运行：
 
 ```text
-{"error":{"code":"runtime_failed","message":"Runtime \"sandbox\" of driver \"sbx\" did not start (credential_missing): No tool in this sbx sandbox can sign in, so every step there would stop at the tool's own \"Not logged in\". claude: sign Claude in once with sbx: run `sbx run claude <any dir>`, then `/login` in Claude Code, and every new sandbox reuses that login (an API key instead: `sbx secret set anthropic`); or run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again."}}
+✖ Step "review" failed with tool_unavailable: Step "review" runs on codex, which the driver of this run cannot launch here: sandbox: codex cannot sign in inside this sbx sandbox, so a step there would stop at its "Not logged in": sign Codex in once with sbx, `sbx secret set openai --oauth` (or store an API key with `sbx secret set openai`), or add OPENAI_API_KEY: env:OPENAI_API_KEY to the sandbox's credentials. Then start again. Or remove tool from the step.
 ```
 
-**3. 在上面运行工作流。**
+**3. 给它做的事评分。** sbx 不提供评判，所以评分步骤的评判在 `local` 上、用你机器上的工具运行：
 
 ```sh
-teamai workflow start review --driver sbx
-sbx ls                                   # 步骤运行时
-```
-
-```text
-SANDBOX                                               AGENT    STATUS      PORTS   WORKSPACE
-teamai-5f0c2a9e1d7b4c38-rb2152f12cb75a939-aca6809de   claude   ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-rb2152f12cb75a939-review-p1-4f8fc24e0d4e, …
+teamai workflow start review --driver sandbox
 ```
 
 ```text
@@ -319,7 +330,7 @@ name: sbx-judged
 tool: claude
 runtimes:
   - use: sandbox
-    options: { provider: sbx, agent: claude }
+    options: { provider: sbx }
   - use: sandbox
     options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
 ```
@@ -390,9 +401,10 @@ sbx ls -q
 | 错误 | 发生了什么 | 下一步 |
 | --- | --- | --- |
 | `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
-| `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，sandbox 里没有能登录的工具，或者评判没有拿到它的工具会读取的环境变量凭据 | sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`。容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials`。评判的情况，把信息里点名的密钥加到 `credentials` |
+| `tool_unavailable` | 步骤的工具在 sandbox 里登录不了 | 执行信息里点名的命令：sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`；容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials` |
+| `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 设置信息里点名的变量，或者把它点名的密钥加到 `credentials` |
 | `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
-| `bad_option` | `options` 里有键或值写错了（`sbx` 缺少 `agent`），或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
+| `bad_option` | `options` 里有键或值写错了（`sbx` 写了 `agent: shell`，或者没写 `agent`，而步骤的工具 sbx 没有模板，比如 `codebuddy`），或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
 | `sandbox_failed` | 无法创建或查找这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>` |
