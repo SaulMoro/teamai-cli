@@ -1918,6 +1918,12 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 ✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
 ```
 
+teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude 或 Codex 自己的错误里识别额度用完，并保留其原文，包括重置时间：
+
+```text
+✖ Step "review" failed with usage_limited: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r7a1… review
+```
+
 守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，末尾同样带上重试命令。受限提示（例如评审的提示）也一样。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
 
 ```text

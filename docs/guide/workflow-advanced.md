@@ -1924,6 +1924,12 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 ✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
 ```
 
+A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's or Codex's own error and keeps its text, reset time included:
+
+```text
+✖ Step "review" failed with usage_limited: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r7a1… review
+```
+
 A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed` with the same retry command at the end. So does a confined prompt, such as a judge's. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
 
 ```text

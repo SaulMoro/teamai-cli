@@ -37,7 +37,7 @@ import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
 import { credentialSecrets, credentialsForTool, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
-import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
+import { newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
@@ -757,8 +757,10 @@ async function promptReport(
   const end: StepEnd = { outcome: result.exitCode === 0 && !result.failure ? 'success' : 'failed' };
 
   if (end.outcome === 'failed' && result.failure) {
-    end.message = result.failure.message;
-    end.failure = result.failure;
+    // A runtime that launches agents its own way ended its prompt's failure with the retry already (runtimePrompter).
+    const failure = onRuntime?.launchesAgents ? result.failure : { ...result.failure, message: withRetry(result.failure.message, result.failure.code, { run: lock.run, step: lease.step }) };
+    end.message = failure.message;
+    end.failure = failure;
   }
 
   // A runtime lost while the tool ran may still run it, refreshing the login: the attempt keeps it, and closing its

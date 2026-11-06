@@ -1560,6 +1560,22 @@ steps:
       expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
     });
 
+    it.each([
+      { driver: 'local', definition: undefined },
+      { driver: 'claudelimit', definition: 'toy' },
+    ])('fails a Claude step that hit its usage limit usage_limited on $driver, with Claude\'s own text and the retry to run', async ({ driver, definition }) => {
+      if (definition) writeDefinition(driver, [{ use: definition, options: { state } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', driver, '--tools', 'default=claude'], repo, env({ FAKE_TOOL_ERROR: 'You\'ve hit your limit · resets 3pm (Europe/Madrid)' }));
+
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(review, ran.stderr).toMatchObject({
+        status: 'failed',
+        failure: { code: 'usage_limited', message: `claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry ${runId} review` },
+      });
+    });
+
     it('masks an env credential in the failure of a place its runtime could not close', async () => {
       writeDefinition('tokenunclosed', [{ use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, close_fails: 'TOY_TEAM' } }]);
 
@@ -1679,6 +1695,13 @@ const span = (edge) => process.env.FAKE_TOOL_SPANS && fs.appendFileSync(process.
 span('start');
 if (process.env.FAKE_CODEX_PID) fs.writeFileSync(process.env.FAKE_CODEX_PID, String(process.pid));
 fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, account: login.tokens.account_id, refresh: login.tokens.refresh_token }) + '\\n');
+// With FAKE_CODEX_ERROR, the turn fails with that message, as Codex reports a spent usage limit.
+if (process.env.FAKE_CODEX_ERROR) {
+  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'th-failed' }) + '\\n');
+  process.stdout.write(JSON.stringify({ type: 'error', message: process.env.FAKE_CODEX_ERROR }) + '\\n');
+  process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message: process.env.FAKE_CODEX_ERROR } }) + '\\n');
+  process.exit(1);
+}
 const next = 'r' + (Number(login.tokens.refresh_token.slice(1)) + 1);
 const refresh = () => fs.writeFileSync(file, JSON.stringify({ ...login, tokens: { ...login.tokens, account_id: process.env.FAKE_CODEX_ACCOUNT || login.tokens.account_id, refresh_token: next } }));
 if (process.env.FAKE_CODEX_REFRESH_FIRST) refresh();
@@ -1764,6 +1787,17 @@ span('end');
       expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
       expect(fs.statSync(dedicated()).mode & 0o777).toBe(0o600);
       expect(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct-daily', refresh_token: 'r900' } });
+    });
+
+    it('fails a Codex step that hit its usage limit usage_limited, with Codex\'s own text and the retry to run', async () => {
+      loginDefinition('codexlimit', state);
+      const limit = 'You\'ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again in 2 days 1 hour 40 minutes.';
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexlimit'], repo, env({ FAKE_CODEX_ERROR: limit }));
+
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'usage_limited', message: `codex hit its usage limit: ${limit} Then run: teamai workflow retry ${runId} review` } });
     });
 
     it('copies no login into the attempt\'s tool home when the runtime\'s provider keeps its own Codex login', async () => {

@@ -18,7 +18,7 @@ export interface ToolReport {
   reachedMaxTurns?: boolean;
   /** Whether stdout ended before the tool's final result, so it holds only what the tool said as it started. */
   unfinished?: boolean;
-  /** What the tool said went wrong, when its final result is an error: Claude's `result` text with `is_error`. */
+  /** What the tool said went wrong, when its final result is an error: Claude's `result` text with `is_error`, Codex's last `error`. */
   error?: string;
 }
 
@@ -391,9 +391,30 @@ export function tokenMeter(adapter: string): (line: string) => TokenUsage | unde
   };
 }
 
+/** The events `codex exec --json` ends a failed turn with: an `error`, then `turn.failed`. */
+const CodexError = z.union([
+  z.object({ type: z.literal('error'), message: z.string() }),
+  z.object({ type: z.literal('turn.failed'), error: z.object({ message: z.string() }) }),
+]);
+
+/** What `codex exec --json` reports: its metadata, and the message of the last error it printed, such as a spent usage limit. */
+function codexStdout(stdout: string): ToolReport | null {
+  const report = readToolMetadata(stdout);
+
+  const error = jsonRecords(stdout).flatMap((record) => {
+    const parsed = CodexError.safeParse(record);
+
+    return parsed.success ? [parsed.data.type === 'error' ? parsed.data.message : parsed.data.error.message] : [];
+  }).at(-1);
+
+  return error === undefined ? report : { ...report, error };
+}
+
 /** What stdout of a tool on this adapter reports. CodeBuddy prints Claude's result record. */
 export function toolStdout(adapter: string, stdout: string): ToolReport | null {
   if (adapter === 'claude' || adapter === 'codebuddy') return claudeStdout(stdout);
+
+  if (adapter === 'codex') return codexStdout(stdout);
 
   if (adapter === 'agy') return agyStdout(stdout);
 

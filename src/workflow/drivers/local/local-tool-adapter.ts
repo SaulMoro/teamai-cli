@@ -210,6 +210,13 @@ async function readResultFile(resultPath: string): Promise<ResultFile | null> {
   }
 }
 
+/**
+ * A tool's own text for a spent usage limit, which carries its reset time: Claude Code's "You've hit your limit · resets
+ * 3pm (Europe/Madrid)", "5-hour limit reached ∙ resets 2pm" or "Claude AI usage limit reached|<time>", and Codex's
+ * "You've hit your usage limit. … try again in 2 days 1 hour".
+ */
+const USAGE_LIMIT = /usage limit|hit your limit|limit reached/i;
+
 /** A failure message a tool wrote, without the step's prompt or the agent's instructions it may quote. */
 export function withoutPrompt(message: string, input: LocalToolRun): string {
   let kept = message;
@@ -494,7 +501,12 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       if (completed.exitCode !== 0 && !result.failure) {
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
 
-        if (printed?.error !== undefined) told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
+        if (printed?.error !== undefined && USAGE_LIMIT.test(printed.error)) {
+          result.failure = { code: 'usage_limited', message: `${tool} hit its usage limit` };
+          told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
+        } else if (printed?.error !== undefined) {
+          told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
+        }
       }
 
       if (!fileResult) await persistFallback(input, result);
