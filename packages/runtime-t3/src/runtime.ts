@@ -552,12 +552,18 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /**
    * Ends a prompt this process runs, once: a later end, such as a follow that saw the run end after a stop ended the
-   * prompt, writes nothing.
+   * prompt, writes nothing. An end the journal cannot keep is still answered, since nothing would answer it later.
    */
   const endRunning = (state: Running, ended: OpState, { threadEnded }: { threadEnded: boolean }): void => {
     if (running.get(ended.op) !== state) return;
     running.delete(ended.op);
-    record(state.handle, ended, { threadEnded });
+
+    try {
+      record(state.handle, ended, { threadEnded });
+    } catch (error) {
+      process.stderr.write(`Runtime t3 could not record how ${ended.op} ended, so a reattach reports it running: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+
     answerEnded(ended.op, ended);
   };
 
@@ -979,18 +985,20 @@ export function serve(options: ServeOptions): Promise<void> {
     };
 
     const { title, launchedAt } = launch;
+
+    // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent. One it cannot
+    // journal fails the request before the op runs here, as nothing was launched.
+    if (!thread) {
+      const now = place(request.handle) ?? opened;
+      journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
+    }
+
     const state: Running = { handle: request.handle, run: opened.run, title };
     running.set(request.op, state);
     const finish = (outcome: OpState, threadEnded = false): void => endRunning(state, outcome, { threadEnded });
 
     try {
       const newThread: NewThread = { title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: request.op };
-
-      // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent.
-      if (!thread) {
-        const now = place(request.handle) ?? opened;
-        journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
-      }
 
       // Accepted before T3 launches anything, which may take longer than teamai waits for an acceptance.
       accept(thread);

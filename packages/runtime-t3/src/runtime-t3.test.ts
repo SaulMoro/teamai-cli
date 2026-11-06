@@ -1713,6 +1713,25 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000079')).toEqual({ op: 'op-00000079', event: 'cancelled' });
     });
 
+    // A prompt whose end goes unanswered is one teamai waits on for good.
+    it('answers a prompt that ends while its record cannot be written, once, and says on stderr that it was not recorded', async () => {
+      const release = path.join(dir, 'release');
+      t3.config({ agent: { release, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000007a'));
+      await runtime.next((line) => line['op'] === 'op-0000007a' && line['event'] === 'display');
+      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+      fs.chmodSync(places, 0o500);
+      fs.writeFileSync(release, '');
+
+      expect(await ended(runtime, 'op-0000007a')).toMatchObject({ op: 'op-0000007a', event: 'finished' });
+      fs.chmodSync(places, 0o700);
+      expect(runtime.stderr()).toMatch(/^Runtime t3 could not record how op-0000007a ended, so a reattach reports it running: .*EACCES/m);
+      runtime.send({ type: 'close', handle });
+      await runtime.next((line) => line['event'] === 'closed');
+      expect(runtime.lines.filter((line) => line['op'] === 'op-0000007a').map((line) => line['event'])).toEqual(['accepted', 'display', 'finished']);
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
