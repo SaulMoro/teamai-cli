@@ -676,6 +676,19 @@ steps:
     expect(git(f.remote, 'show', `${join.workspace.branch}:b.ts`)).toBe('from right');
   });
 
+  it('runs no fsmonitor the child planted in the place while it finishes a resolved merge', async () => {
+    const { f, dir, join } = await adoptedJoin('monitored');
+    const mark = path.join(path.dirname(f.work), 'fsmonitor-ran');
+    const monitor = path.join(path.dirname(f.work), 'fsmonitor.sh');
+    fs.writeFileSync(monitor, `#!/bin/sh\necho "$@" >> "${mark}"\nexit 1\n`, { mode: 0o755 });
+    git(dir, 'config', '--worktree', 'core.fsmonitor', monitor);
+    fs.writeFileSync(path.join(dir, 'a.ts'), 'resolved\n');
+    expect(await f.client.report(f.runId, { attempt: join.attempt, revision: join.revision, outcome: 'success', driver: f.driver }, { changed: ['a.ts'] }))
+      .toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
+    expect(fs.existsSync(mark)).toBe(false);
+    expect(git(f.remote, 'show', `${join.workspace.branch}:a.ts`)).toBe('resolved');
+  });
+
   it('still rejects a preparation merge file the child changed and did not report', async () => {
     const { f, dir, join } = await adoptedJoin('tampered');
     fs.writeFileSync(path.join(dir, 'a.ts'), 'resolved\n');

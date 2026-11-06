@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { CanSchema } from '@teamai/runtime-protocol';
 import { parseReportedAgent, parseReportedUsed, settleObservation, type ReportedAgent, type Used } from '../agent-observation.js';
 import { loadTeamConfig } from '../config.js';
 import { DefaultWorkflows } from '../default-workflows.js';
@@ -36,7 +37,7 @@ import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, lease
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
+import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan, type WorkspaceRequest } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
 } from './pr-delivery.js';
@@ -44,8 +45,8 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, CanSchema, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
-  type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
+  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { TeamPin } from './team-pin.js';
@@ -73,7 +74,8 @@ import type {
 } from './types.js';
 import { hasAction, onlyPersonAnswers, stepWorkflow } from './types.js';
 import { describeWorkflow } from './describe.js';
-import { CONFINED_LEVELS, CostSchema } from '../tool-launch/confined-level.js';
+import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
+import { CostSchema } from '../tool-launch/confined-level.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -1389,7 +1391,7 @@ export async function startRun(
   name: string,
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the parse boundary: start's inputs as the CLI or a driver sent them, checked here first
   inputs: unknown,
-  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: DriverCan },
+  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
 
@@ -1430,14 +1432,15 @@ export async function startRun(
 
 /**
  * Creates a run of a definition the caller already built and checked. The run file is written only when it would keep
- * what it was given unmasked. `secrets` are what the caller resolved for the operation. `alone`: what the run's only
- * driver, the local one, gives strict requirements; a start with a step it could never take for them is refused.
- * `driver`: the run's driver from its start, so that driver's first `next` takes it as its own.
+ * what it was given unmasked. `secrets` are what the caller resolved for the operation. `alone`: the run's only
+ * driver, the local loop, with what each of its runtimes gives strict requirements; a start with a step none of them
+ * could ever take for them is refused. `driver`: the run's driver from its start, so that driver's first `next` takes it
+ * as its own.
  */
 export async function createRun(
   config: LocalConfig,
   { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'startedBy' | 'awaits' | 'definition' | 'workflows' | 'base' | 'checkout' | 'timeout'>
-    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: DriverCan },
+    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
   const unmet = alone && strictlyUnmet(input.definition, workflows, alone);
@@ -1525,6 +1528,20 @@ interface OfferContext {
   prepare: boolean;
   /** The env keys any step of the run requires, read once per request rather than once per offered step. */
   runEnvKeys: Set<string>;
+  toolFor?: ToolFor;
+}
+
+/** How a driver picks the tool of a prompt step that names none, as it would launch it. */
+export type ToolFor = (step: Pick<WorkflowStep, 'agent' | 'tool'>) => string | undefined;
+
+/**
+ * The tool `step` runs on, which a runtime's `can.tools` must list: the one it names, else the one `toolFor` picks for a
+ * prompt step. A confined step takes its tools from `can.confined` instead, and a command step runs none.
+ */
+export function promptTool(step: WorkflowStep, toolFor: ToolFor | undefined): string | undefined {
+  if (step.tool !== undefined || step.prompt === undefined || confinedOf(step) !== undefined) return step.tool;
+
+  return toolFor?.(step);
 }
 
 /** Terms a driver was granted, with the team role the lease carries: absent without one. */
@@ -1575,14 +1592,36 @@ function offerTerms(
     maxTurns: step.maxTurns,
     endTurn,
     setup: plan?.contract && plan.contract.mode !== 'team' ? scope.setup : undefined,
-    tool: step.tool,
+    tool: promptTool(step, context.toolFor),
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
+    // teamai's bookkeeping, and the publish contract, which only this host keeps, never run on an external runtime.
+    pinned: (step.command !== undefined && HOST_PINNED_WORKFLOWS.has(scope.workflow)) || (plan?.contract !== undefined && isPublishContract(plan.contract)),
     ...role,
   }, context.can, context.allow, context.facts);
 
   return negotiation.kind === 'grant' ? { kind: 'grant', terms: { ...negotiation.terms, ...role } } : negotiation;
+}
+
+/**
+ * What a runtime offering `context.can` lacks for step `state`, whose plan for it defers (`defer`). Invariant: these are
+ * exactly `negotiate`'s gaps for the offer, judged as if the runtime had the workspace it lacks, plus that workspace's
+ * own gap. So the member's policy still comes first, and the tool, role, unattended and person gaps hold alike on a
+ * runtime that defers and on one that does not. A plan deferred for a copy another driver owns adds no workspace gap.
+ */
+function deferredGaps(
+  { run, located, state, definition, defer, request }: {
+    run: RunState; located: { scope: Scope; step: WorkflowStep }; state: StepState; definition: WorkflowStep;
+    defer: NonNullable<WorkspacePlan['defer']>; request: Omit<WorkspaceRequest, 'modes'>;
+  },
+  context: OfferContext,
+): Missing[] {
+  const { needs } = defer;
+  const met = needs === undefined ? undefined : planWorkspace(run, located.scope, state, definition, { ...request, modes: [...context.can.workspace ?? [], needs] });
+  const judged = offerTerms(run, state.id, located, met?.defer || met?.fail ? undefined : met, context);
+
+  return [...needs ? [`workspace.${needs}` as const] : [], ...judged.kind === 'hold' ? judged.missing : []];
 }
 
 /**
@@ -1616,22 +1655,40 @@ function leaseTerms(expiresAt: string | undefined, limits: TurnLimits | undefine
 }
 
 /**
- * Why the local driver, which gives strict requirements `can`, could never take a step of `definition`, as describe
- * holds it: the first step it lacks a strict `isolation` or `network` for.
+ * The run's only driver, the local loop, as `start` and `next` judge what it can never take: the name of its driver
+ * definition (`local` without one), and the complete offer of each of its runtimes, in definition order. Offers are
+ * never merged key by key: a step is beyond the driver only when no single runtime can take it.
  */
-function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): string | undefined {
+export interface SoleDriver {
+  driver: string;
+  offers: [RuntimeOffer, ...RuntimeOffer[]];
+}
+
+export interface RuntimeOffer {
+  /** The runtime, as the definition's `use` names it. */
+  runtime: string;
+  can: DriverCan;
+  /** The tools it cannot run now, each with the runtime's reason and next step. */
+  unavailable?: Readonly<Record<string, string>>;
+}
+
+/** Whether `sole` is the plain local driver, which the messages of a refusal name as it always did. */
+function isPlainLocal(sole: SoleDriver): boolean {
+  return sole.driver === 'local' && sole.offers.length === 1;
+}
+
+/** Each step of `definition` a runtime offering `can` holds back for a strict key, with the first key it lacks, as describe holds it. */
+function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): Map<string, 'isolation' | 'network'> {
   const none = new Set<string>();
   const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
+  const held = new Map<string, 'isolation' | 'network'>();
 
   for (const { step, missing } of facts.held) {
-    if (missing.includes('isolation')) {
-      return `Step "${step}" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.`;
-    }
-
-    if (missing.includes('network')) return `Step "${step}" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.`;
+    if (missing.includes('isolation')) held.set(step, 'isolation');
+    else if (missing.includes('network')) held.set(step, 'network');
   }
 
-  return undefined;
+  return held;
 }
 
 /** What `can` gets of step `state` confined to the directory `rendered` names; undefined for a step not confined. */
@@ -1647,9 +1704,92 @@ async function confinedFor(
   });
 }
 
-/** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
-function toolUnavailable(step: string, tool: string): WorkflowFailure {
-  return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
+/**
+ * Why the run's only driver could never take a step of `definition` for a strict `isolation` or `network`: every one
+ * of its runtimes lacks it. A step one runtime can take for them is judged at `next`.
+ */
+function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, sole: SoleDriver): string | undefined {
+  const [mine, ...others] = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
+  const step = [...mine].find(([id]) => others.every((held) => held.has(id)));
+
+  if (!step) return undefined;
+  const first = { step: step[0], key: step[1] };
+
+  if (isPlainLocal(sole)) {
+    return first.key === 'isolation'
+      ? `Step "${first.step}" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.`
+      : `Step "${first.step}" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.`;
+  }
+
+  const runtimes = sole.offers.map((offer) => offer.runtime).join(', ');
+
+  return first.key === 'isolation'
+    ? `Step "${first.step}" requires strict isolation, and no runtime of driver "${sole.driver}" is a sandbox (${runtimes}). Add a runtime that is one to the definition, such as sandbox, or run the workflow in CI or a container with --sandbox.`
+    : `Step "${first.step}" strictly requires no network, which no runtime of driver "${sole.driver}" can deny (${runtimes}). Run it with a driver whose runtime declares can.network.`;
+}
+
+/**
+ * Why no runtime of the run's only driver can take step `step`, held on the offer `next` was given: each runtime's
+ * offer holds it too, and either none gives what this offer lacks (`tools`, or `unattended`), or each lacks something
+ * another gives, so the step's requirements are split over runtimes. Undefined while a runtime can take it, or while
+ * it waits for something no runtime gives and that no `alone` judgement covers, such as a strict `network`, the
+ * member's `workflows.allow`, or a place another step still holds.
+ */
+function beyondSoleDriver(
+  sole: SoleDriver,
+  { step, tool, isNamed, missing, missingOn }: { step: string; tool: string | undefined; isNamed: boolean; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+): WorkflowFailure | undefined {
+  const others = sole.offers.length === 1 ? [missing] : sole.offers.map((offer) => missingOn(offer.can));
+
+  // A runtime that takes it, or one the plan does not decide yet, leaves the step pending for its offer.
+  if (others.some((held) => held === undefined || held.length === 0)) return undefined;
+  const helds = others.filter((held): held is readonly Missing[] => held !== undefined);
+
+  if (helds.some((held) => held.some((key) => key.startsWith('policy.')))) return undefined;
+  const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
+
+  if (lackedByAll.includes('tools') && tool !== undefined) {
+    const reasons = sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
+
+    return toolUnavailable(step, tool, isNamed, reasons);
+  }
+
+  if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
+
+  if (sole.offers.length === 1 || lackedByAll.length > 0) return undefined;
+  const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.map(lackedKey).join(', ') ?? 'nothing'}`).join('; ');
+
+  return {
+    code: 'requirement_unmet',
+    message: `Step "${step}" needs what no single runtime of driver "${sole.driver}" offers: ${lacks}. Give one runtime of the definition all of it, or change what the step requires.`,
+  };
+}
+
+/** A key a runtime lacks, said so that a member can act on it: the keys the local loop sets say why it set them. */
+function lackedKey(key: Missing): string {
+  if (key === 'host') return 'host (the step stays on this machine)';
+
+  if (key === 'prompt') return 'prompt (this entry runs only commands)';
+
+  return key === 'commands' ? 'commands (another runtime of the definition runs them)' : key;
+}
+
+/**
+ * Why a step that runs on `tool`, which it names (`isNamed`) or was picked for it, fails in a run whose only driver cannot
+ * launch it. `reasons` are the runtimes' own, `<runtime>: <reason>`, which replace the install advice.
+ */
+function toolUnavailable(step: string, tool: string, isNamed: boolean, reasons: string[]): WorkflowFailure {
+  if (reasons.length > 0) {
+    const why = reasons.join(' ');
+
+    return isNamed
+      ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here: ${why} Or remove tool from the step.` }
+      : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here: ${why} Or pick a tool it launches with --tools default=<tool>.` };
+  }
+
+  return isNamed
+    ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` }
+    : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or pick a tool it launches with --tools default=<tool>.` };
 }
 
 /** Why a step with `permissions: unattended` fails in a run whose only driver cannot run it unattended. */
@@ -1697,10 +1837,16 @@ export interface NextOptions {
    */
   prepare?: boolean;
   /**
-   * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once. For any other driver it stays pending.
+   * Process-only: the caller is the run's only driver, as the local loop is, with each of its runtimes' offers. A step
+   * that no runtime can take fails at once (`tool_unavailable`, or `requirement_unmet` when its requirements are split
+   * over runtimes). For any other driver it stays pending.
    */
-  alone?: boolean;
+  alone?: SoleDriver;
+  /**
+   * Process-only: the tool the driver launches a prompt step on that names none, so a runtime whose `can.tools` leaves it
+   * out is held from the step, as for a step that names its tool. Without it, only a named tool is checked.
+   */
+  toolFor?: ToolFor;
 }
 
 /**
@@ -1855,7 +2001,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
     const context: OfferContext = {
       // The HITL of a driver nobody attends is its agent's, which works in no interactive step: only a person does.
-      can: can.hitl === true && options.handoff !== undefined ? { ...can, hitl: false } : can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true,
+      can: can.hitl === true && options.handoff !== undefined ? { ...can, hitl: false } : can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true, toolFor: options.toolFor,
       // Admitted workflows too: their own steps' keys are withheld from the steps that do not require them.
       runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {}), ...Object.values(run.admitted ?? {}).map(({ definition }) => definition)]),
     };
@@ -1942,7 +2088,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       // follows workflows.auto_approve.
       if (can.hitl && options.autoApprove === true && answerOptionalGates(run, now)) continue;
 
-      if (options.canTakeLease !== false && !can.hitl && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
+      // A gate waits for another runtime of the run's only driver that can ask, as the local driver offers each in turn.
+      const asksElsewhere = options.alone?.offers.some((offer) => offer.can.hitl === true) === true;
+
+      if (options.canTakeLease !== false && !can.hitl && !asksElsewhere && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
 
       if (options.canTakeLease !== false && byAgent && handoff?.kind === 'unoffered' && failForPerson(run, handoff.reason)) continue;
       // An open lease the driver does not list is handed back before another lease is issued, as a restarted driver expects.
@@ -1990,9 +2139,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               break;
             }
 
-            // A driver that cannot give the step its role is told so too, as it would be held for it once it had the place.
-            const roleGap = stepRole.kind === 'role' && !can.role ? ['role' as const] : [];
-            held.push({ step: state.id, reason: plan.defer.reason, missing: [...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [], ...roleGap] });
+            held.push({
+              step: state.id, reason: plan.defer.reason,
+              missing: deferredGaps({ run, located, state, definition, defer: plan.defer, request: { driver, base: run.base ?? options.base } }, context),
+            });
             continue;
           }
 
@@ -2017,22 +2167,43 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
           const terms = offerTerms(run, state.id, located, plan, context);
 
-          if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
-            failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
-            settledOne = true;
-            break;
-          }
+          // A step whose tool the run's only driver cannot launch fails as that, before a person is asked for it.
+          const lacksTool = options.alone !== undefined && definition.tool !== undefined && terms.kind === 'hold' && terms.missing.includes('tools');
 
-          if (terms.kind === 'hold' && handoff?.kind === 'unoffered' && terms.missing.includes('hitl')) {
+          if (terms.kind === 'hold' && !lacksTool && handoff?.kind === 'unoffered' && terms.missing.includes('hitl')) {
             failStep(state, personRequired(run.id, state.id, handoff.reason), run.revision);
             settledOne = true;
             break;
           }
 
-          if (terms.kind === 'hold' && options.alone && terms.missing.includes('unattended')) {
-            failStep(state, unattendedUnavailable(state.id, definition.tool), run.revision);
-            settledOne = true;
-            break;
+          if (terms.kind === 'hold' && options.alone) {
+            const tool = promptTool(definition, context.toolFor);
+
+            // What another runtime of the driver lacks for the step, judged as this offer is: its plan, then its terms.
+            const missingOn = (offered: DriverCan): readonly Missing[] | undefined => {
+              const planned = planWorkspace(run, located.scope, state, definition, { driver, modes: offered.workspace, base: run.base ?? options.base });
+
+              if (planned.fail) return undefined;
+
+              // A runtime that lacks the step's place lacks what it would be held for once it had it, too.
+              if (planned.defer) {
+                return planned.defer.needs
+                  ? deferredGaps({ run, located, state, definition, defer: planned.defer, request: { driver, base: run.base ?? options.base } }, { ...context, can: offered })
+                  : undefined;
+              }
+
+              const judged = offerTerms(run, state.id, located, planned, { ...context, can: offered });
+
+              return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
+            };
+
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
+
+            if (beyond) {
+              failStep(state, beyond, run.revision);
+              settledOne = true;
+              break;
+            }
           }
 
           if (terms.kind === 'hold') {

@@ -1,3 +1,4 @@
+import { ignorePersonalToolInstances } from './tool-instances.js';
 import path from 'node:path';
 import { z } from 'zod';
 import { autoDetectInit, loadTeamConfig, machineWorkflowAllowProblem } from './config.js';
@@ -7,7 +8,7 @@ import { FINISHED_WORKFLOW } from './scorers/judging-workflows.js';
 import { PassScoring } from './scorers/pass-scoring.js';
 import { Subject } from './scorers/subject.js';
 import { log, setStderrOnly } from './utils/logger.js';
-import { collectEnvSecrets, redact, redactJson } from './utils/redact.js';
+import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { parseNextPayload, parseReport, parseResponsePayload, resumableSessions, retryCommand, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
 import { claimOffered, publishRun, resumeRun } from './workflow/handoff.js';
 import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Taker } from './workflow-published-runs.js';
@@ -18,13 +19,16 @@ import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
 import { localStrictCan, personAnswers, runLocalDriver, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
-import { driveRun, unsupportedDriver } from './workflow-drive.js';
-import { awaitsLine, awaitsOf, leftOpenLine, type DefaultDrive } from './default-driver.js';
-import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
+import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
+import { awaitsLine, awaitsOf, drivesHere, leftOpenLine, type DefaultDrive } from './default-driver.js';
+import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
+import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
+import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId } from './workflow/store.js';
-import { inProcessClient, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun } from './workflow/protocol.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type RunId } from './workflow/store.js';
+import { inProcessClient, invokeRefusal, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun } from './workflow/protocol.js';
 import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
 import { durationMs } from './workflow/parse.js';
@@ -126,8 +130,8 @@ function localWorkspace(run: RunState): string {
 
 /**
  * Drives run `runId` with the local driver through `drive`, then drives each teamai-score run its reports answered its
- * settled passes started, so their labels are written when `workflow start` or `resume` returns, attended or not; the
- * scored run's own steps and `finally` never wait for them.
+ * settled passes started, on the same driver definition, so their labels are written when `workflow start` or `resume`
+ * returns, attended or not; the scored run's own steps and `finally` never wait for them.
  */
 async function withPassScoring(
   { config, env }: { config: LocalConfig; env: WorkflowEnv },
@@ -146,7 +150,7 @@ async function withPassScoring(
     const subject = Subject.format({ kind: 'run', subject: { runId, step, pass } });
     const stored = await readRun(config, run);
     const cwd = stored === 'missing' || stored === 'corrupt' ? process.cwd() : localWorkspace(stored);
-    const said = PassScoring.said(subject, run, await runLocalDriver(config, run, cwd, { tools: options.tools, toolPaths: options.toolPaths, sandbox: options.sandbox }));
+    const said = PassScoring.said(subject, run, await runLocalDriver(config, run, cwd, { tools: options.tools, toolPaths: options.toolPaths, sandbox: options.sandbox, runtimes: options.runtimes }));
 
     if (said.kind === 'pending') log.warn(said.line);
     else log.info(said.line);
@@ -510,23 +514,65 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
   }
 
   const { inputs } = read;
+  // A start the workflow's invoke refuses ends before any runtime of the definition opens, so none signs in.
+  const refused = invokeRefusal((await loadCachedWorkflow(config, name))?.definition, invokeCaller(options.confirmed), { kind: 'start', instead: shortcut.instead });
+
+  if (refused) {
+    writeEnvelope({ error: refused }, secrets);
+
+    return;
+  }
+
+  const defined = await openNamedDriver(config, options.driver, { personal: true });
+
+  if (!defined.ok) {
+    writeEnvelope({ error: defined.failure }, secrets);
+
+    return;
+  }
+
+  try {
+    return await startDriven({ config, name, inputs, tools, timeout, options, opened: defined.opened, toolPaths: teamConfig.toolPaths, env, secrets, shortcut });
+  } finally {
+    await closeDriver(defined.opened);
+  }
+}
+
+type StartRequest = Parameters<ReturnType<typeof inProcessClient>['start']>[1];
+
+/** Starts a run of workflow `name` and drives it here when `--driver` names a driver that does: local, or a definition. */
+async function startDriven(input: {
+  config: LocalConfig;
+  name: string;
+  inputs: StartRequest['inputs'];
+  tools: Record<string, string>;
+  timeout: StartRequest['timeout'];
+  options: Pick<StartOptions, 'driver' | 'confirmed' | 'autoApprove' | 'sandbox'>;
+  opened: OpenedDriver | undefined;
+  toolPaths: LocalDriverOptions['toolPaths'];
+  env: Parameters<typeof inProcessClient>[0]['env'];
+  secrets: Record<string, string>;
+  shortcut: ShortcutStart;
+}): Promise<WorkflowEnvelope | undefined> {
+  const { config, name, inputs, tools, timeout, options, opened, toolPaths, env, secrets, shortcut } = input;
+  const drives = options.driver === 'local' || opened !== undefined;
   const caller = invokeCaller(options.confirmed);
-  const alone = asks(asked, 'local') ? localStrictCan(config, options) : undefined;
+  const alone = drives ? soleDriver(opened, localStrictCan(config, options)) : undefined;
   const { byDefault } = shortcut;
   const awaits = byDefault && awaitsOf(byDefault);
   const started = await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, alone, timeout, instead: shortcut.instead, startedBy: 'person', awaits });
 
-  if ('error' in started || !asks(asked, 'local')) {
+  if ('error' in started || !drives) {
     if (byDefault && 'data' in started) {
       const run = String(started.data.run);
 
-      if (byDefault.kind === 'awaits') log.info(awaitsLine(run, byDefault.driver));
+      if (byDefault.kind === 'awaits') log.info(await awaitsLine(config, run, byDefault.driver));
       else if (byDefault.kind === 'unassigned') log.info(leftOpenLine(run, name));
     }
 
     writeEnvelope(started, secrets);
 
-    return;
+    return undefined;
   }
 
   const startedRun = z.string().safeParse(started.data.run);
@@ -538,16 +584,63 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
   }
 
   const runId = startedRun.data;
-
   log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}`);
-  const local = { tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox };
-  const driven = await withPassScoring({ config, env }, RunIdSchema.parse(runId), local, (scored) => driveRun(config, runId, LOCAL_DRIVER, { cwd: process.cwd(), options: scored }));
+  const drive = { ...definedDrive(opened, tools), toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox };
+  const driven = await withPassScoring({ config, env }, RunIdSchema.parse(runId), drive, (scored) => driveRun(config, runId, opened ? { kind: 'opened', opened } : { kind: 'named', name: LOCAL_DRIVER }, { cwd: process.cwd(), options: scored }));
   const answered = await shortcut.answer?.(config, runId, driven);
 
   if (answered) writeEnvelope(answered, secrets);
   else await writeDriven(config, driven, secrets);
 
   return driven;
+}
+
+/**
+ * The definition `--driver` names, opened, or undefined for none, `local` and `skill`, which are no definition.
+ * `personal: false` skips the member's own definitions, for a run taken from another member.
+ */
+async function openNamedDriver(config: LocalConfig, name: string | undefined, { personal }: { personal: boolean }): Promise<{ ok: true; opened: OpenedDriver | undefined } | { ok: false; failure: WorkflowFailure }> {
+  if (name === undefined || name === 'local' || name === 'skill') return { ok: true, opened: undefined };
+  const canAsk = process.stdin.isTTY && process.stderr.isTTY;
+
+  return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run' });
+}
+
+/**
+ * The driver `workflow resume` without `--driver` drives run `runId` on: the definition it was last driven with on this
+ * install, else the driver it awaits when this machine drives that one, else none, for local.
+ */
+async function resumedDriver(config: LocalConfig, runId: RunId): Promise<string | undefined> {
+  const stored = await readRun(config, runId);
+
+  if (stored === 'missing' || stored === 'corrupt') return undefined;
+  const recorded = stored.driveOptions?.driver;
+
+  if (recorded !== undefined) return recorded;
+  const awaited = stored.awaits?.driver;
+
+  return awaited !== undefined && await drivesHere(config, awaited) ? awaited : undefined;
+}
+
+async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
+  if (opened) await disposeDriver(opened);
+}
+
+/**
+ * The run's only driver as a start checks its strict requirements before the run exists: `local` alone, or each runtime
+ * of the definition `opened`, local giving what `localStrict` says and an external one what it offered. Unsaid is not met.
+ */
+function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<typeof localStrictCan>): SoleDriver {
+  if (!opened) return { driver: 'local', offers: [{ runtime: 'local', can: localStrict }] };
+
+  const offer = (entry: OpenedDriver['runtimes'][number]): SoleDriver['offers'][number] => ({
+    runtime: entry.use,
+    can: entry.kind === 'local' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false },
+  });
+
+  const [first, ...rest] = opened.runtimes;
+
+  return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer)] };
 }
 
 /** Aborts on the first SIGINT or SIGTERM, so `teamai benchmark try` stops the setup or check it runs. A second one ends the process. */
@@ -640,7 +733,10 @@ function asks(asked: AskedDriver, driver: 'local' | 'skill'): boolean {
   return asked.kind === 'driver' && asked.driver === driver;
 }
 
-/** The refusal of a `--driver` that names none of `takes`, the drivers the command runs; undefined without one. */
+/**
+ * The refusal of a `--driver` that names none of `takes`, the drivers the command runs; undefined without one. A driver
+ * definition's name passes: its lookup (`openNamedDriver`) refuses a definition that does not exist.
+ */
 function refusedDriver(asked: AskedDriver, takes: ReadonlyArray<'local' | 'skill'>): WorkflowFailure | undefined {
   switch (asked.kind) {
     case 'unset':
@@ -648,7 +744,19 @@ function refusedDriver(asked: AskedDriver, takes: ReadonlyArray<'local' | 'skill
     case 'unknown':
       return unsupportedDriver(asked.name);
     case 'driver':
-      return takes.some((driver) => asks(asked, driver)) ? undefined : unsupportedDriver(asked.name);
+      switch (asked.driver) {
+        case 'local':
+        case 'skill':
+        case 'none':
+          return takes.some((driver) => asks(asked, driver)) ? undefined : unsupportedDriver(asked.name);
+        default: {
+          // Only a definition's name is left, which its lookup decides: a driver teamai adds fails to compile here until a case above takes it.
+          const definition: { external: DriverName } = asked.driver;
+
+          return definition.external === asked.name ? undefined : unsupportedDriver(asked.name);
+        }
+      }
+
     default: {
       const unhandled: never = asked;
 
@@ -656,7 +764,6 @@ function refusedDriver(asked: AskedDriver, takes: ReadonlyArray<'local' | 'skill
     }
   }
 }
-
 
 /** Answers the first issue of a `--json` driver's flags, as `invalid_arguments`. */
 function refuseOptions(error: z.ZodError): void {
@@ -865,9 +972,36 @@ export async function workflowRetry(runId: string, step: string): Promise<void> 
   });
 }
 
-/** Cancels a run or step through the shared control operation. */
-export async function workflowCancel(runId: string, step?: string): Promise<void> {
-  await workflowControl(runId, (config, secrets) => cancelRun(config, runId, secrets, step));
+/**
+ * Cancels a run or step through the shared control operation. With no live driver of the run on this machine, it also
+ * stops what the cancelled attempts left running on their step runtimes, then releases the logins they held. A live
+ * driver keeps the run's lock and does both itself. `release` names an attempt to let go without its runtime's close.
+ */
+export async function workflowCancel(runId: string, step?: string, options: { release?: string } = {}): Promise<void> {
+  await workflowControl(runId, async (config, secrets) => {
+    const run = RunIdSchema.safeParse(runId);
+    const release = options.release === undefined ? undefined : AttemptIdSchema.safeParse(options.release);
+
+    if (release?.success === false) return { error: { code: 'invalid_arguments', message: `--release takes an attempt id, such as a0123abcd, not ${options.release}.` } };
+
+    if (!run.success) return cancelRun(config, runId, secrets, step);
+
+    // Cancelled under the run's lock, no driver of the run starts between the cancel and the stop. A run that already
+    // settled is stopped again, so an attempt its runtime could not stop before is tried once more.
+    const taken = await takeRunLock(config, run.data, async (lock) => {
+      const cancelled = await cancelRun(config, runId, secrets, step);
+
+      if (!('error' in cancelled) || cancelled.error.code === 'run_settled') await stopCancelledAttempts(config, lock, release?.data);
+
+      return cancelled;
+    }, { waitMs: 0 });
+
+    if (taken.kind === 'held') return taken.value;
+
+    if (release) log.warn(`A driver of run ${runId} is still live, so attempt ${release.data} is not released. Stop that driver, then run teamai workflow cancel ${runId} --release ${release.data} again.`);
+
+    return cancelRun(config, runId, secrets, step);
+  });
 }
 
 /** Publishes a run to teamai-reports, with the sessions its unsettled steps continue when asked. */
@@ -908,6 +1042,8 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
   if (refusedNested(nestedCall(process.env), asks(asked, 'skill'))) return;
 
   if (options.next || runId === undefined) {
+    // A run another member handed over runs on the team's tools, never on this member's own instances.
+    if (options.next) ignorePersonalToolInstances();
     await resumeOffered(runId, options, asked);
 
     return;
@@ -972,6 +1108,26 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
     return;
   }
 
+  // Without --driver, the run resumes on the definition it was last driven with here, which may no longer resolve.
+  const defined = await openNamedDriver(loaded.config, options.driver ?? await resumedDriver(loaded.config, run.data), { personal: true });
+
+  if (!defined.ok) {
+    writeEnvelope({ error: defined.failure }, secrets);
+
+    return;
+  }
+
+  try {
+    await resumeDriven(loaded, run.data, { tools, options, opened: defined.opened });
+  } finally {
+    await closeDriver(defined.opened);
+  }
+}
+
+/** Resumes run `runId` and drives it here, with the local loop or on the definition `opened`. */
+async function resumeDriven(loaded: Ready, runId: RunId, { tools, options, opened }: { tools: Record<string, string>; options: ResumeOptions; opened: OpenedDriver | undefined }): Promise<void> {
+  const { secrets } = loaded;
+
   // Claimed under the driver lock, so a driver of this run already running here never drives the claimed run.
   await writeDriven(loaded.config, await withDriverLock(loaded.config, runId, async (drive) => {
     const resumed = await resumeRun(loaded.config, runId, { claim: options.claim === true, checkout: process.cwd() });
@@ -986,9 +1142,8 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
     }
 
     const cwd = localWorkspace(stored);
-    const driving = { tools, toolPaths: loaded.teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox };
 
-    return withPassScoring(loaded, run.data, driving, (scored) => drive(cwd, scored));
+    return withPassScoring(loaded, runId, { ...definedDrive(opened, tools), toolPaths: loaded.teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox }, (scored) => drive(cwd, scored));
   }), secrets);
 }
 
@@ -1050,8 +1205,26 @@ async function resumeOffered(runId: string | undefined, options: ResumeOptions, 
     ? { caller, driver: 'skill', hasPerson: caller.mode === 'attended' }
     : { caller, driver: 'local', tools, sandbox: options.sandbox === true, hasPerson: personAnswers(caller.mode), autoApprove: options.autoApprove ?? loaded.config.workflows?.auto_approve === true };
 
-  if (options.next) await takeNext(loaded, taker, options);
-  else await listResumable(loaded, taker);
+  if (!options.next) {
+    await listResumable(loaded, taker);
+
+    return;
+  }
+
+  // A run taken from another member runs on the team's definition, never on one of this member's own.
+  const defined = isSkill ? { ok: true as const, opened: undefined } : await openNamedDriver(loaded.config, options.driver, { personal: false });
+
+  if (!defined.ok) {
+    answer({ error: defined.failure });
+
+    return;
+  }
+
+  try {
+    await takeNext(loaded, taker, options, defined.opened);
+  } finally {
+    await closeDriver(defined.opened);
+  }
 }
 
 /** Why `workflow resume` without a run id refuses its command line, before it reads anything. */
@@ -1075,7 +1248,7 @@ function resumeOfferedRefusal(runId: string | undefined, options: ResumeOptions,
  * runs it skipped. Says why it left each run of this repository it skipped. The local driver runs prompt steps on the
  * taker's `tools`.
  */
-async function takeNext(loaded: Ready, taker: Taker, options: ResumeOptions): Promise<void> {
+async function takeNext(loaded: Ready, taker: Taker, options: ResumeOptions, opened: OpenedDriver | undefined): Promise<void> {
   const { config, secrets } = loaded;
   const isSkill = taker.driver === 'skill';
   const answer = isSkill ? refuseSkill : refuse;
@@ -1103,7 +1276,7 @@ async function takeNext(loaded: Ready, taker: Taker, options: ResumeOptions): Pr
   for (const run of candidates) {
     const taken = taker.driver === 'skill'
       ? await skillAnswer({ kind: 'resume', run: run.run, options: { ...withoutDriver(options), next: true } })
-      : { envelope: await driveOffered(loaded, run, { tools: taker.tools, autoApprove: options.autoApprove, sandbox: options.sandbox }), secrets };
+      : { envelope: await driveOffered(loaded, run, { tools: taker.tools, autoApprove: options.autoApprove, sandbox: options.sandbox, opened }), secrets };
 
     if ('error' in taken.envelope && taken.envelope.error.code === 'state_moved') {
       moved += 1;
@@ -1130,13 +1303,13 @@ function withoutDriver(options: ResumeOptions): Omit<ResumeOptions, 'driver' | '
 }
 
 /** Claims offered run `run` under this machine's driver lock, as `resume <run>` does, and drives it with the local driver. */
-async function driveOffered({ config, teamConfig, env }: Ready, run: PublishedRun, options: { tools: Record<string, string>; autoApprove?: boolean; sandbox?: boolean }): Promise<WorkflowEnvelope> {
+async function driveOffered({ config, teamConfig, env }: Ready, run: PublishedRun, options: { tools: Record<string, string>; autoApprove?: boolean; sandbox?: boolean; opened: OpenedDriver | undefined }): Promise<WorkflowEnvelope> {
   return withDriverLock(config, run.run, async (drive) => {
     const claimed = await claimOffered(config, run.run, { checkout: process.cwd() });
 
     if (!claimed.ok) return { error: claimed.error };
     saidClaimed(run);
-    const local = { tools: options.tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox };
+    const local = { ...definedDrive(options.opened, options.tools), toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox };
 
     return withPassScoring({ config, env }, RunIdSchema.parse(run.run), local, (scored) => drive(process.cwd(), scored));
   });

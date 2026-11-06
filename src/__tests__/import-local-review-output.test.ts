@@ -18,7 +18,7 @@ vi.mock('node:readline', () => ({
   },
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), success: vi.fn(), dim: vi.fn() },
 }));
 

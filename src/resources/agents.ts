@@ -10,7 +10,7 @@ import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileConte
 import { log } from '../utils/logger.js';
 import { installScopeName, isAgentExcluded, isSelfMode } from '../types.js';
 import { BUILTIN_AGENT_NAMES, builtinAgentsReplacedByTeam, shippedAgentRender } from '../builtin-agents.js';
-import { isAgentToolId, isToolId, TOOLS } from '../tools.js';
+import { isAgentToolId, isToolId, descriptorOf } from '../tool-registry.js';
 import { cleanupOf, installOf, locate, ownOf, writable, type SidecarFile } from '../locate.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
@@ -1480,7 +1480,7 @@ export class AgentsHandler extends ResourceHandler {
     if (content === null) return null;
 
     if (isLegacyAgent(item)) {
-      return isToolId(tool) && TOOLS[tool].legacyAgentMd ? { ext: '.md', content } : null;
+      return isToolId(tool) && descriptorOf(tool).legacyAgentMd ? { ext: '.md', content } : null;
     }
 
     const parsed = parseAgentYaml(content, `${item.name}.yaml`);
