@@ -43,7 +43,7 @@ export type ThreadRecord = z.infer<typeof ThreadSchema>;
 const LaunchSchema = z.object({
   title: z.string(),
   /** None: T3 picks the member's default model, as it does for a thread the member starts. */
-  modelSelection: z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.string() })).optional() }).optional(),
+  modelSelection: z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.union([z.string(), z.boolean()]) })).optional() }).optional(),
   runtimeMode: z.enum(STEP_MODES),
   tool: z.string(),
   launchedAt: z.number(),

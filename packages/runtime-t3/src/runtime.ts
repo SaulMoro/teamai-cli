@@ -275,8 +275,12 @@ function instancesOf({ providers, instance, project }: { providers: Provider[]; 
  * lease that names no model on the instance of the member's default asks for none, so T3 applies that default, its
  * options, and the member's fallback once its usage is spent.
  */
-function modelSelection({ provider, lease, defaultModel }: { provider: Provider; lease: PromptLease; defaultModel: ModelSelection | undefined }): { ok: true; selection: Launch['modelSelection'] } | { ok: false; failure: RuntimeFailure } {
-  if (!lease.model && defaultModel?.instanceId === provider.providerInstanceId) return { ok: true, selection: undefined };
+function modelSelection({ provider, lease, defaultModel, appliedByT3 }: {
+  provider: Provider; lease: PromptLease; defaultModel: ModelSelection | undefined;
+  /** Whether T3 applies `defaultModel` to a launch that names no model: not on a project teamai added for the checkout's. */
+  appliedByT3: boolean;
+}): { ok: true; selection: Launch['modelSelection'] } | { ok: false; failure: RuntimeFailure } {
+  if (!lease.model && defaultModel?.instanceId === provider.providerInstanceId) return { ok: true, selection: appliedByT3 ? undefined : defaultModel };
   const name = lease.model?.name ?? provider.models[0]?.id;
   const model = provider.models.find((candidate) => candidate.id === name);
   const where = `T3 Code provider instance "${provider.providerInstanceId}" (${provider.displayName})`;
@@ -1101,8 +1105,9 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const project = projectSettings(readSettings(options.t3Home), opened.kind === 'worktree' ? { id: opened.settingsProjectId ?? opened.projectId } : undefined);
-    const selection = modelSelection({ provider: instance, lease, defaultModel: project.defaultModel });
+    const settingsProjectId = opened.kind === 'worktree' ? opened.settingsProjectId ?? opened.projectId : undefined;
+    const project = projectSettings(readSettings(options.t3Home), settingsProjectId === undefined ? undefined : { id: settingsProjectId });
+    const selection = modelSelection({ provider: instance, lease, defaultModel: project.defaultModel, appliedByT3: opened.kind !== 'worktree' || settingsProjectId === opened.projectId });
 
     if (!selection.ok) {
       refuse({ op: request.op, state: 'failed', failure: selection.failure });

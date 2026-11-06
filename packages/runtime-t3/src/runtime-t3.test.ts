@@ -492,6 +492,21 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ runtimeMode: 'approval-required', projectId: expect.not.stringMatching(/^project-1$/) });
     });
 
+    it('runs the thread on the worktree\'s own project on the default model the member set for the checkout\'s project', async () => {
+      const settings = scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true });
+      t3.settings({
+        ...settings, defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' },
+        projectSettingsOverrides: { 'project-1': { ...settings.projectSettingsOverrides['project-1'], defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } } },
+      });
+      const runtime = await initialized();
+
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+      runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b', { model: undefined }));
+
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]).toMatchObject({ provider: 'claudeAgent', model: 'claude-sonnet-5-5', projectId: expect.not.stringMatching(/^project-1$/) });
+    });
+
     it('leaves a thread unsettled, saying why once, when settling it would run the project\'s settle script in the step\'s worktree', async () => {
       t3.settings(scriptsInProject1({ name: 'Stop services', command: 'echo stopped > SETTLE_RAN.txt', runOnWorktreeCreate: false, runOnSettle: true }));
       const { runtime, handle } = await opened();

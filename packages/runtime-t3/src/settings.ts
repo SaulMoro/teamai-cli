@@ -17,7 +17,7 @@ export type T3RuntimeMode = (typeof RUNTIME_MODES)[number];
 const ModelSelectionSchema = z.object({
   instanceId: z.string().min(1),
   model: z.string().min(1),
-  options: z.array(z.object({ id: z.string(), value: z.unknown() })).optional(),
+  options: z.array(z.object({ id: z.string(), value: z.union([z.string(), z.boolean()]) })).optional(),
 });
 
 export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
