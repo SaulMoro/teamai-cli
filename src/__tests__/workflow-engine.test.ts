@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describeWorkflow } from '../workflow/describe.js';
+import { parseWorkflow } from '../workflow/parse.js';
 import { z } from 'zod';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import type { LocalConfig } from '../types.js';
@@ -4759,6 +4761,22 @@ steps:
 
     expect(remote).toMatchObject({ data: { wait: { held: [{ step: 'record', missing: ['host'] }] } } });
     expect(host).toMatchObject({ data: { lease: { step: 'record' } } });
+  });
+
+  it('is held from a runtime off this host by describe too, as next holds it', () => {
+    const parsed = parseWorkflow('teamai-import-rules.yaml', `schemaVersion: v1alpha1
+name: teamai-import-rules
+description: Bookkeeping on this host.
+steps:
+  - id: record
+    command: node record.js
+`);
+    if (!parsed.ok) throw new Error('the workflow does not parse');
+    const none = new Set<string>();
+
+    const { facts } = describeWorkflow({ definition: parsed.definition, source: 'team', workflows: {}, ceiling: 1, can: { remote: true }, allow: {}, env: { declared: none, secrets: none, present: none } });
+
+    expect(facts.held).toEqual([expect.objectContaining({ step: 'record', missing: ['host'] })]);
   });
 });
 

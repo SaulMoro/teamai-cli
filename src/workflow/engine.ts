@@ -45,7 +45,7 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  CAN_KEYS, LimitSchema, ReportedUnenforcedSchema, heldFor, isPinnedToHost, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
   type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
@@ -1681,9 +1681,12 @@ function offerTerms(
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
-    // teamai's bookkeeping and the publish contract, which only this host keeps, never run on an external runtime; nor
-    // does an answer, which the member's tool gives here (`answer`).
-    pinned: (step.command !== undefined && DefaultWorkflows.named(scope.workflow) !== undefined) || (plan?.contract !== undefined && isPublishContract(plan.contract)),
+    pinned: isPinnedToHost({
+      executor: step.command !== undefined ? 'command' : 'prompt',
+      answer: step.answer !== undefined,
+      inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined,
+      publishes: plan?.contract !== undefined && isPublishContract(plan.contract),
+    }),
     answer: step.answer !== undefined,
     ...role,
   }, context.can, context.allow, context.facts);

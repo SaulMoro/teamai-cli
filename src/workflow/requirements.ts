@@ -366,19 +366,23 @@ export interface Offer {
   clone: boolean;
   /** The caller asked `next --prepare`. */
   prepare: boolean;
-  /**
-   * The step runs only on this host: a command step of a workflow teamai ships, which does its bookkeeping against the
-   * run's files, this machine's sessions and the team repo, or a step that publishes to a teamai data branch. Absent: not
-   * pinned.
-   */
+  /** The step runs only on this host (`isPinnedToHost`). Absent: not pinned. */
   pinned?: boolean;
-  /**
-   * An answer step, which the local loop answers with the member's tool on this host whatever runtime takes the lease:
-   * pinned with it, and taken by a slot that runs no prompt step. Absent: not one.
-   */
+  /** An answer step, which a slot that runs no prompt step takes. Absent: not one. */
   answer?: boolean;
   /** The team role the step's copy runs with: its clone's, or the step's own in a worktree copy. */
   role?: string;
+}
+
+/**
+ * Whether a step runs only on this host, so no runtime that runs steps away from it (`can.remote`) takes it:
+ * - an answer step, which the local loop answers with the member's tool here, whatever runtime takes its lease;
+ * - a command step of a workflow teamai ships, which does its bookkeeping against the run's files, this machine's
+ *   sessions and the team repo;
+ * - a step that publishes to a teamai data branch.
+ */
+export function isPinnedToHost(step: { executor: Executor; answer: boolean; inShippedWorkflow: boolean; publishes: boolean }): boolean {
+  return step.answer || (step.executor === 'command' && step.inShippedWorkflow) || step.publishes;
 }
 
 /** What a granted lease carries besides the step itself. */
@@ -450,7 +454,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
     ...personGap(offer.interactive, can),
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
-    ...((offer.pinned || offer.answer) && can.remote ? ['host' as const] : []),
+    ...(offer.pinned && can.remote ? ['host' as const] : []),
     ...(offer.executor === 'prompt' && !offer.answer && can.prompt === false ? ['prompt' as const] : []),
     ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
