@@ -22,6 +22,12 @@ afterAll(() => fs.rmSync(bundleDir, { recursive: true, force: true }));
 /** The link that opens a thread of the fake's environment in T3 Code's desktop app. */
 const linkTo = (threadId: string | undefined): string => `t3code://threads/env-fake-1/${encodeURIComponent(threadId ?? '')}`;
 
+/** A line for the person, which answers no request. */
+const isNotice = (line: Line): boolean => line['event'] === 'notice';
+
+/** The notices the runtime wrote so far. */
+const noticesOf = (runtime: Connection): Line[] => runtime.lines.filter(isNotice);
+
 describe('teamai-runtime-t3', () => {
   let dir: string;
   let checkout: string;
@@ -373,7 +379,7 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
       const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
-      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted')).toMatchObject({ event: 'ready' });
+      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted' && !isNotice(line))).toMatchObject({ event: 'ready' });
 
       return { runtime, handle: z.string().parse(accepted['handle']) };
     };
@@ -388,7 +394,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     /** How the op ended: its first line that neither accepts it nor shows its thread. */
-    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'display', 20_000);
+    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'display' && !isNotice(line), 20_000);
 
     beforeEach(() => {
       signIn(t3);
@@ -403,7 +409,7 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'open', op, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree: folder, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
       await runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
 
-      return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted', timeoutMs);
+      return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && !isNotice(line), timeoutMs);
     };
 
     const initialized = async (options: Line = {}, env: Record<string, string> = {}): Promise<Connection> => {
@@ -426,7 +432,8 @@ describe('teamai-runtime-t3', () => {
 
         expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
         expect(t3.commandRuns()).toContainEqual(['project', 'add', '--base-dir', t3.t3Home, checkout]);
-        expect(runtime.stderr()).toBe(`Adding ${checkout} to T3 Code as a project, so its steps can run there.\n`);
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', op: OPEN, handle: `t3-${RUN}-a1b2c3d4`, message: `Adding ${checkout} to T3 Code as a project, so its steps can run there.` }]);
+        expect(runtime.stderr()).toBe('');
 
         const handle = `t3-${RUN}-a1b2c3d4`;
         runtime.send(prompt(handle, 'op-0000000b'));
@@ -487,7 +494,11 @@ describe('teamai-runtime-t3', () => {
       expect(t3.commandRuns()).toContainEqual(['project', 'add', '--base-dir', t3.t3Home, '--title', `acme-app · teamai ${RUN}`, worktree]);
       expect(t3.threads()[0]).toMatchObject({ workspace: 'root', worktreePath: worktree, projectId: expect.not.stringMatching(/^project-1$/) });
       expect(fs.existsSync(path.join(worktree, 'SETUP_RAN.txt'))).toBe(false);
-      expect(runtime.stderr()).toBe(`T3 Code runs the setup script "Install" of acme-app in each worktree a thread opens on, so teamai adds the step's worktree ${worktree} to T3 Code as a project of its own, where that script does not run.\n`);
+      expect(noticesOf(runtime)).toEqual([{
+        event: 'notice', op: OPEN, handle: `t3-${RUN}-a1b2c3d4`,
+        message: `T3 Code runs the setup script "Install" of acme-app in each worktree a thread opens on, so teamai adds the step's worktree ${worktree} to T3 Code as a project of its own, where that script does not run.`,
+      }]);
+      expect(runtime.stderr()).toBe('');
     });
 
     it('runs the thread on the worktree\'s own project in the mode the member set for the checkout\'s project', async () => {
@@ -532,7 +543,11 @@ describe('teamai-runtime-t3', () => {
       expect(thread?.settled).toBe(false);
       expect(t3.calls().filter((call) => call.tool === 't3_thread_organize')).toEqual([]);
       expect(fs.existsSync(path.join(worktree, 'SETTLE_RAN.txt'))).toBe(false);
-      expect(runtime.stderr()).toBe(`teamai leaves the T3 thread ${linkTo(thread?.threadId)} ("review · teamai ${RUN}") in T3 Code's active threads: settling it would run the project's script "Stop services" in the step's folder.\n`);
+      expect(noticesOf(runtime)).toEqual([{
+        event: 'notice', handle,
+        message: `teamai leaves the T3 thread ${linkTo(thread?.threadId)} ("review · teamai ${RUN}") in T3 Code's active threads: settling it would run the project's script "Stop services" in the step's folder.`,
+      }]);
+      expect(runtime.stderr()).toBe('');
     });
 
     // A read-only step reads the checkout where it is, as on local, and a clone is a folder of its own: each is a
@@ -577,6 +592,7 @@ describe('teamai-runtime-t3', () => {
         expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
         expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['runtimeMode']).toBe(mode);
         expect(runtime.stderr()).toBe('');
+        expect(noticesOf(runtime)).toEqual([]);
       });
 
       it('starts threads in Auto, never in full access, when that is the member\'s T3 default, and says so once', async () => {
@@ -588,7 +604,8 @@ describe('teamai-runtime-t3', () => {
         expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
         expect(await ended(runtime, 'op-0000000c')).toMatchObject({ event: 'finished' });
         expect(t3.calls().filter((call) => call.tool === 't3_thread_launch').map((call) => call.args['runtimeMode'])).toEqual(['auto', 'auto']);
-        expect(runtime.stderr()).toBe('T3\'s default mode is Full access; teamai starts its threads in Auto instead.\n');
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', op: 'op-0000000b', handle, message: 'T3\'s default mode is Full access; teamai starts its threads in Auto instead.' }]);
+        expect(runtime.stderr()).toBe('');
       });
 
       // T3 applies the member's default, its options, and their fallback once its usage is spent, only to a launch that names no model.
@@ -869,8 +886,10 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'close', handle });
       expect(await runtime.next((line) => line['event'] === 'closed')).toEqual({ event: 'closed', handle });
 
-      const said = `teamai could not settle the T3 thread ${linkTo(threadId)} ("review · teamai ${RUN}"), so it stays in T3 Code's active threads: Thread ${threadId} cannot be organized now.\n`;
-      expect(runtime.stderr().split(said)).toHaveLength(2);
+      expect(noticesOf(runtime)).toEqual([{
+        event: 'notice', handle,
+        message: `teamai could not settle the T3 thread ${linkTo(threadId)} ("review · teamai ${RUN}"), so it stays in T3 Code's active threads: Thread ${threadId} cannot be organized now.`,
+      }]);
       expect(t3.threads()[0]?.settled).toBe(false);
     });
 
@@ -2157,7 +2176,7 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, confinedPrompt: true });
       runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a9e8d7c6', credentials: {} });
       const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
-      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted')).toMatchObject({ event: 'ready' });
+      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted' && !isNotice(line))).toMatchObject({ event: 'ready' });
 
       return { runtime, handle: z.string().parse(accepted['handle']) };
     };
@@ -2173,7 +2192,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     /** How the op ended: its first line that neither accepts it nor shows its thread. */
-    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'display', 20_000);
+    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'display' && !isNotice(line), 20_000);
 
     beforeEach(() => {
       signIn(t3);

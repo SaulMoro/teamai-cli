@@ -464,13 +464,16 @@ export function serve(options: ServeOptions): Promise<void> {
   /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
   const working = new Map<string, Set<Promise<unknown>>>();
 
+  /** A line for the person, about the operation or the place it names: teamai shows it as it runs. */
+  const notice = (message: string, about: { op?: OpId; handle?: string }): void => write({ event: 'notice', ...about, message });
+
   let saidFullAccess = false;
 
   /** The mode a thread inherits from the member's T3 default: theirs, or auto; never full access, which it says once. */
-  const inheritedMode = (mode: T3RuntimeMode | undefined): StepMode => {
+  const inheritedMode = (mode: T3RuntimeMode | undefined, about: { op: OpId; handle: string }): StepMode => {
     if (mode !== 'full-access') return mode ?? 'auto';
 
-    if (!saidFullAccess) process.stderr.write('T3\'s default mode is Full access; teamai starts its threads in Auto instead.\n');
+    if (!saidFullAccess) notice('T3\'s default mode is Full access; teamai starts its threads in Auto instead.', about);
     saidFullAccess = true;
 
     return 'auto';
@@ -801,7 +804,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const listed = projectOf(projects, folder);
 
       if (listed) return { ok: true, project: listed };
-      process.stderr.write(`${why}\n`);
+      notice(why, { op: request.op, handle });
 
       let refused: string | undefined;
 
@@ -1140,7 +1143,7 @@ export function serve(options: ServeOptions): Promise<void> {
     // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
     // so a repeat in another mode would not find the thread it launched.
     const launch: LaunchRecord = pending ?? {
-      title: `${lease.step} · teamai ${opened.run}`, ...(selection.selection && { modelSelection: selection.selection }), runtimeMode: s.runtimeMode ?? inheritedMode(project.defaultMode), tool: lease.tool,
+      title: `${lease.step} · teamai ${opened.run}`, ...(selection.selection && { modelSelection: selection.selection }), runtimeMode: s.runtimeMode ?? inheritedMode(project.defaultMode, { op: request.op, handle: request.handle }), tool: lease.tool,
       launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && opened.kind === 'worktree' && opened.binding === 'existing_worktree' && { worktreePath: request.cwd }),
     };
 
@@ -1355,7 +1358,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /**
    * Settles each thread of `handle` that ended and that T3 holds no run of, once: a thread the runtime has not seen
-   * stop, or one the person started again, stays. A settle T3 refuses is said once on stderr and fails nothing.
+   * stop, or one the person started again, stays. A settle T3 refuses is said once, in a notice, and fails nothing.
    */
   const settleEnded = async (handle: string, s: Reached): Promise<void> => {
     const known = place(handle);
@@ -1369,7 +1372,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (script !== undefined) {
         // T3 would run the script in the step's folder, before teamai commits it, so the thread stays where it is.
-        process.stderr.write(`teamai leaves the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") in T3 Code's active threads: settling it would run the project's script "${script}" in the step's folder.\n`);
+        notice(`teamai leaves the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") in T3 Code's active threads: settling it would run the project's script "${script}" in the step's folder.`, { handle });
         outcome = 'skipped';
       } else {
         try {
@@ -1382,7 +1385,7 @@ export function serve(options: ServeOptions): Promise<void> {
           // A thread T3 no longer has is in nobody's active threads.
           outcome = error instanceof T3Error && error.threadGone ? 'settled' : 'failed';
 
-          if (outcome === 'failed') process.stderr.write(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}\n`);
+          if (outcome === 'failed') notice(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}`, { handle });
         }
       }
 
