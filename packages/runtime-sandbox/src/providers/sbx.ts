@@ -19,7 +19,8 @@ import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 //  write. No credential goes in at create: each exec brings its own, by name, from this process's environment. A
 //  login stored with `sbx secret set` stays in the host's proxy, which injects it into the requests; the sandbox holds
 //  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is the
-//  handle: `sbx ls` finds it again after a restart. sbx's network policy lets a sandbox reach every host it allows, so
+//  handle: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none) and its
+//  name names no journal, so no open sweeps sbx: one a killed runtime's create left stays until `sbx rm`. sbx's network policy lets a sandbox reach every host it allows, so
 //  this provider offers no judge, which must reach its model provider only.
 //
 
