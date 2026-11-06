@@ -210,7 +210,8 @@ function init(request) {
   const unavailable = options.unavailable === undefined ? {} : { unavailable: options.unavailable };
   // `permissions` is what it reports of the tools it runs without permission prompts, as given.
   const permissions = options.permissions === undefined ? {} : { permissions: options.permissions };
-  // `own_logins` names the tools whose login its provider keeps, so teamai copies none for them.
+  // `own_logins` names the tools whose login its provider keeps, so teamai copies none for them and sends none of
+  // their sign-in variables it found by name.
   const ownLogins = options.own_logins === undefined ? {} : { ownLogins: options.own_logins };
 
   if (options.agent === undefined) {

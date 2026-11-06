@@ -288,10 +288,15 @@ export const SIGN_IN_VARIABLES: Record<ExecRuntimeTool, { signIn: readonly strin
   codebuddy: { signIn: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'] },
 };
 
+/** A tool's sign-in variables and those that go with them. */
+function variablesOf({ signIn, alongside = [] }: (typeof SIGN_IN_VARIABLES)[ExecRuntimeTool]): string[] {
+  return [...signIn, ...alongside];
+}
+
 /** The values of the tools' sign-in variables set in `env`, by name, with those that go with a sign-in found. */
 function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
   const isSet = (name: string): boolean => (env[name] ?? '') !== '';
-  const names = Object.values(SIGN_IN_VARIABLES).flatMap(({ signIn, alongside = [] }) => (signIn.some(isSet) ? [...signIn, ...alongside] : []));
+  const names = Object.values(SIGN_IN_VARIABLES).flatMap((variables) => (variables.signIn.some(isSet) ? variablesOf(variables) : []));
 
   return Object.fromEntries(names.filter(isSet).sort().map((name) => [name, env[name] ?? '']));
 }
@@ -438,7 +443,10 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     // A sign-in found by name reaches only a runtime that execs the tool and keeps a value to it. One that launches
     // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
     const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
-    const given = isKeepingFound ? { ...values.values, ...found } : values.values;
+    // A tool whose login the runtime's provider keeps signs in on that login, not on what the member's environment holds.
+    const ownLoginVariables = new Set(Object.entries(SIGN_IN_VARIABLES).flatMap(([tool, variables]) => (ready.ownLogins?.includes(tool) ? variablesOf(variables) : [])));
+    const foundHere = Object.fromEntries(Object.entries(found).filter(([name]) => !ownLoginVariables.has(name)));
+    const given = isKeepingFound ? { ...values.values, ...foundHere } : values.values;
 
     return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
   }

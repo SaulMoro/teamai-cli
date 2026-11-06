@@ -69,7 +69,7 @@ export interface ExecEvents {
 
 /** A runtime's offer: what it can, and whether it launches agents its own way, so prompt steps reach it as `prompt`. */
 /** `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step. */
-/** `ownLogins`: the tools whose login the runtime's provider keeps, which teamai copies none of. */
+/** `ownLogins`: the tools whose login the runtime's provider keeps: teamai copies none of their logins, nor sends the sign-ins it found for them. */
 export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[] } | { ok: false; failure: RuntimeFailure };
 
 /** One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in flight. */

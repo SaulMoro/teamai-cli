@@ -284,7 +284,7 @@ export type ConfinedOffer = z.infer<typeof ConfinedOfferSchema>;
 
 /**
  * The credentials a driver definition gives a runtime, by name only, never a value: `env`, the names its operations
- * carry; `logins`, the tools whose login teamai copies into an attempt's tool home. A runtime offers by them, such as
+ * carry, less those of a tool its reply names in `ownLogins` when teamai found them in the member's environment; `logins`, the tools whose login teamai copies into an attempt's tool home. A runtime offers by them, such as
  * `can.confined` only for the tools it can sign in. An older teamai sends none, and the runtime offers as it would
  * without them.
  */
@@ -467,8 +467,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
       unavailable: z.record(z.string().min(1), z.string().min(1).max(UNAVAILABLE_REASON_MAX)).optional(),
       // The tools it runs without permission prompts, because an option of its definition or of the member set that.
       permissions: z.record(z.string().min(1), z.literal('full-access')).optional(),
-      // Of the logins `init.credentials.logins` names, the tools whose login its provider keeps itself, so teamai
-      // copies none of them into an attempt's tool home.
+      // The tools whose login its provider keeps itself: teamai copies none of their `init.credentials.logins` into an
+      // attempt's tool home, and sends none of their sign-in variables it found by name in the member's environment.
       ownLogins: z.array(z.string().min(1)).optional(),
     }).strict(),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }).strict(),
