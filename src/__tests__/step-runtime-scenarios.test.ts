@@ -1353,6 +1353,70 @@ describe('the stdio step runtime client', () => {
     }
   });
 
+  it('counts and logs a terminal for an operation it no longer waits on, and keeps the first one', async () => {
+    const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    // A runtime that ends each exec twice, the second time differently, as one that answers a cancel after an end.
+    const twice = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') write({ type: 'init', ok: true, can: {} });
+      if (request.type === 'exec') {
+        write({ op: request.op, event: 'accepted' });
+        write({ op: request.op, event: 'exited', code: 0, stdout: 'ok' });
+        write({ op: request.op, event: 'cancelled' });
+        write({ op: request.op, event: 'output', stream: 'stdout', data: 'late' });
+      }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'twice', command: process.execPath, args: ['-e', twice] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      const [first, second] = [newOpId(), newOpId()];
+      const exec = (op: typeof first): ExecRequest => ({ op, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() });
+
+      expect(await runtime.exec(exec(first), {})).toEqual({ kind: 'exited', code: 0, stdout: 'ok' });
+      expect(await until(() => warned.mock.calls.length === 1)).toBe(true);
+      expect(await runtime.exec(exec(second), {})).toEqual({ kind: 'exited', code: 0, stdout: 'ok' });
+      expect(await until(() => warned.mock.calls.length === 2)).toBe(true);
+
+      expect(warned.mock.calls.map(([line]) => line)).toEqual([
+        `Step runtime "twice" answered ${first} with cancelled after teamai stopped waiting for it, which teamai ignores (1 such answer from this runtime).`,
+        `Step runtime "twice" answered ${second} with cancelled after teamai stopped waiting for it, which teamai ignores (2 such answers from this runtime).`,
+      ]);
+    } finally {
+      warned.mockRestore();
+      await runtime.dispose();
+    }
+  });
+
+  it('counts no end that answers a cancel it sent, even one that repeats an end already given', async () => {
+    const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    // Each cancel is answered with an end twice; an exec ends, then ends again.
+    const answers = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') write({ type: 'init', ok: true, can: {} });
+      if (request.type === 'cancel') { write({ op: request.op, event: 'exited', code: 0, stdout: '' }); write({ op: request.op, event: 'cancelled' }); }
+      if (request.type === 'exec') { write({ op: request.op, event: 'accepted' }); write({ op: request.op, event: 'exited', code: 0, stdout: '' }); write({ op: request.op, event: 'exited', code: 0, stdout: '' }); }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'answers', command: process.execPath, args: ['-e', answers] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      const [cancelled, ended] = [newOpId(), newOpId()];
+
+      await runtime.cancel(cancelled);
+      await runtime.exec({ op: ended, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() }, {});
+      expect(await until(() => warned.mock.calls.length > 0)).toBe(true);
+      expect(warned.mock.calls.map(([line]) => line)).toEqual([
+        `Step runtime "answers" answered ${ended} with exited after teamai stopped waiting for it, which teamai ignores (1 such answer from this runtime).`,
+      ]);
+    } finally {
+      warned.mockRestore();
+      await runtime.dispose();
+    }
+  });
+
   it('fails a runtime that writes a key protocol 1 does not have, naming the key', async () => {
     const surplus = `require('readline').createInterface({ input: process.stdin }).on('line', () => {
       process.stdout.write(JSON.stringify({ type: 'init', ok: true, can: {}, surplus: true }) + '\\n');

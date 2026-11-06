@@ -1494,7 +1494,7 @@ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa h
 
 只把它们设置到进程的环境里，永远不要写到磁盘或日志里。重启后的 teamai 会随它重新发送的操作再次发送它们，所以你的运行时什么都不用保存。
 
-其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
+其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。对已经结束的操作发出的 `cancel`，再次给出那个结束结果，不停止任何东西；只有 `cancel_failed` 会被替换（见下文）。teamai 收到它已不再等待的操作的结束结果时，会记录一条带计数的警告。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
 无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
 
