@@ -13,9 +13,13 @@ import { serve } from './runtime.js';
 // protocol 1 to it over stdio. Its stdout carries only protocol lines; anything for a person goes to stderr.
 
 // When teamai is gone, a line it would have read goes nowhere: an exec still running keeps going and records its end.
+// So does a warning on stderr, which a sweep nothing waits for can write at any time.
 let stdoutOpen = true;
+let stderrOpen = true;
 
 process.stdout.on('error', () => { stdoutOpen = false; });
+
+process.stderr.on('error', () => { stderrOpen = false; });
 
 const uid = process.getuid?.();
 const gid = process.getgid?.();
@@ -27,7 +31,9 @@ serve({
     if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
   },
   journal: sandboxJournal,
-  warn: (line) => { process.stderr.write(`${line}\n`); },
+  warn: (line) => {
+    if (stderrOpen) process.stderr.write(`${line}\n`);
+  },
   provider: providerOf,
 });
 
