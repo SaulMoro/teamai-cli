@@ -374,6 +374,47 @@ describe('teamai-runtime-paseo', () => {
     ]);
   });
 
+  it('starts a tool in the bypass mode its mode option names, reporting that tool alone in permissions as full access and offering no unattended step', async () => {
+    behave({ output: { ok: true }, codex_login: 'signed_in', default_modes: { codex: 'full-access' } });
+    const runtime = start();
+
+    expect(await ready(runtime, { options: { url: daemon.url, mode: { claude: 'bypassPermissions' } } })).toMatchObject({
+      type: 'init', ok: true, permissions: { claude: 'full-access' }, can: { unattended: false, tools: ['claude', 'codex', 'opencode'] },
+    });
+    // Codex's default is still never inherited: only the option opts a tool in.
+    expect(runtime.lines.filter((line) => 'event' in line && line.event === 'notice').map((line) => 'message' in line && line.message)).toEqual([
+      'Paseo starts codex in mode full-access by default, which never asks before it acts; teamai starts its codex steps in mode auto-review, the nearest one before it in Paseo\'s list that asks.',
+    ]);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+    expect(received().map((create) => create.config)).toEqual([expect.objectContaining({ provider: 'claude', model: 'claude-opus-5-5', modeId: 'bypassPermissions' })]);
+  });
+
+  it('starts a tool in a mode that asks when its mode option names one, over Paseo\'s default, and reports no permissions', async () => {
+    behave({ output: { ok: true } });
+    const runtime = start();
+    const init = await ready(runtime, { options: { url: daemon.url, mode: { claude: 'plan' } } });
+
+    expect(init).toMatchObject({ type: 'init', ok: true });
+    expect(init).not.toHaveProperty('permissions');
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+    expect(received().map((create) => create.config)).toEqual([expect.objectContaining({ provider: 'claude', model: 'claude-opus-5-5', modeId: 'plan' })]);
+  });
+
+  it('does not offer a tool whose mode option names a mode Paseo does not list for it, saying which it lists', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] } });
+
+    expect(await ready(start(), { options: { url: daemon.url, mode: { claude: 'yolo' } } })).toMatchObject({
+      type: 'init', ok: true, can: { tools: ['opencode'] },
+      unavailable: { claude: cannotRun('claude', 'the runtime\'s mode option names yolo for it, which Paseo does not list for claude (plan, default, acceptEdits, auto, bypassPermissions); name one of those') },
+    });
+  });
+
   it('does not offer a tool whose Paseo default mode is not one Paseo lists for it, saying so, and creates no agent', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, default_modes: { claude: 'gone' } });
     const runtime = start();
@@ -2046,6 +2087,7 @@ describe('teamai-runtime-paseo', () => {
 
   it.each([
     ['an option it does not take', { url: 'ws://127.0.0.1:1/ws', imgae: 'x' }, {}, { code: 'bad_option', key: 'imgae' }],
+    ['a mode for a tool it does not run', { url: 'ws://127.0.0.1:1/ws', mode: { cursor: 'agent' } }, {}, { code: 'bad_option', key: 'mode' }],
     ['no daemon at the url', { url: 'ws://127.0.0.1:1/ws' }, {}, { code: 'daemon_unreachable' }],
     ['a daemon older than the client', undefined, { version: '0.13.2' }, { code: 'daemon_version', message: expect.stringContaining('runs version 0.13.2') }],
     ['a daemon without agent receipts', undefined, { missing: ['agentRequestReceipts'] }, { code: 'daemon_version', message: expect.stringContaining('lacks agentRequestReceipts') }],
