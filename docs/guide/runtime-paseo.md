@@ -359,6 +359,10 @@ In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so t
 ✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
+## Interactive steps
+
+In an attended run, a step with `interactive: true` runs as a Paseo agent you work with in the Paseo app. Its prompt starts by telling the agent to work through the step with you, and to write teamai's result only once you say the step is done. The step waits while the agent sits idle between your turns, and ends once the result is written. An unattended run has nobody to work with, so the step goes to a runtime with HITL, as [HITL](workflow-advanced.md#hitl-human-in-the-loop) describes.
+
 ## Cancel, crash and restart
 
 `teamai workflow cancel` stops the agent, and the step ends `cancelled`:

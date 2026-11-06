@@ -69,6 +69,12 @@ const OptionsSchema = z.object({
 /** How long an attended step waits between looks at a permission request a person has not answered yet. */
 const PERMISSION_POLL_MS = 1000;
 
+/** How often an interactive step's agent is looked at while it idles with no result: the person may still be in it. */
+const IDLE_POLL_MS = 2_000;
+
+/** What an interactive step's agent is told before teamai's prompt: the person works through the step with it. */
+const INTERACTIVE_BRIEF = 'This step is interactive: work through it with the person in this Paseo agent. Write the result file only once they say the step is done.';
+
 /** How long a wait the daemon dropped, as a restart does, waits before it asks again. */
 const RECONNECT_MS = 500;
 
@@ -545,7 +551,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       can: {
         // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
         // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.
-        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: tools.map(({ tool }) => tool),
+        // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
+        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: tools.map(({ tool }) => tool),
         ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
       },
     });
@@ -712,8 +719,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     try {
       await launch(live, request, following, tool, {
-        place, modeId: stepModes.get(tool)?.id, prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
-        options: stepGrant(tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result }, cwd: place.cwd,
+        place, modeId: stepModes.get(tool)?.id, prompt: lease.interactive ? `${INTERACTIVE_BRIEF}\n\n${lease.prompt}` : lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
+        options: stepGrant(tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result, ...(lease.interactive && { interactive: true }) }, cwd: place.cwd,
       });
     } finally {
       following.landed();
@@ -1022,6 +1029,13 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             }, following);
 
             return;
+          }
+
+          // An interactive step ends once the person said it is done and the agent wrote the result; until then the agent
+          // idles between their turns. A result file it wrote that is not a workflow result fails the step, as any step.
+          if (!result && record.answer.interactive && !fs.existsSync(record.answer.file)) {
+            await Promise.race([delay(IDLE_POLL_MS), stopped]);
+            continue;
           }
 
           if (!result) {

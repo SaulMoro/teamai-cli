@@ -359,6 +359,10 @@ paseo permit allow 7c483fce --all
 ✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
+## 交互式步骤
+
+在有人值守的运行中，`interactive: true` 的步骤作为一个 Paseo 智能体运行，你在 Paseo 应用里与它一起完成。它的提示词开头告诉智能体与你一起完成这个步骤，并且只在你说步骤完成后才写 teamai 的结果。智能体在你两次发言之间空闲时，步骤一直等待；结果写入后步骤结束。无人值守的运行中没有人可以协作，所以该步骤交给提供 HITL 的运行时，见 [HITL](workflow-advanced.md#hitl人在回路中)。
+
 ## 取消、崩溃和重启
 
 `teamai workflow cancel` 会停止智能体，步骤以 `cancelled` 结束：
