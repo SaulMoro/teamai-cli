@@ -55,7 +55,8 @@ const AgentCreateSchema = z.object({
   env: z.strictObject({ [RUN_DIR_ENV]: z.string() }).optional(),
   config: z.object({
     provider: z.string(),
-    modeId: z.string(),
+    /** Absent: the mode Paseo starts the tool in when it sets no default for it. */
+    modeId: z.string().optional(),
     thinkingOptionId: z.string().optional(),
     /**
      * The provider's own launch options: for Claude, the tools it may use without asking; for Codex, the directories its
