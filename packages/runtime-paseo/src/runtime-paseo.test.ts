@@ -1574,6 +1574,28 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ event: 'alive', handle });
   });
 
+  it('forgets an attempt the person released though its close fails, so the last other attempt on its workspace archives it', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy' });
+    const runtime = start();
+    await ready(runtime);
+    const released = await opened(runtime);
+    const other = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    const workspace = worktreeWorkspace();
+    runtime.send(promptRequest(released, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+
+    runtime.send({ type: 'close', handle: released, release: true });
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toMatchObject({ event: 'close_failed', handle: released, failure: { code: 'close_failed' } });
+    runtime.send({ type: 'reattach', handle: released });
+    expect(await runtime.next((line) => 'event' in line && ['alive', 'gone'].includes(line.event))).toEqual({ event: 'gone', handle: released });
+
+    behave({ output: { ok: true } });
+    runtime.send({ type: 'close', handle: other });
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle: other });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+    expect(journalFiles()).toEqual([]);
+  });
+
   it('archives a workspace two attempts share only when the last of them closes, one whose open is still in flight included', async () => {
     const runtime = start();
     await ready(runtime);

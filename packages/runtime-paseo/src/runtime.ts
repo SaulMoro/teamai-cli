@@ -1366,10 +1366,25 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   /**
    * Ends an attempt's place once nothing it started runs. A place whose agent may still run is kept, so teamai can close
    * it again: one the runtime cannot stop, or any place while it reaches no daemon, as after a restart whose init failed.
+   * A place the person released (`release`) is forgotten either way, so it no longer counts on its workspace or directory.
    */
-  async function closePlace(handle: string): Promise<void> {
+  async function closePlace(handle: string, { release }: { release: boolean }): Promise<void> {
     const deadline = Date.now() + STOP_SETTLE_MS;
     const prompts = journal.promptsOf(handle);
+
+    const closeFailed = (failure: RuntimeFailure): void => {
+      if (release) {
+        for (const { op } of journal.promptsOf(handle)) {
+          const following = waiting.get(op);
+          waiting.delete(op);
+          following?.stop();
+        }
+
+        journal.forget(handle);
+      }
+
+      write({ event: 'close_failed', handle, failure });
+    };
 
     // A prompt that has not sent its create yet ends cancelled, and never sends it: the place it would run in closes.
     for (const { op, record } of prompts) {
@@ -1384,7 +1399,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     // A place whose worktree, or judge's directory, Paseo is still opening is closed once its workspace is known, so the
     // workspace is archived.
     if (opening && (await Promise.race([opening, late(deadline)])) === 'late') {
-      write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: `Paseo did not open the worktree of ${handle} as a workspace within ${STOP_SETTLE_MS / 1000} s; close the attempt again.` } });
+      closeFailed({ code: 'close_failed', message: `Paseo did not open the worktree of ${handle} as a workspace within ${STOP_SETTLE_MS / 1000} s; close the attempt again.` });
 
       return;
     }
@@ -1394,7 +1409,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const creating = prompts.flatMap(({ op }) => creates.get(op) ?? []);
 
     if (creating.length > 0 && (await Promise.race([Promise.all(creating), late(deadline)])) === 'late') {
-      write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: `Paseo did not finish creating an agent of ${handle} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; close the attempt again.` } });
+      closeFailed({ code: 'close_failed', message: `Paseo did not finish creating an agent of ${handle} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; close the attempt again.` });
 
       return;
     }
@@ -1408,7 +1423,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       : withoutDaemon(live, `stop the agents of ${handle} or archive its workspace`, 'close the attempt again'));
 
     if (failure) {
-      write({ event: 'close_failed', handle, failure });
+      closeFailed(failure);
 
       return;
     }
@@ -1459,7 +1474,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       }
 
       case 'close':
-        await closePlace(request.handle);
+        await closePlace(request.handle, { release: request.release === true });
 
         return;
       case 'cancel':
@@ -1634,7 +1649,18 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           keep(request.op, { op: request.op, state: 'failed', failure });
           fail(request.op, failure);
         } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
-        else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
+        else if (request.type === 'close') {
+          // A released place is forgotten though its close failed; a journal that cannot remove it is named.
+          let kept = '';
+
+          try {
+            if (request.release) journal.forget(request.handle);
+          } catch (error) {
+            kept = ` teamai-runtime-paseo could not forget the released attempt either (${error instanceof Error ? error.message : String(error)}); make ${journal.root} writable, then release it again.`;
+          }
+
+          write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${kept}` } });
+        }
         else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });
         else write({ event: 'failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
       }
