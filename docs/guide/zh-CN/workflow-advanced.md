@@ -1732,6 +1732,13 @@ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa h
 ← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
 ```
 
+现在无法运行的工具（例如还没登录的工具）不要放进 `can.tools`，而是放在 `can` 旁边的 `unavailable` 里，写明原因和用户该做什么。你的运行时仍然会启动，所以命令步骤照常运行。用这个工具的提示步骤会以 `tool_unavailable` 失败，并带上你的原因：
+
+```text
+← {"type":"init","ok":true,"can":{"tools":["codex"]},"unavailable":{"claude":"claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login."}}
+✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
+```
+
 `max_parallel` 和 `credentials` 由 teamai 自己使用：它在 `init` 之前把它们从选项里去掉，所以你的运行时永远看不到它们，也不应检查它们。`init` 改为列出凭据的名字，从不带值，这样你的运行时可以只提供它能登录的工具，例如 `can.confined` 评审：
 
 ```text
