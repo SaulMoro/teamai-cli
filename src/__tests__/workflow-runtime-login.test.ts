@@ -127,6 +127,20 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   const cancelled = (op: string): Reattached => ({ kind: 'alive', ops: [{ op: OpIdSchema.parse(op), state: 'cancelled' }] });
   const cannotStop = { code: 'cancel_failed', message: 'The provider is down. Start it, then run teamai workflow cancel again.' };
 
+  it('takes an operation an alive reattach no longer lists as ended: it sends no cancel and still closes the place', async () => {
+    const omits = (): Reattached => ({ kind: 'alive', ops: [] });
+    const cancels: string[] = [];
+    const closes: string[] = [];
+    const runtime: StepRuntime = { ...runtimeSeeing([omits]), cancel: async (op) => { cancels.push(op); }, close: async (handle) => { closes.push(handle); return { ok: true }; } };
+    await leftRunning(runtime);
+    const placed = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+
+    expect(await placed.stopLeftOperation()).toBeUndefined();
+    expect(await placed.close()).toBeUndefined();
+    expect({ cancels, closes }).toEqual({ cancels: [], closes: ['h1'] });
+    expect(await readAttemptRuntime(config(), RUN, FIRST)).toMatchObject({ phase: 'closed' });
+  });
+
   it('takes an operation that failed with any code but cancel_failed after the cancel as ended, as the next cancel does', async () => {
     const runtime = runtimeSeeing([running, ended({ code: 'tool_failed', message: 'codex exited with status 1' })]);
     await leftRunning(runtime);
