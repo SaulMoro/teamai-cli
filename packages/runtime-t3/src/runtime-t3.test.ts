@@ -508,6 +508,85 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.stderr()).toBe('');
     });
 
+    // The project teamai added for the worktree points at a folder that no longer exists once teamai removed it.
+    it('removes the project it added for the step\'s worktree once teamai removed the worktree, and keeps the checkout\'s project', async () => {
+      t3.settings(scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true }));
+      const handle = `t3-${RUN}-a1b2c3d4`;
+      const runtime = await initialized();
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+      runtime.send(prompt(handle, 'op-0000000b'));
+      expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+      const added = t3.threads()[0]?.projectId;
+      runtime.send({ type: 'collect', handle });
+      await runtime.next((line) => line['event'] === 'collected');
+      execFileSync('git', ['-C', checkout, 'worktree', 'remove', '--force', worktree]);
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(t3.commandRuns()).toContainEqual(['project', 'remove', '--base-dir', t3.t3Home, '--force', added]);
+      expect(t3.projects().filter((project) => !project.deletedAt).map((project) => project.id)).toEqual(['project-1']);
+      expect(t3.threads()).toEqual([]);
+    });
+
+    it('keeps the project it added for a folder teamai still has at close, and removes it at a later close once the folder is gone', async () => {
+      const clone = path.join(dir, 'clones', `${RUN}-a1b2c3d4`);
+      execFileSync('git', ['clone', '-q', checkout, clone]);
+      const runtime = await initialized();
+      expect(await openOn(runtime, clone)).toMatchObject({ event: 'ready' });
+      const added = t3.projects().find((project) => project.workspaceRoot === clone)?.id;
+      runtime.send({ type: 'close', handle: `t3-${RUN}-a1b2c3d4` });
+      await runtime.next((line) => line['event'] === 'closed');
+      expect(t3.commandRuns().filter((run) => run[1] === 'remove')).toEqual([]);
+
+      fs.rmSync(clone, { recursive: true, force: true });
+      runtime.send({ type: 'open', op: 'op-0000000c', run: RUN, attempt: 'a5e6f7a8', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      await runtime.next((line) => line['op'] === 'op-0000000c' && line['event'] === 'ready');
+      runtime.send({ type: 'close', handle: `t3-${RUN}-a5e6f7a8` });
+      await runtime.next((line) => line['event'] === 'closed' && line['handle'] === `t3-${RUN}-a5e6f7a8`);
+
+      expect(t3.commandRuns().filter((run) => run[1] === 'remove')).toEqual([['project', 'remove', '--base-dir', t3.t3Home, '--force', added]]);
+      expect(t3.projects().filter((project) => !project.deletedAt).map((project) => project.id)).toEqual(['project-1']);
+    });
+
+    it('keeps the project it added for a folder it cannot look at, which may still be in use', async () => {
+      const clones = path.join(dir, 'clones');
+      const clone = path.join(clones, `${RUN}-a1b2c3d4`);
+      execFileSync('git', ['clone', '-q', checkout, clone]);
+      const runtime = await initialized();
+      expect(await openOn(runtime, clone)).toMatchObject({ event: 'ready' });
+      runtime.send({ type: 'close', handle: `t3-${RUN}-a1b2c3d4` });
+      await runtime.next((line) => line['event'] === 'closed');
+
+      fs.chmodSync(clones, 0o000);
+
+      try {
+        runtime.send({ type: 'open', op: 'op-0000000c', run: RUN, attempt: 'a5e6f7a8', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+        await runtime.next((line) => line['op'] === 'op-0000000c' && line['event'] === 'ready');
+        runtime.send({ type: 'close', handle: `t3-${RUN}-a5e6f7a8` });
+        await runtime.next((line) => line['event'] === 'closed' && line['handle'] === `t3-${RUN}-a5e6f7a8`);
+      } finally {
+        fs.chmodSync(clones, 0o755);
+      }
+
+      expect(t3.commandRuns().filter((run) => run[1] === 'remove')).toEqual([]);
+      expect(t3.projects().filter((project) => !project.deletedAt).map((project) => project.workspaceRoot)).toContain(clone);
+    });
+
+    it('never removes the checkout\'s project, though teamai added it', async () => {
+      t3.config({ projects: [] });
+      const handle = `t3-${RUN}-a1b2c3d4`;
+      const runtime = await initialized();
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+      execFileSync('git', ['-C', checkout, 'worktree', 'remove', '--force', worktree]);
+
+      runtime.send({ type: 'close', handle });
+      await runtime.next((line) => line['event'] === 'closed');
+
+      expect(t3.commandRuns().filter((run) => run[1] === 'remove')).toEqual([]);
+      expect(t3.projects()).toEqual([expect.objectContaining({ workspaceRoot: checkout, deletedAt: null })]);
+    });
+
     it('runs the thread on the worktree\'s own project in the mode the member set for the checkout\'s project', async () => {
       const settings = scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true });
       t3.settings({ ...settings, defaultRuntimeMode: 'auto', projectSettingsOverrides: { 'project-1': { ...settings.projectSettingsOverrides['project-1'], defaultRuntimeMode: 'approval-required' } } });

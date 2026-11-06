@@ -9,6 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
+import type { AddedProjects } from './added-projects.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
@@ -33,7 +34,8 @@ import type { T3Command } from './t3-command.js';
 //    collect  nothing to copy: the worktree, the result and the transcript are already on this machine. Settle the
 //             thread of each op that ended, once T3 holds no run of it, so it leaves the person's active threads
 //    close    stop each thread the runtime has not seen stop, whichever process launched it, settle what collect did
-//             not (a judge's place is never collected), and remove a judge's copy
+//             not (a judge's place is never collected), and remove a judge's copy, and each project teamai added
+//             for a folder of its own that teamai has removed since
 //
 //  A thread the journal holds stays the runtime's to stop until it saw that thread stop: no failure path forgets it.
 //
@@ -161,8 +163,10 @@ export interface ServeOptions {
   t3Home: string;
   /** The home of the user T3 Code runs as, where a provider instance with no `homePath` keeps its tool's sessions. */
   t3UserHome: string;
-  /** The `t3` command, which adds a project as the member does. */
+  /** The `t3` command, which adds and removes a project as the member does. */
   t3Cli: T3Command;
+  /** The projects teamai added for folders of its own, which it removes once it removed their folder. */
+  added: AddedProjects;
   /** Where teamai started the runtime: the checkout of the run, whose project's settings the offer follows. */
   cwd: string;
 }
@@ -416,6 +420,17 @@ function replyValue(text: string): JsonValue | undefined {
 }
 
 /** What `promise` gave within `ms`, or that it had not by then; it may still settle later. */
+/** Whether `folder` is gone. One teamai cannot look at, such as one on a volume that is not mounted, may still be in use. */
+function isGone(folder: string): boolean {
+  try {
+    fs.statSync(folder);
+
+    return false;
+  } catch (error) {
+    return error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+  }
+}
+
 async function within<TValue>(promise: Promise<TValue>, ms: number): Promise<{ answered: true; value: TValue } | { answered: false }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ answered: false }>((resolve) => { timer = setTimeout(() => resolve({ answered: false }), ms); });
@@ -797,16 +812,21 @@ export function serve(options: ServeOptions): Promise<void> {
     const s = session;
     let root: string;
     let projects: Project[];
+    let runCheckout: string | undefined;
 
     try {
-      [root, projects] = await Promise.all([mainCheckout(view.worktree), s.t3.projects()]);
+      [root, projects, runCheckout] = await Promise.all([mainCheckout(view.worktree), s.t3.projects(), mainCheckout(options.cwd).catch(() => undefined)]);
     } catch (error) {
       fail(request.op, { code: 'open_failed', message: `Could not match the worktree ${view.worktree} to a T3 Code project: ${error instanceof Error ? error.message : String(error)}` });
 
       return;
     }
 
-    /** The project of `folder`, added as the member adds one when T3 has none, saying so first; or why it could not be. */
+    /**
+     * The project of `folder`, added as the member adds one when T3 has none, saying so first; or why it could not be.
+     * `added`: teamai added it for a folder of its own, not the checkout the run started in, so it removes the project
+     * once the folder is gone. A checkout it cannot tell counts as the run's.
+     */
     const projectFor = async (folder: string, { title, why }: { title?: string; why: string }): Promise<{ ok: true; project: Project } | { ok: false; reason: string }> => {
       const listed = projectOf(projects, folder);
 
@@ -833,6 +853,8 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       const added = projectOf(projects, folder);
+
+      if (added && runCheckout !== undefined && realpath(folder) !== realpath(runCheckout)) options.added.add({ id: added.id, folder: realpath(folder) });
 
       if (added) return { ok: true, project: added };
 
@@ -1471,6 +1493,29 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
+   * Removes, with its threads, each project teamai added for a folder of its own that is gone, as far as `deadline`
+   * allows: its threads point at nothing. One T3 no longer has is forgotten; one T3 does not remove stays listed for
+   * the next close, and is said in a notice about `handle`.
+   */
+  const removeGoneProjects = async (handle: string, deadline: number): Promise<void> => {
+    for (const project of options.added.list()) {
+      if (!isGone(project.folder) || deadline <= Date.now()) continue;
+
+      try {
+        await options.t3Cli.run({ name: 'project remove', args: ['project', 'remove', '--base-dir', options.t3Home, '--force', project.id], signal: AbortSignal.timeout(deadline - Date.now()) });
+        options.added.drop(project.id);
+      } catch (error) {
+        const reaching = await within(reach(), Math.max(deadline - Date.now(), 0));
+        const listing = reaching.answered && reaching.value.ok ? await within(reaching.value.reached.t3.projects().catch(() => undefined), Math.max(deadline - Date.now(), 0)) : undefined;
+        const listed = listing?.answered ? listing.value : undefined;
+
+        if (listed && !listed.some((one) => one.id === project.id && !one.deletedAt)) options.added.drop(project.id);
+        else notice(`teamai could not remove the T3 project it added for ${project.folder}, which teamai has removed, so its threads stay in T3 Code (${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}). Remove it in T3 Code, or run t3 project remove --force ${project.id}.`, { handle });
+      }
+    }
+  };
+
+  /**
    * Ends the place within STOP_WAIT_MS. Each launch T3 never answered is looked up, and each thread the runtime has not
    * seen stop is stopped first, all at once; while one cannot be, or T3 Code does not answer in time, the place stays,
    * with a judge's copy, and close fails. A lookup or settle that answers late still journals what it found while the
@@ -1589,6 +1634,7 @@ export function serve(options: ServeOptions): Promise<void> {
       }
     }
 
+    await removeGoneProjects(handle, deadline);
     journal.remove(handle);
     write({ event: 'closed', handle });
   };
