@@ -402,7 +402,15 @@ function sbx() {
         return { source, target: source, readonly };
       });
 
-      writeContainer({ id: crypto.randomBytes(16).toString('hex'), name, image: agent, running: true, labels: {}, env: proxyEnv(), mounts });
+      const id = crypto.randomBytes(16).toString('hex');
+      writeContainer({ id, name, image: agent, running: true, labels: {}, env: proxyEnv(), mounts });
+
+      // sbx's claude template keeps Claude's sign-in in its default home as a stand-in the proxy swaps for the login.
+      if (fs.existsSync(path.join(images[agent], 'claude'))) {
+        fs.mkdirSync(path.join(containers, id, 'home', '.claude'), { recursive: true });
+        fs.writeFileSync(path.join(containers, id, 'home', '.claude', '.credentials.json'), '{"claudeAiOauth":{"accessToken":"proxy-managed"}}');
+      }
+
       process.stdout.write(`  ✓ Created sandbox ${name}\n`);
       break;
     }
