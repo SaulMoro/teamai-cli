@@ -112,6 +112,8 @@ export interface FakeT3Config {
   projectAddFails?: number;
   /** Another caller adds the folder first, as a parallel step's open may, so `t3 project add` fails as T3 does then. */
   projectAddRaced?: boolean;
+  /** `t3 project add` never finishes. */
+  projectAddHangs?: boolean;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
@@ -262,6 +264,7 @@ const values = (flag) => args.flatMap((arg, i) => (arg === flag ? [args[i + 1]] 
 if (args.slice(0, 2).join(' ') === 'project add') {
   const config = JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8'));
   if (config.projectAddFails) { process.stderr.write('Could not add the project.\\n'); process.exit(config.projectAddFails); }
+  if (config.projectAddHangs) { setInterval(() => {}, 60000); return; }
   const root = args[args.length - 1];
   const project = { id: 'project-' + randomUUID().slice(0, 8), title: values('--title')[0] ?? path.basename(root), workspaceRoot: root, deletedAt: null };
   config.projects.push(project);

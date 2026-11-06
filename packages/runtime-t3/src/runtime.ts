@@ -70,6 +70,9 @@ const WAIT_MS = { attended: 25_000, unattended: 5_000 } as const;
  */
 const STOP_WAIT_MS = 10_000;
 
+/** How long `t3 project add` may take before an open gives up on it. */
+const PROJECT_ADD_MS = 10_000;
+
 /**
  * How long T3 gets to answer init's connection and what it runs: teamai gives init 15 s. An attended sign-in waits for
  * the person instead, and this bound starts once they approved.
@@ -802,11 +805,15 @@ export function serve(options: ServeOptions): Promise<void> {
 
       let refused: string | undefined;
 
+      const signal = AbortSignal.timeout(PROJECT_ADD_MS);
+
       try {
-        await options.t3Cli.run({ name: 'project add', args: ['project', 'add', '--base-dir', options.t3Home, ...(title ? ['--title', title] : []), folder] });
+        await options.t3Cli.run({ name: 'project add', args: ['project', 'add', '--base-dir', options.t3Home, ...(title ? ['--title', title] : []), folder], signal });
       } catch (error) {
         // A step opening beside this one may have added the folder first, which T3 refuses to add again.
-        refused = (error instanceof Error ? error.message : String(error)).replace(/\.$/, '');
+        refused = signal.aborted
+          ? `t3 project add did not finish within ${PROJECT_ADD_MS / 1_000} s`
+          : (error instanceof Error ? error.message : String(error)).replace(/\.$/, '');
       }
 
       try {
