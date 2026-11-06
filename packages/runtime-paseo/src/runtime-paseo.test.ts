@@ -323,6 +323,16 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
+  it('names the Claude home the daemon keeps a step\'s session in, so teamai reads it there though it runs in another HOME', async () => {
+    const elsewhere = path.join(dir, 'daemon-user', '.claude');
+    behave({ output: { verdict: 'approve' }, claude_home: elsewhere });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'claude', home: elsewhere } });
+  });
+
   it('starts a Codex agent in the mode Paseo sets as its default, auto-review, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { verdict: 'approve' }, codex_login: 'signed_in' });
     const runtime = start();
