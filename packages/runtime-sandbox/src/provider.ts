@@ -24,7 +24,7 @@ export interface PlaceKey {
 }
 
 /** An attempt's handle, `teamai-<run>-<attempt>`, which also names its container (sbx adds its journal: providers/sbx.ts). */
-export function sandboxName({ run, attempt }: PlaceKey): string {
+export function handleOf({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
 }
 
@@ -38,13 +38,13 @@ export function unreachable(failure: RuntimeFailure): Provider {
 
   return {
     offer: async () => ({ ok: false, failure }),
-    find: async (key) => kept(sandboxName(key)),
-    create: async (key) => kept(sandboxName(key)),
+    find: async (key) => kept(handleOf(key)),
+    create: async (key) => kept(handleOf(key)),
     exec: async (id) => ({ kind: 'failed', failure: kept(id).failure }),
     stop: async (id) => kept(id),
     destroy: async (id) => kept(id),
-    display: (key) => ({ label: sandboxName(key) }),
-    removal: (key) => `remove sandbox ${sandboxName(key)} once the sandbox runtime reaches its engine`,
+    display: (key) => ({ label: handleOf(key) }),
+    removal: (key) => `remove sandbox ${handleOf(key)} once the sandbox runtime reaches its engine`,
   };
 }
 
