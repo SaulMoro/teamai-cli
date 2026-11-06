@@ -421,6 +421,10 @@ steps:
     const scoreRun = String((envelope(scored) as { data: { run: string } }).data.run);
     const judge = readRunState(scoreRun).steps.find((step) => step.id.endsWith('.judge'));
     expect(runtimeRecord(scoreRun, attemptOf(judge))).toMatchObject({ runtime: 'toy', driver: 'toyscore' });
+    // The judge's place was opened naming the tool its confined prompt runs.
+    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null })
+      .filter((op) => op.kind === 'open');
+    expect(opens.map((op) => op.tool)).toEqual(['claude']);
   });
 
   it('ends the failure of a judge whose runtime restarted under it with the retry to run', async () => {

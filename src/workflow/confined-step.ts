@@ -216,7 +216,7 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
   const reads = confinedEnvNames(tool);
   const given = Object.fromEntries(Object.entries(credentials).filter(([name]) => reads.includes(name)));
   const startedAt = Date.now();
-  const opened = await attemptRun.open(undefined, { credentials: given });
+  const opened = await attemptRun.open(undefined, { tool, credentials: given });
 
   if (!opened.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: opened.failure.message, failure: opened.failure } };
   // A stop before the prompt is sent, or while the place opened, is kept and sent once the runtime accepts the prompt.
