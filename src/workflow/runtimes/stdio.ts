@@ -357,6 +357,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       };
 
       const deadline = request.deadline === undefined ? undefined : Date.parse(request.deadline);
+      // Stops the wait for the place to be ready by the deadline, once the place is accepted.
+      let notReady = (): void => {};
 
       const settled = new Promise<Opened>((resolve, reject) => {
         // A caller that joins while the handle is being written adds its own write, which open also waits for.
@@ -387,6 +389,13 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
             for (const onHandle of persisters) persist(onHandle, accepted);
 
+            // Only an accepted place is bounded by the deadline, so its handle is kept even when it is already past.
+            notReady = atDeadline(deadline, () => {
+              const waiting = ops.get(request.op);
+
+              waiting?.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not report the place of open ${request.op} ready by the attempt's deadline.` });
+            });
+
             return;
           }
 
@@ -397,14 +406,6 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           settleAfterPersisted(event.event === 'failed' ? { kind: 'failed', failure: event.failure }
             : handle === undefined ? { kind: 'failed', failure: { code: 'runtime_protocol', message: `Step runtime "${name}" reported open ${request.op} ready before it accepted it.` } }
               : { kind: 'ready', handle, ...displayOf(name, event.display) });
-        });
-
-        // A place not ready by the attempt's deadline fails the open; its handle, once accepted, stays persisted.
-        const waiting = ops.get(request.op);
-
-        const notReady = atDeadline(deadline, () => {
-          if (waiting === undefined || ops.get(request.op) !== waiting) return;
-          waiting.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not report the place of open ${request.op} ready by the attempt's deadline.` });
         });
 
         send({ type: 'open', ...request });

@@ -1320,6 +1320,25 @@ describe('an attempt\'s deadline, over stdio', () => {
     expect(place).toEqual({ kind: 'failed', failure: { code: 'runtime_unanswered', message: `Step runtime "slow" did not report the place of open ${op} ready by the attempt's deadline.` } });
     expect(persisted).toEqual(['h1']);
   });
+
+  it('keeps the handle of an open sent past the attempt\'s deadline, which it fails once the runtime accepts it', async () => {
+    // A runtime that accepts each open a moment later, and never reports its place ready.
+    const late = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      if (request.type === 'init') process.stdout.write(JSON.stringify({ type: 'init', ok: true, can: {} }) + '\\n');
+      if (request.type === 'open') setTimeout(() => process.stdout.write(JSON.stringify({ op: request.op, event: 'accepted', handle: 'h1' }) + '\\n'), 300);
+    });`;
+    const runtime = stdioStepRuntime({ name: 'late', command: process.execPath, args: ['-e', late] });
+    started.push(runtime);
+    expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+    const persisted: string[] = [];
+    const op = newOpId();
+
+    const place = await runtime.open({ op, run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, deadline: soon(-60_000), view: { worktree: dir, readonly: [], result: dir, runDir: dir, toolHome: {} } }, async (handle) => { persisted.push(handle); });
+
+    expect(place).toEqual({ kind: 'failed', failure: { code: 'runtime_unanswered', message: `Step runtime "late" did not report the place of open ${op} ready by the attempt's deadline.` } });
+    expect(persisted).toEqual(['h1']);
+  });
 });
 
 describe('the stdio step runtime client', () => {
