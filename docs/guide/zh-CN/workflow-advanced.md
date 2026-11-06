@@ -1503,10 +1503,10 @@ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa h
 ← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
 ```
 
-每次 `teamai workflow cancel <run>` 都会再试一次 close。如果运行时永远无法确认它，例如提供方拒绝了一次创建，请先确认这次尝试已没有任何东西还在那里运行，再用 `teamai workflow cancel <run> --release <attempt>` 放开这次尝试。teamai 不停止也不关闭它，会把它的登录写回并释放，之后不再尝试 close。运行时可能仍然保留这个位置：
+每次 `teamai workflow cancel <run>` 都会再试一次 close。如果运行时永远无法确认它，例如提供方拒绝了一次创建，请先确认这次尝试已没有任何东西还在那里运行，再用 `teamai workflow cancel <run> --release <attempt>` 放开这次尝试。teamai 会再试一次停止和 close；运行时无法确认的部分不再卡住这次尝试。teamai 把它的登录写回并释放，之后不再尝试 close。运行时可能仍然保留这个位置：
 
 ```text
-ℹ Released attempt a1 of run r7 without closing its place on step runtime "docker", as asked. That runtime may still keep the place.
+ℹ Released attempt a1 of run r7 on step runtime "docker" without its confirmation, as asked. That runtime may still keep the place: Step runtime "docker" could not close the place of attempt a1, so what ran there may still run (rm_failed): docker rm teamai-r7-a1 failed: the daemon is not running
 ```
 
 exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
