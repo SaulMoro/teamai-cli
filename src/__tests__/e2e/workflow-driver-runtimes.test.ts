@@ -689,6 +689,24 @@ Judge the review.
       expect(fs.existsSync(launches)).toBe(false);
     });
 
+    it('answers an answer step on this host with the member\'s tool, even when the runtime runs no tool, and sends the runtime no prompt', async () => {
+      writeDefinition('agentanswer', [{ use: 'toy', options: { state, can: { tools: [] }, agent: { output: { ok: true } } } }]);
+      writeFlow('asks', `  - id: ask
+    answer: Name one risk in this repository.
+    output:
+      text: string`);
+      await runCLI(['pull'], repo);
+
+      const ran = await runCLI(['workflow', 'start', 'asks', '--driver', 'agentanswer'], repo, env({ TEAMAI_AI_TOOL: 'claude', FAKE_TOOL_REPLY: 'Unpinned dependencies.' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [ask] = readRunState(runId).steps;
+      expect(ask).toMatchObject({ id: 'ask', status: 'succeeded', outputs: { text: 'Unpinned dependencies.' } });
+      expect(runtimeRecord(runId, attemptOf(ask))).toBeUndefined();
+      expect(sends()).toEqual([]);
+    });
+
     it('reports the session, output and usage of a prompt that finished while teamai was killed, without sending a new one', async () => {
       writeDefinition('agentdie', [{ use: 'toy', options: { state, die_at: 'prompt-finished', agent: { output: { ok: true }, usage: { input: 7 } } } }]);
 

@@ -64,9 +64,11 @@ if (args.includes('--version')) {
   process.exit(0);
 }
 if (process.env.TEAMAI_WORKFLOW_RESULT === undefined) {
-  // A judge: it reads the prompt on stdin and answers with a label, under teamai-score's answer output.
+  // A judge: it reads the prompt on stdin and answers with a label, under teamai-score's answer output. With
+  // FAKE_TOOL_REPLY, it answers an answer step's one-shot call with that text instead.
   process.stdin.resume();
-  process.stdin.on('end', () => process.stdout.write(JSON.stringify({ type: 'result', structured_output: { answer: { label: 'good', reasoning: 'read it' } } }) + '\\n'));
+  const reply = process.env.FAKE_TOOL_REPLY === undefined ? { structured_output: { answer: { label: 'good', reasoning: 'read it' } } } : { result: process.env.FAKE_TOOL_REPLY };
+  process.stdin.on('end', () => process.stdout.write(JSON.stringify({ type: 'result', ...reply }) + '\\n'));
   return;
 }
 const at = args.indexOf('--resume');
