@@ -1483,6 +1483,27 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
   });
 
+  it.each([
+    ['whether a workspace is open on the worktree', { list_ms: 60_000 }],
+    ['the open of the worktree as a workspace', { open_ms: 60_000 }],
+  ] satisfies Array<[string, Behaviour]>)('fails an open whose question to Paseo, %s, gets no answer in 20 s, and lets the next open of the directory go on', async (_question, slow) => {
+    behave(slow);
+    const runtime = start();
+    await ready(runtime);
+    const asked = Date.now();
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+
+    expect(await runtime.next((line) => isOp('op-0000000a', 'ready')(line) || isOp('op-0000000a', 'failed')(line))).toEqual({
+      op: 'op-0000000a', event: 'failed',
+      failure: { code: 'workspace_failed', message: 'Paseo could not open the worktree as a workspace: no answer in 20 s; check that its daemon answers with `paseo ls`, then run the step again' },
+    });
+    expect(Date.now() - asked).toBeLessThan(30_000);
+
+    behave({});
+    await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    expect(runtime.lines.find(isOp('op-0000000c', 'ready'))).toBeDefined();
+  }, 60_000);
+
   it('fails an open it cannot journal before asking Paseo, and opens nothing there', async () => {
     const runtime = start();
     await ready(runtime);
