@@ -2,7 +2,7 @@ import type { ContainerEngine } from '../options.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
-import { COMMAND_MS, handleOf, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, handleOf, type ExecEnd, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { cliOf, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
@@ -77,10 +77,6 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
   const { run: cli, why } = cliOf({ name: engine, env: host.env, notInstalled });
 
-  // Docker Desktop names this machine host.docker.internal in every container, and Podman host.containers.internal;
-  // Docker on Linux names it nothing. Known once `offer` read what the engine is.
-  let hostAlias: ReturnType<Provider['hostAlias']> = engine === 'podman' ? { ok: true, alias: 'host.containers.internal' } : { ok: false, why: 'this container cannot reach until teamai-runtime-sandbox has asked docker what it runs on' };
-
   const lastLine = (ran: Ran): string => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : '');
 
   const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
@@ -113,7 +109,12 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       if (info.code !== 0) return unavailable(notRunning(info));
       const [version = '', system = ''] = info.stdout.trim().split('|');
 
-      if (engine === 'docker') hostAlias = system === 'Docker Desktop' ? { ok: true, alias: 'host.docker.internal' } : { ok: false, why: `this container cannot reach: Docker Engine on Linux (${system || 'here'}) gives no host alias, as Docker Desktop does` };
+      // Docker Desktop names this machine host.docker.internal in every container, and Podman host.containers.internal;
+      // Docker Engine on Linux names it nothing.
+      const route: HostRoute = engine === 'podman' || system === 'Docker Desktop'
+        ? { ok: true, alias: engine === 'podman' ? 'host.containers.internal' : 'host.docker.internal' }
+        : { ok: false, refusal: `docker reports its system as "${system}", not Docker Desktop, and teamai knows the name a container has for this machine only on Docker Desktop (host.docker.internal); Docker Engine on Linux gives it none.` };
+
       const present = await cli(['image', 'inspect', '--format', '{{.Id}}', image]);
 
       if (present.kind !== 'ran' || present.code !== 0) {
@@ -154,12 +155,10 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
         ...(confined.length > 0 && { confined }),
       };
 
-      return { ok: true, can };
+      return { ok: true, can, host: route };
     },
 
     find,
-
-    hostAlias: () => hostAlias,
 
     async owned() {
       const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}{{.Label "teamai.judge"}}'], { timeoutMs: COMMAND_MS });
