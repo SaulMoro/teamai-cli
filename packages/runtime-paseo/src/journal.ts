@@ -295,8 +295,6 @@ export function journal(root: string) {
       }
     },
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
-    /** Where `op`'s record is kept, for a person to delete when a close says to. */
-    promptFile,
     savePrompt(op: OpId, record: PromptRecord): void {
       // Indexed under the directory `savePlace` made: a handle `forget` removed gets none back.
       if (fs.existsSync(indexDir(record.handle))) fs.writeFileSync(path.join(indexDir(record.handle), op), '');
