@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, DEFAULT_MODES, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool, type StepMode } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place, PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -31,7 +31,8 @@ interface Following {
 /** How a prompt's agent is launched: in which place and mode, with what prompt and options, and where its answer comes from. */
 interface Launch {
   place: Place;
-  modeId: string;
+  /** Absent: the mode Paseo starts the tool in when it sets no default for it. */
+  modeId: string | undefined;
   prompt: string;
   options?: AgentCreate['config']['options'];
   env?: AgentCreate['env'];
@@ -263,6 +264,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
   /** What init offered of each tool the daemon has installed. */
   let offers = new Map<PaseoTool, Offer>();
+  /** The mode each offered tool's steps start in, which init read from Paseo. */
+  let stepModes = new Map<PaseoTool, StepMode>();
 
   /**
    * Why a new step or judge on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was
@@ -527,6 +530,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     daemon = connected;
     mode = request.mode;
 
+    stepModes = new Map(tools.map((entry) => [entry.tool, entry.stepMode]));
     offers = new Map(installed.map((entry): [PaseoTool, Offer] => {
       if (!entry.canRun) return [entry.tool, { runs: 'nothing', reason: entry.reason }];
       const confinedMode = CONFINED_MODES[entry.tool];
@@ -616,7 +620,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}`, 'teamai-run': place.run, 'teamai-step': lease.step },
       ...(how.env && { env: how.env }),
-      config: { provider: `${tool}/${model.id}`, modeId: how.modeId, ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
+      config: { provider: `${tool}/${model.id}`, ...(how.modeId !== undefined && { modeId: how.modeId }), ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
     };
   }
 
@@ -708,7 +712,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     try {
       await launch(live, request, following, tool, {
-        place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
+        place, modeId: stepModes.get(tool)?.id, prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
         options: stepGrant(tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result }, cwd: place.cwd,
       });
     } finally {
@@ -939,7 +943,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           continue;
         case 'permission': {
           const asked = end.final?.pendingPermissions[0];
-          const modeId = create.config.modeId;
+          const inMode = create.config.modeId === undefined ? 'in the mode Paseo starts it in' : `in Paseo mode ${create.config.modeId}`;
 
           if (record.answer.kind === 'reply') {
             const refused = await cancelAgent(live, record);
@@ -948,7 +952,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
               failure: {
                 // A stop that is not confirmed is the one failure whose agent may still run.
                 code: refused ? 'cancel_failed' : 'tool_failed',
-                message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} in Paseo mode ${modeId}. A confined prompt only reads its directory, so it ends rather than ask.${refused ? ` ${refused.message}` : ''}`,
+                message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} ${inMode}. A confined prompt only reads its directory, so it ends rather than ask.${refused ? ` ${refused.message}` : ''}`,
               },
             }, following);
 
@@ -966,7 +970,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             op, state: 'failed',
             failure: {
               code: refused ? 'cancel_failed' : 'tool_failed',
-              message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} in Paseo mode ${modeId}, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.${refused ? ` ${refused.message}` : ''}`,
+              message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} ${inMode}, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.${refused ? ` ${refused.message}` : ''}`,
             },
           }, following);
 

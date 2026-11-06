@@ -79,7 +79,7 @@ $ paseo inspect 9b38e203
 Name      teamai classify · r0769801107010602
 Provider  claude
 Model     claude-sonnet-5-5
-Mode      default
+Mode      auto
 Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-4e57d9b3cff1
 ```
 
@@ -231,13 +231,13 @@ runtimes:
 
 ## 工具、模型和模式
 
-只要工具的可执行文件在守护进程的 `PATH` 上，Paseo 就称它可用，不论是否已登录。运行时只在 Paseo 表明工具能在那里运行时才提供它；否则，使用该工具的步骤交给下一个运行时。智能体以该工具在 Paseo 中的默认模式启动，从不使用绕过权限的模式。评判以一个在编辑或运行任何东西前先询问的模式启动：
+只要工具的可执行文件在守护进程的 `PATH` 上，Paseo 就称它可用，不论是否已登录。运行时只在 Paseo 表明工具能在那里运行时才提供它；否则，使用该工具的步骤交给下一个运行时。步骤的智能体以 Paseo 为该工具设定的默认模式启动（`paseo provider ls` 中的 `DEFAULT MODE`），从不使用从不询问的绕过权限模式：默认模式是这种模式时，智能体改用 Paseo 列表中排在它前面、最接近它的模式。Paseo 设定的默认模式不在它为该工具列出的模式中时，不提供该工具。评判以一个在编辑或运行任何东西前先询问的模式启动：
 
 | 工具 | 何时提供 | 步骤模式 | 评判模式 |
 | --- | --- | --- | --- |
-| `claude` | 守护进程主机上的 `claude auth status` 显示 `"loggedIn": true`：账号登录或 API key 均可 | `default`（执行未允许的操作前先询问） | `default` |
-| `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`，或是 Unix 套接字），且 `codex login status` 显示 `Logged in` | `auto` | `auto`，沙箱为 `read-only` |
-| `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | `build` | `plan` |
+| `claude` | 守护进程主机上的 `claude auth status` 显示 `"loggedIn": true`：账号登录或 API key 均可 | Paseo 的默认模式：Paseo 0.14.0 上为 `auto` | `default` |
+| `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`，或是 Unix 套接字），且 `codex login status` 显示 `Logged in` | Paseo 的默认模式：Paseo 0.14.0 上为 `auto-review` | `auto`，沙箱为 `read-only` |
+| `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | OpenCode 自己的默认模式 `build`：Paseo 没有为它设定 | `plan` |
 
 Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。这项检查看不到守护进程自己的环境，回环地址一律算作本机：请用你平时的 `CODEX_HOME` 启动守护进程，也不要让 `url` 指向通往另一台机器的隧道（`ssh -L`）。
 
@@ -332,10 +332,10 @@ Paseo 以明文把智能体的环境变量存在它的 home 下，所以这个�
 
 ## 权限
 
-Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果文件>)` 和 `Edit(/<运行目录>/**)`，模式仍是 `default`。Codex 智能体可以写同样两处：它在 `auto` 下的沙箱可写工作树，运行时再把结果文件所在目录和运行的临时目录加为可写根目录：
+Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果文件>)` 和 `Edit(/<运行目录>/**)`，模式是 Paseo 启动它时的模式。Codex 智能体可以写同样两处：它在 `auto-review` 下的沙箱可写工作树，运行时再把结果文件所在目录和运行的临时目录加为可写根目录：
 
 ```json
-{ "provider": "codex", "modeId": "auto", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
+{ "provider": "codex", "modeId": "auto-review", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
 ```
 
 OpenCode 智能体也可以写这两处：运行时通过 OpenCode 的 `external_directory` 权限放行它们，所以它只在碰工作树之外的其他东西前询问：
@@ -356,7 +356,7 @@ paseo permit allow 7c483fce --all
 无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）里没人能回答，所以步骤失败，智能体停止。下面是一个提示词步骤 `count`，它让智能体运行 `ls -1 | wc -l`：
 
 ```text
-✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
+✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
 ## 取消、崩溃和重启

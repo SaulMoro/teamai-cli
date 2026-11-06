@@ -79,7 +79,7 @@ $ paseo inspect 9b38e203
 Name      teamai classify · r0769801107010602
 Provider  claude
 Model     claude-sonnet-5-5
-Mode      default
+Mode      auto
 Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-4e57d9b3cff1
 ```
 
@@ -231,13 +231,13 @@ runtimes:
 
 ## Tools, models and modes
 
-Paseo calls a tool available once its binary is on the daemon's `PATH`, signed in or not. The runtime offers a tool only when Paseo shows it can run there. Otherwise, a step on that tool runs on the next runtime. The agent starts in the tool's default Paseo mode, never a bypass mode. A judge starts in a mode that asks before it edits or runs anything:
+Paseo calls a tool available once its binary is on the daemon's `PATH`, signed in or not. The runtime offers a tool only when Paseo shows it can run there. Otherwise, a step on that tool runs on the next runtime. A step's agent starts in the mode Paseo sets as the tool's default (`DEFAULT MODE` in `paseo provider ls`), never a bypass mode that never asks: when that default is one, the agent starts in the nearest mode before it in Paseo's list instead. A tool whose default Paseo does not list for it is not offered. A judge starts in a mode that asks before it edits or runs anything:
 
 | Tool | Offered when | Step mode | Judge mode |
 | --- | --- | --- | --- |
-| `claude` | `claude auth status` on the daemon's host says `"loggedIn": true`: a login or an API key | `default` (asks before what it does not allow) | `default` |
-| `codex` | the daemon runs on this machine (`url` is a loopback address, such as `127.0.0.1` or `localhost`, or a Unix socket), and `codex login status` says `Logged in` | `auto` | `auto`, with a `read-only` sandbox |
-| `opencode` | Paseo lists a model for it: OpenCode reaches a model provider, its free models included | `build` | `plan` |
+| `claude` | `claude auth status` on the daemon's host says `"loggedIn": true`: a login or an API key | Paseo's default: `auto` on Paseo 0.14.0 | `default` |
+| `codex` | the daemon runs on this machine (`url` is a loopback address, such as `127.0.0.1` or `localhost`, or a Unix socket), and `codex login status` says `Logged in` | Paseo's default: `auto-review` on Paseo 0.14.0 | `auto`, with a `read-only` sandbox |
+| `opencode` | Paseo lists a model for it: OpenCode reaches a model provider, its free models included | OpenCode's own default, `build`: Paseo sets none | `plan` |
 
 Paseo does not report whether Codex is signed in, so the runtime runs `codex login status` itself, with your environment (`CODEX_HOME` or `~/.codex`). It runs the `codex` that `Resolved path` names in Paseo's diagnostic, which the daemon found on its own `PATH`, not one on teamai's. A daemon at any other address, such as one on another machine, is never offered Codex. The check cannot see the daemon's own environment, and a loopback address counts as this machine: start the daemon with the `CODEX_HOME` you use, and do not point `url` at a tunnel (`ssh -L`) to another machine.
 
@@ -332,10 +332,10 @@ Remove the entry, and give the tool what it needs on the daemon's host instead: 
 
 ## Permissions
 
-A Claude agent may write two things without asking: teamai's result file, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result file>)` and `Edit(/<run directory>/**)`, and the mode stays `default`. A Codex agent may write the same two places: its sandbox in `auto` writes the worktree, and the runtime adds the result file's directory and the run's scratch directory as writable roots:
+A Claude agent may write two things without asking: teamai's result file, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result file>)` and `Edit(/<run directory>/**)`, in the mode Paseo starts it in. A Codex agent may write the same two places: its sandbox in `auto-review` writes the worktree, and the runtime adds the result file's directory and the run's scratch directory as writable roots:
 
 ```json
-{ "provider": "codex", "modeId": "auto", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
+{ "provider": "codex", "modeId": "auto-review", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
 ```
 
 An OpenCode agent may write the same two places: the runtime allows them through OpenCode's `external_directory` permission, so it asks only before it touches anything else outside the worktree:
@@ -356,7 +356,7 @@ paseo permit allow 7c483fce --all
 In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so the step fails and the agent stops. Here a prompt step `count` asked its agent to run `ls -1 | wc -l`:
 
 ```text
-✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
+✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
 ## Cancel, crash and restart
