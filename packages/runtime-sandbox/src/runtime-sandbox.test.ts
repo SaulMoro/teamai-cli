@@ -1100,6 +1100,39 @@ describe("the containers of one runtime's journal", () => {
     expect(connection.stderr()).toBe('');
   }, 60_000);
 
+  it("removes a judge's container this journal no longer records together with its filter and its network", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openAttempt(connection, 'a00000001');
+    const owner = ['--label', `teamai.owner=${engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? ''}`];
+    const judged = `teamai-${RUN}-a00000002`;
+    const docker = (...args: string[]): void => { execFileSync(path.join(engine.bin, 'docker'), args, { env: engine.env() }); };
+    docker('network', 'create', '--internal', '--label', `teamai.run=${RUN}`, '--label', 'teamai.attempt=a00000002', ...owner, `${judged}-net`);
+    docker('run', '-d', '--name', `${judged}-proxy`, '--label', `teamai.run=${RUN}`, '--label', 'teamai.judge=a00000002', ...owner, '--entrypoint', 'node', IMAGE, '-e', '');
+    docker('run', '-d', '--name', judged, '--label', `teamai.run=${RUN}`, '--label', 'teamai.attempt=a00000002', ...owner, '--network', `${judged}-net`, '--entrypoint', '/bin/sh', IMAGE, '-c', 'sleep infinity');
+
+    expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
+    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
+    expect(engine.networks()).toEqual([]);
+    expect(connection.stderr()).toBe('');
+  }, 60_000);
+
+  it("removes a judge's filter that landed after its place was closed, with its network, when its judge's container never did", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openAttempt(connection, 'a00000001');
+    const owner = ['--label', `teamai.owner=${engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? ''}`];
+    const judged = `teamai-${RUN}-a00000002`;
+    const docker = (...args: string[]): void => { execFileSync(path.join(engine.bin, 'docker'), args, { env: engine.env() }); };
+    docker('network', 'create', '--internal', '--label', `teamai.run=${RUN}`, '--label', 'teamai.attempt=a00000002', ...owner, `${judged}-net`);
+    docker('run', '-d', '--name', `${judged}-proxy`, '--label', `teamai.run=${RUN}`, '--label', 'teamai.judge=a00000002', ...owner, '--entrypoint', 'node', IMAGE, '-e', '');
+
+    expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
+    expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
+    expect(engine.networks()).toEqual([]);
+    expect(connection.stderr()).toBe('');
+  }, 60_000);
+
   it('opens all the same when the engine cannot remove or list what an earlier run left, with one warning each on stderr', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
@@ -1371,7 +1404,7 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:/evidence:ro`]);
     expect(judgeRun.join(' ')).toContain(`--network ${HANDLE}-net`);
     expect(judgeRun.join(' ')).toContain('--cap-drop ALL');
-    expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, `${HANDLE}-net`]);
+    expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, '--label', expect.stringMatching(/^teamai\.owner=[0-9a-f]{16}$/), `${HANDLE}-net`]);
     // The filter in front of that network lets through only the provider's host.
     expect(proxyRun.at(-2)).toBe('3128');
     expect(proxyRun.at(-1)).toBe('api.anthropic.com:443');
@@ -1543,6 +1576,24 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(engine.containers()).toEqual([]);
     expect(engine.networks()).toEqual([]);
   }, 60_000);
+
+  it("labels a judge's container, its filter and its network with the journal that owns its place", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    const op = newOp();
+    const ended = judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, op, lease: { model: { name: '--hang' } } });
+    await vi.waitFor(() => { expect(engine.containers().sort()).toEqual([HANDLE, `${HANDLE}-proxy`]); }, { timeout: 10_000 });
+
+    const owner = engine.labelsOf(HANDLE)?.['teamai.owner'];
+    const network = engine.calls().find(([, command, action]) => command === 'network' && action === 'create') ?? [];
+
+    expect(owner).toMatch(/^[0-9a-f]{16}$/);
+    expect(engine.labelsOf(`${HANDLE}-proxy`)?.['teamai.owner']).toBe(owner);
+    expect(network.join(' ')).toContain(`--label teamai.owner=${owner}`);
+    connection.send({ type: 'cancel', op });
+    expect(await ended).toEqual({ op, event: 'cancelled' });
+  });
 
   it('stops a judge on cancel', async () => {
     const connection = start();

@@ -364,11 +364,11 @@ teamai workflow resume r7c41d09e2b6a5f13 --driver containers
 teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮保留下来的工作继续
 ```
 
-如果运行时在 `docker run` 或 `podman run` 创建容器时被终止，可能会留下一个已经不属于任何尝试的容器。每次尝试的容器都带有 `teamai.owner` 标签，标明创建它的 teamai 主目录。之后在同一引擎上的下一次 `open` 会用 `--force` 删除这个主目录下所有已经没有尝试记录的容器。其他成员或其他主目录的容器，以及没有 `teamai.owner` 标签的容器，都不会被动到。列出或删除失败时，会在 stderr 输出一条警告，步骤照常继续。sbx 沙箱没有标签，所以不会被清理：剩下的用 `sbx rm --force <sandbox>` 删除。
+如果运行时在 `docker run` 或 `podman run` 创建容器时被终止，可能会留下一个已经不属于任何尝试的容器。每个容器都带有 `teamai.owner` 标签，标明创建它的 teamai 主目录。之后在同一引擎上打开容器的下一个步骤会用 `--force` 删除这个主目录下所有已经没有尝试记录的容器，评判容器的过滤器和网络也一起删除。其他成员或其他主目录的容器，以及没有 `teamai.owner` 标签的容器，都不会被动到。列出或删除失败时，会在 stderr 输出一条警告，步骤照常继续。sbx 沙箱没有标签，所以不会被清理：剩下的用 `sbx rm --force <sandbox>` 删除。
 
 ```sh
 docker ps -a --filter label=teamai.owner --format '{{.Names}} {{.Label "teamai.owner"}}'
-# teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    它落地前尝试已经关闭：下一次在 docker 上 open 时会删除它
+# teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    它落地前尝试已经关闭：docker 上的下一个步骤会删除它
 ```
 
 ## 错误

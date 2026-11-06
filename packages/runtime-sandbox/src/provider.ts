@@ -79,8 +79,8 @@ export interface Provider {
    */
   find(key: PlaceKey): Promise<{ ok: true; id: string | undefined } | { ok: false; failure: RuntimeFailure }>;
   /**
-   * The sandboxes labelled as this runtime's journal's whose labels name a run and an attempt, each with them, within
-   * COMMAND_MS. A provider whose sandboxes carry no owner has none: nothing of it is ever swept.
+   * The sandboxes labelled as this runtime's journal's whose labels name a run and an attempt (a judge's filter: the
+   * attempt it filters for), each with them, within COMMAND_MS. A provider whose sandboxes carry no owner has none: nothing of it is ever swept.
    */
   owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }> } | { ok: false; failure: RuntimeFailure }>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
