@@ -1255,7 +1255,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           return;
         }
 
-        const ops = journal.promptsOf(request.handle).map(({ op, record }): OpState => record.outcome ?? { op, state: 'running' });
+        const ops = journal.promptsOf(request.handle).map(({ op, record }): OpState => record.outcome ?? unkept.get(op) ?? { op, state: 'running' });
         const display = live && displayOf(request.handle, live);
         write({ event: 'alive', handle: request.handle, ops, ...(display && { display }) });
 
@@ -1317,9 +1317,13 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     }
   };
 
+  /** The outcomes this process sent but could not record, until a later prompt or cancel of the op: a reattach here reports them. */
+  const unkept = new Map<OpId, OpState>();
+
   /**
    * Records the outcome a failed prompt or cancel request sends, so a reattach or a repeated prompt reports it, when the
-   * prompt's record can still be read and written. One that cannot is only sent, once.
+   * prompt's record can still be read and written. One that cannot is only sent, once, and only a reattach in this
+   * process reports it.
    */
   const keep = (op: OpId, outcome: OpState): void => {
     try {
@@ -1327,7 +1331,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
       if (record && record.kind !== 'refused' && !record.outcome) journal.savePrompt(op, { ...record, outcome });
     } catch {
-      // The record cannot be kept: the outcome is sent all the same, and a reattach reports the prompt running.
+      unkept.set(op, outcome);
     }
   };
 
@@ -1407,6 +1411,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const endsBefore = 'op' in request ? (ends.get(request.op) ?? 0) : 0;
 
     if ('op' in request) inFlight.set(request.op, (inFlight.get(request.op) ?? 0) + 1);
+
+    // A prompt or cancel sent again may end the op otherwise, so the outcome it could not record is no longer its state.
+    if (request.type === 'prompt' || request.type === 'cancel') unkept.delete(request.op);
 
     const answered = (async () => {
       try {

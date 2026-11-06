@@ -1019,6 +1019,23 @@ describe('teamai-runtime-paseo', () => {
     expect(runtime.lines.filter(isEnd('op-0000000b')).map((line) => ('event' in line ? line.event : undefined))).toEqual(['failed']);
   });
 
+  it('reports the failure of a prompt it could not record to a reattach in the same process, not running', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, models_ms: 2_000 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    const ops = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops');
+    fs.chmodSync(ops, 0o555);
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'paseo_failed' } });
+    fs.chmodSync(ops, 0o755);
+
+    runtime.send({ type: 'reattach', handle });
+
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'failed', failure: { code: 'paseo_failed' } }] });
+  });
+
   it('answers every cancel in recover mode, though the first could not record itself', async () => {
     behave({ hold_ms: 60_000, output: { ok: true } });
     const first = start();
