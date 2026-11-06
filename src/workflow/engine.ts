@@ -1769,6 +1769,8 @@ function leaseTerms(expiresAt: string | undefined, limits: TurnLimits | undefine
 export interface SoleDriver {
   driver: string;
   offers: [RuntimeOffer, ...RuntimeOffer[]];
+  /** The runtime of `offers` this `next` offers for, which the runtimes before it in the definition came before. */
+  offering?: string;
 }
 
 export interface RuntimeOffer {
@@ -1902,6 +1904,29 @@ function beyondSoleDriver(
     code: 'requirement_unmet',
     message: `Step "${step}" needs what no single runtime of driver "${sole.driver}" offers: ${lacks}. Give one runtime of the definition all of it, or change what the step requires.`,
   };
+}
+
+/**
+ * The sandbox runtime before the one `sole` offers for, outside a sandbox, that lacks nothing for the step but `tool`,
+ * which it lists as unavailable: its reason, `<runtime>: <reason>`.
+ */
+function unsignedInSandbox(
+  sole: SoleDriver,
+  { tool, can, missingOn }: { tool: string | undefined; can: DriverCan; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+): { tool: string; reason: string } | undefined {
+  if (tool === undefined || can.isolation === 'sandbox') return undefined;
+  const at = sole.offers.findIndex((offer) => offer.runtime === sole.offering);
+
+  for (const offer of sole.offers.slice(0, Math.max(at, 0))) {
+    const reason = offer.unavailable?.[tool];
+
+    if (offer.can.isolation !== 'sandbox' || reason === undefined) continue;
+    const missing = missingOn(offer.can);
+
+    if (missing?.length === 1 && missing[0] === 'tools') return { tool, reason: `${offer.runtime}: ${reason}` };
+  }
+
+  return undefined;
 }
 
 /** A key a runtime lacks, said so that a member can act on it: the keys the local loop sets say why it set them. */
@@ -2355,26 +2380,36 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             break;
           }
 
+          // What another runtime of the driver lacks for the step, judged as this offer is: its plan, then its terms.
+          const missingOn = (offered: DriverCan): readonly Missing[] | undefined => {
+            const planned = planWorkspace(run, located.scope, state, definition, { driver, modes: offered.workspace, base: run.base ?? options.base });
+
+            if (planned.fail) return undefined;
+
+            // A runtime that lacks the step's place lacks what it would be held for once it had it, too.
+            if (planned.defer) {
+              return planned.defer.needs
+                ? deferredGaps({ run, located, state, definition, defer: planned.defer, request: { driver, base: run.base ?? options.base } }, { ...context, can: offered })
+                : undefined;
+            }
+
+            const judged = offerTerms(run, state.id, located, planned, { ...context, can: offered });
+
+            return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
+          };
+
+          // A step a sandbox before this runtime would take, but for a tool it cannot sign in now, is not run with less
+          // isolation: it fails with the sandbox's reason.
+          const unsigned = terms.kind === 'grant' && options.alone ? unsignedInSandbox(options.alone, { tool: promptTool(definition, context.toolFor), can: context.can, missingOn }) : undefined;
+
+          if (unsigned) {
+            failStep(state, toolUnavailable(state.id, unsigned.tool, definition.tool !== undefined, [unsigned.reason]), run.revision);
+            settledOne = true;
+            break;
+          }
+
           if (terms.kind === 'hold' && options.alone) {
             const tool = promptTool(definition, context.toolFor);
-
-            // What another runtime of the driver lacks for the step, judged as this offer is: its plan, then its terms.
-            const missingOn = (offered: DriverCan): readonly Missing[] | undefined => {
-              const planned = planWorkspace(run, located.scope, state, definition, { driver, modes: offered.workspace, base: run.base ?? options.base });
-
-              if (planned.fail) return undefined;
-
-              // A runtime that lacks the step's place lacks what it would be held for once it had it, too.
-              if (planned.defer) {
-                return planned.defer.needs
-                  ? deferredGaps({ run, located, state, definition, defer: planned.defer, request: { driver, base: run.base ?? options.base } }, { ...context, can: offered })
-                  : undefined;
-              }
-
-              const judged = offerTerms(run, state.id, located, planned, { ...context, can: offered });
-
-              return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
-            };
 
             const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
 

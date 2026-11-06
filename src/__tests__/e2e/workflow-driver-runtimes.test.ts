@@ -507,6 +507,26 @@ steps:
     expect(toyOpens()).toBe(0);
   });
 
+  it('fails a step a sandbox would take but cannot sign its tool in, with the sandbox\'s reason, rather than run it on local', async () => {
+    writeFlow('codexreview', `  - id: review
+    tool: codex
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    // A codex on this machine's PATH, which local would launch.
+    fs.writeFileSync(path.join(bin, 'codex'), fakeTool({ tool: 'codex', version: 'codex-cli 0.40.0', homeVariable: 'CODEX_HOME', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+    onTestFinished(() => fs.rmSync(path.join(bin, 'codex'), { force: true }));
+    const reason = 'codex cannot sign in inside this sandbox. Sign it in there, then start again.';
+    writeDefinition('sandboxthenlocal', [{ use: 'toy', options: { state, can: { isolation: 'sandbox' }, unavailable: { codex: reason } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'codexreview', '--driver', 'sandboxthenlocal'], repo, env());
+
+    const [review] = readRunState(runOf(ran)).steps;
+    expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable', message: expect.stringContaining(`toy: ${reason}`) } });
+    expect(fs.existsSync(launches)).toBe(false);
+  });
+
   it('warns once that a runtime runs steps in full access on this machine, and records their isolation as none', async () => {
     writeFlow('worktreed', `  - id: review
     tool: claude
