@@ -1084,11 +1084,14 @@ export function serve(options: ServeOptions): Promise<void> {
       if (!(error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code))) throw error;
     }
 
-    const now = place(known.handle) ?? known;
-    const { [op]: _resolved, ...launches } = now.launches;
+    // A close may have removed the place while T3 answered: its record is not written again.
+    const now = place(known.handle);
+    const base = now ?? known;
+    const { [op]: _resolved, ...launches } = base.launches;
     const thread: ThreadRecord | undefined = threadId === undefined ? undefined : { threadId, title: launch.title, model: launch.modelSelection.model, tool: launch.tool, launchedAt: launch.launchedAt };
-    const resolved: PlaceRecord = { ...now, launches, ...(thread && { threads: { ...now.threads, [op]: thread } }) };
-    journal.write(resolved);
+    const resolved: PlaceRecord = { ...base, launches, ...(thread && { threads: { ...base.threads, [op]: thread } }) };
+
+    if (now) journal.write(resolved);
 
     return { ok: true, place: resolved };
   };
@@ -1163,7 +1166,7 @@ export function serve(options: ServeOptions): Promise<void> {
       let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
 
       try {
-        // A lookup that answers late still journals the thread it found.
+        // A lookup that answers late still journals the thread it found, unless a close removed the place meanwhile.
         const resolving = await within(resolveLaunch(s, known, op, launch), left());
 
         if (!resolving.answered) return answer(unconfirmed(op, `${lookUp}, and T3 Code did not say within ${STOP_WAIT_MS / 1_000} s whether it launched it when teamai looked. Run teamai workflow cancel ${run} again once T3 Code answers.`), false);
@@ -1219,7 +1222,8 @@ export function serve(options: ServeOptions): Promise<void> {
   /**
    * Ends the place within STOP_WAIT_MS. Each launch T3 never answered is looked up, and each thread the runtime has not
    * seen stop is stopped first, all at once; while one cannot be, or T3 Code does not answer in time, the place stays,
-   * with a judge's copy, and close fails. A lookup or settle that answers late still journals what it found.
+   * with a judge's copy, and close fails. A lookup or settle that answers late still journals what it found while the
+   * place's record is there.
    */
   const close = async (handle: string): Promise<void> => {
     const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
