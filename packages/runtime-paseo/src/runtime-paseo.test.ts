@@ -286,29 +286,61 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toMatchObject({
       type: 'agent.create.request',
       idempotencyKey: 'op-0000000b',
-      config: { provider: 'claude', model: 'claude-opus-5-5', modeId: 'default', cwd: worktree, title: `teamai review · ${RUN}` },
+      // The mode Paseo sets as Claude's default, as the member's own agents start in.
+      config: { provider: 'claude', model: 'claude-opus-5-5', modeId: 'auto', cwd: worktree, title: `teamai review · ${RUN}` },
     });
     // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
     expect(create?.labels).toEqual({ 'teamai-attempt': `${RUN}/${ATTEMPT}`, 'teamai-run': RUN, 'teamai-step': 'review' });
-    // Claude's default mode asks before any write: the result file and the run's scratch directory, and only they, are
-    // allowed, as teamai's own launch allows the result file.
+    // The result file and the run's scratch directory, and only they, are allowed without asking, as teamai's own launch
+    // allows the result file.
     expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } } });
     // Only the run directory's name crosses, so $TEAMAI_RUN_DIR works in the agent's shell: Paseo keeps a create's env in
     // plain text, so nothing of the step's env does.
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
-  it('starts a Codex agent in its default mode auto, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
+  it('starts a Codex agent in the mode Paseo sets as its default, auto-review, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { verdict: 'approve' }, codex_login: 'signed_in' });
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'codex', model: undefined }));
 
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'codex' }, result: { output: { verdict: 'approve' } } });
-    // Codex's `auto` mode writes its worktree without asking, and asks before writing anywhere else.
+    // Codex's `auto-review` mode writes its worktree without asking, and asks before writing anywhere else.
     expect(received()).toMatchObject([{
-      config: { provider: 'codex', model: 'gpt-6.1-sol', modeId: 'auto', cwd: worktree, providerOptions: { sandbox_workspace_write: { writable_roots: [path.join(dir, 'out'), path.join(dir, 'run')] } } },
+      config: { provider: 'codex', model: 'gpt-6.1-sol', modeId: 'auto-review', cwd: worktree, providerOptions: { sandbox_workspace_write: { writable_roots: [path.join(dir, 'out'), path.join(dir, 'run')] } } },
     }]);
+  });
+
+  it('starts a tool whose Paseo default is a bypass mode in the next tighter mode Paseo lists, never in the bypass mode', async () => {
+    // Paseo marks Claude's bypassPermissions and Codex's full-access as modes that never ask.
+    behave({ output: { ok: true }, codex_login: 'signed_in', default_modes: { claude: 'bypassPermissions', codex: 'full-access' } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    runtime.send(promptRequest(handle, 'op-0000000c', { tool: 'codex', model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+    expect(await runtime.next(isEnd('op-0000000c'))).toMatchObject({ event: 'finished' });
+    expect(received().map((create) => create.config)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude', modeId: 'auto' }),
+      expect.objectContaining({ provider: 'codex', modeId: 'auto-review' }),
+    ]));
+  });
+
+  it('does not offer a tool whose Paseo default mode is not one Paseo lists for it, saying so, and creates no agent', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, default_modes: { claude: 'gone' } });
+    const runtime = start();
+
+    expect(await ready(runtime)).toMatchObject({ ok: true, can: { tools: ['opencode'] } });
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({
+      event: 'failed',
+      failure: { code: 'tool_unavailable', message: 'teamai-runtime-paseo did not offer claude: Paseo sets its default mode to gone, which it does not list for claude (plan, default, acceptEdits, auto, bypassPermissions); run `paseo provider ls` on the daemon\'s host to see its modes.' },
+    });
+    expect(received()).toEqual([]);
   });
 
   it('refuses a step on a tool it did not offer, saying why, and creates no agent', async () => {
@@ -375,7 +407,7 @@ describe('teamai-runtime-paseo', () => {
     expect(received()).toEqual([expect.objectContaining({ config: expect.objectContaining({ model: 'claude-opus-5-5', thinkingOptionId: 'high' }) })]);
   });
 
-  it('starts an OpenCode agent in its default mode build, on the daemon\'s default model when the step names none, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
+  it('starts an OpenCode agent with no mode, as Paseo starts one it sets no default mode for, on the daemon\'s default model when the step names none, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
     await ready(runtime);
@@ -383,7 +415,8 @@ describe('teamai-runtime-paseo', () => {
 
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode' } });
     const [create] = received();
-    expect(create).toMatchObject({ config: { provider: 'opencode', model: 'opencode/beam-free', modeId: 'build' } });
+    expect(create).toMatchObject({ config: { provider: 'opencode', model: 'opencode/beam-free' } });
+    expect(create).not.toHaveProperty('config.modeId');
     // OpenCode asks before it touches a directory outside its project (`external_directory: ask`): Paseo passes this rule
     // to the agent's session, so the two teamai writes outside the worktree are allowed, and only they.
     expect(create).toHaveProperty('config.providerOptions', { permission: { external_directory: { [`${path.join(dir, 'out')}/*`]: 'allow', [`${path.join(dir, 'run')}/*`]: 'allow' } } });
@@ -777,7 +810,7 @@ describe('teamai-runtime-paseo', () => {
       op: 'op-0000000b', event: 'failed',
       failure: {
         code: 'tool_failed',
-        message: 'The claude agent asked for permission (Run npm test) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.',
+        message: 'The claude agent asked for permission (Run npm test) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.',
       },
     });
     expect(received().map((request) => request.type)).toEqual(['agent.create.request', 'cancel_agent_request']);

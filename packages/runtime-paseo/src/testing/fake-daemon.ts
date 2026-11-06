@@ -49,6 +49,8 @@ const BehaviourSchema = z.object({
   codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
   /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
   codex_path: z.string().optional(),
+  /** The default mode the providers snapshot gives a provider, over Paseo 0.14.0's own; null: none, as OpenCode's. */
+  default_modes: z.record(z.string(), z.string().nullable()).default({}),
   /** The output the agent writes to the result file; none written when absent. */
   output: z.unknown().optional(),
   /** The agent's last message, which a confined prompt's answer is. */
@@ -101,11 +103,19 @@ export type Behaviour = z.input<typeof BehaviourSchema>;
 /** The providers the fake runs, as Paseo names them. */
 type Provider = 'claude' | 'codex' | 'opencode';
 
-const MODES: Readonly<Record<Provider, Array<{ id: string; label: string }>>> = {
-  claude: [{ id: 'plan', label: 'Plan Mode' }, { id: 'default', label: 'Always Ask' }, { id: 'acceptEdits', label: 'Accept File Edits' }, { id: 'bypassPermissions', label: 'Bypass' }],
-  codex: [{ id: 'auto', label: 'Default Permissions' }, { id: 'auto-review', label: 'Auto-review' }, { id: 'full-access', label: 'Full Access' }],
-  opencode: [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }],
+/** Each provider's modes, in Paseo's order, as Paseo 0.14.0 lists them (recorded): `dangerous` marks a mode that never asks. */
+const MODES: Readonly<Record<Provider, Array<{ id: string; label: string; colorTier: string }>>> = {
+  claude: [
+    { id: 'plan', label: 'Plan Mode', colorTier: 'planning' }, { id: 'default', label: 'Always Ask', colorTier: 'safe' },
+    { id: 'acceptEdits', label: 'Accept File Edits', colorTier: 'moderate' }, { id: 'auto', label: 'Auto mode', colorTier: 'moderate' },
+    { id: 'bypassPermissions', label: 'Bypass', colorTier: 'dangerous' },
+  ],
+  codex: [{ id: 'auto', label: 'Default Permissions', colorTier: 'moderate' }, { id: 'auto-review', label: 'Auto-review', colorTier: 'moderate' }, { id: 'full-access', label: 'Full Access', colorTier: 'dangerous' }],
+  opencode: [{ id: 'build', label: 'Build', colorTier: 'moderate' }, { id: 'plan', label: 'Plan', colorTier: 'planning' }],
 };
+
+/** The mode Paseo 0.14.0 starts each provider in, as its providers snapshot reports it (recorded): none for OpenCode. */
+const DEFAULT_MODES: Readonly<Record<Provider, string | null>> = { claude: 'auto', codex: 'auto-review', opencode: null };
 
 const FEATURES = ['creationLifecycle', 'agentRequestReceipts', 'ownedSubscriptions', 'workspaceRequestReceipts'];
 
@@ -145,7 +155,7 @@ type Reply = Extract<Outbound, { type: 'session' }>['message'];
 
 const isProvider = (provider: string): provider is Provider => Object.hasOwn(MODES, provider);
 
-const modesOf = (provider: string): Array<{ id: string; label: string }> => (isProvider(provider) ? MODES[provider] : []);
+const modesOf = (provider: string): Array<{ id: string; label: string; colorTier: string }> => (isProvider(provider) ? MODES[provider] : []);
 
 function now(): string {
   return new Date().toISOString();
@@ -400,6 +410,20 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
             models: models.map((id, index) => ({ provider: message.provider, id, label: id, isDefault: index === 0, thinkingOptions: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] })),
           },
         });
+
+        return;
+      }
+
+      case 'get_providers_snapshot_request': {
+        // A full snapshot, as a daemon answers a client that names no hash it holds.
+        const { models: offered, default_modes: defaults } = behaviour();
+
+        const entries = Object.keys(MODES).filter(isProvider).map((provider) => ({
+          provider, status: Object.hasOwn(offered, provider) ? 'ready' as const : 'unavailable' as const, enabled: true, source: 'builtin' as const, label: provider,
+          modes: MODES[provider], defaultModeId: Object.hasOwn(defaults, provider) ? defaults[provider] : DEFAULT_MODES[provider],
+        }));
+
+        reply({ type: 'get_providers_snapshot_response', payload: { requestId: message.requestId, entries, generatedAt: now() } });
 
         return;
       }
