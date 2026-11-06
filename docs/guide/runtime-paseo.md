@@ -2,7 +2,7 @@
 
 > Part of [Workflows](workflow.md).
 
-`teamai-runtime-paseo` runs each prompt step as an agent of a [Paseo](https://github.com/getpaseo/paseo) daemon, in a Paseo workspace on teamai's worktree for the step. You watch the agent and answer its permission prompts in the Paseo app. teamai still reads the result, commits, delivers, scores, and recovers the step.
+`teamai-runtime-paseo` runs each prompt step as an agent of a [Paseo](https://github.com/getpaseo/paseo) daemon, in a Paseo workspace on the directory teamai gives the step: your checkout for a read-only step, or a worktree teamai prepares. You watch the agent and answer its permission prompts in the Paseo app. teamai still reads the result, commits, delivers, scores, and recovers the step.
 
 It runs prompt steps only. Commands and `setup` go to the next runtime in the definition, or to this machine. A prompt step that needs `permissions: unattended` or a `role` goes to the next runtime that can run it. It also judges a scored pass, best-effort: see [Judge a scored pass](#judge-a-scored-pass).
 
@@ -420,6 +420,8 @@ Two attempts on one worktree share its Paseo workspace, which only the last of t
 ```text
 Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agent is busy. It may still run in the worktree; stop it in the Paseo app.
 ```
+
+A workspace you already had open in Paseo on that directory, as your checkout may be when a read-only step runs there, is never archived: the attempt cancels its own agents instead, and your workspace stays open.
 
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 

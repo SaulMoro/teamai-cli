@@ -49,6 +49,8 @@ const BehaviourSchema = z.object({
   codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
   /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
   codex_path: z.string().optional(),
+  /** Directories the member already has open as Paseo workspaces, as the app opens a project. */
+  member_workspaces: z.array(z.string()).default([]),
   /** The default mode the providers snapshot gives a provider, over Paseo 0.14.0's own; null: none, as OpenCode's. */
   default_modes: z.record(z.string(), z.string().nullable()).default({}),
   /** The output the agent writes to the result file; none written when absent. */
@@ -85,6 +87,8 @@ const BehaviourSchema = z.object({
   models_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to open a workspace, as a slow host does. */
   open_ms: z.number().int().nonnegative().default(0),
+  /** How long the daemon takes to answer an open that makes a workspace, which exists before the answer; one that finds a workspace answers at once. */
+  open_reply_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to create an agent, as a provider that is slow to start does. */
   create_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to archive a workspace. */
@@ -364,7 +368,16 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
   /** The requests already held for the delay `models_ms`, `open_ms`, `create_ms` or `archive_ms` gives them. */
   const held = new WeakSet<Inbound>();
 
+  /** Opens the member's own workspaces once, as the app did before teamai came. */
+  const openMembers = (): void => {
+    for (const dir of behaviour().member_workspaces) {
+      const cwd = path.resolve(dir);
+      kept.workspaces[cwd] ??= `wks_${createHash('sha256').update(`member:${cwd}`).digest('hex').slice(0, 16)}`;
+    }
+  };
+
   function handle(message: Inbound, reply: (message: Reply) => void): void {
+    openMembers();
     const { models_ms: listing, open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
     const holds: Partial<Record<Inbound['type'], number>> = { list_provider_models_request: listing, open_project_request: opening, 'agent.create.request': creating, archive_workspace_request: archiving };
     const hold = holds[message.type] ?? 0;
@@ -448,11 +461,17 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
           return;
         }
 
-        const cwd = fs.realpathSync(message.cwd);
+        // As Paseo keys a directory's workspace: by its path, resolved but never through its links.
+        const cwd = path.resolve(message.cwd);
+        const made = kept.workspaces[cwd] === undefined;
         const id = kept.workspaces[cwd] ?? `wks_${createHash('sha256').update(cwd).digest('hex').slice(0, 16)}`;
         kept.workspaces[cwd] = id;
         save();
-        reply({ type: 'open_project_response', payload: { requestId: message.requestId, workspace: workspaceOf(id, cwd), error: null } });
+        const answer = (): void => reply({ type: 'open_project_response', payload: { requestId: message.requestId, workspace: workspaceOf(id, cwd), error: null } });
+        const late = made ? behaviour().open_reply_ms : 0;
+
+        if (late > 0) timers.add(setTimeout(answer, late));
+        else answer();
 
         return;
       }
