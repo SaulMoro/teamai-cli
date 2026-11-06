@@ -1436,6 +1436,24 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
   });
 
+  it('takes over the hold on a directory once it is a minute old, as one whose runtime hangs on a Paseo that never answers, or died with its pid in use since', async () => {
+    behave({ output: { ok: true }, open_reply_ms: 60_000 });
+    const stuck = start();
+    const other = start();
+    await ready(stuck);
+    await ready(other);
+    stuck.send(openRequest('op-0000000a', ATTEMPT));
+    await stuck.next(isOp('op-0000000a', 'accepted'));
+    await until(() => fs.existsSync(path.join(daemonState, 'agents.json')) && worktreeWorkspace() !== undefined);
+    const holds = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'opening');
+    const aMinuteAgo = new Date(Date.now() - 61_000);
+
+    for (const name of fs.readdirSync(holds)) fs.utimesSync(path.join(holds, name), aMinuteAgo, aMinuteAgo);
+    other.send(openRequest('op-0000000c', 'a4567cdef'));
+
+    expect(await other.next((line) => isOp('op-0000000c', 'ready')(line) || isOp('op-0000000c', 'failed')(line))).toMatchObject({ event: 'ready' });
+  });
+
   it('fails an open it cannot journal before asking Paseo, and opens nothing there', async () => {
     const runtime = start();
     await ready(runtime);
