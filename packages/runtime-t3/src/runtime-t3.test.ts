@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
+import { sessionSince } from './sessions.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, PATH_WITHOUT_T3, signIn, type Connection, type FakeT3, type FakeT3Config, type Line } from './testing/harness.js';
@@ -2521,5 +2522,28 @@ describe('teamai-runtime-t3', () => {
       const briefs = t3.calls().filter((call) => call.tool === 't3_thread_send').map((call) => call.args['message']);
       expect(briefs).toEqual([t3.threads()[0]?.message]);
     });
+  });
+});
+
+// A step's thread can delegate a task that runs its own session in the same folder, after the step's started.
+describe('the session a step thread kept', () => {
+  it('is the first one started in the folder since the launch, not a delegated task\'s later one', async () => {
+    const toolHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-t3-sessions-')));
+    const cwd = path.join(toolHome, 'worktree');
+    const dir = path.join(toolHome, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(dir, { recursive: true });
+    const write = (sessionId: string, at: string): void => fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
+      JSON.stringify({ type: 'user', sessionId, cwd, timestamp: at, uuid: `${sessionId}-u`, message: { role: 'user', content: 'go' } }),
+      JSON.stringify({ type: 'assistant', sessionId, cwd, timestamp: at, uuid: `${sessionId}-a`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Done.' }] } }),
+    ].join('\n') + '\n');
+    const launchedAt = Date.parse('2026-11-06T10:00:00.000Z');
+    write('5ab0c71a-0000-4000-8000-000000000001', '2026-11-06T10:00:01.000Z');
+    write('dd5bedbf-0000-4000-8000-000000000002', '2026-11-06T10:00:30.000Z');
+
+    try {
+      expect(await sessionSince({ driver: 'claudeAgent', toolHome, cwd, since: launchedAt })).toBe('5ab0c71a-0000-4000-8000-000000000001');
+    } finally {
+      fs.rmSync(toolHome, { recursive: true, force: true });
+    }
   });
 });
