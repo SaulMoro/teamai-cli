@@ -422,6 +422,24 @@ steps:
     expect(runtimeRecord(scoreRun, attemptOf(judge))).toMatchObject({ runtime: 'toy', driver: 'toyscore' });
   });
 
+  it('ends the failure of a judge whose runtime restarted under it with the retry to run', async () => {
+    const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
+    const runId = runOf(ran);
+    writeDefinition('toyjudgerestart', [{ use: 'toy', options: { state, judge: { fail: { code: 'daemon_restarted', message: 'The daemon stopped while the claude agent answered the confined prompt.' } } } }]);
+    setMemberWorkflows({ driver: 'toyjudgerestart' });
+    const runsDir = path.join(dataHome, 'workflows', 'runs');
+    const before = new Set(fs.readdirSync(runsDir));
+
+    const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
+
+    const [scoreRun = ''] = fs.readdirSync(runsDir).filter((name) => !before.has(name) && name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length));
+    const judge = readRunState(scoreRun).steps.find((step) => step.id.endsWith('.judge'));
+    expect(judge, scored.stderr).toMatchObject({
+      status: 'failed',
+      failure: { message: `Step runtime "toy" could not run the confined claude prompt (daemon_restarted): The daemon stopped while the claude agent answered the confined prompt. Then run: teamai workflow retry ${scoreRun} ${String(judge?.id)}` },
+    });
+  });
+
   it('resumes a run that awaits a definition on that definition once this machine runs it, when the resume names no driver', async () => {
     const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
     const runId = runOf(ran);
@@ -2181,9 +2199,13 @@ span('end');
         expect(pidAlive(pid)).toBe(true);
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
 
+        expect(refused.stderr).not.toContain('Then run: teamai workflow retry');
+
         loginDefinition('codexrestartstuck', state);
         const stopped = await runCLI(['workflow', 'cancel', run], repo, env());
         expect(stopped.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+        // The stop is confirmed now, so the step that failed on it can run again.
+        expect(stopped.stderr).toContain(`Closed the place of attempt ${attempt} of run ${run} on step runtime "toy", which an earlier close had kept. Then run: teamai workflow retry ${run} review`);
         expect(pidAlive(pid)).toBe(false);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
       } finally {

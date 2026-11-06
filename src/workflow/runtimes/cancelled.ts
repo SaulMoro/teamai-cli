@@ -8,6 +8,8 @@ import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type
 import { attemptRun, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
 import { disposeDriver, LOGIN_TOOLS, openDriver } from './sources.js';
+import { retryCommand } from './step-runtime.js';
+import { CANCEL_FAILED } from '@teamai/runtime-protocol';
 
 // ─── What cancelled attempts left on their step runtimes ─
 //
@@ -50,7 +52,9 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   const checkout = await existingCheckout(state) ?? process.cwd();
 
   for (const attempt of left) {
-    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout });
+    // A step that failed because its stop was not confirmed can run again once it is.
+    const lost = state.steps.find((step) => step.status === 'failed' && step.attempt === attempt && (step.failure?.code === 'runtime_lost' || step.failure?.code === CANCEL_FAILED));
+    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout, ...(lost && { retry: { run, step: lost.id } }) });
 
     if (ended === 'running') stillRunning.add(attempt);
     else if (ended !== 'none') stopped[ended].push(attempt);
@@ -105,7 +109,7 @@ const RELEASE = { release: true } as const;
  * Stops attempt `attempt` on the step runtime its record names, or says why it could not and answers false. A released
  * attempt the runtime cannot stop or close is let go instead, as the person asked.
  */
-async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout }: { isReleased: boolean; checkout: string }): Promise<AttemptStop> {
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string } }): Promise<AttemptStop> {
   const record = await readAttemptRuntime(config, run, attempt);
 
   if (!record || record.phase === 'closed') return 'none';
@@ -142,8 +146,10 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
     const notClosed = await placed.close(isReleased ? RELEASE : undefined);
 
     if (!notClosed) {
-      if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.`);
-      else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.`);
+      const then = retry ? ` Then run: ${retryCommand(retry)}` : '';
+
+      if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.${then}`);
+      else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.${then}`);
 
       return 'closed';
     }

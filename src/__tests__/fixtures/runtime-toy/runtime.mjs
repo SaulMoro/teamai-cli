@@ -22,7 +22,7 @@
 // With `judge`, it also answers confined prompts, best effort: its init says so and offers `can.confined` at `level`
 // (`best-effort` unless given) with `access` (`read`) for `tools` (`claude`). It answers each one at once with `reply`
 // as the result's output, keeping the level it was asked for (or `reports`, to say less), and logs the files it could
-// read: those under the prompt's directory, which is all it reads. `path` names a directory of its own tools, first on
+// read: those under the prompt's directory, which is all it reads; with `fail`, it ends each with that failure instead. `path` names a directory of its own tools, first on
 // the PATH of each exec.
 //
 // `answer` makes it answer a request otherwise, by request type: `failed`, the failure reply for that handle or
@@ -435,7 +435,7 @@ function judgePrompt(request) {
 
   if (!record) {
     fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease, confined: request.confined, sees: filesUnder(request.confined.dir) })}\n`);
-    const outcome = {
+    const outcome = options.judge.fail !== undefined ? { state: 'failed', failure: options.judge.fail } : {
       state: 'finished', session: { tool: request.lease.tool, id: `toy-judge-${request.op.slice(3)}` }, result: { output: options.judge.reply ?? {} },
       confined: { level: options.judge.reports ?? request.confined.level, access: request.confined.access },
     };

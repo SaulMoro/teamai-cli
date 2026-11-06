@@ -14,6 +14,22 @@ import type { DriverCan } from '../requirements.js';
 //  request, and a runtime answers a repeated id with the same acceptance and the same terminal outcome until `close`.
 //
 
+/** The command that runs step `step` of run `run` again. */
+export function retryCommand({ run, step }: { run: string; step: string }): string {
+  return `teamai workflow retry ${run} ${step}`;
+}
+
+/** The failure codes of a step that a retry fixes as it is: the usage limit reset, or the runtime's daemon is back. */
+const RETRIED_CODES: ReadonlySet<string> = new Set(['usage_limited', 'daemon_restarted']);
+
+/**
+ * `message`, the message of a step's failure with code `code`, ending with `Then run:` and the retry command when a
+ * retry fixes that code. A runtime never spells the run or the step itself.
+ */
+export function withRetry(message: string, code: string, retry: { run: string; step: string }): string {
+  return RETRIED_CODES.has(code) ? `${message.replace(/\.?\s*$/, '.')} Then run: ${retryCommand(retry)}` : message;
+}
+
 /** A new operation id. */
 export function newOpId(): OpId {
   return OpIdSchema.parse(`op-${randomBytes(6).toString('hex')}`);

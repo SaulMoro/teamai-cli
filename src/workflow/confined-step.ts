@@ -20,7 +20,7 @@ import { attemptDir, attemptResultPath, type RunId } from './store.js';
 import type { WorkflowFailure } from './types.js';
 import type { ConfinedRunReport } from './step-state.js';
 import type { AttemptRun } from './runtimes/attempt.js';
-import type { PromptEnd } from './runtimes/step-runtime.js';
+import { withRetry, type PromptEnd } from './runtimes/step-runtime.js';
 
 /** What a driver reports of a confined run, besides the attempt and itself. */
 export type ConfinedStepReport = Pick<ReportInput, 'outcome' | 'outputs' | 'tool' | 'model' | 'tokens' | 'cost' | 'durationMs' | 'confined' | 'message' | 'failure'>;
@@ -248,12 +248,12 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
   clearTimeout(timer);
   signal?.removeEventListener('abort', stop);
 
-  return { kind: 'ran', report: runtimeConfinedReport({ runtime, tool, model, level: lease.confined.level, end, durationMs: Date.now() - startedAt }) };
+  return { kind: 'ran', report: runtimeConfinedReport({ runtime, tool, model, level: lease.confined.level, end, durationMs: Date.now() - startedAt, retry: { run, step: lease.step } }) };
 }
 
 /** The report of a confined prompt a step runtime ended. */
-function runtimeConfinedReport(input: { runtime: string; tool: string; model: StepModel | undefined; level: ConfinedLevel; end: PromptEnd; durationMs: number }): ConfinedStepReport {
-  const { runtime, tool, model, level, end, durationMs } = input;
+function runtimeConfinedReport(input: { runtime: string; tool: string; model: StepModel | undefined; level: ConfinedLevel; end: PromptEnd; durationMs: number; retry: { run: string; step: string } }): ConfinedStepReport {
+  const { runtime, tool, model, level, end, durationMs, retry } = input;
   const failed = (failure: WorkflowFailure): ConfinedStepReport => ({ outcome: 'failed', tool, durationMs, message: failure.message, failure });
 
   switch (end.kind) {
@@ -280,7 +280,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
     case 'cancelled':
       return failed({ code: 'confined_failed', message: `The confined ${tool} prompt on step runtime "${runtime}" was stopped before it replied.` });
     case 'failed':
-      return failed({ code: 'confined_failed', message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` });
+      return failed({ code: 'confined_failed', message: withRetry(`Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}`, end.failure.code, retry) });
     case 'lost':
       return failed({ code: 'runtime_lost', message: `Step runtime "${runtime}" stopped answering while it ran the confined ${tool} prompt, which may still run there: ${end.failure.message}` });
     default: {

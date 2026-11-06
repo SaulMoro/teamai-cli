@@ -5,6 +5,7 @@ import type { CommandExit } from '../../../tool-launch/process-stop.js';
 import { attemptEnv } from '../../attempt-marker.js';
 import type { LeaseWire } from '../../lease-wire.js';
 import type { AttemptRun } from '../../runtimes/attempt.js';
+import { withRetry } from '../../runtimes/step-runtime.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../../launch-context.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
@@ -212,19 +213,16 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, creden
   };
 }
 
-/** The codes of a failed prompt that a retry fixes: the limit reset, or the runtime's daemon is back. */
-const RETRIED_CODES: ReadonlySet<string> = new Set(['usage_limited', 'daemon_restarted']);
-
 /**
  * A failed prompt as the step records it: a code the protocol lets a prompt carry as it is, or `runtime_failed`. A
- * code a retry fixes ends with `retry`, the command that runs it, which the runtime never spells.
+ * code a retry fixes ends with the command that runs `retry` again.
  */
-function promptFailure(failure: RuntimeFailure, retry: string): WorkflowFailure {
+function promptFailure(failure: RuntimeFailure, retry: { run: string; step: string }): WorkflowFailure {
   const recorded = PROMPT_FAILURE_CODES.some((code) => code === failure.code)
     ? { code: failure.code, message: failure.message }
     : { code: 'runtime_failed', message: `The step runtime could not run the prompt (${failure.code}): ${failure.message}` };
 
-  return RETRIED_CODES.has(failure.code) ? { ...recorded, message: `${recorded.message.replace(/\.?\s*$/, '.')} Then run: ${retry}` } : recorded;
+  return { ...recorded, message: withRetry(recorded.message, failure.code, retry) };
 }
 
 /**
@@ -324,7 +322,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, provided, 
       }
 
       case 'failed':
-        return { started: accepted, exitCode: 1, failure: promptFailure(end.failure, `teamai workflow retry ${runId} ${step}`) };
+        return { started: accepted, exitCode: 1, failure: promptFailure(end.failure, { run: runId, step }) };
       case 'lost':
         return { started: accepted, exitCode: 1, failure: lost(`the ${tool} prompt`, end.failure) };
       default: {
