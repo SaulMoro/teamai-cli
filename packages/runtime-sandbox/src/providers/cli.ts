@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Can, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { Can, InitInstance, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
 
 // ─── What every bind-mount provider shares: its CLI, and the place view as mounts ───
 //
@@ -28,7 +28,7 @@ export function heldProbe(commands: readonly string[]): string[] {
 }
 
 /** The instances' commands, to look for in a sandbox beside the tools it may hold. */
-export function commandsOf(instances: ReadonlyArray<{ command?: string }>): string[] {
+export function commandsOf(instances: ReadonlyArray<Pick<InitInstance, 'command'>>): string[] {
   return instances.flatMap(({ command }) => (command === undefined ? [] : [command]));
 }
 

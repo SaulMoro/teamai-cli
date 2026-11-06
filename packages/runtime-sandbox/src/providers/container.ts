@@ -133,7 +133,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       // A login on this machine never crosses into a container: a tool is offered only on a credential teamai gives it.
       const { tools: offered, unavailable: notSignedIn } = offerSignedIn({
         tools: LAUNCHABLE.filter((tool) => found.has(tool)), provider: engine, credentials, stored: new Set(), instances,
-        missing: (command) => (found.has(command) ? undefined : `image ${image} does not hold: add it to the image`),
+        missing: (command) => (found.has(command) ? undefined : { holder: `image ${image}`, fix: 'add it to the image' }),
       });
 
       // A judge runs a tool teamai ships, never an instance.

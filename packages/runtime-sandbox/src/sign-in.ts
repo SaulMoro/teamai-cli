@@ -63,7 +63,7 @@ export const SIGN_IN = {
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
 
 /** `reason` cut to the longest protocol 1 takes in `unavailable`, its end marked when it is cut. */
-function fitted(reason: string): string {
+function cutToFit(reason: string): string {
   return reason.length > UNAVAILABLE_REASON_MAX ? `${reason.slice(0, UNAVAILABLE_REASON_MAX - 1)}…` : reason;
 }
 
@@ -72,9 +72,12 @@ function signInOf(tool: string): SignIn | undefined {
   return Object.entries(SIGN_IN).find(([name]) => name === tool)?.[1];
 }
 
-/** Whether teamai gives `tool` a sign-in: one of its variables, or its login copied into the attempt's tool home. */
-export function isGivenSignIn(tool: string, credentials: InitCredentials): boolean {
-  return credentials.logins.includes(tool) || signInOf(tool)?.env.some((name) => credentials.env.includes(name)) === true;
+/**
+ * Whether teamai gives `tool` a sign-in: one of its variables, or a login copied into the attempt's tool home, the one
+ * of `login`, the tool or instance the attempt launches (teamai copies a tool's login into no instance's home).
+ */
+export function isGivenSignIn(tool: string, credentials: InitCredentials, login: string = tool): boolean {
+  return credentials.logins.includes(login) || signInOf(tool)?.env.some((name) => credentials.env.includes(name)) === true;
 }
 
 /**
@@ -95,11 +98,11 @@ interface SignedIn {
 }
 
 /**
- * Where an instance's `command` is missing in the sandbox of an attempt on `tool`, as the rest of a sentence that starts
- * "<command>, which": what does not hold it and how to add it, such as "image ghcr.io/acme/agent:1 does not hold:
- * add it to the image"; undefined when the sandbox holds it.
+ * Where an instance's `command` is missing in the sandbox of an attempt on `tool`: what does not hold it (`holder`, such
+ * as "image ghcr.io/acme/agent:1") and how to add it there (`fix`, such as "add it to the image"); undefined when the
+ * sandbox holds it.
  */
-export type MissingCommand = (command: string, tool: string) => string | undefined;
+export type MissingCommand = (command: string, tool: string) => { holder: string; fix: string } | undefined;
 
 /**
  * The tools of `tools` that can sign in on `provider`: by a credential teamai gives, or, on sbx, by the login sbx keeps
@@ -111,14 +114,14 @@ export type MissingCommand = (command: string, tool: string) => string | undefin
  * (`missing`); otherwise it is `unavailable`, with why. teamai launches an offered instance's command, with its home
  * variable at the attempt's tool home.
  */
-export function offerSignedIn({ tools, provider, credentials, stored, env = {}, instances = [], missing }: {
+export function offerSignedIn({ tools, provider, credentials, stored, env = {}, instances, missing }: {
   tools: readonly string[];
   provider: SignInProvider;
   credentials: InitCredentials | undefined;
   stored: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
-  instances?: readonly InitInstance[];
-  missing?: MissingCommand;
+  instances: readonly InitInstance[];
+  missing: MissingCommand;
 }): SignedIn {
   if (credentials === undefined) return { tools: [...tools], unavailable: {}, kept: [], unusedGateways: {} };
 
@@ -145,26 +148,26 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
     }]];
   }));
 
-  const cannotSignIn = (name: string, tool: string): string => `${name}${name === tool ? '' : `, an instance of ${tool},`} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`;
+  const cannotSignIn = (tool: string): string => `${tool} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`;
 
-  const served = instances.filter((instance) => tools.includes(instance.tool)).map((instance) => {
-    const isSignedInThere = credentials.logins.includes(instance.name) || signInOf(instance.tool)?.env.some((name) => credentials.env.includes(name)) === true || isStored(instance.tool);
-    const lacking = instance.command === undefined ? undefined : missing?.(instance.command, instance.tool);
+  /** Each instance of a tool the sandbox holds, with why it is not offered, or undefined when it is. */
+  const verdicts = instances.filter((instance) => tools.includes(instance.tool)).map(({ name, tool, command }) => {
+    if (!isGivenSignIn(tool, credentials, name) && !isStored(tool)) {
+      return { name, why: `${name}, an instance of ${tool}, cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.` };
+    }
 
-    const why = !isSignedInThere ? cannotSignIn(instance.name, instance.tool)
-      : lacking === undefined ? undefined
-      : `${instance.name} runs ${instance.command}, which ${lacking}, or run the step with --driver local.`;
+    const missingAt = command === undefined ? undefined : missing(command, tool);
 
-    return { name: instance.name, why };
+    return { name, why: missingAt && `${name} runs ${command}, which ${missingAt.holder} does not hold: ${missingAt.fix}, or run the step with --driver local.` };
   });
 
   return {
-    tools: [...tools.filter(isSignedIn), ...served.flatMap(({ name, why }) => (why === undefined ? [name] : []))],
+    tools: [...tools.filter(isSignedIn), ...verdicts.flatMap(({ name, why }) => (why === undefined ? [name] : []))],
     kept,
     unusedGateways,
     unavailable: Object.fromEntries([
-      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, fitted(cannotSignIn(tool, tool))]),
-      ...served.flatMap(({ name, why }) => (why === undefined ? [] : [[name, fitted(why)]])),
+      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, cutToFit(cannotSignIn(tool))]),
+      ...verdicts.flatMap(({ name, why }) => (why === undefined ? [] : [[name, cutToFit(why)]])),
     ]),
   };
 }
