@@ -5,6 +5,7 @@ import { CANCEL_FAILED, PromptResultSchema, RuntimeRequestSchema, type Can, type
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
+import { maskedAsGiven, onThisMachine, toAlias } from './loopback.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { COMMAND_MS, handleOf, unreachable, type PlaceKey, type Provider } from './provider.js';
 
@@ -78,27 +79,26 @@ export interface RuntimeDeps {
 type Journaled = { op: OpId } & ExecRecord;
 
 /**
- * Whether `hostname`, as a URL spells it, is this machine itself: localhost, 127.0.0.0/8, ::1 (also IPv4-mapped), or
- * the unspecified 0.0.0.0 and ::, which a client connects to as this machine.
+ * Why an attempt whose credentials point at this machine itself cannot open on `provider`, checked before anything is
+ * created or journaled: a sandbox that has no name for this machine, or, on sbx, a policy that does not let a sandbox
+ * reach that port. A keyed message names the variable, never its value.
  */
-function isThisMachine(hostname: string): boolean {
-  const host = hostname.replace(/\.$/, '');
+async function hostUnreachable(credentials: Record<string, string>, provider: Provider): Promise<RuntimeFailure | undefined> {
+  const local = onThisMachine(credentials);
+  const [first] = local;
 
-  return host === 'localhost' || host.endsWith('.localhost') || /^127\.\d+\.\d+\.\d+$/.test(host) || host === '0.0.0.0'
-    || ['[::1]', '[::]'].includes(host) || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(host);
-}
+  if (first === undefined) return undefined;
+  const route = provider.hostAlias();
 
-/**
- * Why a credential that is a URL on this machine itself is refused: inside a container, that address is the
- * container's own, so the tool would fail to connect. The message names the variable, never its value.
- */
-function loopbackRefused(credentials: Record<string, string>): RuntimeFailure | undefined {
-  const name = Object.entries(credentials).find(([, value]) => URL.canParse(value) && isThisMachine(new URL(value).hostname))?.[0];
+  if (!route.ok) return { code: 'bad_option', key: `credentials.${first.name}`, message: `${first.name} points at this machine itself, which ${route.why}. Use an address of this machine the sandbox can reach` };
 
-  return name === undefined ? undefined : {
-    code: 'bad_option', key: `credentials.${name}`,
-    message: `${name} points at this machine itself, which no container reaches: inside one, that address is the container's own. On Docker Desktop, write its host as host.docker.internal (Podman: host.containers.internal); on Linux, use an address of this machine the container can reach. Then start again.`,
-  };
+  for (const { name, port } of local) {
+    const reached = await provider.reachesHost?.(port, name);
+
+    if (reached?.ok === false) return reached.failure;
+  }
+
+  return undefined;
 }
 
 function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
@@ -212,6 +212,13 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    */
   const stateOf = (exec: Journaled): OpState => (exec.outcome ? { op: exec.op, ...exec.outcome } : { op: exec.op, state: 'running' });
 
+  /** `credentials` as a sandbox of `provider` gets them: a URL on this machine itself at the name it has there. */
+  const inSandbox = (credentials: Record<string, string>, provider: Provider): Record<string, string> => {
+    const route = provider.hostAlias();
+
+    return route.ok ? toAlias(credentials, route.alias) : credentials;
+  };
+
   /** Writes the end of an op this process does not run: through its follower here when it has one. */
   const conclude = (op: OpId, outcome: Outcome): void => {
     const follower = followers.get(op);
@@ -291,7 +298,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    const refused = loopbackRefused(credentials);
+    const refused = await hostUnreachable(credentials, provider);
 
     if (refused) {
       write({ op, event: 'failed', failure: refused });
@@ -459,7 +466,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     // A credential the exec withholds is not set; a name the exec sets itself wins over a credential.
-    const scoped = Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name)));
+    const scoped = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), provider);
     let stdout = '';
 
     const end = await provider.exec(id, { argv: request.argv, env: { ...scoped, ...request.env }, unset: request.unset, cwd: request.cwd }, (stream, data) => {
@@ -470,7 +477,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : end.kind === 'failed' ? { state: 'failed', failure: end.failure } : { state: 'exited', code: end.code, stdout };
     // teamai gets the complete stdout and masks it itself; the journal never holds a credential the tool printed, so a
     // repeated id is answered with it masked.
-    finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: request.credentials, patterns: false }) } : outcome);
+    finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: maskedAsGiven(request.credentials, scoped), patterns: false }) } : outcome);
   };
 
   /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
@@ -502,7 +509,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    const chosen = judgeOf(lease.tool, request.credentials);
+    const given = inSandbox(request.credentials, provider);
+    const chosen = judgeOf(lease.tool, given);
 
     if (!chosen.ok) {
       write({ op, event: 'failed', failure: chosen.failure });
@@ -518,7 +526,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // The journal never holds a credential the tool echoed into its reply. Only its strings are masked: a setting such
     // as `1` leaves a reply's numbers as they are.
-    const settle = (outcome: Outcome): void => finish(op, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, request.credentials)) } : outcome);
+    const masks = maskedAsGiven(request.credentials, given);
+    const settle = (outcome: Outcome): void => finish(op, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, masks)) } : outcome);
 
     /** The judge's container, or undefined once the prompt settled: its creation failed, or a cancel came meanwhile. */
     const create = async (): Promise<string | undefined> => {
@@ -570,7 +579,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     const reading = judge.tool.read(stdout);
-    const masked = (text: string): string => redact(text, { envSecrets: request.credentials, patterns: false });
+    const masked = (text: string): string => redact(text, { envSecrets: masks, patterns: false });
 
     if (end.code !== 0) {
       const lastStderr = stderr.trim().split('\n').at(-1) || 'it printed nothing on stderr';
