@@ -38,7 +38,7 @@ import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
 import { credentialSecrets, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
-import type { SoleDriver } from '../../engine.js';
+import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, cloneRoleProblem, refuseDirtyAdoptedCommand, roleNotDeliveredFailure, runPlaceSetup, sweepClones, worktreeRoleProblem, type StepEnd } from '../../place/place.js';
@@ -223,6 +223,8 @@ interface RuntimeSlot {
   engine: EngineOptions;
   /** The values of the credentials the runtime declares, which only its prompts' tools get. */
   credentials: Record<string, string>;
+  /** The tools it cannot run now, with the runtime's reason. */
+  unavailable?: Record<string, string>;
 }
 
 /** A lease as this driver runs it: what the engine sent, and what staging it adds. A step staged after `expiresAt` does not start. */
@@ -1058,6 +1060,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
     : {
       kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
+      ...(entry.unavailable && { unavailable: entry.unavailable }),
       can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), remote: true },
     });
 
@@ -1075,7 +1078,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const host: RuntimeSlot = runsCommands ? { ...hostSlot, can: { ...hostSlot.can, commands: 'pinned' } } : hostSlot;
   const [firstSlot = host, ...otherSlots] = listedHost ? definedSlots.map((slot) => (slot === listedHost ? host : slot)) : [...definedSlots, host];
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
-  const sole: SoleDriver = { driver: defined.driver, offers: [{ runtime: slots[0].use, can: slots[0].can }, ...otherSlots.map((slot) => ({ runtime: slot.use, can: slot.can }))] };
+  const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.unavailable && { unavailable: slot.unavailable }) });
+  const sole: SoleDriver = { driver: defined.driver, offers: [offerOf(slots[0]), ...otherSlots.map(offerOf)] };
   const driver = driverIdentity('local', cwd);
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
   const slotOf = new Map<string, RuntimeSlot>();

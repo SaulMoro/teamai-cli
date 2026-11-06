@@ -68,7 +68,8 @@ export interface ExecEvents {
 }
 
 /** A runtime's offer: what it can, and whether it launches agents its own way, so prompt steps reach it as `prompt`. */
-export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean } | { ok: false; failure: RuntimeFailure };
+/** `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step. */
+export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean; unavailable?: Record<string, string> } | { ok: false; failure: RuntimeFailure };
 
 /** One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in flight. */
 export interface StepRuntime {

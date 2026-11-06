@@ -427,7 +427,11 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * `confinedPrompt: true` says it answers a `prompt` with `confined`; without it, teamai drops `can.confined`.
    */
   const InitReply = z.discriminatedUnion('ok', [
-    z.object({ type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional() }).strict(),
+    z.object({
+      type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(),
+      // The tools it cannot run now, each with why and what the person does about it; it still offers the rest.
+      unavailable: z.record(z.string().min(1), z.string().min(1).max(500)).optional(),
+    }).strict(),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }).strict(),
   ]);
 

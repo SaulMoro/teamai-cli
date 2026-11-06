@@ -166,7 +166,9 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     const { message } = parsed;
 
     if ('type' in message) {
-      onInit?.(message.ok ? { ok: true, can: offered(message.can, message.confinedPrompt === true), launchesAgents: message.prompt === true } : { ok: false, failure: message.error });
+      onInit?.(message.ok
+        ? { ok: true, can: offered(message.can, message.confinedPrompt === true), launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }) }
+        : { ok: false, failure: message.error });
       onInit = undefined;
 
       return;

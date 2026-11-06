@@ -1668,6 +1668,8 @@ export interface RuntimeOffer {
   /** The runtime, as the definition's `use` names it. */
   runtime: string;
   can: DriverCan;
+  /** The tools it cannot run now, each with the runtime's reason and next step. */
+  unavailable?: Readonly<Record<string, string>>;
 }
 
 /** Whether `sole` is the plain local driver, which the messages of a refusal name as it always did. */
@@ -1746,7 +1748,11 @@ function beyondSoleDriver(
   if (helds.some((held) => held.some((key) => key.startsWith('policy.')))) return undefined;
   const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
 
-  if (lackedByAll.includes('tools') && tool !== undefined) return toolUnavailable(step, tool, isNamed);
+  if (lackedByAll.includes('tools') && tool !== undefined) {
+    const reasons = sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
+
+    return toolUnavailable(step, tool, isNamed, reasons);
+  }
 
   if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
 
@@ -1768,8 +1774,19 @@ function lackedKey(key: Missing): string {
   return key === 'commands' ? 'commands (another runtime of the definition runs them)' : key;
 }
 
-/** Why a step that runs on `tool`, which it names (`isNamed`) or was picked for it, fails in a run whose only driver cannot launch it. */
-function toolUnavailable(step: string, tool: string, isNamed: boolean): WorkflowFailure {
+/**
+ * Why a step that runs on `tool`, which it names (`isNamed`) or was picked for it, fails in a run whose only driver cannot
+ * launch it. `reasons` are the runtimes' own, `<runtime>: <reason>`, which replace the install advice.
+ */
+function toolUnavailable(step: string, tool: string, isNamed: boolean, reasons: string[]): WorkflowFailure {
+  if (reasons.length > 0) {
+    const why = reasons.join(' ');
+
+    return isNamed
+      ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here: ${why} Or remove tool from the step.` }
+      : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here: ${why} Or pick a tool it launches with --tools default=<tool>.` };
+  }
+
   return isNamed
     ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` }
     : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or pick a tool it launches with --tools default=<tool>.` };

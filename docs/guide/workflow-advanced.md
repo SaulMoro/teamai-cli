@@ -1480,6 +1480,13 @@ A runtime reads one JSON request per line on stdin and answers with JSON lines o
 ← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
 ```
 
+A tool you cannot run now, such as one that is not signed in, stays out of `can.tools` and goes in `unavailable` beside `can`, with why and what the person does about it. Your runtime still starts, so command steps run. A prompt step on that tool fails `tool_unavailable` with your reason:
+
+```text
+← {"type":"init","ok":true,"can":{"tools":["codex"]},"unavailable":{"claude":"claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login."}}
+✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
+```
+
 teamai keeps `max_parallel` and `credentials` for itself: it strips them from the options before `init`, so your runtime never sees them and must not check them. `init` names the credentials instead, never their values, so your runtime can offer only the tools it can sign in, such as a `can.confined` judge:
 
 ```text

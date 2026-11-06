@@ -476,6 +476,18 @@ Judge the review.
     expect(ran.stderr).toContain(`Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set.`);
   });
 
+  it('runs the commands of a runtime that cannot run a tool now, and fails a prompt step on that tool with the runtime\'s reason', async () => {
+    const reason = 'claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.';
+    writeDefinition('toolless', [{ use: 'toy', options: { state, unavailable: { claude: reason } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toolless'], repo, env());
+
+    const runId = runOf(ran);
+    const [build, review] = readRunState(runId).steps;
+    expect(build).toMatchObject({ id: 'build', status: 'succeeded', outputs: { built: true } });
+    expect(review).toMatchObject({ id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: `Step "review" runs on claude, which the driver of this run cannot launch here: toy: ${reason} Or remove tool from the step.` } });
+  });
+
   it('records why each runtime holds a step back, which the run\'s details show once the driver stops', async () => {
     setMemberWorkflows({ allow: { network: false } });
     writeDefinition('both', [{ use: 'toy', options: { state } }, { use: 'local' }]);

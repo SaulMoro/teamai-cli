@@ -279,9 +279,10 @@ export type OpenedRuntime =
   | { kind: 'local'; use: 'local'; engine: EngineOptions }
   /**
    * `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. `credentials`: the values
-   * of the credentials it declares from the member's environment, by name, in memory only.
+   * of the credentials it declares from the member's environment, by name, in memory only. `unavailable`: the tools it
+   * cannot run now, with why.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string> };
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; unavailable?: Record<string, string> };
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
 export interface OpenedDriver {
@@ -388,7 +389,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     };
   }
 
-  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: values.values } };
+  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: values.values, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
   await runtime.dispose();
   const { failure } = ready;
 
