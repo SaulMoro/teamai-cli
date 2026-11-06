@@ -216,16 +216,28 @@ type CustomProviders = z.infer<typeof CustomProvidersSchema>;
 const runsCommand = (executable: string | undefined, command: string): boolean => executable !== undefined
   && (executable === command || (path.isAbsolute(executable) && !path.isAbsolute(command) && path.basename(executable) === command));
 
+/** Why the custom provider the runtime's providers option names cannot run `tool`, or undefined when it extends it. */
+const namedProblem = (named: string, tool: PaseoTool, custom: CustomProviders): string | undefined => (custom[named]?.extends === tool
+  ? undefined
+  : `the runtime's providers option names ${named}, which the daemon's agents.providers does not hold as a provider that extends ${tool}`);
+
 /**
- * The Paseo provider that runs team instance `instance` of `tool`: the one `named` gives, which must extend `tool`, else
- * the one custom provider that extends it with the instance's command. Or why none does, with how to set one up.
+ * The Paseo provider that runs team instance `instance` of `tool`: the one `named` gives, which must extend `tool` and
+ * run the instance's command, else the one custom provider that does. Or why none does, with how to set one up.
  */
 function providerOf(instance: InitInstance, tool: PaseoTool, custom: CustomProviders, named: string | undefined): { provider: string } | { cannot: string } {
-  if (named !== undefined) {
-    return custom[named]?.extends === tool ? { provider: named } : { cannot: `the runtime's providers option names ${named}, which the daemon's agents.providers does not hold as a provider that extends ${tool}` };
-  }
-
   const { command } = instance;
+
+  if (named !== undefined) {
+    const problem = namedProblem(named, tool, custom);
+    const runs = custom[named]?.command?.[0];
+
+    if (problem !== undefined) return { cannot: problem };
+
+    return command === undefined || runsCommand(runs, command)
+      ? { provider: named }
+      : { cannot: `the runtime's providers option names ${named}, which runs ${runs ?? 'its tool\'s own command'} rather than its command ${command}; name a provider whose command is ${command}` };
+  }
 
   if (command === undefined) {
     return { cannot: `the team instance names no command for Paseo to run; add a Paseo provider on the daemon's host that extends ${tool} and runs it, then name it in the runtime's providers option` };
@@ -526,7 +538,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
    * Why the daemon cannot run `tool`, or the tool home it runs it with when Paseo reports one. Paseo calls a tool
    * available once its binary is on PATH, signed in or not, so each tool's sign-in is read from what Paseo reports of it.
    */
-  const signIn = async ({ name, tool, provider }: Target): Promise<SignIn> => {
+  const signIn = async ({ tool, provider }: Target): Promise<SignIn> => {
     switch (tool) {
       case 'claude': {
         // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in, and,
@@ -568,8 +580,8 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const resolved = /^\s*Resolved path: (.+)$/m.exec((await api.providers.diagnostic(provider)).diagnostic)?.[1]?.trim();
 
         if (resolved === undefined || resolved === 'not found') return { canRun: false, problem: `Paseo reports no path for it; run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
-        // A team instance's provider runs the instance's own command, which answers as Codex does.
-        const executable = name === tool ? 'codex' : path.basename(custom.get(provider)?.command?.[0] ?? name);
+        // A custom provider, an instance's or one the providers option names, runs its own command, which answers as Codex does.
+        const executable = path.basename(custom.get(provider)?.command?.[0] ?? 'codex');
 
         if (!isCodexExecutable(resolved, process.platform, executable)) {
           return { canRun: false, problem: `Paseo resolves it to "${resolved}", which is not an absolute path to a ${executable}; run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
@@ -624,7 +636,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         return [{
           target: { name: tool, tool, provider },
-          ...(customs[provider]?.extends !== tool && { cannot: `the runtime's providers option names ${provider}, which the daemon's agents.providers does not hold as a provider that extends ${tool}` }),
+          cannot: namedProblem(provider, tool, customs),
         }];
       });
 

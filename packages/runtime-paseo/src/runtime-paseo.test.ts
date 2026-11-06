@@ -456,6 +456,7 @@ describe('teamai-runtime-paseo', () => {
       ['no Paseo provider runs its command', {}, {}, 'no Paseo provider runs its command acme-claude; add one on the daemon\'s host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime\'s providers option'],
       ['two Paseo providers run its command', { a: { extends: 'claude', command: ['acme-claude'] }, b: { extends: 'claude', command: ['/usr/local/bin/acme-claude'] } }, {}, 'Paseo providers a and b both run its command acme-claude; name the one to use in the runtime\'s providers option, such as providers: { acme-claude: a }'],
       ['the provider the providers option names does not extend its tool', { a: { extends: 'codex', command: ['acme-claude'] } }, { providers: { 'acme-claude': 'a' } }, 'the runtime\'s providers option names a, which the daemon\'s agents.providers does not hold as a provider that extends claude'],
+      ['the provider the providers option names runs another command', { a: { extends: 'claude', command: ['claude'] } }, { providers: { 'acme-claude': 'a' } }, 'the runtime\'s providers option names a, which runs claude rather than its command acme-claude; name a provider whose command is acme-claude'],
     ] satisfies Array<[string, NonNullable<Behaviour['custom_providers']>, RuntimeOptions, string]>)('does not offer an instance when %s, naming how to set one up, and still offers the rest', async (_case, custom, options, reason) => {
       behave({ custom_providers: custom });
 
@@ -474,6 +475,15 @@ describe('teamai-runtime-paseo', () => {
       expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
       expect(received()).toMatchObject([{ config: { provider: 'b' } }]);
     });
+  });
+
+  it('checks the sign-in of Codex on the custom provider the providers option names for it, through that provider\'s own command', async () => {
+    behave({ codex_login: 'signed_in', custom_providers: { 'codex-wrap': { extends: 'codex', command: ['/opt/wrap/bin/codex-wrap'] } } });
+
+    const init = await ready(start(), { options: { url: daemon.url, providers: { codex: 'codex-wrap' } } });
+
+    expect(init).not.toHaveProperty('unavailable.codex');
+    expect(init).toMatchObject({ type: 'init', ok: true, can: { tools: ['claude', 'codex', 'opencode'] } });
   });
 
   it('does not offer a tool whose Paseo default mode is not one Paseo lists for it, saying so, and creates no agent', async () => {
