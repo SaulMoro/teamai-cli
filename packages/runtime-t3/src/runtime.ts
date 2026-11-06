@@ -1545,10 +1545,20 @@ export function serve(options: ServeOptions): Promise<void> {
    * Ends the place within STOP_WAIT_MS. Each launch T3 never answered is looked up, and each thread the runtime has not
    * seen stop is stopped first, all at once; while one cannot be, or T3 Code does not answer in time, the place stays,
    * with a judge's copy, and close fails. A lookup or settle that answers late still journals what it found while the
-   * place's record is there.
+   * place's record is there. With `release`, the person checked that nothing of the attempt runs and let it go: a close
+   * that fails still forgets the place, its record and a judge's copy, and says why it failed.
    */
-  const close = async (handle: string): Promise<void> => {
-    const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
+  const close = async (handle: string, { release }: { release: boolean }): Promise<void> => {
+    // A released place is forgotten, so its failure no longer says it is kept: the cancel before named its threads.
+    const failClose = (failure: RuntimeFailure): void => {
+      if (!release) return write({ event: 'close_failed', handle, failure });
+      forget(handle);
+      write({
+        event: 'close_failed', handle,
+        failure: { code: failure.code, message: `Runtime t3 forgot ${handle}, as you released it, though T3 Code did not confirm it closed (${failure.code}). If one of its T3 threads still runs, stop it in T3 Code with its Stop button.` },
+      });
+    };
+
     const deadline = Date.now() + STOP_WAIT_MS;
     const left = (): number => Math.max(deadline - Date.now(), 0);
     const late = `T3 Code did not answer within ${STOP_WAIT_MS / 1_000} s`;
@@ -1652,17 +1662,26 @@ export function serve(options: ServeOptions): Promise<void> {
       known = place(handle) ?? known;
     }
 
-    // A judge's copy is the thread's scratch folder, so the thread loses its folder with it.
+    removeCopies(known);
+    await removeGoneProjects(handle, deadline);
+    journal.remove(handle);
+    write({ event: 'closed', handle });
+  };
+
+  /** A judge's copy is the thread's scratch folder, so the thread loses its folder with it. */
+  const removeCopies = (known: PlaceRecord | undefined): void => {
     for (const thread of Object.values(known?.threads ?? {})) {
       if (thread.copy && fs.existsSync(thread.copy)) {
         chmodTree(thread.copy, WRITABLE);
         fs.rmSync(thread.copy, { recursive: true, force: true });
       }
     }
+  };
 
-    await removeGoneProjects(handle, deadline);
+  /** Forgets a place the person released: its record, readable or not, and a judge's copy. */
+  const forget = (handle: string): void => {
+    removeCopies(place(handle));
     journal.remove(handle);
-    write({ event: 'closed', handle });
   };
 
   const handleRequest = async (request: RuntimeRequest): Promise<void> => {
@@ -1723,7 +1742,7 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       case 'close':
-        return close(request.handle);
+        return close(request.handle, { release: request.release === true });
       default: {
         const unhandled: never = request;
 
