@@ -2240,6 +2240,48 @@ describe('an attempt in an sbx sandbox', () => {
     expect(fs.readFileSync(path.join(at.worktree, 'BUILT.md'), 'utf8')).toBe('built\n');
   });
 
+  describe("a gateway your shell sets, which sbx's login replaces", () => {
+    const GATEWAY = 'http://127.0.0.1:4000/anthropic';
+
+    /** Opens the attempt's place for `tool`, then its notices about that open. */
+    async function openFor(connection: Connection, tool: string, credentials: Record<string, string> = {}): Promise<Message[]> {
+      const at = place();
+      const op = newOp();
+      connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool, credentials, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+      expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'ready' });
+      connection.send({ type: 'close', handle: HANDLE });
+      await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
+
+      return connection.messages.filter((message) => message.op === op && message.event === 'notice');
+    }
+
+    it('says once, at the first Claude attempt, that the gateway is not used in the sandbox and how to use it there, never its value', async () => {
+      engine.secret('anthropic', true);
+      const connection = start({ ANTHROPIC_BASE_URL: GATEWAY });
+      await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] });
+      const first = await openFor(connection, 'claude');
+
+      expect(first).toEqual([expect.objectContaining({ event: 'notice', message: expect.stringContaining('ANTHROPIC_BASE_URL: env:ANTHROPIC_BASE_URL') })]);
+      expect(JSON.stringify(first)).toContain('sbx secret ls');
+      expect(JSON.stringify(first)).not.toContain('127.0.0.1');
+      expect(await openFor(connection, 'claude')).toEqual([]);
+    });
+
+    it.each<{ name: string; env: NodeJS.ProcessEnv; tool: string; credentials: Record<string, string> }>([
+      { name: 'the definition gives the gateway to the step', env: { ANTHROPIC_BASE_URL: GATEWAY }, tool: 'claude', credentials: { ANTHROPIC_BASE_URL: GATEWAY, ANTHROPIC_AUTH_TOKEN: 'gateway-token' } },
+      { name: 'your shell sets no gateway', env: {}, tool: 'claude', credentials: {} },
+      { name: 'the attempt runs another tool', env: { ANTHROPIC_BASE_URL: GATEWAY }, tool: 'codex', credentials: {} },
+    ])('says nothing when $name', async ({ env, tool, credentials }) => {
+      engine.secret('anthropic', true);
+      engine.secret('openai', true);
+      engine.allowNetwork('localhost:4000');
+      const connection = start(env);
+      await init(connection, { provider: 'sbx' }, 'unattended', { env: Object.keys(credentials), logins: [] });
+
+      expect(await openFor(connection, tool, credentials)).toEqual([]);
+    });
+  });
+
   it.each<{ tool: string; service: string; credentials: InitCredentials }>([
     { tool: 'claude', service: 'anthropic', credentials: { env: [], logins: [] } },
     { tool: 'codex', service: 'openai', credentials: { env: [], logins: [] } },

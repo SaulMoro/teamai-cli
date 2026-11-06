@@ -26,6 +26,8 @@ interface SignIn {
   sbx?: string;
   /** How to sign it in, as the rest of a sentence that starts with the tool's name, per provider. */
   hint: Record<SignInProvider, string>;
+  /** The variable that points the tool at a gateway, and the token it signs in to that gateway with, when it reads one. */
+  gateway?: { url: string; token: string };
 }
 
 const CLAUDE_TOKEN = 'run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox\'s credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY)';
@@ -41,6 +43,7 @@ export const SIGN_IN = {
   claude: {
     env: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'],
     sbx: 'anthropic',
+    gateway: { url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' },
     hint: {
       sbx: `sign Claude in once with sbx: run \`sbx run claude <any dir>\`, then \`/login\` in Claude Code, and every new sandbox reuses that login (an API key instead: \`sbx secret set anthropic\`); or ${CLAUDE_TOKEN}`,
       docker: CLAUDE_IN_A_CONTAINER,
@@ -69,20 +72,30 @@ export function isGivenSignIn(tool: string, credentials: InitCredentials): boole
   return credentials.logins.includes(tool) || signInOf(tool)?.env.some((name) => credentials.env.includes(name)) === true;
 }
 
-/** What a sandbox offers of the tools it holds: those that can sign in, why each other one cannot, and those sbx keeps a login for (`kept`). */
+/**
+ * The tools that sign in on the login sbx keeps though the member's shell points them at a gateway, by tool: the
+ * gateway's variable, and the line that tells the member their gateway is not used in the sandbox.
+ */
+export type UnusedGateways = Record<string, { variable: string; notice: string }>;
+
+/**
+ * What a sandbox offers of the tools it holds: those that can sign in, why each other one cannot, those sbx keeps a
+ * login for (`kept`), and the gateways that login replaces.
+ */
 interface SignedIn {
   tools: string[];
   unavailable: Unavailable;
   kept: string[];
+  unusedGateways: UnusedGateways;
 }
 
 /**
  * The tools of `tools` that can sign in on `provider`: by a credential teamai gives, or, on sbx, by the login sbx keeps
  * for its service (`stored`); each other tool is `unavailable`, with how to sign it in. An older teamai names no
- * credentials: every tool is offered, as before.
+ * credentials: every tool is offered, as before. `env` is the member's, which a kept login replaces a gateway of.
  */
-export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): SignedIn {
-  if (credentials === undefined) return { tools: [...tools], unavailable: {}, kept: [] };
+export function offerSignedIn({ tools, provider, credentials, stored, env = {} }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string>; env?: NodeJS.ProcessEnv }): SignedIn {
+  if (credentials === undefined) return { tools: [...tools], unavailable: {}, kept: [], unusedGateways: {} };
 
   const isStored = (tool: string): boolean => {
     const service = signInOf(tool)?.sbx;
@@ -93,9 +106,24 @@ export function offerSignedIn({ tools, provider, credentials, stored }: { tools:
   const isSignedIn = (tool: string): boolean => isGivenSignIn(tool, credentials) || isStored(tool);
   const how = (tool: string): string => signInOf(tool)?.hint[provider] ?? 'teamai knows no way to sign it in inside a sandbox';
 
+  const kept = tools.filter(isStored);
+
+  const unusedGateways = Object.fromEntries(kept.flatMap((tool) => {
+    const signIn = signInOf(tool);
+    const gateway = signIn?.gateway;
+
+    if (signIn?.sbx === undefined || gateway === undefined || !env[gateway.url]) return [];
+
+    return [[tool, {
+      variable: gateway.url,
+      notice: `${tool} signs in here on the login sbx keeps (${signIn.sbx} in \`sbx secret ls\`), so the gateway ${gateway.url} names in your shell is not used in this sandbox. To use it there, add ${gateway.url}: env:${gateway.url} and ${gateway.token}: env:${gateway.token} to the sandbox's credentials.`,
+    }]];
+  }));
+
   return {
     tools: tools.filter(isSignedIn),
-    kept: tools.filter(isStored),
+    kept,
+    unusedGateways,
     unavailable: Object.fromEntries(tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, `${tool} cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.`])),
   };
 }

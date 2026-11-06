@@ -153,7 +153,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       };
 
       // A container keeps no login of its own: every sign-in comes from teamai.
-      return { ok: true, can, host: route, unavailable: notSignedIn, ownLogins: [] };
+      return { ok: true, can, host: route, unavailable: notSignedIn, ownLogins: [], unusedGateways: {} };
     },
 
     find,
