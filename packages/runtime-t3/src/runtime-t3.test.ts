@@ -444,6 +444,17 @@ describe('teamai-runtime-t3', () => {
         });
       });
 
+      it('runs the step on the project another step\'s open added meanwhile, when its own add finds it there', async () => {
+        t3.config({ projects: [], projectAddRaced: true });
+        const runtime = await initialized();
+
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b'));
+
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
+        expect(t3.threads()[0]).toMatchObject({ projectId: expect.stringMatching(/^project-/), workspace: 'existing_worktree', worktreePath: worktree });
+      });
+
       it('adds it again when T3 deleted the project it had', async () => {
         t3.config({ projects: [{ id: 'project-old', title: 'acme-app', workspaceRoot: checkout, deletedAt: '2026-10-01T09:00:00.000Z' }] });
         const runtime = await initialized();

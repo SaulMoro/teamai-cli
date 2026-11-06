@@ -110,6 +110,8 @@ export interface FakeT3Config {
   commandFails?: number;
   /** `t3 project add` fails with this exit status, saying why on stderr. */
   projectAddFails?: number;
+  /** Another caller adds the folder first, as a parallel step's open may, so `t3 project add` fails as T3 does then. */
+  projectAddRaced?: boolean;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
@@ -264,6 +266,7 @@ if (args.slice(0, 2).join(' ') === 'project add') {
   const project = { id: 'project-' + randomUUID().slice(0, 8), title: values('--title')[0] ?? path.basename(root), workspaceRoot: root, deletedAt: null };
   config.projects.push(project);
   fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify(config));
+  if (config.projectAddRaced) { process.stderr.write("ProjectAlreadyExistsError: An active project already exists for '" + root + "'.\\n"); process.exit(1); }
   process.stdout.write('Added project ' + project.id + ' (' + project.title + ') at ' + root + '.\\n');
   process.exit(0);
 }
