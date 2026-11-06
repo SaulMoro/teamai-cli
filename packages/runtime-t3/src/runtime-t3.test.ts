@@ -512,7 +512,7 @@ describe('teamai-runtime-t3', () => {
 
     // A read-only step reads the checkout where it is, as on local, and a clone is a folder of its own: each is a
     // project's own folder, where T3 runs no setup script.
-    it('runs a read-only step on the checkout itself, as a thread of the checkout\'s project', async () => {
+    it('runs a step in the checkout itself as a thread of the checkout\'s project, where T3 runs no setup script', async () => {
       t3.settings(scriptsInProject1({ name: 'Install', command: 'echo installed > SETUP_RAN.txt', runOnWorktreeCreate: true }));
       const runtime = await initialized();
 

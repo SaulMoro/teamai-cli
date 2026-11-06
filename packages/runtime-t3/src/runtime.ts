@@ -827,7 +827,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const settings = readSettings(options.t3Home);
     const scripts = projectSettings(settings, checkout.project).scripts;
-    // The step's folder is the project's own: a checkout read in place, a clone, a team repo's clone.
+    // The step's folder is the project's own: the checkout itself, a clone, a team repo's clone.
     const own = realpath(view.worktree) === realpath(root);
     let project = checkout.project;
     let binding: 'existing_worktree' | 'root' = own ? 'root' : 'existing_worktree';
