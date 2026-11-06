@@ -399,11 +399,11 @@ describe('teamai-runtime-t3', () => {
     });
 
     /** Opens the place of an attempt whose folder is `folder` on `runtime`, and answers how the open ended. */
-    const openOn = async (runtime: Connection, folder: string, op = OPEN): Promise<Line> => {
+    const openOn = async (runtime: Connection, folder: string, op = OPEN, timeoutMs?: number): Promise<Line> => {
       runtime.send({ type: 'open', op, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree: folder, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
       await runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
 
-      return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted');
+      return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted', timeoutMs);
     };
 
     const initialized = async (options: Line = {}, env: Record<string, string> = {}): Promise<Connection> => {
@@ -454,6 +454,16 @@ describe('teamai-runtime-t3', () => {
         expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
         expect(t3.threads()[0]).toMatchObject({ projectId: expect.stringMatching(/^project-/), workspace: 'existing_worktree', worktreePath: worktree });
       });
+
+      it('fails open within its bound when the t3 command never finishes adding it', async () => {
+        t3.config({ projects: [], projectAddHangs: true });
+        const runtime = await initialized();
+
+        expect(await openOn(runtime, worktree, OPEN, 15_000)).toEqual({
+          op: OPEN, event: 'failed',
+          failure: { code: 'not_a_t3_project', message: `${checkout} is not a project in T3 Code fake-laptop, and teamai could not add it (t3 project add did not finish within 10 s). Add it in T3 Code (Add project), or run t3 project add ${checkout}, then start the workflow again.` },
+        });
+      }, 20_000);
 
       it('adds it again when T3 deleted the project it had', async () => {
         t3.config({ projects: [{ id: 'project-old', title: 'acme-app', workspaceRoot: checkout, deletedAt: '2026-10-01T09:00:00.000Z' }] });
