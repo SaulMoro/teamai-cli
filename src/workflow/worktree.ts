@@ -126,6 +126,24 @@ export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
   };
 }
 
+/**
+ * The variables of this process that git and the member's own git setup need: where git and its config are, the
+ * locale, the SSH agent and askpass a push signs in through, proxies and certificates. Nothing else, so a filter or
+ * command a step planted in a copy's config, which `untrustedGit` still starts, reads no token or key of the host.
+ */
+export function hostGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => HOST_GIT_ENV.has(name) || HOST_GIT_ENV.has(name.toUpperCase()) || /^LC_[A-Z]+$/.test(name)));
+}
+
+const HOST_GIT_ENV: ReadonlySet<string> = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LANGUAGE', 'TZ', 'TERM',
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
+  'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+  'GIT_EXEC_PATH', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT',
+  'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_SSH_VARIANT', 'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH',
+  'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+]);
+
 /** `options` with its timeout cut to the time left before `expiresAt`, at least 1 ms: a timeout of 0 never stops git. */
 function boundedBy(options: GitOptions | undefined, expiresAt: string | undefined): GitOptions | undefined {
   if (expiresAt === undefined) return options;
@@ -399,7 +417,7 @@ export async function reconcileCopy(main: string, branch: string, expected: stri
 
   const own = worktreePath(main, branch);
   // An earlier step ran in the branch's copy, so its config may start anything.
-  const copyGit = untrustedGit(process.env);
+  const copyGit = untrustedGit(hostGitEnv());
 
   if (await fs.stat(own).then((stats) => stats.isDirectory(), () => false)) {
     const on = await offBranch(own, branch, copyGit);
@@ -1340,7 +1358,7 @@ export async function unrestoredCopy(dir: string): Promise<
     return { state: 'unrestored', dir, marker: parsed.data, left: `it had changes when the step started, so teamai cannot tell when it is back; delete ${file} once it is` };
   }
 
-  const left = await copyLeftOver(dir, parsed.data, untrustedGit(process.env));
+  const left = await copyLeftOver(dir, parsed.data, untrustedGit(hostGitEnv()));
 
   if (left) return { state: 'unrestored', dir, marker: parsed.data, left };
   await fs.rm(file, { force: true });

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { WorkflowFailure } from '../types.js';
 import type { StepChanges } from '../workspace.js';
 import { commitPathsOf, mergeStagedPathsOf } from './worktree-snapshot.js';
-import { commitWork, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git } from '../worktree.js';
+import { commitWork, hostGitEnv, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
 
 /**
@@ -172,7 +172,7 @@ export async function finishWriter(input: {
   already?: WorkflowFailure;
 }): Promise<{ changes?: StepChanges; failure?: WorkflowFailure; unpushed?: string }> {
   const { dir, step, workspace, rangeFrom, conflicts, saved, failed, reported, already } = input;
-  const hookSafe = untrustedGit(process.env);
+  const hookSafe = untrustedGit(hostGitEnv());
   const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved, run: hookSafe });
 
   if (unrestored) return { failure: { code: 'workspace_base', message: `Step "${step}" ran, but nothing was committed or pushed. ${unrestoredConfig(unrestored, dir)}` } };

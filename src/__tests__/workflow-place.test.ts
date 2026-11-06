@@ -144,6 +144,20 @@ describe('prepared places through the workflow client', () => {
     expect(await f.client.report(f.runId, { attempt: second.attempt, revision: second.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
     expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
   });
+  it('gives a clean filter a step planted in its copy none of the host\'s secrets while it commits the step\'s work', async () => {
+    const f = await fixture();
+    vi.stubEnv('DEPLOY_TOKEN', 'host-deploy-secret');
+    const lease = await next(f);
+    const mark = path.join(path.dirname(f.work), 'filter-saw');
+    const filter = path.join(path.dirname(f.work), 'filter.sh');
+    fs.writeFileSync(filter, `#!/bin/sh\nif [ -n "$DEPLOY_TOKEN" ]; then echo set >> "${mark}"; else echo unset >> "${mark}"; fi\ncat\n`, { mode: 0o755 });
+    git(lease.cwd, 'config', '--worktree', 'filter.planted.clean', filter);
+    fs.writeFileSync(path.join(lease.cwd, '.gitattributes'), '*.txt filter=planted\n');
+    fs.writeFileSync(path.join(lease.cwd, 'code.txt'), 'work\n');
+    expect(await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    expect(git(f.remote, 'show', `${lease.workspace.branch}:code.txt`)).toBe('work');
+    expect(fs.readFileSync(mark, 'utf8').split('\n').filter(Boolean)).not.toContain('set');
+  });
   it('commits every change in a place TeamAI made, even when the report lists none of them', async () => {
     const f = await fixture();
     const lease = await next(f);

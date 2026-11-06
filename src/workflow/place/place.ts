@@ -17,7 +17,7 @@ import { stageEvidence } from '../../scorers/engine-hooks.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import type { RunState, WorkflowFailure } from '../types.js';
 import { type CopyContract, type WorkspaceContract } from '../workspace.js';
-import { clearWorktreeHooks, headCommit, markReadCopy, markSetup, releaseReadCopy, removeWorktree, reopenConfigConflicts, stepCheckout, unchangedOverlayPaths, untrustedGit, worktreePath, type Git } from '../worktree.js';
+import { clearWorktreeHooks, headCommit, hostGitEnv, markReadCopy, markSetup, releaseReadCopy, removeWorktree, reopenConfigConflicts, stepCheckout, unchangedOverlayPaths, untrustedGit, worktreePath, type Git } from '../worktree.js';
 import { adoptRefusal, takeAdopted } from './adopted.js';
 import { cloneEnv, cloneKeyOf, commitClone, markCloneReady, openClone, preparedClone, removeClone, type CloneLease } from './clone.js';
 import { openWorktree } from './created.js';
@@ -507,10 +507,10 @@ async function stageRole(input: {
 /**
  * The git teamai runs in a place's copy while it prepares and finishes it. A step ran there, or one of an earlier attempt
  * on the branch did, so no hook, fsmonitor or replacement its config names runs, and what it still starts, such as a
- * filter, gets this process's environment.
+ * filter, gets only `hostGitEnv`.
  */
 function copyGit(): Git {
-  return untrustedGit(process.env);
+  return untrustedGit(hostGitEnv());
 }
 
 /** What the overlay of a lease's copy reads of it: the prompt it adds to, the role and tool it delivers for, and whether an answer, which gets none, reads the copy. */
