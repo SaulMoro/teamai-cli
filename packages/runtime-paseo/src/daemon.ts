@@ -74,6 +74,27 @@ function stepModeOf(tool: PaseoTool, defaultMode: string | null | undefined, mod
 
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/**
+ * How long a question an open asks Paseo may go unanswered: an open holds its directory meanwhile, and the two it asks
+ * end well within the minute after which another open takes that hold over (`HOLD_STALE_MS`).
+ */
+const OPEN_QUESTION_TIMEOUT_MS = 20_000;
+
+/** What `asking` answers, or a failure once it gave no answer in `OPEN_QUESTION_TIMEOUT_MS`. */
+async function answeredInTime<T>(asking: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer in ${OPEN_QUESTION_TIMEOUT_MS / 1000} s; check that its daemon answers with \`paseo ls\`, then run the step again`)), OPEN_QUESTION_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([asking, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The config directory `claude auth status` reports in Claude's diagnostic, when it reports an absolute one. */
 function claudeHomeIn(diagnostic: string): string | undefined {
   const quoted = /"configDirectory":\s*("(?:[^"\\]|\\.)*")/.exec(diagnostic)?.[1];
@@ -254,11 +275,11 @@ export interface Daemon {
   /** The tools whose provider the daemon has installed, each one it can run when signed in and Paseo gives it a mode a step can start in. */
   installedTools(): Promise<InstalledTool[]>;
   models(tool: PaseoTool): Promise<Model[]>;
-  /** Whether Paseo has an active workspace on a directory, as one the member opened in the app. */
+  /** Whether Paseo has an active workspace on a directory, as one the member opened in the app; fails with no answer in 20 s. */
   isOpen(cwd: string): Promise<boolean>;
   /** The agents of a workspace that no archive closed and teamai did not start (they carry no `teamai-attempt` label): the member's. */
   memberAgentsIn(workspaceId: string): Promise<string[]>;
-  /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. */
+  /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. Fails with no answer in 20 s. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
   /**
    * Creates the agent in the workspace of `cwd`, or answers the one a repeated create made. A create that failed says
@@ -467,7 +488,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }));
     },
     models,
-    isOpen: (cwd) => isOpenIn(api, cwd),
+    isOpen: (cwd) => answeredInTime(isOpenIn(api, cwd)),
     async memberAgentsIn(workspaceId) {
       const found: string[] = [];
 
@@ -481,7 +502,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }
     },
     async workspace(cwd) {
-      const opened = await api.workspaces.open({ cwd });
+      const opened = await answeredInTime(api.workspaces.open({ cwd }));
       const current = opened.current();
 
       return { id: opened.id, name: current?.projectDisplayName ?? opened.name ?? opened.id, directory: opened.directory ?? cwd };

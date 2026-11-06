@@ -167,8 +167,8 @@ function write(file: string, value: Place | PromptRecord): void {
 const HoldPidSchema = z.coerce.number().int().positive();
 
 /**
- * How old a hold on a directory's open may grow before another open takes it over: its runtime may be stuck on a Paseo
- * that never answers, or gone with its pid in use since. Whichever of the two journals first whether the workspace is the
+ * How old a hold on a directory's open may grow before another open takes it over: its runtime gives up on each question
+ * to Paseo after 20 s, so one older than this is stuck past that, or gone with its pid in use since. Whichever of the two journals first whether the workspace is the
  * member's decides it for the other, which reads it before it decides.
  */
 const HOLD_STALE_MS = 60_000;
