@@ -7,6 +7,7 @@ import type { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { isCodexExecutable } from './daemon.js';
 import { agentIdOf } from './runtime.js';
+import { paseoApp } from './testing/asar.js';
 import { startFakeDaemon, type Behaviour } from './testing/fake-daemon.js';
 import { startRuntime, TEST_CLIENT, type Runtime } from './testing/harness.js';
 
@@ -2039,11 +2040,15 @@ describe('teamai-runtime-paseo', () => {
       type: 'init', ok: false,
       error: {
         code: 'client_missing',
-        message: `teamai-runtime-paseo found no Paseo client in ${empty}, which PASEO_CLIENT_PATH names. Install Paseo (npm install -g @getpaseo/cli) so \`paseo\` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
+        message: `teamai-runtime-paseo found no Paseo client in ${empty}, which PASEO_CLIENT_PATH names. Install the Paseo CLI from the Paseo desktop app's settings, or with npm install -g @getpaseo/cli, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
       },
     });
-    expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: path.dirname(process.execPath) }))).toMatchObject({
-      type: 'init', ok: false, error: { code: 'client_missing', message: expect.stringContaining('found no `paseo` on PATH') },
+    expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: path.dirname(process.execPath) }))).toEqual({
+      type: 'init', ok: false,
+      error: {
+        code: 'client_missing',
+        message: 'teamai-runtime-paseo found no `paseo` on PATH, or in ~/.local/bin where the Paseo desktop app installs its CLI, to load the Paseo client from. Install the Paseo CLI from the Paseo desktop app\'s settings, or with npm install -g @getpaseo/cli, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.',
+      },
     });
   });
 
@@ -2070,6 +2075,32 @@ describe('teamai-runtime-paseo', () => {
     fs.symlinkSync(path.join(cli, 'bin', 'paseo'), path.join(dir, 'bin', 'paseo'));
 
     expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: [path.join(dir, 'bin'), path.dirname(process.execPath)].join(path.delimiter) }))).toMatchObject({ type: 'init', ok: true });
+  });
+
+  it('runs on the client inside the Paseo app, through the CLI its install-CLI action links into ~/.local/bin, though no paseo is on PATH', async () => {
+    const cli = paseoApp(path.join(dir, 'app'), TEST_CLIENT);
+    fs.mkdirSync(path.join(dir, 'home', '.local', 'bin'), { recursive: true });
+    fs.symlinkSync(cli, path.join(dir, 'home', '.local', 'bin', 'paseo'));
+    const env = { PASEO_CLIENT_PATH: undefined, PATH: path.dirname(process.execPath) };
+
+    expect(await ready(start(env))).toMatchObject({ type: 'init', ok: true });
+    // Once unpacked, the client is loaded again from where it was kept, as a second runtime does.
+    expect(await ready(start(env))).toMatchObject({ type: 'init', ok: true });
+  });
+
+  it('fails init naming the file, rather than load it, when a file of the client in the Paseo app does not match the app\'s own hash', async () => {
+    const cli = paseoApp(path.join(dir, 'app'), TEST_CLIENT, 'node_modules/ws/package.json');
+    fs.mkdirSync(path.join(dir, 'home', '.local', 'bin'), { recursive: true });
+    fs.symlinkSync(cli, path.join(dir, 'home', '.local', 'bin', 'paseo'));
+    const app = fs.realpathSync(path.join(dir, 'app', 'Paseo.app'));
+
+    expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: path.dirname(process.execPath) }))).toEqual({
+      type: 'init', ok: false,
+      error: {
+        code: 'client_missing',
+        message: `teamai-runtime-paseo could not unpack the Paseo client from the Paseo app at ${app}: node_modules/ws/package.json does not match the SHA-256 the app records for it. Reinstall the Paseo app, or install the Paseo CLI (npm install -g @getpaseo/cli) so \`paseo\` is on PATH.`,
+      },
+    });
   });
 
   it('fails a step whose agent errors, with Paseo\'s error, and one whose agent wrote no result', async () => {
