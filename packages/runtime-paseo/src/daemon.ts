@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import spawn from 'cross-spawn';
-import { expandHome } from '@teamai/tool-core/home';
+import { expandHome, getUserHome } from '@teamai/tool-core/home';
 import { z } from 'zod';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
@@ -124,6 +125,46 @@ function claudeHomeIn(diagnostic: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** The names under `dir`, newest first by name, as Codex's dated session folders sort; none when it cannot be read. */
+const newestFirst = (dir: string): string[] => {
+  try {
+    return fs.readdirSync(dir).sort().reverse();
+  } catch {
+    return [];
+  }
+};
+
+/** Whether the Codex home `home` holds the rollout of thread `threadId`: under `sessions/<yyyy>/<mm>/<dd>/`, or archived. */
+function holdsRollout(home: string, threadId: string): boolean {
+  const isRollout = (name: string): boolean => name.startsWith('rollout-') && name.endsWith(`-${threadId}.jsonl`);
+
+  if (newestFirst(path.join(home, 'archived_sessions')).some(isRollout)) return true;
+  const sessions = path.join(home, 'sessions');
+
+  return newestFirst(sessions).some((year) => newestFirst(path.join(sessions, year)).some((month) => newestFirst(path.join(sessions, year, month))
+    .some((day) => newestFirst(path.join(sessions, year, month, day)).some(isRollout))));
+}
+
+/**
+ * The Codex home on this machine that holds the rollout of thread `threadId`, or undefined when none it can see does.
+ * Paseo reports no Codex home, so the homes the daemon's Codex likely writes are looked in: the runtime's `CODEX_HOME`,
+ * then `.codex` in the account's home, where a daemon the Paseo app started runs, then in `$HOME`.
+ */
+function codexHomeHolding(threadId: string): string | undefined {
+  let account: string | undefined;
+
+  try {
+    account = os.userInfo().homedir;
+  } catch {
+    account = undefined;
+  }
+
+  const homes = [process.env.CODEX_HOME, account && path.join(account, '.codex'), path.join(getUserHome(), '.codex')]
+    .filter((home): home is string => typeof home === 'string' && path.isAbsolute(home));
+
+  return [...new Set(homes)].find((home) => holdsRollout(home, threadId));
 }
 
 export interface Model {
@@ -309,6 +350,11 @@ export interface Daemon {
   /** Archives a workspace, which stops its agents; Paseo deletes only worktrees it created, so teamai's stays. */
   archive(workspaceId: string): Promise<void>;
   link(agentId: string): string;
+  /**
+   * The tool home a finished session of `tool` lives in, when the runtime can tell: Claude's from Paseo's diagnostic at
+   * init, Codex's found by the session's rollout on a daemon on this machine.
+   */
+  sessionHome(tool: PaseoTool, sessionId: string, claudeHome: string | undefined): string | undefined;
   close(): Promise<void>;
 }
 
@@ -554,6 +600,22 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       if (error) throw new Error(error);
     },
     link: (agentId) => paseo.buildAgentDeepLink({ serverId, agentId }),
+    sessionHome(tool, sessionId, claudeHome) {
+      switch (tool) {
+        case 'claude':
+          return claudeHome;
+        case 'codex':
+          return isOnThisMachine(url) ? codexHomeHolding(sessionId) : undefined;
+        // OpenCode keeps its sessions in a database under its data directory, which no file names the session in.
+        case 'opencode':
+          return undefined;
+        default: {
+          const unhandled: never = tool;
+
+          return unhandled;
+        }
+      }
+    },
     async close() {
       await api.dispose().catch(() => {});
       await client.close().catch(() => {});

@@ -333,6 +333,24 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'claude', home: elsewhere } });
   });
 
+  it('names the Codex home that holds a step\'s session, found by its thread id, so teamai reads it there though it runs in another HOME, and none when no home it can see holds it', async () => {
+    const elsewhere = path.join(dir, 'daemon-user', '.codex');
+    behave({ output: { verdict: 'approve' }, codex_login: 'signed_in', codex_home: elsewhere });
+    const runtime = start({ CODEX_HOME: elsewhere });
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b', { tool: 'codex', model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'codex', id: `fake-session-${agentIdOf(OpIdSchema.parse('op-0000000b'))}`, home: elsewhere } });
+
+    behave({ output: { verdict: 'approve' }, codex_login: 'signed_in', codex_home: path.join(dir, 'unseen', '.codex') });
+    runtime.send(promptRequest(handle, 'op-0000000c', { tool: 'codex', model: undefined }));
+    const unseen = await runtime.next(isEnd('op-0000000c'));
+
+    expect(unseen).toMatchObject({ event: 'finished', session: { tool: 'codex' } });
+    expect('session' in unseen && unseen.session).not.toHaveProperty('home');
+  });
+
   it('starts a Codex agent in the mode Paseo sets as its default, auto-review, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { verdict: 'approve' }, codex_login: 'signed_in' });
     const runtime = start();

@@ -482,9 +482,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     };
   };
 
-  /** A finished prompt's session: its tool and id, and the home it lives in when Paseo reports it. */
-  const sessionOf = (tool: string, id: string): z.infer<typeof PromptSessionSchema> => {
-    const home = isPaseoTool(tool) ? sessionHomes.get(tool) : undefined;
+  /** A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. */
+  const sessionOf = (live: Daemon, tool: string, id: string): z.infer<typeof PromptSessionSchema> => {
+    const home = isPaseoTool(tool) ? live.sessionHome(tool, id, sessionHomes.get(tool)) : undefined;
 
     return { tool, id, ...(home !== undefined && { home }) };
   };
@@ -1138,7 +1138,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
               return;
             }
 
-            settle(op, { op, state: 'finished', session: sessionOf(record.tool, session), result: { output }, confined: record.answer.kept }, following);
+            settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session), result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -1174,7 +1174,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(record.tool, session), result }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session), result }, following);
 
           return;
         }
