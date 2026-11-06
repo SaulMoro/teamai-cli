@@ -56,6 +56,11 @@ const BehaviourSchema = z.object({
   opencode_server: z.string().optional(),
   /** Directories the member already has open as Paseo workspaces, as the app opens a project. */
   member_workspaces: z.array(z.string()).default([]),
+  /**
+   * While a step's agent works, the member opens its directory in the Paseo app, which answers the same workspace, and
+   * starts an agent of their own there.
+   */
+  member_joins: z.boolean().default(false),
   /** The default mode the providers snapshot gives a provider, over Paseo 0.14.0's own; null: none, as OpenCode's. */
   default_modes: z.record(z.string(), z.string().nullable()).default({}),
   /** The output the agent writes to the result file; none written when absent. */
@@ -536,6 +541,11 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         agent.permission = agent.behaviour.ask_permission;
         kept.agents[id] = agent;
 
+        if (agent.behaviour.member_joins) {
+          const member = crypto.randomUUID();
+          kept.agents[member] = { ...agent, id: member, title: 'member', labels: {}, status: 'idle', sessionId: null, permission: false, prompt: 'Look around.' };
+        }
+
         kept.receipts[key] = { agentId: id, fingerprint };
         save();
         reply({ type: 'agent.create.update', payload: creation(agent) });
@@ -599,6 +609,14 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         if (agent) stop(agent, 'idle');
 
         reply({ type: 'cancel_agent_response', payload: { requestId: message.requestId ?? '', agentId: message.agentId, agent: agent ? snapshot(agent) : null, error: agent ? null : `Agent not found: ${message.agentId}` } });
+
+        return;
+      }
+
+      case 'fetch_agents_request': {
+        // Every agent no archive closed, in one page: the runtime asks which agents a workspace holds.
+        const entries = Object.values(kept.agents).filter((agent) => agent.status !== 'closed').map((agent) => ({ agent: snapshot(agent), project: placementOf(agent.workspaceId, agent.cwd) }));
+        reply({ type: 'fetch_agents_response', payload: { requestId: message.requestId, entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } } });
 
         return;
       }
@@ -673,6 +691,11 @@ function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' 
   return file;
 }
 
+/** Where Paseo places a workspace's directory: its project and checkout. */
+function placementOf(id: string, cwd: string): NonNullable<WorkspaceDescriptorPayload['project']> {
+  return { projectKey: `prj_${id.slice(4)}`, projectName: path.basename(cwd), workspaceName: 'main', checkout: { cwd, currentBranch: 'main', remoteUrl: null, worktreeRoot: cwd, isGit: true, isPaseoOwnedWorktree: false, mainRepoRoot: null } };
+}
+
 function workspaceOf(id: string, cwd: string): WorkspaceDescriptorPayload {
   const name = path.basename(cwd);
 
@@ -680,7 +703,7 @@ function workspaceOf(id: string, cwd: string): WorkspaceDescriptorPayload {
     id, projectId: `prj_${id.slice(4)}`, projectDisplayName: name, projectCustomName: null, projectCustomIconRevision: null, projectRootPath: cwd, workspaceDirectory: cwd,
     setupStatus: null, projectKind: 'git', workspaceKind: 'local_checkout', name: 'main', title: null, pinnedAt: null, background: false, archivingAt: null,
     status: 'done', statusEnteredAt: null, activityAt: null, createdAt: now(), diffStat: null, scripts: [],
-    project: { projectKey: `prj_${id.slice(4)}`, projectName: name, workspaceName: 'main', checkout: { cwd, currentBranch: 'main', remoteUrl: null, worktreeRoot: cwd, isGit: true, isPaseoOwnedWorktree: false, mainRepoRoot: null } },
+    project: placementOf(id, cwd),
   };
 }
 

@@ -423,7 +423,7 @@ Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, t
 Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agent is busy. It may still run in the worktree; stop it in the Paseo app.
 ```
 
-你在 Paseo 里已经打开的、同一目录上的工作区（例如只读步骤在你的检出目录中运行时）从不被归档：这次尝试改为取消它自己的智能体，你的工作区保持打开。
+你在 Paseo 里已经打开的、同一目录上的工作区（例如只读步骤在你的检出目录中运行时）从不被归档：这次尝试改为取消它自己的智能体，你的工作区保持打开。步骤运行期间你在 Paseo 中打开该目录（得到的是这次尝试的工作区）并在其中启动了智能体时，也是如此。
 
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 

@@ -1246,6 +1246,22 @@ describe('teamai-runtime-paseo', () => {
     expect(worktreeWorkspace()).toBe(workspace);
   });
 
+  it('never archives its workspace once the member works there too, as when they open the same checkout in Paseo during a read-only step, and stops only its own agents', async () => {
+    behave({ output: { ok: true }, member_joins: true });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
+    const kept = JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { title: string | null; status: string }> };
+    expect(Object.values(kept.agents).filter((agent) => agent.title === 'member').map((agent) => agent.status)).toEqual(['idle']);
+  });
+
   it('archives a workspace once though a second attempt opens its directory while Paseo makes it for the first', async () => {
     behave({ output: { ok: true }, open_reply_ms: 1_500 });
     const runtime = start();
@@ -1262,6 +1278,26 @@ describe('teamai-runtime-paseo', () => {
     for (const accepted of [first, second]) {
       const handle = 'handle' in accepted ? accepted.handle : undefined;
       runtime.send({ type: 'close', handle: String(handle) });
+      expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    }
+
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+  });
+
+  it('archives a workspace two attempts shared once the last of them closes, though each ran an agent there', async () => {
+    behave({ output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const first = await opened(runtime);
+    const second = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    const workspace = worktreeWorkspace();
+    runtime.send(promptRequest(first, 'op-0000000b'));
+    runtime.send(promptRequest(second, 'op-0000000d'));
+    await runtime.next(isEnd('op-0000000b'));
+    await runtime.next(isEnd('op-0000000d'));
+
+    for (const handle of [first, second]) {
+      runtime.send({ type: 'close', handle });
       expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
     }
 
