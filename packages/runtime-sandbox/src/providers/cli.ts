@@ -19,6 +19,19 @@ export const WORKSPACES: Can['workspace'] = ['read-only', 'new', 'continue', 'cl
 // oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
 export const LAUNCHABLE = ['claude', 'codex', 'codebuddy'] as const;
 
+/**
+ * The `/bin/sh -c` arguments that print each of `commands` a sandbox holds, one per line. The commands go in as
+ * arguments, never into the script, since an instance's comes from a config file.
+ */
+export function heldProbe(commands: readonly string[]): string[] {
+  return ['-c', 'for t in "$@"; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; exit 0', 'sh', ...commands];
+}
+
+/** The instances' commands, to look for in a sandbox beside the tools it may hold. */
+export function commandsOf(instances: ReadonlyArray<{ command?: string }>): string[] {
+  return instances.flatMap(({ command }) => (command === undefined ? [] : [command]));
+}
+
 /** How the CLI ran: to its end, not at all, or past the time it was given, after which it was killed. */
 export type Ran = { kind: 'ran'; code: number; stdout: string; stderr: string } | { kind: 'unstartable' | 'timed_out'; message: string };
 
