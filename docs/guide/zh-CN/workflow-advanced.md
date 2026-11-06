@@ -1780,7 +1780,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 ← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
 ```
 
-`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的请求失败为 `runtime_unanswered`：`open` 失败，正在进行的 `exec` 或 `prompt` 以 `runtime_lost` 结束，因为它启动的东西可能还在运行。15 秒内没有收到回复的 `init`、`reattach` 或 `close`，以及 15 秒内你没有回答的 `open`、`exec` 或 `prompt` 也一样，所以要在任何耗时的工作（例如拉取镜像或启动代理）之前先发送 `accepted`。`cancel` 本身不需要回复：用操作的结果结束它即可。teamai 在等待某个 `exec` 或 `prompt` 时取消了它，如果 15 秒内你没有给出结果，它也会同样以 `runtime_lost` 结束。驱动退出后的停止通过 `reattach` 读取结果，从发出 `cancel` 起最多等 15 秒。这次尝试保留它的位置、记录和登录：
+`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的请求失败为 `runtime_unanswered`：`open` 失败，正在进行的 `exec` 或 `prompt` 以 `runtime_lost` 结束，因为它启动的东西可能还在运行。15 秒内没有收到回复的 `init`（有人值守时为 10 分钟）、`reattach` 或 `close`，以及 15 秒内你没有回答的 `open`、`exec` 或 `prompt` 也一样，所以要在任何耗时的工作（例如拉取镜像或启动代理）之前先发送 `accepted`。`cancel` 本身不需要回复：用操作的结果结束它即可。teamai 在等待某个 `exec` 或 `prompt` 时取消了它，如果 15 秒内你没有给出结果，它也会同样以 `runtime_lost` 结束。驱动退出后的停止通过 `reattach` 读取结果，从发出 `cancel` 起最多等 15 秒。这次尝试保留它的位置、记录和登录：
 
 ```text
 Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
@@ -1790,7 +1790,7 @@ Step runtime "acme" could not close the place of attempt a1, so what ran there m
 
 `ready`、exec 或 prompt 的 `accepted` 或 `display` 事件，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，立即接受 prompt，等智能体创建好后再发送它的链接，如下面的例子所示。`display` 事件既不接受也不结束它的操作：它不算 teamai 等待 15 秒的那个回答，也不算 `cancel` 的结果。
 
-要在不回答请求的情况下告诉用户一件事，就写一条 `notice`：一个要打开的登录页面、一次很慢的镜像拉取，或一个不影响工作继续的问题。它涉及某个操作或位置时，写上 `op` 或 `handle`。teamai 把它作为警告显示，并遮蔽你的运行时拿到的凭据，然后照常等待该请求自己的回答：
+要在不回答请求的情况下告诉用户一件事，就写一条 `notice`：一个要打开的登录页面、一次很慢的镜像拉取，或一个不影响工作继续的问题。它涉及某个操作或位置时，写上 `op` 或 `handle`。teamai 把它作为警告显示，并遮蔽你的运行时拿到的凭据，然后照常等待该请求自己的回答。有人值守的 `init` 可以等待用户：先在 notice 里发送登录链接，等用户批准后再回答 `init`，期限是 10 分钟：
 
 ```text
 ← {"event":"notice","message":"Open https://acme.example.test/device and enter the code shown there to sign in."}

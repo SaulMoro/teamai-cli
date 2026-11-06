@@ -957,6 +957,28 @@ describe('a runtime that cannot close a place, over stdio', () => {
     }
   });
 
+  it('gives an attended init 10 min, long enough to approve a sign-in page, and shows the runtime\'s notice meanwhile', async () => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    let noticed: (line: string) => void = () => {};
+    const notice = new Promise<string>((resolve) => { noticed = resolve; });
+    const warned = vi.spyOn(log, 'warn').mockImplementation((line) => noticed(line));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      const ready = runtime.init({ options: { state: path.join(dir, 'state'), answer: { init: 'silent' }, notice: { init: 'Open https://toy.example.test/device to sign in.' } }, mode: 'attended' });
+
+      expect(await notice).toBe('Step runtime "toy": Open https://toy.example.test/device to sign in.');
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await Promise.race([ready, 'still waiting'])).toBe('still waiting');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 15_000);
+      expect(await Promise.race([ready, 'still waiting'])).toEqual({ ok: false, failure: { code: 'runtime_unanswered', message: 'Step runtime "toy" did not answer init within 10 min, while it ran attended.' } });
+    } finally {
+      vi.useRealTimers();
+      warned.mockRestore();
+    }
+  });
+
   it('fails a reattach and a close the runtime does not answer within 15 s as runtime_unanswered', async () => {
     const { runtime, handle } = await opened({ answer: { reattach: 'silent', close: 'silent' } });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
