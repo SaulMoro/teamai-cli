@@ -61,7 +61,7 @@ teamai pull
 teamai workflow start readme-review --driver t3
 ```
 
-第一次运行会让 teamai 登录 T3 Code，不打开页面，也不问你。teamai 让这台机器上的 `t3` 命令创建一个两分钟内有效的配对码，再用它按本次运行的 `runtime_mode` 批准自己的登录：默认是 Auto，除非你[收紧它](#步骤线程会问你多少)。它运行的命令：
+第一次运行会让 teamai 登录 T3 Code，不打开页面，也不问你。teamai 让这台机器上的 `t3` 命令创建一个两分钟内有效的配对码，再用它以 Auto 权限批准自己的登录，即使你[收紧了 `runtime_mode`](#步骤线程会问你多少)：每个线程仍按自己的模式运行，一次登录可供所有运行使用。它运行的命令：
 
 ```sh
 t3 auth pairing create --json --base-dir ~/.t3 --scope orchestration:read --scope orchestration:operate --ttl 2m --label "teamai workflow"
@@ -150,10 +150,10 @@ workflows:
 {"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition …/drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"full-access\" is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two. Fix the option and start again."}}
 ```
 
-teamai 的登录限定了模式的上限。如果它允许的比本次运行的模式窄，T3 会拒绝创建线程，步骤失败。例如，之前一次 `runtime_mode: approval-required` 的运行以 Supervised 登录，而这次运行用 Auto：
+teamai 的登录限定了模式的上限。如果它允许的比本次运行的模式窄，T3 会拒绝创建线程，步骤失败。例如，有人在 T3 的登录页面里以 Supervised 权限批准了 teamai，而这次运行用 Auto：
 
 ```text
-✖ Step "review" failed with runtime_failed: The step runtime could not run the prompt (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode, because teamai's sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again at the run's runtime_mode. Or set runtime_mode to a mode the sign-in allows.
+✖ Step "review" failed with runtime_failed: The step runtime could not run the prompt (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode, because teamai's sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again with Auto access. Or set runtime_mode to a mode the sign-in allows.
 ```
 
 ## 选择提供方实例和模型
@@ -270,7 +270,7 @@ teamai workflow cancel r70d31098c8884803
 | --- | --- | --- |
 | `T3 Code is not running on this machine.` | 这里没有 T3 服务。teamai 读取 `~/.t3/userdata/server-runtime.json`，或 `$T3CODE_HOME/userdata/…` | 打开 T3 Code，然后重新运行。 |
 | `… (login_required): … could not sign in through the t3 command (there is no t3 command on PATH) …` | 无人值守运行没有有效的登录，`t3` 命令也没能创建一个。括号里的文字说明原因。 | 确认在 teamai 运行的 shell 里 `t3 auth session list` 能正常工作，然后重新运行。或者从终端启动一次工作流，在页面里批准 teamai。 |
-| `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai 的登录允许的模式比线程运行的模式窄。 | 删除 `~/.teamai/runtime-state/t3/credentials.json` 并重新运行：teamai 会按本次运行的 `runtime_mode` 重新登录。或者设置 `runtime_mode`。 |
+| `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai 的登录允许的模式比线程运行的模式窄。 | 删除 `~/.teamai/runtime-state/t3/credentials.json` 并重新运行：teamai 会以 Auto 权限重新登录。或者设置 `runtime_mode`。 |
 | `… is not a project in T3 Code <machine>.` | 这个检出不是 T3 项目。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
