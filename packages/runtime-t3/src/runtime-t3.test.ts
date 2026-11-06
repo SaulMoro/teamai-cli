@@ -451,6 +451,22 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.runtimeMode).toBe(runtimeMode);
     });
 
+    it('runs an Auto thread on the sign-in a run at a tighter runtime_mode left', async () => {
+      fs.rmSync(credentialsFile(t3.home));
+      const tighter = start();
+      tighter.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'approval-required' } });
+      expect(await tighter.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      await tighter.close();
+
+      const { runtime, handle } = await opened('unattended');
+      runtime.send(prompt(handle, 'op-000000c7'));
+
+      const end = await ended(runtime, 'op-000000c7');
+      expect(end, JSON.stringify(end)).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]?.runtimeMode).toBe('auto');
+      expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
+    });
+
     it('fails sign_in_too_narrow, naming the fix, when the sign-in does not allow the mode the thread runs in', async () => {
       t3.config({ access: 'approval-required' });
       const { runtime, handle } = await opened();
