@@ -102,6 +102,8 @@ const BehaviourSchema = z.object({
   refuse_fetch: z.string().optional(),
   /** How long the daemon takes to list a provider's models, as a provider SDK that is slow to start does. */
   models_ms: z.number().int().nonnegative().default(0),
+  /** How long the daemon takes to list its workspaces, answering with those open by then. */
+  list_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to open a workspace, as a slow host does. */
   open_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to answer an open that makes a workspace, which exists before the answer; one that finds a workspace answers at once. */
@@ -395,8 +397,16 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
   function handle(message: Inbound, reply: (message: Reply) => void): void {
     openMembers();
-    const { models_ms: listing, open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
-    const holds: Partial<Record<Inbound['type'], number>> = { list_provider_models_request: listing, open_project_request: opening, 'agent.create.request': creating, archive_workspace_request: archiving };
+    const { models_ms: listing, list_ms: listingWorkspaces, open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
+
+    const holds: Partial<Record<Inbound['type'], number>> = {
+      list_provider_models_request: listing,
+      fetch_workspaces_request: listingWorkspaces,
+      open_project_request: opening,
+      'agent.create.request': creating,
+      archive_workspace_request: archiving,
+    };
+
     const hold = holds[message.type] ?? 0;
 
     // Recorded as it arrives, so a test sees a create the daemon still holds.

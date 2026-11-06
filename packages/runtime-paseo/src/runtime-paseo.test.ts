@@ -1454,6 +1454,35 @@ describe('teamai-runtime-paseo', () => {
     expect(await other.next((line) => isOp('op-0000000c', 'ready')(line) || isOp('op-0000000c', 'failed')(line))).toMatchObject({ event: 'ready' });
   });
 
+  it('archives the workspace an open made after taking over the hold of one still waiting for Paseo, whichever closes last', async () => {
+    behave({ output: { ok: true }, list_ms: 4_000 });
+    const stuck = start();
+    const other = start();
+    await ready(stuck);
+    await ready(other);
+    const stuckOpen = opened(stuck);
+    const holds = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'opening');
+    await until(() => fs.existsSync(holds) && fs.readdirSync(holds).some((name) => !name.startsWith('.')));
+    // Its question is with Paseo; the next one is answered at once.
+    await delay(500);
+    behave({ output: { ok: true } });
+    const aMinuteAgo = new Date(Date.now() - 61_000);
+
+    for (const name of fs.readdirSync(holds)) fs.utimesSync(path.join(holds, name), aMinuteAgo, aMinuteAgo);
+    const taken = await opened(other, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    expect(other.lines.find(isOp('op-0000000c', 'ready'))).toBeDefined();
+    const late = await stuckOpen;
+    expect(stuck.lines.find(isOp('op-0000000a', 'ready'))).toBeDefined();
+    const workspace = worktreeWorkspace();
+
+    other.send({ type: 'close', handle: taken });
+    expect(await other.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toMatchObject({ event: 'closed' });
+    stuck.send({ type: 'close', handle: late });
+    expect(await stuck.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toMatchObject({ event: 'closed' });
+
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+  });
+
   it('fails an open it cannot journal before asking Paseo, and opens nothing there', async () => {
     const runtime = start();
     await ready(runtime);
