@@ -212,16 +212,19 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, creden
   };
 }
 
+/** The codes of a failed prompt that a retry fixes: the limit reset, or the runtime's daemon is back. */
+const RETRIED_CODES: ReadonlySet<string> = new Set(['usage_limited', 'daemon_restarted']);
+
 /**
  * A failed prompt as the step records it: a code the protocol lets a prompt carry as it is, or `runtime_failed`. A
  * code a retry fixes ends with `retry`, the command that runs it, which the runtime never spells.
  */
 function promptFailure(failure: RuntimeFailure, retry: string): WorkflowFailure {
-  if (failure.code === 'usage_limited') return { code: failure.code, message: `${failure.message.replace(/\.?\s*$/, '.')} Then run: ${retry}` };
+  const recorded = PROMPT_FAILURE_CODES.some((code) => code === failure.code)
+    ? { code: failure.code, message: failure.message }
+    : { code: 'runtime_failed', message: `The step runtime could not run the prompt (${failure.code}): ${failure.message}` };
 
-  if (PROMPT_FAILURE_CODES.some((code) => code === failure.code)) return { code: failure.code, message: failure.message };
-
-  return { code: 'runtime_failed', message: `The step runtime could not run the prompt (${failure.code}): ${failure.message}` };
+  return RETRIED_CODES.has(failure.code) ? { ...recorded, message: `${recorded.message.replace(/\.?\s*$/, '.')} Then run: ${retry}` } : recorded;
 }
 
 /**

@@ -1918,6 +1918,8 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 ✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
 ```
 
+A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed` with the same retry command at the end.
+
 When the tool keeps its sessions in a home of its own rather than its default one, such as a T3 provider instance with its own `CLAUDE_CONFIG_DIR`, say where in `finished.session.home`, an absolute path. teamai records it with the attempt, reads the transcript there to score and publish the step, and the next pass asks you to resume that session by id. Leave `home` out for the tool's default home, as a runtime before it did:
 
 ```text

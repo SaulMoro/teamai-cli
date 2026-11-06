@@ -941,6 +941,19 @@ steps:
       expect(review).toMatchObject({ status: 'failed', failure: { code: 'usage_limited', message: `claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry ${runId} review` } });
     });
 
+    it('ends the failure of a prompt whose runtime restarted under it with the retry to run', async () => {
+      writeDefinition('agentrestart', [{ use: 'toy', options: { state, agent: { fail: { code: 'daemon_restarted', message: 'The daemon stopped while the claude agent worked. Its work is kept in the worktree.' } } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentrestart'], repo, env());
+
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(review, ran.stderr).toMatchObject({
+        status: 'failed',
+        failure: { code: 'runtime_failed', message: `The step runtime could not run the prompt (daemon_restarted): The daemon stopped while the claude agent worked. Its work is kept in the worktree. Then run: teamai workflow retry ${runId} review` },
+      });
+    });
+
     it('fails the step with the failure the agent wrote, without the prompt it quotes', async () => {
       const result = { failure: { code: 'tool_failed', message: 'Gave up on: Review the repository without changing it.' } };
       writeDefinition('agentfail', [{ use: 'toy', options: { state, agent: { result } } }]);

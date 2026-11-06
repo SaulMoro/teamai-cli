@@ -1912,6 +1912,8 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 ✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
 ```
 
+守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，末尾同样带上重试命令。
+
 工具把会话放在自己的主目录而不是默认主目录时，例如有自己 `CLAUDE_CONFIG_DIR` 的 T3 提供方实例，在 `finished.session.home` 里用绝对路径说明位置。teamai 把它和 attempt 一起记录，在那里读取记录来评分和发布这个步骤，下一轮会请你按 id 恢复该会话。如果是工具的默认主目录，就不写 `home`，和之前的运行时一样：
 
 ```text
