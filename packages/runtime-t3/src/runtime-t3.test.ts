@@ -123,6 +123,9 @@ describe('teamai-runtime-t3', () => {
       const signedIn = await attended.next((line) => line['type'] === 'init');
       expect(signedIn, JSON.stringify(signedIn)).toMatchObject({ ok: true });
       expect(browser.visits()).toEqual(['/oauth/mcp/authorize']);
+      // The page's link reaches the person while init waits, for a browser that did not open.
+      expect(noticesOf(attended)).toEqual([{ event: 'notice', message: expect.stringMatching(/^Approve teamai in T3 Code \(silent sign-in failed: found no t3 command .*\)\. If no browser opened, visit: http:\/\/127\.0\.0\.1:\d+\/oauth\/mcp\/authorize\?\S+$/) }]);
+      expect(attended.stderr()).toBe('');
       expect(fs.statSync(credentialsFile(t3.home)).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.dirname(credentialsFile(t3.home))).mode & 0o777).toBe(0o700);
       await attended.close();
@@ -177,11 +180,15 @@ describe('teamai-runtime-t3', () => {
 
         expect(await runtime.next((line) => line['type'] === 'init', 20_000)).toMatchObject({ ok: true });
         expect(browser.visits()).toEqual(['/oauth/mcp/authorize']);
-        const [said, link] = runtime.stderr().split('\n');
-        expect(said).toBe(`Approve teamai in T3 Code (silent sign-in failed: ${reason}). If no browser opened, visit:`);
-        expect(link).toMatch(/^ {2}http:\/\/127\.0\.0\.1:\d+\/oauth\/mcp\/authorize\?/);
+        const said = `Approve teamai in T3 Code (silent sign-in failed: ${reason}). If no browser opened, visit: `;
+        const [notice, ...more] = noticesOf(runtime);
+        expect(more).toEqual([]);
+        const message = z.string().parse(notice?.['message']);
+        expect(message.slice(0, said.length)).toBe(said);
+        expect(message.slice(said.length)).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/mcp\/authorize\?\S+$/);
+        expect(runtime.stderr()).toBe('');
 
-        for (const secret of secrets()) expect(runtime.stderr()).not.toContain(secret);
+        for (const secret of secrets()) expect(message).not.toContain(secret);
       });
     });
 

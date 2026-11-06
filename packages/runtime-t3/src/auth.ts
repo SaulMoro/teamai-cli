@@ -139,10 +139,10 @@ export interface SignIn {
 
 /**
  * An attended sign-in for `resource`: a loopback listener for T3's redirect, and the SDK's OAuth client over the
- * credentials file. The page opens in the person's browser; its link also goes to stderr, for a browser that does not
+ * credentials file. The page opens in the person's browser; `say` also gives them its link, for a browser that does not
  * open, after why the silent sign-in could not serve the run, when it was tried.
  */
-export async function attendedSignIn({ stateDir, resource, silentFailure }: { stateDir: string; resource: string; silentFailure?: string }): Promise<SignIn> {
+export async function attendedSignIn({ stateDir, resource, silentFailure, say }: { stateDir: string; resource: string; silentFailure?: string; say(message: string): void }): Promise<SignIn> {
   let answer: { resolve: (code: string) => void; reject: (error: Error) => void } | undefined;
   const answered = new Promise<string>((resolve, reject) => { answer = { resolve, reject }; });
   // A rejection nobody awaits yet must not end the process.
@@ -176,9 +176,9 @@ export async function attendedSignIn({ stateDir, resource, silentFailure }: { st
   const provider: OAuthClientProvider = {
     ...keptClient({ stateDir, resource, redirectUrl }),
     redirectToAuthorization: (authorizationUrl) => {
-      process.stderr.write(silentFailure === undefined
-        ? `Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}\n`
-        : `Approve teamai in T3 Code (silent sign-in failed: ${silentFailure}). If no browser opened, visit:\n  ${authorizationUrl.toString()}\n`);
+      say(silentFailure === undefined
+        ? `Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}`
+        : `Approve teamai in T3 Code (silent sign-in failed: ${silentFailure}). If no browser opened, visit: ${authorizationUrl.toString()}`);
       const [command, args] = opener(authorizationUrl.toString());
       const child = spawn(command, args, { stdio: 'ignore', detached: true });
       child.on('error', () => {});
