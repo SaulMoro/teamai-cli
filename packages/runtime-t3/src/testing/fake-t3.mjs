@@ -409,6 +409,9 @@ function mcpServer(bearer) {
 
 const codes = new Map();
 
+/** The scopes T3 grants a sign-in approved with `access` (`mcpClientScopes` in T3's server). */
+const scopesOf = (access) => (access === 'full-access' ? ['orchestration:read', 'orchestration:operate', 'settings:write', 'source-control:write'] : ['orchestration:read', 'orchestration:operate']);
+
 /** The pairing codes the fake `t3` command minted, each with its scopes and the data directory it was minted for. */
 const pairings = () => {
   const file = path.join(STATE, 'pairings.jsonl');
@@ -456,9 +459,11 @@ async function route(req, res) {
   }
 
   if (url.pathname === '/oauth/mcp/authorize') {
-    // The person approves at once.
+    // The person approves at once, with the access they pick in the page.
     const code = randomUUID();
-    codes.set(code, { challenge: url.searchParams.get('code_challenge'), redirect: url.searchParams.get('redirect_uri') });
+    const access = config().pageAccess ?? 'auto';
+    approved = access;
+    codes.set(code, { challenge: url.searchParams.get('code_challenge'), redirect: url.searchParams.get('redirect_uri'), access });
     const back = new URL(url.searchParams.get('redirect_uri'));
     back.searchParams.set('code', code);
 
@@ -474,7 +479,7 @@ async function route(req, res) {
     const { authorization, decision } = JSON.parse(await readBody(req));
     await sleep(config().decisionMs ?? 0);
     const pairing = pairings().find((minted) => minted.credential === decision.code && minted.base === T3_HOME && !spent.has(minted.credential));
-    const needed = decision.access === 'full-access' ? ['orchestration:read', 'orchestration:operate', 'settings:write', 'source-control:write'] : ['orchestration:read', 'orchestration:operate'];
+    const needed = scopesOf(decision.access);
 
     if (config().decisionRefused || decision._tag !== 'pairing-code' || !pairing || !needed.every((scope) => pairing.scopes.includes(scope))) {
       return json(res, 400, { _tag: 'AuthMcpApprovalError', message: 'That pairing code is not valid. Create a new one and try again.' });
@@ -488,7 +493,7 @@ async function route(req, res) {
     if (config().decisionNoCode) back.searchParams.set('error', 'access_denied');
     else {
       const code = randomUUID();
-      codes.set(code, { challenge: authorization.code_challenge, redirect: authorization.redirect_uri });
+      codes.set(code, { challenge: authorization.code_challenge, redirect: authorization.redirect_uri, access: decision.access });
       back.searchParams.set('code', code);
     }
 
@@ -506,7 +511,8 @@ async function route(req, res) {
     codes.delete(form.get('code'));
     fs.appendFileSync(path.join(STATE, 'calls.jsonl'), `${JSON.stringify({ tool: 'oauth_token', args: {}, bearer: 'none' })}\n`);
 
-    return json(res, 200, { access_token: config().token, token_type: 'Bearer', expires_in: 3600, scope: 'orchestration:read orchestration:operate' });
+    // T3 names the scopes of the access approved, as it issued them.
+    return json(res, 200, { access_token: config().token, token_type: 'Bearer', expires_in: 3600, scope: scopesOf(pending.access).join(' ') });
   }
 
   if (url.pathname === '/mcp') {

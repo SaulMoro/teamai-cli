@@ -375,8 +375,68 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
+    describe('with `runtime_mode: full-access`', () => {
+      const FULL_ACCESS_SCOPES = ['--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'settings:write', '--scope', 'source-control:write'];
+
+      it('signs in with Full access through a pairing code carrying the scopes T3 needs for it, and reports every tool it offers as running in full access', async () => {
+        const runtime = start();
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'full-access' } });
+        const reply = await runtime.next((line) => line['type'] === 'init');
+
+        expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], unattended: false }, permissions: { claude: 'full-access', codex: 'full-access' } });
+        expect(t3.commandRuns()).toEqual([['auth', 'pairing', 'create', '--json', '--base-dir', t3.t3Home, ...FULL_ACCESS_SCOPES, '--ttl', '2m', '--label', 'teamai workflow']]);
+        expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'full-access' });
+      });
+
+      it('signs in again with Full access when the kept sign-in was approved with Auto, and a later Auto run keeps the new one', async () => {
+        signIn(t3, undefined, undefined, 'orchestration:read orchestration:operate');
+        const runtime = start();
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'full-access' } });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, permissions: { claude: 'full-access' } });
+        expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'full-access' });
+        await runtime.close();
+
+        const later = start();
+        later.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+        expect(await later.next((line) => line['type'] === 'init')).not.toHaveProperty('permissions');
+        expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
+      });
+
+      it('asks the person to approve Full access when it signs in through T3\'s page', async () => {
+        t3.config({ pageAccess: 'full-access' });
+        const browser = fakeBrowser(dir);
+        const runtime = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', runtime_mode: 'full-access' } });
+
+        const reply = await runtime.next((line) => line['type'] === 'init');
+        expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, permissions: { claude: 'full-access' } });
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: expect.stringMatching(/^Approve teamai in T3 Code with Full access, since runtime_mode is full-access \(silent sign-in failed: found no t3 command .*\)\. If no browser opened, visit: http:\/\/127\.0\.0\.1:\d+\/oauth\/mcp\/authorize\?\S+$/) }]);
+      });
+
+      it('fails sign_in_too_narrow, naming the fix, when the person approves only Auto access in T3\'s page', async () => {
+        const browser = fakeBrowser(dir);
+        const runtime = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', runtime_mode: 'full-access' } });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
+          type: 'init', ok: false,
+          error: {
+            code: 'sign_in_too_narrow',
+            message: 'teamai\'s T3 Code sign-in was approved without Full access, which runtime_mode full-access needs. Start the workflow again and pick Full access in the page T3 Code opens, or remove runtime_mode: full-access.',
+          },
+        });
+      });
+    });
+
     // teamai quotes a keyed option failure inside a sentence of its own and ends it, so these messages bring no full stop.
-    it.each(['full-access', 'yolo'])('refuses `runtime_mode: %s`, a mode it never starts a thread in', async (runtimeMode) => {
+    it.each(['yolo'])('refuses `runtime_mode: %s`, a mode it never starts a thread in', async (runtimeMode) => {
       signIn(t3);
       const runtime = start();
 
@@ -386,7 +446,7 @@ describe('teamai-runtime-t3', () => {
         type: 'init', ok: false,
         error: {
           code: 'bad_option', key: 'runtime_mode',
-          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access; runtime_mode sets it to auto, auto-accept-edits or approval-required. Remove it, or set one of those three`,
+          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four`,
         },
       });
       expect(t3.calls()).toEqual([]);
@@ -719,7 +779,7 @@ describe('teamai-runtime-t3', () => {
         expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished' });
         expect(await ended(runtime, 'op-0000000c')).toMatchObject({ event: 'finished' });
         expect(t3.calls().filter((call) => call.tool === 't3_thread_launch').map((call) => call.args['runtimeMode'])).toEqual(['auto', 'auto']);
-        expect(noticesOf(runtime)).toEqual([{ event: 'notice', op: 'op-0000000b', handle, message: 'T3\'s default mode is Full access; teamai starts its threads in Auto instead.' }]);
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', op: 'op-0000000b', handle, message: 'T3\'s default mode is Full access; teamai starts its threads in Auto unless runtime_mode says full-access.' }]);
         expect(runtime.stderr()).toBe('');
       });
 
@@ -837,6 +897,30 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-0000001a')).toMatchObject({ event: 'finished' });
       expect(t3.threads()[0]?.runtimeMode).toBe(runtimeMode);
+    });
+
+    it('runs every thread in full access when `runtime_mode` is full-access', async () => {
+      const { runtime, handle } = await opened('attended', {}, { runtime_mode: 'full-access' });
+
+      runtime.send(prompt(handle, 'op-0000001c'));
+
+      expect(await ended(runtime, 'op-0000001c')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]?.runtimeMode).toBe('full-access');
+      expect(noticesOf(runtime)).toEqual([]);
+    });
+
+    it('fails sign_in_too_narrow, asking for Full access, when T3 refuses a full-access thread on the kept sign-in', async () => {
+      t3.config({ access: 'auto' });
+      const { runtime, handle } = await opened('attended', {}, { runtime_mode: 'full-access' });
+
+      runtime.send(prompt(handle, 'op-0000001d'));
+
+      expect(await ended(runtime, 'op-0000001d')).toEqual({
+        op: 'op-0000001d', event: 'failed', failure: {
+          code: 'sign_in_too_narrow',
+          message: 'T3 Code refused to start the step\'s thread in full-access mode, because teamai\'s sign-in does not allow it (Child runtime mode full-access is broader than parent mode auto.). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Full access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.',
+        },
+      });
     });
 
     it('runs an Auto thread on the sign-in a run at a tighter runtime_mode left', async () => {
@@ -2441,6 +2525,15 @@ describe('teamai-runtime-t3', () => {
       expect(thread?.message).toContain(`the schema in ${path.join(copy, 'schema.json')},`);
       expect(thread?.message).toContain(`Ignore ${spaced}-old and ${spaced}.bak.`);
       expect(thread?.message).not.toContain(`under ${spaced}`);
+    });
+
+    it('runs the judge\'s thread in Auto, never in full access, when `runtime_mode` is full-access', async () => {
+      const { runtime, handle } = await opened({ runtime_mode: 'full-access' });
+
+      runtime.send(judge(handle, 'op-000000a3'));
+
+      expect(await ended(runtime, 'op-000000a3')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]?.runtimeMode).toBe('auto');
     });
 
     it('runs the judge\'s thread in the tighter `runtime_mode`', async () => {

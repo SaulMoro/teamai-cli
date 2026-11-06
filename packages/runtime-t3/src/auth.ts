@@ -29,8 +29,31 @@ const APPROVAL_TIMEOUT_MS = 5 * 60_000;
 /** How long the silent sign-in may take, from the `t3` command to the token, inside the 10 s an unattended init has. */
 const SILENT_SIGN_IN_MS = 8_000;
 
-/** What teamai asks T3 for: reading and operating threads, the scopes T3 grants a sign-in at any mode a step runs in. */
-const SCOPES = ['orchestration:read', 'orchestration:operate'] as const;
+/**
+ * The access teamai asks T3 to approve its sign-in with: Auto, the ceiling of every mode a step runs in by default, or
+ * Full access, only for a run whose `runtime_mode` is full-access.
+ */
+export type SignInAccess = Extract<StepMode, 'auto' | 'full-access'>;
+
+/**
+ * The scopes T3 grants a sign-in approved with each access (`mcpClientScopes` in T3's server): reading and operating
+ * threads, and for Full access also writing settings and source control, which T3 requires for it.
+ */
+const SCOPES = {
+  auto: ['orchestration:read', 'orchestration:operate'],
+  'full-access': ['orchestration:read', 'orchestration:operate', 'settings:write', 'source-control:write'],
+} as const satisfies Record<SignInAccess, readonly string[]>;
+
+/**
+ * Whether `tokens` serve a run that needs `access`: T3 names the scopes it granted. A token kept with none named
+ * counts, since T3 itself refuses a thread broader than its grant (`sign_in_too_narrow`).
+ */
+function grants(tokens: OAuthTokens, access: SignInAccess): boolean {
+  if (tokens.scope === undefined) return true;
+  const granted = new Set(tokens.scope.split(' '));
+
+  return SCOPES[access].every((scope) => granted.has(scope));
+}
 
 /** The name teamai registers with, which T3 lists its sign-in session under. */
 const CLIENT_NAME = 'teamai workflow';
@@ -71,11 +94,11 @@ function credentialStore(stateDir: string) {
   };
 }
 
-/** The token kept for `resource`, while it has more than the margin left. */
-export function validToken(stateDir: string, resource: string, now = Date.now()): OAuthTokens | undefined {
+/** The token kept for `resource`, while it has more than the margin left and was granted `access`. */
+export function validToken(stateDir: string, resource: string, access: SignInAccess, now = Date.now()): OAuthTokens | undefined {
   const entry = credentialStore(stateDir).entry(resource);
 
-  return entry.tokens && (entry.expiresAt === undefined || entry.expiresAt - EXPIRY_MARGIN_MS > now) ? entry.tokens : undefined;
+  return entry.tokens && (entry.expiresAt === undefined || entry.expiresAt - EXPIRY_MARGIN_MS > now) && grants(entry.tokens, access) ? entry.tokens : undefined;
 }
 
 /**
@@ -101,7 +124,7 @@ function opener(url: string): [string, string[]] {
  * The SDK's OAuth client for `resource` over the credentials file, short of sending anyone to sign in: it registers
  * teamai with `redirectUrl` once and keeps the registration, the PKCE verifier and the token the flow gets.
  */
-function keptClient({ stateDir, resource, redirectUrl }: { stateDir: string; resource: string; redirectUrl: string }): Omit<OAuthClientProvider, 'redirectToAuthorization'> {
+function keptClient({ stateDir, resource, redirectUrl, access }: { stateDir: string; resource: string; redirectUrl: string; access: SignInAccess }): Omit<OAuthClientProvider, 'redirectToAuthorization'> {
   const store = credentialStore(stateDir);
   let verifier = '';
 
@@ -113,7 +136,7 @@ function keptClient({ stateDir, resource, redirectUrl }: { stateDir: string; res
       grant_types: ['authorization_code'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope: SCOPES.join(' '),
+      scope: SCOPES[access].join(' '),
     },
     clientInformation: (): OAuthClientInformationMixed | undefined => store.entry(resource).client,
     saveClientInformation: (client) => {
@@ -121,7 +144,7 @@ function keptClient({ stateDir, resource, redirectUrl }: { stateDir: string; res
 
       if (full.success) store.update(resource, (entry) => ({ ...entry, client: full.data }));
     },
-    tokens: () => validToken(stateDir, resource),
+    tokens: () => validToken(stateDir, resource, access),
     saveTokens: (tokens) => {
       store.update(resource, (entry) => ({ ...entry, tokens, ...(tokens.expires_in === undefined ? { expiresAt: undefined } : { expiresAt: Date.now() + tokens.expires_in * 1000 }) }));
     },
@@ -142,7 +165,7 @@ export interface SignIn {
  * credentials file. The page opens in the person's browser; `say` also gives them its link, for a browser that does not
  * open, after why the silent sign-in could not serve the run, when it was tried.
  */
-export async function attendedSignIn({ stateDir, resource, silentFailure, say }: { stateDir: string; resource: string; silentFailure?: string; say(message: string): void }): Promise<SignIn> {
+export async function attendedSignIn({ stateDir, resource, access, silentFailure, say }: { stateDir: string; resource: string; access: SignInAccess; silentFailure?: string; say(message: string): void }): Promise<SignIn> {
   let answer: { resolve: (code: string) => void; reject: (error: Error) => void } | undefined;
   const answered = new Promise<string>((resolve, reject) => { answer = { resolve, reject }; });
   // A rejection nobody awaits yet must not end the process.
@@ -174,11 +197,19 @@ export async function attendedSignIn({ stateDir, resource, silentFailure, say }:
   const timer = setTimeout(() => answer?.reject(new Error('Nobody approved the T3 Code sign-in within 5 minutes.')), APPROVAL_TIMEOUT_MS);
 
   const provider: OAuthClientProvider = {
-    ...keptClient({ stateDir, resource, redirectUrl }),
+    ...keptClient({ stateDir, resource, redirectUrl, access }),
     redirectToAuthorization: (authorizationUrl) => {
-      say(silentFailure === undefined
-        ? `Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}`
-        : `Approve teamai in T3 Code (silent sign-in failed: ${silentFailure}). If no browser opened, visit: ${authorizationUrl.toString()}`);
+      // The person picks the access in the page: Full access only when the run asks for it.
+      if (access === 'full-access') {
+        say(silentFailure === undefined
+          ? `Approve teamai in T3 Code with Full access, since runtime_mode is full-access, to run workflow steps as threads: ${authorizationUrl.toString()}`
+          : `Approve teamai in T3 Code with Full access, since runtime_mode is full-access (silent sign-in failed: ${silentFailure}). If no browser opened, visit: ${authorizationUrl.toString()}`);
+      } else {
+        say(silentFailure === undefined
+          ? `Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}`
+          : `Approve teamai in T3 Code (silent sign-in failed: ${silentFailure}). If no browser opened, visit: ${authorizationUrl.toString()}`);
+      }
+
       const [command, args] = opener(authorizationUrl.toString());
       const child = spawn(command, args, { stdio: 'ignore', detached: true });
       child.on('error', () => {});
@@ -206,8 +237,8 @@ const DecisionSchema = z.object({ redirectTo: z.url() });
 const AUTHORIZATION_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'resource'] as const;
 
 /** Creates a pairing code with the local `t3` command for the T3 server whose data directory is `t3Home`; never says the code. */
-async function createPairingCode({ t3Cli, t3Home, signal }: { t3Cli: T3Command; t3Home: string; signal: AbortSignal }): Promise<string> {
-  const args = ['auth', 'pairing', 'create', '--json', '--base-dir', t3Home, ...SCOPES.flatMap((scope) => ['--scope', scope]), '--ttl', '2m', '--label', CLIENT_NAME];
+async function createPairingCode({ t3Cli, t3Home, access, signal }: { t3Cli: T3Command; t3Home: string; access: SignInAccess; signal: AbortSignal }): Promise<string> {
+  const args = ['auth', 'pairing', 'create', '--json', '--base-dir', t3Home, ...SCOPES[access].flatMap((scope) => ['--scope', scope]), '--ttl', '2m', '--label', CLIENT_NAME];
   const stdout = await t3Cli.run({ name: 'auth pairing create', args, signal });
 
   try {
@@ -219,12 +250,13 @@ async function createPairingCode({ t3Cli, t3Home, signal }: { t3Cli: T3Command; 
 
 /**
  * Approves the sign-in the SDK built `authorizationUrl` for with a pairing code, as T3's page posts it, and returns the
- * authorization code T3 redirects with. The access is always Auto, whatever the run's runtime_mode: a tighter mode needs
- * the same scopes, each thread still runs in its own mode, and the grant is only their ceiling. One credential then
- * serves every run, and a run at a tighter mode never leaves a sign-in too narrow for a later Auto run.
+ * authorization code T3 redirects with. The access is Auto whatever a tighter runtime_mode: a tighter mode needs the
+ * same scopes, each thread still runs in its own mode, and the grant is only their ceiling. One credential then serves
+ * every run, and a run at a tighter mode never leaves a sign-in too narrow for a later Auto run. Only a full-access run
+ * asks for Full access, which also serves every later run.
  */
-async function approveWithPairingCode(authorizationUrl: URL, { t3Cli, t3Home, signal }: { t3Cli: T3Command; t3Home: string; signal: AbortSignal }): Promise<string> {
-  const code = await createPairingCode({ t3Cli, t3Home, signal });
+async function approveWithPairingCode(authorizationUrl: URL, { t3Cli, t3Home, access, signal }: { t3Cli: T3Command; t3Home: string; access: SignInAccess; signal: AbortSignal }): Promise<string> {
+  const code = await createPairingCode({ t3Cli, t3Home, access, signal });
 
   const authorization = Object.fromEntries(AUTHORIZATION_FIELDS.flatMap((field) => {
     const value = authorizationUrl.searchParams.get(field);
@@ -235,7 +267,7 @@ async function approveWithPairingCode(authorizationUrl: URL, { t3Cli, t3Home, si
   const reply = await fetch(new URL('decision', authorizationUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorization, decision: { _tag: 'pairing-code', access: 'auto' satisfies StepMode, code } }),
+    body: JSON.stringify({ authorization, decision: { _tag: 'pairing-code', access, code } }),
     signal,
   });
 
@@ -263,10 +295,10 @@ export type SilentSignIn = { ok: true } | { ok: false; reason: string };
 /**
  * Signs teamai in to `resource` with no page and no question: the `t3` command on this machine creates a pairing code
  * for the T3 server whose data directory is `t3Home`, and teamai approves its own authorization request with it, with
- * Auto access. The SDK's flow registers the client and holds the PKCE verifier, and keeps the token in the credentials
+ * `access`. The SDK's flow registers the client and holds the PKCE verifier, and keeps the token in the credentials
  * file. A failure says why, in a few words, and names no code or token.
  */
-export async function signInSilently({ stateDir, resource, t3Home, t3Cli }: { stateDir: string; resource: URL; t3Home: string; t3Cli: T3Command }): Promise<SilentSignIn> {
+export async function signInSilently({ stateDir, resource, t3Home, t3Cli, access }: { stateDir: string; resource: URL; t3Home: string; t3Cli: T3Command; access: SignInAccess }): Promise<SilentSignIn> {
   // One deadline over every step, so a T3 Code that stops answering ends the attempt with a reason rather than holding init.
   const signal = AbortSignal.timeout(SILENT_SIGN_IN_MS);
   const fetchFn = (url: string | URL, init?: RequestInit): Promise<Response> => fetch(url, { ...init, signal });
@@ -274,17 +306,17 @@ export async function signInSilently({ stateDir, resource, t3Home, t3Cli }: { st
 
   // T3 accepts a loopback redirect on any port, and nobody follows this one: the decision hands the code back.
   const provider: OAuthClientProvider = {
-    ...keptClient({ stateDir, resource: resource.href, redirectUrl: 'http://127.0.0.1/callback' }),
-    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { t3Cli, t3Home, signal }); },
+    ...keptClient({ stateDir, resource: resource.href, redirectUrl: 'http://127.0.0.1/callback', access }),
+    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, { t3Cli, t3Home, access, signal }); },
   };
 
   try {
-    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' '), fetchFn });
+    await auth(provider, { serverUrl: resource, scope: SCOPES[access].join(' '), fetchFn });
 
     if (authorizationCode === undefined) return { ok: false, reason: 'T3 Code started no sign-in' };
-    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' '), authorizationCode, fetchFn });
+    await auth(provider, { serverUrl: resource, scope: SCOPES[access].join(' '), authorizationCode, fetchFn });
 
-    return validToken(stateDir, resource.href) ? { ok: true } : { ok: false, reason: 'T3 Code issued no credential' };
+    return validToken(stateDir, resource.href, access) ? { ok: true } : { ok: false, reason: 'T3 Code issued no credential' };
   } catch (error) {
     if (signal.aborted) return { ok: false, reason: `the silent sign-in did not finish within ${SILENT_SIGN_IN_MS / 1_000} s` };
 
@@ -293,12 +325,12 @@ export async function signInSilently({ stateDir, resource, t3Home, t3Cli }: { st
 }
 
 /** An unattended client: the kept token or nothing, and no sign-in, since nobody is there to approve one. */
-export function unattendedAuth(stateDir: string, resource: string): OAuthClientProvider {
+export function unattendedAuth(stateDir: string, resource: string, access: SignInAccess): OAuthClientProvider {
   return {
     redirectUrl: undefined,
     clientMetadata: { client_name: CLIENT_NAME, redirect_uris: [] },
     clientInformation: () => credentialStore(stateDir).entry(resource).client,
-    tokens: () => validToken(stateDir, resource),
+    tokens: () => validToken(stateDir, resource, access),
     saveTokens: () => {},
     redirectToAuthorization: () => { throw new Error('An unattended run cannot sign in to T3 Code.'); },
     saveCodeVerifier: () => {},
