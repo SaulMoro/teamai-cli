@@ -1422,8 +1422,8 @@ describe('the stdio step runtime client', () => {
       expect(await until(() => warned.mock.calls.length === 2)).toBe(true);
 
       expect(warned.mock.calls.map(([line]) => line)).toEqual([
-        `Step runtime "twice" answered ${first} with cancelled after teamai stopped waiting for it, which teamai ignores (1 such answer from this runtime).`,
-        `Step runtime "twice" answered ${second} with cancelled after teamai stopped waiting for it, which teamai ignores (2 such answers from this runtime).`,
+        `Step runtime "twice" answered ${first} with cancelled after teamai stopped waiting for it, which teamai ignores (late answers from this runtime: 1).`,
+        `Step runtime "twice" answered ${second} with cancelled after teamai stopped waiting for it, which teamai ignores (late answers from this runtime: 2).`,
       ]);
     } finally {
       warned.mockRestore();
@@ -1451,7 +1451,7 @@ describe('the stdio step runtime client', () => {
       await runtime.exec({ op: ended, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() }, {});
       expect(await until(() => warned.mock.calls.length > 0)).toBe(true);
       expect(warned.mock.calls.map(([line]) => line)).toEqual([
-        `Step runtime "answers" answered ${ended} with exited after teamai stopped waiting for it, which teamai ignores (1 such answer from this runtime).`,
+        `Step runtime "answers" answered ${ended} with exited after teamai stopped waiting for it, which teamai ignores (late answers from this runtime: 1).`,
       ]);
     } finally {
       warned.mockRestore();
