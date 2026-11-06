@@ -126,7 +126,7 @@ async function worktreeMode(workspace: string, relative: string): Promise<string
 }
 
 /** `run` is the git it runs, such as `untrustedGit` in a workspace whose config a command it did not write could change. */
-export async function snapshotWorktree(workspace: string, run: Git = git, depth = 0): Promise<WorktreeSnapshot> {
+export async function snapshotWorktree(workspace: string, run: Git, depth = 0): Promise<WorktreeSnapshot> {
   // Independent reads, started together: each untrusted git first reads the hooks to turn off.
   const [status, headRead, branchRead] = await Promise.all([
     gitStatus(workspace, run),

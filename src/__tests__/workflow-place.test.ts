@@ -127,6 +127,23 @@ describe('prepared places through the workflow client', () => {
     expect(stored).not.toContain('Edit the project.'); expect(stored).not.toContain('Untrusted branch instructions.');
   });
 
+  it.each([
+    { next: 'writer', yaml: undefined },
+    { next: 'reader', yaml: `schemaVersion: v1alpha1\nname: build\ndescription: Write, then read.\nalias: ship\nsteps:\n  - id: change\n    workspace: new\n    workflow:\n      steps:\n        - id: write\n          prompt: Write the code.\n        - id: polish\n          needs: [write]\n          workspace: read-only\n          prompt: Read the code.\n` },
+  ])('runs no fsmonitor a step planted in its reused copy while the next $next step is prepared and finished', async ({ yaml }) => {
+    const f = await fixture(yaml);
+    const first = await next(f);
+    const mark = path.join(path.dirname(f.work), 'fsmonitor-ran');
+    const monitor = path.join(path.dirname(f.work), 'fsmonitor.sh');
+    fs.writeFileSync(monitor, `#!/bin/sh\necho "$@" >> "${mark}"\nexit 1\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(first.cwd, 'code.txt'), 'first\n');
+    git(first.cwd, 'config', '--worktree', 'core.fsmonitor', monitor);
+    expect(await f.client.report(f.runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    const second = await next(f);
+    expect(second.cwd).toBe(first.cwd);
+    expect(await f.client.report(f.runId, { attempt: second.attempt, revision: second.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
+    expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
+  });
   it('commits every change in a place TeamAI made, even when the report lists none of them', async () => {
     const f = await fixture();
     const lease = await next(f);

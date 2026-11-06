@@ -1789,9 +1789,9 @@ exec "${realGit}" "$@"
     const opened = await ensureWorktree(repo, 'teamai/r/step/p1', head);
     if ('error' in opened) throw new Error(opened.error);
     const saved = path.join(root, 'attempt', 'overlay');
-    await killed({ dir: opened.dir, saved, apply: () => applyBaseConfig(opened.dir, base, hooksPath(repo), saved) });
+    await killed({ dir: opened.dir, saved, apply: () => applyBaseConfig(opened.dir, base, hooksPath(repo), saved, { run: workflowGit }) });
 
-    expect(await applyBaseConfig(opened.dir, base, hooksPath(repo), saved, { resume: true })).toEqual({ ok: true, saved });
+    expect(await applyBaseConfig(opened.dir, base, hooksPath(repo), saved, { run: workflowGit, resume: true })).toEqual({ ok: true, saved });
 
     expect(fs.readFileSync(path.join(opened.dir, 'AGENTS.md'), 'utf8')).toBe('base rules\n');
     expect(fs.readFileSync(path.join(saved, 'AGENTS.md'), 'utf8')).toBe('branch rules\n');
@@ -1814,7 +1814,7 @@ exec "${realGit}" "$@"
     const opened = await ensureWorktree(repo, 'teamai/r/step/p1', head);
     if ('error' in opened) throw new Error(opened.error);
 
-    const applied = await applyBaseConfig(opened.dir, elsewhere, hooksPath(repo), path.join(root, 'overlay'));
+    const applied = await applyBaseConfig(opened.dir, elsewhere, hooksPath(repo), path.join(root, 'overlay'), { run: workflowGit });
 
     expect(applied).toEqual({ ok: false, message: expect.stringContaining(elsewhere) });
     expect(fs.readFileSync(path.join(opened.dir, 'AGENTS.md'), 'utf8')).toBe('branch rules\n');
@@ -1847,7 +1847,7 @@ exec "${realGit}" "$@"
     const temp = path.join(root, 'tmp');
     fs.mkdirSync(temp);
 
-    const applied = await applyBaseConfig(opened.dir, base, hooksPath(repo), path.join(temp, 'overlay'));
+    const applied = await applyBaseConfig(opened.dir, base, hooksPath(repo), path.join(temp, 'overlay'), { run: workflowGit });
 
     expect(fs.readFileSync(path.join(opened.dir, 'AGENTS.md'), 'utf8')).toBe('branch rules\n');
     expect(git(['status', '--porcelain'], opened.dir)).toBe('');

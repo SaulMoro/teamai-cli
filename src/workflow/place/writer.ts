@@ -5,15 +5,17 @@ import { z } from 'zod';
 import type { WorkflowFailure } from '../types.js';
 import type { StepChanges } from '../workspace.js';
 import { commitPathsOf, mergeStagedPathsOf } from './worktree-snapshot.js';
-import { commitWork, git, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git } from '../worktree.js';
+import { commitWork, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
 
 /**
  * Merges each of `merge` into the copy `dir` of a writer. A conflict stops the merging: a command fails
  * `merge_conflict`, and a prompt gets `note`, which names the conflict and the branches left to merge for it to resolve.
+ * `git` is the git it runs in the copy.
  */
-export async function mergeBranches({ dir, run, step, executor, merge }: {
+export async function mergeBranches({ dir, run, step, executor, merge, git }: {
   dir: string;
+  git: Git;
   run: string;
   step: string;
   executor: 'command' | 'prompt';
@@ -28,7 +30,7 @@ export async function mergeBranches({ dir, run, step, executor, merge }: {
       continue;
     }
 
-    const result = await mergeBranch(dir, item.commit);
+    const result = await mergeBranch(dir, item.commit, git);
 
     if (result.state === 'failed') {
       return { kind: 'failed', failure: { code: 'workspace_base', message: `Step "${step}" could not merge branch ${item.branch} at ${item.commit} into workspace ${dir}. Git stopped without a conflict to resolve, so the step did not run. Git said: ${result.error.replace(/\.$/, '')}. Fix what git reported in ${dir}, then retry this step with teamai workflow retry ${run} ${step}.` } };
@@ -64,11 +66,11 @@ function hashText(text: string): string {
 /**
  * Keeps the paths that were conflicted when the merge started until a resolution is validated: a prompt commit can
  * clear MERGE_HEAD before that. Each, with the hash of its content as the step gets it. A file left unchanged is not a
- * resolution.
+ * resolution. `run` is the git it runs in the copy.
  */
-export async function rememberConflicts(dir: string): Promise<Record<string, string>> {
-  const current = await conflictContents(dir);
-  const file = await conflictsPath(dir, git);
+export async function rememberConflicts(dir: string, run: Git): Promise<Record<string, string>> {
+  const current = await conflictContents(dir, run);
+  const file = await conflictsPath(dir, run);
   let saved = new Map<string, string>();
 
   try {
@@ -104,10 +106,10 @@ async function unmergedPaths(dir: string, run: Git): Promise<string[]> {
   return unmerged.stdout.split('\0').filter((file) => file !== '');
 }
 
-async function conflictContents(dir: string): Promise<Map<string, string>> {
+async function conflictContents(dir: string, run: Git): Promise<Map<string, string>> {
   const contents = new Map<string, string>();
 
-  for (const file of await unmergedPaths(dir, git)) {
+  for (const file of await unmergedPaths(dir, run)) {
     try {
       contents.set(file, await fs.readFile(path.join(dir, file), 'utf8'));
     } catch {
@@ -226,8 +228,8 @@ async function mergePreparedPath(dir: string, run: Git): Promise<string> {
  * Records the paths prepare's merge left staged, with a worktree that still matches the index. A path that still has
  * this content at finish is the merge. An unstaged edit of a tracked file is not recorded.
  */
-export async function recordMergePreparation(dir: string): Promise<string | undefined> {
-  const listed = await mergeStagedPathsOf(dir);
+export async function recordMergePreparation(dir: string, git: Git): Promise<string | undefined> {
+  const listed = await mergeStagedPathsOf(dir, git);
 
   if ('error' in listed) return listed.error;
   const record: Record<string, string> = {};

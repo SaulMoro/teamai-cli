@@ -861,9 +861,9 @@ steps:
     vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value-1082');
     let ran = false;
     const snapshot = worktreeSnapshot.snapshotWorktree;
-    vi.spyOn(worktreeSnapshot, 'snapshotWorktree').mockImplementation(async (dir) => {
+    vi.spyOn(worktreeSnapshot, 'snapshotWorktree').mockImplementation(async (dir, run) => {
       if (ran) throw new Error('snapshot failed');
-      return snapshot(dir);
+      return snapshot(dir, run);
     });
     const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn<LocalToolAdapter['run']>(async (_tool, input) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });

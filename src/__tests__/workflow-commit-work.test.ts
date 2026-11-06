@@ -76,7 +76,7 @@ describe('commitWork', () => {
     expect(() => git(dir, 'merge', 'other')).toThrow();
     fs.appendFileSync(path.join(dir, 'tracked.txt'), 'host\n');
 
-    expect(await recordMergePreparation(dir)).toBeUndefined();
+    expect(await recordMergePreparation(dir, runGit)).toBeUndefined();
     const recorded = path.resolve(dir, git(dir, 'rev-parse', '--git-path', 'teamai-merge.json').trim());
     const merge = JSON.parse(fs.readFileSync(recorded, 'utf8'));
     expect(merge).toHaveProperty('b.ts');
@@ -89,7 +89,7 @@ describe('commitWork', () => {
     git(dir, 'rm', '-q', 'tracked.txt');
     fs.writeFileSync(path.join(dir, 'tracked.txt'), 'host\n');
 
-    expect(await recordMergePreparation(dir)).toBeUndefined();
+    expect(await recordMergePreparation(dir, runGit)).toBeUndefined();
     const recorded = path.resolve(dir, git(dir, 'rev-parse', '--git-path', 'teamai-merge.json').trim());
     const merge = JSON.parse(fs.readFileSync(recorded, 'utf8'));
     expect(merge).not.toHaveProperty('tracked.txt');
