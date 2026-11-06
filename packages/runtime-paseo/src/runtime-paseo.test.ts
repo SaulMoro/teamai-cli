@@ -457,6 +457,41 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toHaveProperty('config.providerOptions', { permission: { external_directory: { [`${path.join(dir, 'out')}/*`]: 'allow', [`${path.join(dir, 'run')}/*`]: 'allow' } } });
   });
 
+  it('answers a cancel of a prompt that already ended with that end again, and stops nothing', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out', output: { verdict: 'approve' } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    const finished = await runtime.next(isEnd('op-0000000b'));
+    // Refused before any agent existed: Codex is signed out.
+    runtime.send(promptRequest(handle, 'op-0000000c', { tool: 'codex', model: undefined }));
+    const refused = await runtime.next(isEnd('op-0000000c'));
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    runtime.send({ type: 'cancel', op: 'op-0000000c' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual(finished);
+    expect(await runtime.next(isEnd('op-0000000c'))).toEqual(refused);
+    expect(received().map((request) => request.type)).toEqual(['agent.create.request']);
+  });
+
+  it('answers a recover-mode cancel of a prompt whose end teamai lost with the end it recorded', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const first = start();
+    await ready(first);
+    first.send(promptRequest(await opened(first), 'op-0000000b'));
+    const finished = await first.next(isEnd('op-0000000b'));
+    await first.kill();
+
+    const recovering = start();
+    await ready(recovering, { mode: 'recover' });
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toEqual(finished);
+    expect(received().map((request) => request.type)).toEqual(['agent.create.request']);
+  });
+
   it('cancels a running prompt: the agent is cancelled, and the prompt ends cancelled though Paseo reports the agent idle', async () => {
     behave({ hold_ms: 60_000, output: { ok: true } });
     const runtime = start();
@@ -1167,6 +1202,24 @@ describe('teamai-runtime-paseo', () => {
     runtime.send({ type: 'reattach', handle });
 
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'failed', failure: { code: 'paseo_failed' } }] });
+  });
+
+  it('answers a cancel of a prompt whose failure it could not record with that failure again, never cancelled', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, models_ms: 2_000 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    const ops = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops');
+    fs.chmodSync(ops, 0o555);
+    const failed = await runtime.next(isEnd('op-0000000b'));
+    fs.chmodSync(ops, 0o755);
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(failed).toMatchObject({ event: 'failed', failure: { code: 'paseo_failed' } });
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual(failed);
   });
 
   it('answers every cancel in recover mode, though the first could not record itself', async () => {
