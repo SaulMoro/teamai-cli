@@ -1767,7 +1767,7 @@ teamai keeps `max_parallel` and `credentials` for itself: it strips them from th
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
-When your runtime's provider keeps its own login for a tool, such as a sandbox signed in to Codex, reply `"ownLogins":["codex"]` beside `can`. teamai then copies none of that login into the attempt's tool home, and sends none of that tool's sign-in variables it found in the member's environment, such as `OPENAI_API_KEY`. A variable your definition declares still goes.
+When your runtime's provider keeps its own login for a tool, such as a sandbox signed in to Codex, reply `"ownLogins":["codex"]` beside `can`. teamai then copies none of that login into the attempt's tool home, and sends none of that tool's sign-in variables it found in the member's environment, such as `OPENAI_API_KEY`, nor one the member's own config declares under `workflows.drivers.<name>.runtimes.<runtime>.credentials`. A variable your definition declares still goes.
 
 `init` names the run's checkout too, `"checkout":"/abs/path"`, and teamai starts your runtime in that directory.
 

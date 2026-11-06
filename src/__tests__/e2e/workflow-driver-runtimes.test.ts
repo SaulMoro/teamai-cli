@@ -1466,6 +1466,27 @@ steps:
       ]);
     });
 
+    // The member's own route, in order: the login the provider keeps, then the member's config credentials. The
+    // definition's own credential is the team's choice, and goes either way.
+    it.each([
+      { from: 'member', names: [] },
+      { from: 'definition', names: ['ANTHROPIC_API_KEY'] },
+    ])('signs a Claude step in on the login the runtime\'s provider keeps before a credential the $from config declares for it', async ({ from, names }) => {
+      const credentials = { ANTHROPIC_API_KEY: 'env:MEMBER_ANTHROPIC_KEY' };
+      writeDefinition('keptlogin', [{ use: 'toy', options: { state, own_logins: ['claude'], ...(from === 'definition' && { credentials }) } }]);
+
+      if (from === 'member') setMemberWorkflows({ drivers: { keptlogin: { runtimes: { toy: { credentials } } } } });
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'keptlogin'], repo, env({ MEMBER_ANTHROPIC_KEY: VALUE }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      const sent = noted().filter((line) => line.handle === `toy-${runId}-${attemptOf(review)}`);
+      expect(sent.map(({ type }) => type)).toEqual(['open', 'exec']);
+      for (const line of sent) expect(line.names).toEqual(names);
+    });
+
     // The Claude step's own variables go unless the provider keeps Claude's login; another tool's never matter here.
     it.each([
       { ownLogins: ['claude'], claudeNames: [] },

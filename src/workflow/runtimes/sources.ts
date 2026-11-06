@@ -446,10 +446,14 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     // A sign-in found by name reaches only a runtime that execs the tool and keeps a value to it. One that launches
     // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
     const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
-    // A tool whose login the runtime's provider keeps signs in on that login, not on what the member's environment holds.
+    // A tool whose login the runtime's provider keeps signs in on that login, before the member's own route: the
+    // credentials their config declares, then what their environment holds. The definition's own credential still goes.
     const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, variables]) => (ready.ownLogins?.includes(tool) ? variablesOf(variables) : [])));
-    const foundHere = Object.fromEntries(Object.entries(found).filter(([name]) => !ownLoginVariables.has(name)));
-    const given = isKeepingFound ? { ...values.values, ...foundHere } : values.values;
+    const notOwnLogin = (given: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(given).filter(([name]) => !ownLoginVariables.has(name)));
+    const foundHere = notOwnLogin(found);
+    const isMemberRoute = driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use]?.credentials !== undefined;
+    const declared = isMemberRoute ? notOwnLogin(values.values) : values.values;
+    const given = isKeepingFound ? { ...declared, ...foundHere } : declared;
 
     return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, ...(ready.unavailable && { unavailable: ready.unavailable }) } };
   }

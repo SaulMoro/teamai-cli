@@ -1761,7 +1761,7 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
-如果你的运行时的提供方自己保存某个工具的登录，比如已登录 Codex 的沙箱，就在 `can` 旁边回复 `"ownLogins":["codex"]`。teamai 就不会把这份登录复制进本次尝试的工具 home，也不会发送它在成员环境里按名字找到的该工具登录变量，比如 `OPENAI_API_KEY`。驱动定义声明的变量照常发送。
+如果你的运行时的提供方自己保存某个工具的登录，比如已登录 Codex 的沙箱，就在 `can` 旁边回复 `"ownLogins":["codex"]`。teamai 就不会把这份登录复制进本次尝试的工具 home，也不会发送它在成员环境里按名字找到的该工具登录变量，比如 `OPENAI_API_KEY`，或成员自己的配置在 `workflows.drivers.<name>.runtimes.<runtime>.credentials` 下声明的该工具登录变量。驱动定义声明的变量照常发送。
 
 `init` 还会给出运行所在的检出目录 `"checkout":"/abs/path"`，teamai 也在该目录启动你的运行时。
 
