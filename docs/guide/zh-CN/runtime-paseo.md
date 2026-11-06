@@ -239,7 +239,7 @@ runtimes:
 | --- | --- | --- | --- |
 | `claude` | 守护进程主机上的 `claude auth status` 显示 `"loggedIn": true`：账号登录或 API key 均可 | Paseo 的默认模式：Paseo 0.14.0 上为 `auto` | `default` |
 | `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`，或是 Unix 套接字），且 `codex login status` 显示 `Logged in` | Paseo 的默认模式：Paseo 0.14.0 上为 `auto-review` | `auto`，沙箱为 `read-only` |
-| `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | OpenCode 自己的默认模式 `build`：Paseo 没有为它设定 | `plan` |
+| `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型。Paseo 在 OpenCode 自己的后台服务器上运行它时不提供（其主机上运行着该服务器时，Paseo 0.15 就会这样做），因为该服务器不给智能体任何环境变量；用 `opencode service stop` 停掉该服务器，然后运行 `paseo restart` | OpenCode 自己的默认模式 `build`：Paseo 没有为它设定 | `plan` |
 
 Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。这项检查看不到守护进程自己的环境，回环地址一律算作本机：请用你平时的 `CODEX_HOME` 启动守护进程，也不要让 `url` 指向通往另一台机器的隧道（`ssh -L`）。
 
@@ -443,6 +443,6 @@ No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `p
 | `client_version` | 找到的 Paseo 客户端早于 0.14.0。升级 Paseo，或把 `PASEO_CLIENT_PATH` 指向更新的 `@getpaseo/client` 包。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
-| `tool_unavailable` | 守护进程 `claude`、`codex` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式；守护进程不在回环地址上时，Codex 也算在内。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。步骤写明的工具守护进程运行不了时，该步骤交给下一个运行时；使用定义的 `tool` 的步骤则以 `tool_unavailable` 失败，原因相同。 |
+| `tool_unavailable` | 守护进程 `claude`、`codex` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式；守护进程不在回环地址上时，Codex 也算在内；OpenCode 连不上模型提供方，或 Paseo 在 OpenCode 自己的后台服务器上运行它时，OpenCode 也算在内。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。步骤写明的工具守护进程运行不了时，该步骤交给下一个运行时；使用定义的 `tool` 的步骤则以 `tool_unavailable` 失败，原因相同。 |
 | `paseo_config` | 没有 `url` 时，无法从 Paseo 的配置读出守护进程地址：`$PASEO_HOME/config.json` 不是 JSON，它的 `daemon` 部分不是 Paseo 写出的样子，或 `daemon.listen` 指向 Windows 命名管道。修好该文件，或设置 `url`。 |
 | `bad_option` | `url` 以外的选项。 |
