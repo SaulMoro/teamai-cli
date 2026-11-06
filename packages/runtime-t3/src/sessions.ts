@@ -52,12 +52,12 @@ export function isDefaultToolHome(driver: Driver, toolHome: string): boolean {
 }
 
 /**
- * The id of the newest session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, or undefined
- * when it kept none.
+ * The id of the first session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, or undefined
+ * when it kept none. A task the thread delegates may start a later session in the same folder; that one is not the step's.
  */
 export async function sessionSince({ driver, toolHome, cwd, since }: { driver: Driver; toolHome: string; cwd: string; since: number }): Promise<string | undefined> {
   const sessions = await DRIVERS[driver].sessions(toolHome).listConversations(cwd);
   const started = sessions.filter((session) => Date.parse(session.createdAt) >= since - CLOCK_SLACK_MS);
 
-  return started.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0]?.sessionId;
+  return started.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0]?.sessionId;
 }
