@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -96,6 +97,11 @@ export function journal(root: string) {
   };
 
   return {
+    /**
+     * This journal's id, which labels every container it owns: stable across restarts, and another for another
+     * directory, so two members or two homes on one engine never take each other's containers for their own.
+     */
+    owner: crypto.createHash('sha256').update(path.resolve(root)).digest('hex').slice(0, 16),
     place: (handle: string): PlaceRecord | undefined => read(placeFile(handle), PlaceRecordSchema),
     savePlace: (handle: string, place: PlaceRecord): void => write(placeFile(handle), place),
     exec: (op: OpId): ExecRecord | undefined => read(opFile(op), ExecRecordSchema),
