@@ -42,6 +42,10 @@ function localEndpoint(): URL | undefined {
   }
 }
 
+const write = (message: RuntimeMessage): void => {
+  if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
+};
+
 const connect: ServeOptions['connect'] = async (how) => {
   const resource = localEndpoint();
 
@@ -65,7 +69,7 @@ const connect: ServeOptions['connect'] = async (how) => {
     return { ok: false, error: { code: 'login_required', message } };
   }
 
-  const signIn = how.mode === 'attended' ? await attendedSignIn({ stateDir: state, resource: resource.href, silentFailure }) : undefined;
+  const signIn = how.mode === 'attended' ? await attendedSignIn({ stateDir: state, resource: resource.href, silentFailure, say: (message) => write({ event: 'notice', message }) }) : undefined;
 
   try {
     const t3 = await connectT3(resource, signIn?.provider ?? unattendedAuth(state, resource.href), () => signIn?.code() ?? Promise.reject(new Error('No sign-in.')));
@@ -91,9 +95,7 @@ const startedFrom = process.env['T3CODE_THREAD_ID'];
 
 await serve({
   input: process.stdin,
-  write: (message: RuntimeMessage) => {
-    if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
-  },
+  write,
   journal: journal(path.join(state, 'places')),
   connect,
   t3Home,
