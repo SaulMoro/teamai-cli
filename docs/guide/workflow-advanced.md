@@ -1717,8 +1717,11 @@ A runtime that cannot stop the work says why. teamai then keeps the place, its r
 Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it answers `run_settled`, and it also stops the attempt, closes its place and releases the login:
 
 ```text
-Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
+ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
+ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
 ```
+
+When only the close had failed, the line names the place it closed instead: `Closed the place of attempt a3f0c2b1d of run r48201aa on step runtime "sandbox", which an earlier close had kept.`
 
 A driver that still runs when you cancel, and a `workflow resume` that finds such an exec still running, fail the step `runtime_lost` with the same advice, and keep the place and the login the same way. `teamai workflow cancel` of that run stops it once the runtime can.
 
