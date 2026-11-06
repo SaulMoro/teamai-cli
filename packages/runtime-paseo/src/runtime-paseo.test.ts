@@ -1719,6 +1719,28 @@ describe('teamai-runtime-paseo', () => {
     expect(journalFiles()).toEqual([]);
   });
 
+  it('keeps forgetting an attempt released while Paseo still opened its worktree, once that open ends', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const other = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    const workspace = worktreeWorkspace();
+    // Paseo answers the open after the close gave up waiting for it, and before the open's own question times out.
+    behave({ open_ms: 14_000 });
+    runtime.send(openRequest('op-0000000a', ATTEMPT));
+    const accepted = await runtime.next(isOp('op-0000000a', 'accepted'));
+    const released = 'handle' in accepted ? String(accepted.handle) : '';
+
+    runtime.send({ type: 'close', handle: released, release: true });
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toMatchObject({ event: 'close_failed', handle: released });
+    await runtime.next((line) => isOp('op-0000000a', 'ready')(line) || isOp('op-0000000a', 'failed')(line));
+
+    behave({});
+    runtime.send({ type: 'close', handle: other });
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle: other });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+    expect(journalFiles()).toEqual([]);
+  }, 30_000);
+
   it('archives a workspace two attempts share only when the last of them closes, one whose open is still in flight included', async () => {
     const runtime = start();
     await ready(runtime);

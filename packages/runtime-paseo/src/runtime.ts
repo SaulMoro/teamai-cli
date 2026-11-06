@@ -671,7 +671,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     }
 
     write({ op, event: 'accepted', handle });
-    const place = journal.place(handle);
+    const opened = handle;
+    const place = journal.place(opened);
 
     if (place?.kind === 'worktree' && !place.workspace) {
       // One open at a time on a directory, in this runtime and across those on this journal, decides whether the
@@ -683,6 +684,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         });
 
         const unopened = (why: string): RuntimeFailure => ({ code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: ${why}` });
+        // A close the person released while Paseo was slow to answer forgot the attempt, and nothing journals it again.
+        const isReleased = (): boolean => journal.place(opened) === undefined;
+        const released: RuntimeFailure = { code: 'workspace_failed', message: `The attempt was released while Paseo opened ${place.cwd}; archive its workspace in the Paseo app if no other attempt runs there.` };
         let release: () => void;
         let member = place.member;
 
@@ -712,15 +716,19 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             }
           }
 
+          if (isReleased()) return released;
+
           try {
-            journal.savePlace(handle, { ...place, member });
+            journal.savePlace(opened, { ...place, member });
           } catch (error) {
             return unjournaled(error instanceof Error ? error.message : String(error));
           }
 
           try {
             const workspace = await live.workspace(place.cwd);
-            journal.savePlace(handle, { ...place, member, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
+
+            if (isReleased()) return released;
+            journal.savePlace(opened, { ...place, member, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
 
             return undefined;
           } catch (error) {
@@ -882,7 +890,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const adopting = (async () => {
       try {
         const workspace = await live.workspace(dir);
-        journal.savePlace(handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
+
+        // A place the person released meanwhile stays forgotten.
+        if (journal.place(handle) !== undefined) journal.savePlace(handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
 
         return workspace;
       } catch (error) {
