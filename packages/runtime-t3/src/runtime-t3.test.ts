@@ -347,6 +347,34 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['codex'], confined: [{ tools: ['codex'] }] } });
     });
 
+    describe('the default tool', () => {
+      const CODEX_DEFAULT = { instanceId: 'codex', model: 'gpt-6.1-sol' };
+
+      it.each<{ set: string; settings: Line; providers?: FakeT3Config['providers']; options?: Line; tool: string | undefined }>([
+        { set: 'the member\'s T3 default runs on an offered instance', settings: { defaultModelSelection: CODEX_DEFAULT }, tool: 'codex' },
+        { set: 'the checkout\'s project sets its own default, over the global one', settings: { defaultModelSelection: CODEX_DEFAULT, projectSettingsOverrides: { 'project-1': { defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' } } } }, tool: 'claude' },
+        { set: 'no default is set', settings: {}, tool: undefined },
+        { set: 'the default\'s instance cannot run now', settings: { defaultModelSelection: CODEX_DEFAULT }, providers: [CLAUDE, { ...CODEX, constraints: ['Provider is not authenticated.'] }], tool: undefined },
+        { set: '`instance` names another instance than the default\'s', settings: { defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' } }, providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work' }], options: { instance: 'claude-work' }, tool: undefined },
+        { set: 'the default runs a provider this runtime does not run', settings: { defaultModelSelection: { instanceId: 'opencode', model: 'big-pickle' } }, tool: undefined },
+      ])('reports the tool of the member\'s effective T3 default when $set', async ({ settings, providers, options, tool }) => {
+        signIn(t3);
+        t3.settings(settings);
+
+        if (providers) t3.config({ providers });
+        // teamai starts the runtime in the run's checkout, and names it in init.
+        const runtime = connect(executable, t3, {}, dir);
+        connections.push(runtime);
+
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, checkout });
+        const reply = await runtime.next((line) => line['type'] === 'init');
+
+        expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
+        expect(reply).toMatchObject({ ok: true });
+        expect(z.object({ default_tool: z.string().optional() }).parse(reply['can']).default_tool).toBe(tool);
+      });
+    });
+
     // teamai quotes a keyed option failure inside a sentence of its own and ends it, so these messages bring no full stop.
     it.each(['full-access', 'yolo'])('refuses `runtime_mode: %s`, a mode it never starts a thread in', async (runtimeMode) => {
       signIn(t3);
