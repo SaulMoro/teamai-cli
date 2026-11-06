@@ -1680,6 +1680,36 @@ describe('teamai-runtime-t3', () => {
         return { runtime, handle: first.handle };
       };
 
+      // `workflow cancel --release`: the person checked nothing of the attempt runs, and let it go.
+      it('forgets the place when a close that releases the attempt cannot stop its thread, and still answers close_failed', async () => {
+        const { runtime, handle } = await recovering('op-00000063');
+        t3.config({ interruptFails: true });
+        const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(handle)}.json`);
+
+        runtime.send({ type: 'close', handle, release: true });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({
+          event: 'close_failed', handle,
+          failure: { code: 'thread_still_runs', message: `Runtime t3 forgot ${handle}, as you released it, though T3 Code did not confirm it closed (thread_still_runs). If one of its T3 threads still runs, stop it in T3 Code with its Stop button.` },
+        });
+        expect(fs.existsSync(record)).toBe(false);
+        runtime.send({ type: 'reattach', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'gone', handle });
+        runtime.send({ type: 'close', handle });
+        expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'gone')).toEqual({ event: 'closed', handle });
+      });
+
+      it('forgets a place whose record it cannot read when a close releases the attempt', async () => {
+        const { runtime, handle } = await recovering('op-00000064');
+        const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(handle)}.json`);
+        fs.writeFileSync(record, '{broken');
+
+        runtime.send({ type: 'close', handle, release: true });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', handle, failure: { code: 'journal_unreadable' } });
+        expect(fs.existsSync(record)).toBe(false);
+      });
+
       it('answers reattach from its journal, and reaches T3 only to stop the thread on cancel and to settle it at close', async () => {
         const { runtime, handle } = await recovering('op-00000060');
         const before = t3.calls().length;
