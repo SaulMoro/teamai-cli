@@ -23,6 +23,8 @@ npm install -g --prefix ~/.paseo-cli @getpaseo/cli
 export PASEO_CLIENT_PATH=~/.paseo-cli/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/client
 ```
 
+改用 Paseo 桌面应用时，从应用里安装它的命令行工具，它会把 `paseo` 链接到 `~/.local/bin`。即使 teamai 的 `PATH` 里没有 `~/.local/bin`，运行时也会在那里找到它。应用把客户端放在自己的归档文件里，所以运行时按应用构建把客户端解包一次到 `~/.teamai/runtime-state/paseo-client`，并按应用记录的 SHA-256 校验每个文件。
+
 teamai 自带一个定义，把提示词步骤交给本机的守护进程，其余步骤留在本机。`--driver paseo` 用的就是它：
 
 ```yaml
@@ -437,7 +439,7 @@ No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `p
 
 | 代码 | 何时出现 |
 | --- | --- |
-| `client_missing` | 找不到 Paseo 客户端：`PATH` 上没有 `paseo`，或 `PASEO_CLIENT_PATH` 指向的不是 `@getpaseo/client` 包。安装 Paseo，或设置 `PASEO_CLIENT_PATH`。 |
+| `client_missing` | 找不到 Paseo 客户端：`PATH` 上和 `~/.local/bin` 里都没有 `paseo`，或 `PASEO_CLIENT_PATH` 指向的不是 `@getpaseo/client` 包。从 Paseo 桌面应用的设置中或用 `npm install -g @getpaseo/cli` 安装 Paseo CLI，或设置 `PASEO_CLIENT_PATH`。Paseo 应用的客户端中有文件与应用记录的 SHA-256 不符时也是此错误：重新安装应用。 |
 | `client_version` | 找到的 Paseo 客户端早于 0.14.0。升级 Paseo，或把 `PASEO_CLIENT_PATH` 指向更新的 `@getpaseo/client` 包。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
