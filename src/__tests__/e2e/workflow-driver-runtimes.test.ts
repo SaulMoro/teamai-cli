@@ -661,6 +661,54 @@ Judge the review.
       expect(sends()).toEqual([]);
     });
 
+    it('reads a session from the home the runtime reports for it, for scoring and the next pass\'s resume, and names the tool in open', async () => {
+      writeFlow('homed', `  - id: review
+    prompt: Review the repository without changing it.
+    scorers: [quality]
+    output:
+      ok: boolean
+  - id: followup
+    needs: [review]
+    session: { from: review }
+    prompt: Follow up on the review.
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      // A Claude home of the runtime's own, as a T3 provider instance keeps, apart from the member's ~/.claude.
+      const home = path.join(sandbox, 'instance-claude-home');
+      writeDefinition('agenthome', [{ use: 'toy', options: { state, agent: { output: { ok: true }, transcript: true, home } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'homed', '--driver', 'agenthome'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      const session = 'session' in (review ?? {}) ? (review as { session?: string }).session : undefined;
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ sessionHome: { tool: 'claude', dir: home } });
+      // The next pass found the review's session where the runtime keeps it, so it asked the runtime to continue it.
+      expect(sends()[1]?.sent).toMatchObject({ step: 'followup', resume: session });
+      expect(ran.stderr).not.toContain('starts a new claude session');
+      // Each place was opened naming the tool its prompt runs.
+      const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null })
+        .filter((op) => op.kind === 'open');
+      expect(opens.map((op) => op.tool)).toEqual(['claude', 'claude']);
+
+      const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
+
+      expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
+    });
+
+    it('fails a prompt whose tool hit its usage limit usage_limited, with the reset time the runtime gave and the retry to run', async () => {
+      writeDefinition('agentlimit', [{ use: 'toy', options: { state, agent: { fail: { code: 'usage_limited', message: 'claude hit its usage limit, which resets at 14:00.' } } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentlimit'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(review).toMatchObject({ status: 'failed', failure: { code: 'usage_limited', message: `claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry ${runId} review` } });
+    });
+
     it('fails the step with the failure the agent wrote, without the prompt it quotes', async () => {
       const result = { failure: { code: 'tool_failed', message: 'Gave up on: Review the repository without changing it.' } };
       writeDefinition('agentfail', [{ use: 'toy', options: { state, agent: { result } } }]);

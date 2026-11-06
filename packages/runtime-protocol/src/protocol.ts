@@ -13,7 +13,7 @@ import { z } from 'zod';
 //    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]}}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
-//    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","view":{...},"credentials":{}}
+//    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","tool":"claude","view":{...},"credentials":{}}   tool: the prompt's, when it has one
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
 //    < {"op":"op-7f2a…","event":"ready","display":{"label":"…","url":"…","fields":{…}}}       display optional
 //    > {"type":"exec","op":"op-8b10…","handle":"…","argv":[...],"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
@@ -23,7 +23,7 @@ import { z } from 'zod';
 //    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"provided":[...],"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-91c4…","event":"accepted"}                                     accepted before the slow launch
 //    < {"op":"op-91c4…","event":"display","display":{"label":"…","url":"…"}}        once the agent exists; neither accepts nor ends it
-//    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…},"resumed":true}   resumed: true only when it continued lease.resume
+//    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…","home":"…"},"result":{"output":{…}},"usage":{…},"resumed":true}   resumed: true only when it continued lease.resume
 //    > {"type":"open",…,"credentials":{}}                                      no view: the place of a confined prompt
 //    > {"type":"prompt",…,"confined":{"dir":"…","level":"verified","access":"read","schema":{…}}}
 //    < {"op":"op-a3d5…","event":"finished",…,"result":{"output":{…}},"confined":{"level":"verified","access":"read"}}
@@ -145,8 +145,17 @@ export const RuntimeDisplaySchema = z.object({
 
 export type RuntimeDisplay = z.infer<typeof RuntimeDisplaySchema>;
 
-/** A tool's session: the tool that keeps it, and its id there, which a later pass resumes and scoring reads. */
-export const PromptSessionSchema = z.object({ tool: z.string().min(1), id: z.string().min(1) });
+/**
+ * A tool's session: the tool that keeps it, and its id there, which a later pass resumes and scoring reads. `home` is
+ * the absolute path of the tool home it lives in (the directory `CLAUDE_CONFIG_DIR` or `CODEX_HOME` would name), when
+ * that is not the tool's default home, such as a T3 provider instance's own. A runtime that omits it, as one before
+ * protocol 1 had it does, keeps the session in the tool's default home.
+ */
+export const PromptSessionSchema = z.object({
+  tool: z.string().min(1),
+  id: z.string().min(1),
+  home: z.string().regex(/^(?:\/|[A-Za-z]:[\\/])/, 'A session home is an absolute path').optional(),
+});
 
 /** The tokens a prompt billed, as far as the runtime knows them. */
 export const PromptUsageSchema = z.object({
@@ -284,6 +293,11 @@ export const OpenRequestSchema = z.object({
   /** What of the host the place gets. Absent for a confined prompt's place, which gets only the prompt's `confined.dir`. */
   view: PlaceViewSchema.optional(),
   /**
+   * The tool the attempt's prompt runs, such as `claude`, so a runtime can make the place for it (an `sbx` sandbox of
+   * that agent). Absent for a command step's place, which runs no tool.
+   */
+  tool: z.string().min(1).optional(),
+  /**
    * The credentials of this attempt's tool, as each of its execs and prompts also carries them: never set when the
    * place is created, only per operation. A command step's place gets none.
    */
@@ -358,9 +372,11 @@ export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
 
 /**
  * The codes a failed prompt may carry that teamai records on the step as they are: the tool or model the lease names
- * is not there, or the tool failed. teamai records any other code as `runtime_failed`, naming it in the message.
+ * is not there, the tool failed, or it hit its usage limit (`usage_limited`, whose message names the tool and the reset
+ * time when the tool or the app gives it, never the run or the step: teamai adds the retry). teamai records any other
+ * code as `runtime_failed`, naming it in the message.
  */
-export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed'] as const;
+export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed', 'usage_limited'] as const;
 
 /** What a runtime kept of a confined prompt: the level it enforced, and what the agent could do in the directory. */
 export const ConfinedKeptSchema = z.object({ level: ConfinedLevelSchema, access: z.enum(ACCESS_LEVELS) });
