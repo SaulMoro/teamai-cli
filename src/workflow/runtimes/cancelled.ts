@@ -92,7 +92,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
     return false;
   };
 
-  const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop' });
+  const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout: process.cwd() });
 
   if (!opened.ok) return cannot(opened.failure.message);
 

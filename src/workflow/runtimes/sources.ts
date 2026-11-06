@@ -336,7 +336,7 @@ async function runnableInstances(): Promise<InitInstance[]> {
 }
 
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
-async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk, purpose }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
@@ -369,14 +369,14 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const masks = credentialSecrets(source.name, values.values);
 
   const spawned = (): StepRuntime => (source.kind === 'shipped'
-    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], secrets: masks })
-    : stdioStepRuntime({ name: source.name, command: source.executable, secrets: masks }));
+    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], cwd: checkout, secrets: masks })
+    : stdioStepRuntime({ name: source.name, command: source.executable, cwd: checkout, secrets: masks }));
 
   let notRecovered: RuntimeFailure | undefined;
 
   if (purpose === 'stop') {
     const recovering = spawned();
-    const recovered = await recovering.init({ options: split.runtime, mode: 'recover' });
+    const recovered = await recovering.init({ options: split.runtime, mode: 'recover', checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
     if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {}, masks } };
@@ -386,7 +386,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   const runtime = spawned();
   const credentials = { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins };
-  const ready = await runtime.init({ options: split.runtime, mode, credentials, instances: await runnableInstances() });
+  const ready = await runtime.init({ options: split.runtime, mode, credentials, instances: await runnableInstances(), checkout });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
     await runtime.dispose();
@@ -425,9 +425,10 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
 /**
  * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
- * then opens each of its runtimes in order, so a bad option of any fails before a step runs.
+ * then opens each of its runtimes in order, so a bad option of any fails before a step runs. Each starts in `checkout`,
+ * the run's, which its `init` names too.
  */
-export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk, purpose }: { personal: boolean; mode: RunMode; canAsk: boolean; purpose: DriverPurpose }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
+export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk, purpose, checkout }: { personal: boolean; mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
   const resolved = await resolveDriver(config, name, { personal });
 
   if (!resolved.ok) return resolved;
@@ -435,7 +436,7 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
   const opened: OpenedRuntime[] = [];
 
   for (const entry of driver.definition.runtimes) {
-    const one = await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), { mode, canAsk, purpose });
+    const one = await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), { mode, canAsk, purpose, checkout });
 
     if (!one.ok) {
       await Promise.all(opened.map((done) => (done.kind === 'external' ? done.runtime.dispose() : undefined)));

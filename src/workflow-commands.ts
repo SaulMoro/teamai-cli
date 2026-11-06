@@ -910,7 +910,7 @@ async function openNamedDriver(config: LocalConfig, name: string | undefined, { 
   if (name === undefined || name === 'local' || name === 'skill') return { ok: true, opened: undefined };
   const canAsk = process.stdin.isTTY && process.stderr.isTTY;
 
-  return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run' });
+  return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run', checkout: process.cwd() });
 }
 
 /**

@@ -10,7 +10,7 @@ import { z } from 'zod';
 //  teamai persists before it sends the request, and a runtime answers a repeated id with the same acceptance and the
 //  same terminal outcome until `close`. Both sides parse with the schemas below.
 //
-//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude"}]}
+//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude"}],"checkout":"/repo"}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //                                                                    permissions: {"claude":"full-access"}, the tools it runs without prompts
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
@@ -306,6 +306,8 @@ const InitRequestSchema = z.object({
   type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema,
   credentials: InitCredentialsSchema.optional(),
   instances: z.array(InitInstanceSchema).optional(),
+  /** The run's checkout, an absolute path: teamai starts the runtime there too. */
+  checkout: z.string().min(1).optional(),
 });
 
 export const OpenRequestSchema = z.object({

@@ -77,10 +77,10 @@ export interface StepRuntime {
   readonly name: string;
   /**
    * Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers, knowing the
-   * names of the `credentials` its definition gives it and the tool `instances` the member may run. In `recover` mode it
-   * only answers for the handles it recorded.
+   * names of the `credentials` its definition gives it, the tool `instances` the member may run, and the run's
+   * `checkout`. In `recover` mode it only answers for the handles it recorded.
    */
-  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[] }): Promise<Initialized>;
+  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[]; checkout?: string }): Promise<Initialized>;
   /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open` rejects with its error. */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;

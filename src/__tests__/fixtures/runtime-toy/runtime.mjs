@@ -31,13 +31,14 @@
 // new work unanswered, as a sign-in check whose provider stalls, while recover mode still answers. A request it cannot
 // answer, such as one for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
 //
-// Each init's mode, and the tool instances it was given, are appended to `inits.jsonl` in its state. `init_fails` is
-// the failure an init for new work ends with, as a runtime signed out of its provider; in `recover` mode it still
-// opens, offers nothing and answers from its state, unless `recover: false` makes it answer that mode as a runtime before it did. With `cancel_fails`, a cancel of
-// an exec or prompt still running stops nothing and ends it failed with that failure, which reattach keeps reporting
-// until a later cancel stops it. With `stop_ms`, a stop completes that long after the cancel, and the operation is
-// reported running until then. With `stray`, an exec it accepts also starts a process that shares the toy's stdout and
-// stderr and outlives it, which writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
+// Each init's mode, the directory it was started in, and the checkout and tool instances it was given, are appended to
+// `inits.jsonl` in its state. `init_fails` is the failure an init for new work ends with, as a runtime signed out of
+// its provider; in `recover` mode it still opens, offers nothing and answers from its state, unless `recover: false`
+// makes it answer that mode as a runtime before it did. With `cancel_fails`, a cancel of an exec or prompt still
+// running stops nothing and ends it failed with that failure, which reattach keeps reporting until a later cancel stops
+// it. With `stop_ms`, a stop completes that long after the cancel, and the operation is reported running until then.
+// With `stray`, an exec it accepts also starts a process that shares the toy's stdout and stderr and outlives it, which
+// writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
 //
 // `notice` sends a notice before it answers a request, by request type (`{"init":"…","exec":"…"}`), naming the
 // request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, or of
@@ -166,7 +167,7 @@ function init(request) {
   }
 
   fs.mkdirSync(request.options.state, { recursive: true });
-  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode, ...(request.instances && { instances: request.instances }) })}\n`);
+  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode, cwd: process.cwd(), ...(request.checkout && { checkout: request.checkout }), ...(request.instances && { instances: request.instances }) })}\n`);
 
   // A sign-in check whose provider never answers: an init for new work stalls, and recover mode, which checks nothing, does not.
   if (request.mode !== 'recover' && request.options.answer?.init === 'silent') return;

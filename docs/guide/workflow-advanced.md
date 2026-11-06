@@ -1763,6 +1763,8 @@ teamai keeps `max_parallel` and `credentials` for itself: it strips them from th
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
+`init` names the run's checkout too, `"checkout":"/abs/path"`, and teamai starts your runtime in that directory.
+
 `init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. List in `can.tools` the ones your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with its `home.env` set to the attempt's tool home. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
 
 ```text

@@ -1757,6 +1757,8 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
+`init` 还会给出运行所在的检出目录 `"checkout":"/abs/path"`，teamai 也在该目录启动你的运行时。
+
 `init` 还会列出你可以运行的[工具实例](reference.md#团队工具tools)：你自己的，以及团队中命令无需确认或已在本机确认过的实例。在 `can.tools` 中列出你的运行时能提供的实例。在自行 exec 工具的运行时上，teamai 会启动实例的 `command`，并把它的 `home.env` 设为该次尝试的工具主目录。没有任何运行时列出该实例时，在其上运行的步骤以 `tool_unsupported` 失败：
 
 ```text

@@ -484,6 +484,15 @@ steps:
     expect(fs.existsSync(launches)).toBe(false);
   });
 
+  it('tells a runtime at init the checkout the run starts in, and starts it there', async () => {
+    writeDefinition('toycheckout', [{ use: 'toy', options: { state } }]);
+
+    await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toycheckout'], repo, env());
+
+    const inits = fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { checkout?: string; cwd?: string });
+    expect(inits.at(-1)).toMatchObject({ checkout: repo, cwd: repo });
+  });
+
   it('gives a runtime the instances the member may run at init, with their command and home', async () => {
     acmeInstance();
     writeDefinition('toyagentacme', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
