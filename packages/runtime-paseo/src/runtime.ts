@@ -10,7 +10,7 @@ import {
 import { z } from 'zod';
 import { loadClient } from './client.js';
 import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool, type StepMode } from './daemon.js';
-import type { AgentCreate, AgentPrompt, Journal, Place, PromptRecord } from './journal.js';
+import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
 type WorktreePlace = Extract<Place, { kind: 'worktree' }> & { workspace: NonNullable<Place['workspace']> };
@@ -293,6 +293,22 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   const stopping = new Set<OpId>();
   /** The worktrees this process is opening as Paseo workspaces, by handle: a close waits for its open to end. */
   const opens = new Map<string, Promise<void>>();
+  /** The last open this process runs on each directory, by its resolved path: the next one there waits for it. */
+  const turns = new Map<string, Promise<void>>();
+
+  /** Runs `task` once every open this process began before on `directory` has ended. */
+  function inTurn<T>(directory: string, task: () => Promise<T>): Promise<T> {
+    const key = resolvedDir(directory);
+    const turn = (turns.get(key) ?? Promise.resolve()).then(task);
+    const ended = turn.then(() => undefined, () => undefined);
+    turns.set(key, ended);
+    void ended.then(() => {
+      if (turns.get(key) === ended) turns.delete(key);
+    });
+
+    return turn;
+  }
+
   /** The requests this process is answering. */
   const answering = new Set<Promise<void>>();
   /** teamai closed stdin: a prompt's agent goes on in Paseo, and this process stops following it. */
@@ -552,7 +568,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
         // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.
         // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
-        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: tools.map(({ tool }) => tool),
+        exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue'], tools: tools.map(({ tool }) => tool),
         ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
       },
     });
@@ -574,16 +590,50 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const place = journal.place(handle);
 
     if (place?.kind === 'worktree' && !place.workspace) {
-      const opening = (async (): Promise<RuntimeFailure | undefined> => {
-        try {
-          const workspace = await live.workspace(place.cwd);
-          journal.savePlace(handle, { ...place, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
+      // One open at a time on a directory, in this runtime and across those on this journal, decides whether the
+      // workspace there is the member's: an open in flight has made teamai's own before it journals it.
+      const opening = inTurn(place.cwd, async (): Promise<RuntimeFailure | undefined> => {
+        const unjournaled = (why: string): RuntimeFailure => ({
+          code: 'workspace_failed',
+          message: `teamai-runtime-paseo could not journal its open of ${place.cwd} before asking Paseo, so it opened nothing: ${why}. Make ${journal.root} writable, then run the step again.`,
+        });
 
-          return undefined;
+        const unopened = (why: string): RuntimeFailure => ({ code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: ${why}` });
+        let release: () => void;
+        let member = place.member;
+
+        try {
+          release = await journal.holdOpen(place.cwd);
+          member ??= journal.memberOn(place.cwd, handle);
         } catch (error) {
-          return { code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: ${error instanceof Error ? error.message : String(error)}` };
+          return unjournaled(error instanceof Error ? error.message : String(error));
         }
-      })();
+
+        try {
+          try {
+            member ??= await live.isOpen(place.cwd);
+          } catch (error) {
+            return unopened(error instanceof Error ? error.message : String(error));
+          }
+
+          try {
+            journal.savePlace(handle, { ...place, member });
+          } catch (error) {
+            return unjournaled(error instanceof Error ? error.message : String(error));
+          }
+
+          try {
+            const workspace = await live.workspace(place.cwd);
+            journal.savePlace(handle, { ...place, member, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
+
+            return undefined;
+          } catch (error) {
+            return unopened(error instanceof Error ? error.message : String(error));
+          }
+        } finally {
+          release();
+        }
+      });
 
       opens.set(handle, opening.then(() => undefined));
       const failure = await opening;
@@ -1129,14 +1179,15 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   /**
    * Stops what an attempt's place runs, its failed prompts' agents included, since a failed cancel leaves its agent
    * running, or says why something may still run. The last attempt on a Paseo workspace archives it, which stops what
-   * still runs there; an attempt that shares it stops only its own agents.
+   * still runs there; an attempt that shares it stops only its own agents, as does one on a workspace the member had
+   * open, which teamai never archives.
    */
   async function stopPlace(live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | undefined> {
     // A confined prompt's place before its prompt came: no workspace, so no agent.
     if (!place.workspace) return undefined;
     const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
-    if (!journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) {
+    if ((place.kind === 'worktree' && place.member) || !journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record, deadline)))).flatMap((failure) => (failure ? [failure.message] : []));
 
       return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : undefined;

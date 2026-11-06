@@ -2,7 +2,7 @@
 
 > 本文是 [工作流](workflow.md) 的一部分。
 
-`teamai-runtime-paseo` 把每个提示词步骤作为 [Paseo](https://github.com/getpaseo/paseo) 守护进程的智能体运行，放在一个 Paseo 工作区里，该工作区就是 teamai 为这个步骤准备的 worktree。你在 Paseo 应用里查看智能体、回答它的权限请求。读取结果、提交、交付、评分和恢复仍由 teamai 负责。
+`teamai-runtime-paseo` 把每个提示词步骤作为 [Paseo](https://github.com/getpaseo/paseo) 守护进程的智能体运行，放在 teamai 交给该步骤的目录上的一个 Paseo 工作区里：只读步骤用你的检出目录，其余步骤用 teamai 准备的 worktree。你在 Paseo 应用里查看智能体、回答它的权限请求。读取结果、提交、交付、评分和恢复仍由 teamai 负责。
 
 它只运行提示词步骤。命令和 `setup` 交给定义里的下一个运行时，或留在本机。需要 `permissions: unattended` 或 `role` 的提示词步骤，交给下一个能运行它的运行时。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
 
@@ -420,6 +420,8 @@ Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f yet, t
 ```text
 Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agent is busy. It may still run in the worktree; stop it in the Paseo app.
 ```
+
+你在 Paseo 里已经打开的、同一目录上的工作区（例如只读步骤在你的检出目录中运行时）从不被归档：这次尝试改为取消它自己的智能体，你的工作区保持打开。
 
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ConfinedKeptSchema, OpIdSchema, OpStateSchema, RUN_DIR_ENV, type OpId } from '@teamai/runtime-protocol';
@@ -15,6 +16,8 @@ import { z } from 'zod';
 //                           agent as idle, so only this file tells a cancel from a finish
 //    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
 //                           own records, and one that cannot be read stops only its own handle
+//    opening/<directory>    the pid of the runtime opening a Paseo workspace on a directory: one open at a time decides
+//                           whether the workspace there is the member's, so none takes teamai's own for theirs
 //
 //  The agent create is kept as sent, so a runtime started again sends the same one: Paseo answers a repeated
 //  idempotency key with the agent it created, and refuses one whose request changed. Each file is written to a
@@ -34,6 +37,12 @@ const PlaceSchema = z.discriminatedUnion('kind', [
     attempt: z.string(),
     /** Absent until Paseo opened the worktree: the open is accepted, and its handle kept, before. */
     workspace: WorkspaceSchema.optional(),
+    /**
+     * Whether the workspace on the worktree is the member's, as Paseo had it open before teamai opened it, so teamai
+     * never archives it. Decided before Paseo is asked to open it, so an open repeated after a restart, which finds the
+     * workspace its first try made, decides the same.
+     */
+    member: z.boolean().optional(),
     /** The worktree: as teamai gave it until Paseo opened it, then as the workspace adopted it. */
     cwd: z.string(),
     /** The run's scratch directory, which the place's agents write at its own path. */
@@ -126,7 +135,7 @@ function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
 }
 
 /** A directory with its links resolved, as Paseo names a workspace's, or as given when it is gone. */
-function resolved(directory: string): string {
+export function resolvedDir(directory: string): string {
   try {
     return fs.realpathSync(directory);
   } catch {
@@ -139,6 +148,35 @@ function write(file: string, value: Place | PromptRecord): void {
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(temporary, file);
+}
+
+/** Whether a process runs, as a runtime holding an open: one another user runs is alive though it cannot be signalled. */
+const HoldPidSchema = z.coerce.number().int().positive();
+
+/** The hold on a directory's open: its text, and the pid of the runtime that holds it when it names one; none once released. */
+function holdAt(file: string): { text: string; pid: number | undefined } | undefined {
+  let text: string;
+
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+
+  const pid = HoldPidSchema.safeParse(text.split(' ')[0]);
+
+  return { text, pid: pid.success ? pid.data : undefined };
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
 }
 
 export function journal(root: string) {
@@ -171,6 +209,8 @@ export function journal(root: string) {
   });
 
   return {
+    /** The directory the journal is kept in, for a person to fix when it cannot be written. */
+    root,
     place: (handle: string): Place | undefined => read(placeFile(handle), PlaceSchema),
     savePlace(handle: string, place: Place): void {
       fs.mkdirSync(indexDir(handle), { recursive: true });
@@ -191,7 +231,69 @@ export function journal(root: string) {
       ? true
       : place.workspace
         ? place.workspace.id === id
-        : place.kind === 'worktree' && directory !== undefined && resolved(place.cwd) === resolved(directory))).map(({ handle }) => handle),
+        : place.kind === 'worktree' && directory !== undefined && resolvedDir(place.cwd) === resolvedDir(directory))).map(({ handle }) => handle),
+    /**
+     * Whether the workspace on `directory` is the member's, as another attempt's place there decided it, which the
+     * workspace a new open finds open may be teamai's own for: undefined when no place there decided it.
+     */
+    memberOn: (directory: string, except: string): boolean | undefined => places()
+      .flatMap(({ handle, place }) => (handle !== except && place?.kind === 'worktree' && resolvedDir(place.cwd) === resolvedDir(directory)
+        ? [place.member] : []))
+      .find((member) => member !== undefined),
+    /**
+     * Holds `directory` for one open at a time across the runtimes on this journal, waiting while another live runtime
+     * holds it, and taking it from one that died. Resolves to its release; rejects when the hold cannot be written.
+     */
+    async holdOpen(directory: string): Promise<() => void> {
+      const dir = path.join(root, 'opening');
+      const file = path.join(dir, createHash('sha256').update(resolvedDir(directory)).digest('hex').slice(0, 32));
+      fs.mkdirSync(dir, { recursive: true });
+      // Written whole, then linked into place, so another runtime never reads a hold with no pid in it. Each hold is told
+      // apart from every other, so a hold found stale is never mistaken for one another runtime took since.
+      const mine = path.join(dir, `.${process.pid}.${randomUUID()}.tmp`);
+      fs.writeFileSync(mine, `${process.pid} ${randomUUID()}`, { mode: 0o600 });
+
+      try {
+        for (;;) {
+          try {
+            fs.linkSync(mine, file);
+
+            return () => fs.rmSync(file, { force: true });
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+          }
+
+          const hold = holdAt(file);
+
+          // Released since the link failed: try again.
+          if (hold === undefined) continue;
+
+          if (hold.pid !== undefined && hold.pid !== process.pid && isAlive(hold.pid)) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            continue;
+          }
+
+          // Its runtime is gone. It is moved aside before it is removed: a hold another runtime took in its place since it
+          // was read is put back, so two runtimes that both found it stale never both hold.
+          const aside = path.join(dir, `.${process.pid}.${randomUUID()}.stale`);
+
+          try {
+            fs.renameSync(file, aside);
+          } catch (error) {
+            if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
+            throw error;
+          }
+
+          try {
+            if (fs.readFileSync(aside, 'utf8') !== hold.text) fs.linkSync(aside, file);
+          } finally {
+            fs.rmSync(aside, { force: true });
+          }
+        }
+      } finally {
+        fs.rmSync(mine, { force: true });
+      }
+    },
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
     /** Where `op`'s record is kept, for a person to delete when a close says to. */
     promptFile,
