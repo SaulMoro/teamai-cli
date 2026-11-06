@@ -37,6 +37,9 @@ export function isExecRuntimeTool(tool: string): tool is ExecRuntimeTool {
 
 const PHASES = ['opening', 'ready', 'running', 'collected', 'closed'] as const;
 
+/** A tool's home: the tool, and the directory its sessions are kept under. */
+const ToolHomeSchema = z.object({ tool: z.string(), dir: z.string() });
+
 export const AttemptRuntimeRecordSchema = z.object({
   /** The runtime the attempt runs on, as the definition's `use` names it. */
   runtime: z.string(),
@@ -48,12 +51,12 @@ export const AttemptRuntimeRecordSchema = z.object({
   /** The prompt sent to a runtime that launches agents its own way. */
   prompt: z.object({ op: OpIdSchema }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
-  toolHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
+  toolHome: ToolHomeSchema.optional(),
   /**
    * The tool home outside the attempt that a runtime launching agents its own way reported its prompt's session in
    * (`finished.session.home`), such as a T3 provider instance's. teamai reads the session there and never copies it.
    */
-  sessionHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
+  sessionHome: ToolHomeSchema.optional(),
   /** What the runtime last showed of the place, at `ready` or at a reattach, for the run's details. */
   display: RuntimeDisplaySchema.optional(),
   /**
@@ -111,9 +114,9 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
 /**
  * The attempt of run `run` whose tool home holds session `session` of its tool, with that home's store, or undefined
  * when no attempt that ran on a step runtime holds it (the session is then in the member's own store, if anywhere).
- * `own` says the home is the attempt's own, under its directory, rather than one a runtime reported outside it.
+ * `isOwn` says the home is the attempt's own, under its directory, rather than one a runtime reported outside it.
  */
-export async function attemptHoldingSession(config: LocalConfig, run: string, session: { tool: string; id: string }): Promise<{ attempt: AttemptId; home: string; own: boolean; storeDir: string } | undefined> {
+export async function attemptHoldingSession(config: LocalConfig, run: string, session: { tool: string; id: string }): Promise<{ attempt: AttemptId; home: string; isOwn: boolean; storeDir: string } | undefined> {
   const runId = RunIdSchema.safeParse(run);
   const platform = AgentSession.platformForTool(session.tool);
 
@@ -131,7 +134,7 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
     if (storeDir === '') continue;
     const found = await AgentSession.find({ platform, sessionId: session.id, storeDir }, { scrub: false });
 
-    if (found.status === 'done') return { attempt: attempt.data, home: home.dir, own: record?.toolHome !== undefined, storeDir };
+    if (found.status === 'done') return { attempt: attempt.data, home: home.dir, isOwn: record?.toolHome !== undefined, storeDir };
   }
 
   return undefined;
@@ -147,7 +150,7 @@ export async function seedToolHome({ config, run, attempt, tool, sessions }: { c
     const holding = await attemptHoldingSession(config, run, session);
 
     // A home outside the attempt is the runtime's, such as the member's own instance home: it is never copied whole.
-    if (holding === undefined || !holding.own) continue;
+    if (holding === undefined || !holding.isOwn) continue;
 
     // A home this attempt already has, from before a restart, keeps what its tool wrote there. The login stays behind:
     // only the lock that holds it may copy it, so a step on a runtime that holds no login never gets one.
@@ -181,7 +184,7 @@ export interface AttemptRun {
    * tool home a prompt's tool keeps its session in, recorded for every later lookup; `credentials` are the values its
    * tool gets, sent and never recorded; `tool` is the tool its prompt runs, which the runtime is told.
    */
-  open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: { tool: string; dir: string }; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
+  open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
