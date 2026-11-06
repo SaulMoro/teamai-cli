@@ -211,6 +211,10 @@ Judge the review.
     ]);
     // Each prompt's result came back through the attempt's out/ directory.
     expect(fs.existsSync(path.join(attemptsOf(runId), reviewAttempt, 'out', 'result.json'))).toBe(true);
+    // The command's place was opened naming no tool, and each prompt's naming the tool it runs.
+    const opened = fs.readdirSync(path.join(sandbox, 'toy-state-1', 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(sandbox, 'toy-state-1', 'ops', name), 'utf8')) as { kind: string; tool?: string | null })
+      .filter((op) => op.kind === 'open').map((op) => op.tool).sort();
+    expect(opened).toEqual(['claude', 'claude', null]);
 
     // Scoring reads the review's session from its attempt's tool home: the member's own store has none.
     const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());

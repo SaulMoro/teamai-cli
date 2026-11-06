@@ -49,6 +49,11 @@ export const AttemptRuntimeRecordSchema = z.object({
   prompt: z.object({ op: OpIdSchema }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
   toolHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
+  /**
+   * The tool home outside the attempt that a runtime launching agents its own way reported its prompt's session in
+   * (`finished.session.home`), such as a T3 provider instance's. teamai reads the session there and never copies it.
+   */
+  sessionHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
   /** What the runtime last showed of the place, at `ready` or at a reattach, for the run's details. */
   display: RuntimeDisplaySchema.optional(),
   /** Why the runtime could not close the place, which may still hold what ran there, for the run's details. */
@@ -83,7 +88,8 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
   const attemptId = AttemptIdSchema.safeParse(attempt);
 
   if (!runId.success || !attemptId.success) return undefined;
-  const home = (await readAttemptRuntime(config, runId.data, attemptId.data))?.toolHome;
+  const record = await readAttemptRuntime(config, runId.data, attemptId.data);
+  const home = record?.toolHome ?? record?.sessionHome;
 
   const platform = home && isExecRuntimeTool(home.tool) ? AgentSession.platformForTool(home.tool) : undefined;
   const store = home && platform ? storeDirOf(platform, { kind: 'tool-home', dir: home.dir }) : '';
@@ -94,8 +100,9 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
 /**
  * The attempt of run `run` whose tool home holds session `session` of its tool, with that home's store, or undefined
  * when no attempt that ran on a step runtime holds it (the session is then in the member's own store, if anywhere).
+ * `own` says the home is the attempt's own, under its directory, rather than one a runtime reported outside it.
  */
-export async function attemptHoldingSession(config: LocalConfig, run: string, session: { tool: string; id: string }): Promise<{ attempt: AttemptId; home: string; storeDir: string } | undefined> {
+export async function attemptHoldingSession(config: LocalConfig, run: string, session: { tool: string; id: string }): Promise<{ attempt: AttemptId; home: string; own: boolean; storeDir: string } | undefined> {
   const runId = RunIdSchema.safeParse(run);
   const platform = AgentSession.platformForTool(session.tool);
 
@@ -104,7 +111,8 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 
   for (const name of names.sort()) {
     const attempt = AttemptIdSchema.safeParse(name);
-    const home = attempt.success ? (await readAttemptRuntime(config, runId.data, attempt.data))?.toolHome : undefined;
+    const record = attempt.success ? await readAttemptRuntime(config, runId.data, attempt.data) : undefined;
+    const home = record?.toolHome ?? record?.sessionHome;
 
     if (!attempt.success || home?.tool !== session.tool) continue;
     const storeDir = storeDirOf(platform, { kind: 'tool-home', dir: home.dir });
@@ -112,7 +120,7 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
     if (storeDir === '') continue;
     const found = await AgentSession.find({ platform, sessionId: session.id, storeDir }, { scrub: false });
 
-    if (found.status === 'done') return { attempt: attempt.data, home: home.dir, storeDir };
+    if (found.status === 'done') return { attempt: attempt.data, home: home.dir, own: record?.toolHome !== undefined, storeDir };
   }
 
   return undefined;
@@ -127,7 +135,8 @@ export async function seedToolHome({ config, run, attempt, tool, sessions }: { c
   for (const session of sessions.filter((candidate) => candidate.tool === tool)) {
     const holding = await attemptHoldingSession(config, run, session);
 
-    if (holding === undefined) continue;
+    // A home outside the attempt is the runtime's, such as the member's own instance home: it is never copied whole.
+    if (holding === undefined || !holding.own) continue;
 
     // A home this attempt already has, from before a restart, keeps what its tool wrote there. The login stays behind:
     // only the lock that holds it may copy it, so a step on a runtime that holds no login never gets one.
@@ -159,9 +168,9 @@ export interface AttemptRun {
   /**
    * Opens the place, with what of the host it gets, or with nothing for a confined prompt's place. `toolHome` is the
    * tool home a prompt's tool keeps its session in, recorded for every later lookup; `credentials` are the values its
-   * tool gets, sent and never recorded.
+   * tool gets, sent and never recorded; `tool` is the tool its prompt runs, which the runtime is told.
    */
-  open(view: PlaceView | undefined, place?: { toolHome?: { tool: string; dir: string }; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
+  open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: { tool: string; dir: string }; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
@@ -284,6 +293,15 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
     return { code: 'runtime_unanswered', message: `Step runtime "${runtime.name}" still reported operation ${op} of attempt ${attempt} running ${STOP_WAIT_MS / 1000} s after teamai asked it to cancel it.` };
   };
 
+  /** Records the home outside the attempt a finished prompt's session lives in, which its runtime reported. */
+  const keptIn = async (end: PromptEnd): Promise<PromptEnd> => {
+    const now = await current();
+
+    if (end.kind === 'finished' && end.session.home !== undefined && now) await save({ ...now, sessionHome: { tool: end.session.tool, dir: end.session.home } });
+
+    return end;
+  };
+
   /** Ends an exec or prompt as `lost`, which keeps its place open: what it started may still run there. */
   const lostFor = (failure: RuntimeFailure): Lost => {
     mayRun = failure;
@@ -302,7 +320,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
   };
 
   return {
-    async open(view, { toolHome: home, credentials = {} } = {}) {
+    async open(view, { tool, toolHome: home, credentials = {} } = {}) {
       openedWith = credentials;
       const before = await current();
 
@@ -323,12 +341,14 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
 
       if (toolHome) opening.toolHome = toolHome;
 
+      if (before?.sessionHome) opening.sessionHome = before.sessionHome;
+
       if (before?.display) opening.display = before.display;
 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       await save(opening);
 
-      const opened = await runtime.open({ op, run, attempt, credentials, ...(view && { view }) }, async (handle) => {
+      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(view && { view }) }, async (handle) => {
         const now = await current();
 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
@@ -426,7 +446,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
 
           if (state.resumed === true) end.resumed = true;
 
-          return end;
+          return keptIn(end);
         }
 
         if (state?.state === 'cancelled') return { kind: 'cancelled' };
@@ -447,7 +467,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await acceptance.kept();
       running = undefined;
 
-      return ended(end);
+      return ended(await keptIn(end));
     },
 
     async cancel() {

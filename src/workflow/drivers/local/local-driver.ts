@@ -32,7 +32,7 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
-import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
@@ -399,9 +399,11 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
 /**
  * The session the step's tool resumes, and the lease session it continues: the lease's session, else each earlier one it
  * continued, newest first. Each is tried on this machine, then as a copy in this tool, then as a copy of the one the team
- * session archive holds. OpenCode has no flag to resume one, so its step starts a new session.
+ * session archive holds. OpenCode has no flag to resume one, so its step starts a new session. `held` answers whether
+ * an earlier attempt of the run keeps the session where the step's runtime resumes it by id, such as the home a
+ * runtime that launches agents its own way reported it in.
  */
-async function resumeSession(archive: SessionArchive, lease: Lease, target: LaunchTarget, cwd: string): Promise<{ id: string; resumed: SessionRef } | undefined> {
+async function resumeSession(archive: SessionArchive, lease: Lease, target: LaunchTarget, cwd: string, held?: (session: SessionRef) => Promise<boolean>): Promise<{ id: string; resumed: SessionRef } | undefined> {
   const to = AgentSession.platformForTool(target.name);
 
   if (!lease.session || !to) return undefined;
@@ -416,6 +418,7 @@ async function resumeSession(archive: SessionArchive, lease: Lease, target: Laun
 
     // One platform is one store: a tool that shares the format but keeps its own home, as an instance does, gets a copy.
     if (from === to && resumes) {
+      if (await held?.(resumed)) return { id: session.id, resumed };
       const found = await AgentSession.find({ platform: from, sessionId: session.id }, { scrub: false });
 
       if (found.status === 'done') return { id: session.id, resumed };
@@ -621,7 +624,9 @@ async function promptReport(
 
     if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
   } else {
-    resume = await resumeSession(archive, lease, target, cwd);
+    // A runtime that launches agents resumes a session by id in the home it reported it in.
+    const held = onRuntime?.launchesAgents ? async (session: SessionRef) => (await attemptHoldingSession(config, lock.run, session)) !== undefined : undefined;
+    resume = await resumeSession(archive, lease, target, cwd, held);
   }
 
   // A login the runtime brings is held by this attempt alone, on the whole machine, from before the place opens until
@@ -707,7 +712,7 @@ async function promptReport(
   if (onRuntime?.launchesAgents) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials });
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };

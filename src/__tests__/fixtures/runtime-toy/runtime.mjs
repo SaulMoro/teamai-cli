@@ -12,7 +12,8 @@
 // session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
 // `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
 // `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
-// machine does.
+// machine does; with `home` too, in that Claude home instead, which `finished` reports as the session's `home`, as a
+// T3 provider instance with its own home does. Each open records the tool its attempt's prompt runs (`open.tool`).
 // `agent.display` is what its agent shows once it exists, given with the prompt's acceptance; with `display_after_ms`, it
 // accepts the prompt at once with no display and sends that one as a `display` event that long after, as a runtime that
 // accepts before its slow launch and shows the agent once it exists.
@@ -225,7 +226,7 @@ function open(request) {
   handles[key] = handle;
   writeJson(file('handles.json'), handles);
   // A confined prompt's place is opened with no view of the host.
-  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null });
+  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null });
   noteCredentials(request, handle);
   openCredentials.set(handle, request.credentials ?? {});
 
@@ -360,10 +361,10 @@ function agentOutcome(record) {
   const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
 
   const resumes = record.lease.resume !== undefined && options.agent.resumes !== false;
-  const session = { tool: record.lease.tool, id: resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}` };
+  const session = { tool: record.lease.tool, id: resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}`, ...(options.agent.home !== undefined && { home: options.agent.home }) };
 
   if (options.agent.transcript) {
-    const project = path.join(os.homedir(), '.claude', 'projects', record.cwd.replace(/[^A-Za-z0-9]/g, '-'));
+    const project = path.join(options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', record.cwd.replace(/[^A-Za-z0-9]/g, '-'));
     fs.mkdirSync(project, { recursive: true });
     const line = { type: 'user', sessionId: session.id, cwd: record.cwd, timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } };
     fs.appendFileSync(path.join(project, `${session.id}.jsonl`), `${JSON.stringify(line)}\n`);

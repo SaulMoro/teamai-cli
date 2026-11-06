@@ -173,7 +173,7 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, creden
     let stdout = '';
 
     const closed = (async (): Promise<ToolClosed> => {
-      const opened = await run.open(view, { toolHome, credentials: given });
+      const opened = await run.open(view, { tool: toolHome.tool, toolHome, credentials: given });
 
       if (!opened.ok) return { failure: opened.failure };
 
@@ -212,8 +212,13 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, creden
   };
 }
 
-/** A failed prompt as the step records it: a code the protocol lets a prompt carry as it is, or `runtime_failed`. */
-function promptFailure(failure: RuntimeFailure): WorkflowFailure {
+/**
+ * A failed prompt as the step records it: a code the protocol lets a prompt carry as it is, or `runtime_failed`. A
+ * code a retry fixes ends with `retry`, the command that runs it, which the runtime never spells.
+ */
+function promptFailure(failure: RuntimeFailure, retry: string): WorkflowFailure {
+  if (failure.code === 'usage_limited') return { code: failure.code, message: `${failure.message.replace(/\.?\s*$/, '.')} Then run: ${retry}` };
+
   if (PROMPT_FAILURE_CODES.some((code) => code === failure.code)) return { code: failure.code, message: failure.message };
 
   return { code: 'runtime_failed', message: `The step runtime could not run the prompt (${failure.code}): ${failure.message}` };
@@ -225,8 +230,9 @@ function promptFailure(failure: RuntimeFailure): WorkflowFailure {
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, credentials }: {
+export function runtimePrompter(run: AttemptRun, { view, runId, step, provided, unset, credentials }: {
   view: PlaceView;
+  runId: RunId;
   step: string;
   provided: string[];
   unset: string[];
@@ -235,7 +241,7 @@ export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, 
   const given = toolCredentials(credentials, unset);
 
   const launch = async (tool: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
-    const opened = await run.open(view, { credentials: given });
+    const opened = await run.open(view, { tool, credentials: given });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
     const lease: PromptLease = { step, tool, prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
@@ -315,7 +321,7 @@ export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, 
       }
 
       case 'failed':
-        return accepted ? { started: true, exitCode: 1, failure: promptFailure(end.failure) } : { started: false, exitCode: 1, failure: promptFailure(end.failure) };
+        return { started: accepted, exitCode: 1, failure: promptFailure(end.failure, `teamai workflow retry ${runId} ${step}`) };
       case 'lost':
         return { started: accepted, exitCode: 1, failure: lost(`the ${tool} prompt`, end.failure) };
       default: {
