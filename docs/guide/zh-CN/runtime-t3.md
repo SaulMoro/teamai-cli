@@ -77,7 +77,7 @@ af508185-8908-4575-a1d0-f3c6f67cddec
 
 teamai 把凭据保存在 `~/.teamai/runtime-state/t3/credentials.json`（权限 0600），之后的运行复用它。T3 在 30 天后让它过期，下一次运行会用同样的方式重新登录。要撤销它，运行 `t3 auth session revoke <id>`。
 
-teamai 运行它找到的第一个 `t3`：`$T3CODE_CLI_PATH`（T3 在自己的线程里设置它），然后是 PATH 上的 `t3`，然后是 `~/.t3/bin/t3`。如果一个都找不到，或者 T3 拒绝了配对码，运行会改为打开 T3 的登录页面。在 T3 Code 里创建一个配对码，选 **Auto** 权限，输入配对码并批准。你选的权限是步骤线程能运行的最宽模式。
+teamai 运行它找到的第一个 `t3`：`$T3CODE_CLI_PATH`（T3 在自己的线程里设置它），然后是 PATH 上的 `t3`，然后是 T3 数据目录里的 `bin/t3`（`~/.t3/bin/t3`，或 `$T3CODE_HOME` 下的）。如果一个都找不到，或者 T3 拒绝了配对码，运行会改为打开 T3 的登录页面。在 T3 Code 里创建一个配对码，选 **Auto** 权限，输入配对码并批准。你选的权限是步骤线程能运行的最宽模式。
 
 **4. 在 T3 里看步骤运行。** `inventory` 在你的机器上运行。`review` 以 `review · teamai r928e2fc23ab9bd62` 出现在项目的线程列表里。它的第一条消息说明它属于哪个运行：
 
@@ -222,7 +222,7 @@ $ teamai workflow start readme-test-section --driver t3only
 - 它是一个独立的新线程，在一个新的 scratch 文件夹（`~/.t3/scratch/…`）里。teamai 把评审要读的证据（会话记录、diff、`evidence.json`）复制进这个文件夹，并把副本设为只读。
 - 它的第一条消息要求它只读这个文件夹，给出回复的 JSON Schema，并把 teamai 提示词里每处提到证据目录的地方都指向副本。
 - 它的最后一条消息就是回复：`{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`。
-- 它和步骤线程以同样的模式运行。评审的位置关闭时，teamai 会把线程标为已处理（settle）并删除副本。
+- 它以 `runtime_mode` 运行，否则以你的全局 T3 默认模式运行，都没有时是 Auto；从不以 Full access 运行。评审的位置关闭时，teamai 会把线程标为已处理（settle）并删除副本。
 
 T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 
@@ -237,7 +237,7 @@ T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 在 CI 中，或在 `TEAMAI_MODE=unattended` 的运行中，没人能批准登录或工具请求。无人值守运行和其他运行一样通过 `t3` 命令登录，所以凭据过期后，定时运行仍能继续。`t3` 命令无法让它登录时，它会立即失败并说明原因：
 
 ```text
-{"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773 and could not sign in through the t3 command (there is no t3 command on PATH), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
+{"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773 and could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ~/.t3/bin/t3), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
 无人值守运行的线程以上面的模式运行。agent 仍然请求审批，或者委派的任务请求审批的步骤会被停止，并以 `tool_failed` 失败，消息里写明线程。如果 T3 没有停止这个线程，步骤改以 `cancel_failed` 失败，teamai 会保留步骤的位置，直到之后的 `teamai workflow cancel` 停止它。交互式步骤只在有人值守运行中运行。
@@ -273,7 +273,7 @@ teamai workflow cancel r70d31098c8884803
 | --- | --- | --- |
 | `T3 Code is not running on this machine.` | 这里没有 T3 服务。teamai 读取 `~/.t3/userdata/server-runtime.json`，或 `$T3CODE_HOME/userdata/…` | 打开 T3 Code，或运行 `t3 serve`，然后重新运行。 |
 | `T3 Code at http://127.0.0.1:3773 does not answer. Open T3 Code, or run \`t3 serve\` …` | T3 留下了服务文件，但那里没有服务应答。 | 打开 T3 Code，或运行 `t3 serve`，然后重新运行。 |
-| `… (login_required): … could not sign in through the t3 command (there is no t3 command on PATH) …` | 无人值守运行没有有效的登录，`t3` 命令也没能创建一个。括号里的文字说明原因。 | 确认在 teamai 运行的 shell 里 `t3 auth session list` 能正常工作，然后重新运行。或者从终端启动一次工作流，在页面里批准 teamai。 |
+| `… (login_required): … could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ~/.t3/bin/t3) …` | 无人值守运行没有有效的登录，`t3` 命令也没能创建一个。括号里的文字说明原因。 | 确认在 teamai 运行的 shell 里 `t3 auth session list` 能正常工作，然后重新运行。或者从终端启动一次工作流，在页面里批准 teamai。 |
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai 的登录允许的模式比线程运行的模式窄。 | 删除 `~/.teamai/runtime-state/t3/credentials.json` 并重新运行：teamai 会重新登录；如果 T3 Code 询问，用 Auto 权限批准。或者设置 `runtime_mode`。 |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | 这个检出不是 T3 项目，`t3 project add` 也失败了。括号里的文字说明原因。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
@@ -291,6 +291,6 @@ teamai workflow cancel r70d31098c8884803
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程。T3 只为在另一个已链接环境上创建的线程保留父线程链接。
 - 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
 - 带 `session: continue` 或 `session.from` 的步骤会开始一段新的对话，和 OpenCode 一样：T3 无法在已有会话上启动线程。
-- 只读的提示词步骤在检出本身上运行，`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。带 `role` 的步骤也在这里运行。带 `env` 或 `setup` 的步骤会交给 `local`。
+- 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。带 `role` 的步骤也在这里运行。带 `env` 或 `setup` 的步骤会交给 `local`。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
 - 不提供 `permissions: unattended` 的步骤。它们需要一个工具在沙箱中运行的线程，后续版本会加入。
