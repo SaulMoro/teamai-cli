@@ -276,8 +276,8 @@ sbx ls                                   # while a step runs
 ```
 
 ```text
-SANDBOX                              AGENT    STATUS      PORTS   WORKSPACE
-teamai-rb2152f12cb75a939-aca6809de   claude   ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-rb2152f12cb75a939-review-p1-4f8fc24e0d4e, …
+SANDBOX                                               AGENT    STATUS      PORTS   WORKSPACE
+teamai-5f0c2a9e1d7b4c38-rb2152f12cb75a939-aca6809de   claude   ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-rb2152f12cb75a939-review-p1-4f8fc24e0d4e, …
 ```
 
 ```text
@@ -364,11 +364,14 @@ teamai workflow resume r7c41d09e2b6a5f13 --driver containers
 teamai workflow retry r7c41d09e2b6a5f13 review      # goes on from the work the stopped pass kept
 ```
 
-A runtime killed while `docker run` or `podman run` creates a container can leave that container behind with no attempt that still owns it. Each container carries a `teamai.owner` label naming the teamai home that created it, and the next step that opens a container on that engine removes, with `--force`, every container of this home whose attempt is no longer recorded, and a judge's filter and network with it. Containers of another member or another home, and containers with no `teamai.owner` label, are never touched. When a list or removal fails, it prints one warning on stderr and the step goes on. sbx sandboxes carry no labels, so they are not swept: remove a leftover with `sbx rm --force <sandbox>`.
+A runtime killed while `docker run`, `podman run` or `sbx create` creates a sandbox can leave it behind with no attempt that still owns it. Each container carries a `teamai.owner` label naming the teamai home that created it; sbx takes no labels, so each sbx sandbox's name starts with that id instead (`teamai-<home id>-<run>-<attempt>`). Once the next step that opens a sandbox on that provider is accepted, teamai removes, with `--force`, every container or sandbox of this home whose attempt is no longer recorded, and a judge's filter and network with it. That cleanup runs in the background: no step, cancel or close waits for it. Containers of another member or another home, containers with no `teamai.owner` label, and sbx sandboxes whose name does not start with this home's id are never touched. When a list or removal fails, it prints one warning on stderr and the step goes on.
 
 ```sh
 docker ps -a --filter label=teamai.owner --format '{{.Names}} {{.Label "teamai.owner"}}'
 # teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    its attempt closed before it landed: the next step on docker removes it
+sbx ls -q
+# teamai-5f0c2a9e1d7b4c38-r7c41d09e2b6a5f13-a3b90c2f   the same, on sbx: the next step on sbx removes it
+# teamai-r7c41d09e2b6a5f13-a3b90c2f                    named by an older teamai: kept; remove it with sbx rm --force
 ```
 
 ## Errors
