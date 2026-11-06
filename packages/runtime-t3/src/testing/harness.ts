@@ -43,6 +43,8 @@ export interface FakeAgent {
   release?: string;
   /** The agent asks for an approval and waits for it. */
   waits?: boolean;
+  /** The agent delegates a task, whose own thread asks for an approval and waits for it, and waits for the task. */
+  delegatedWaits?: boolean;
   /** The agent writes no transcript. */
   noSession?: boolean;
   /** The agent's last message in the thread, which a judge's reply is. */
@@ -117,6 +119,8 @@ export type FakeCall = z.infer<typeof CallSchema>;
 const ThreadSchema = z.object({
   threadId: z.string(), title: z.string(), message: z.string().optional(), worktreePath: z.string().optional(), projectId: z.string().optional(),
   provider: z.string(), model: z.string().optional(), runtimeMode: z.string().optional(), status: z.string(), settled: z.boolean(),
+  /** The thread that delegated this one's task, for a delegated task's thread. */
+  parentThreadId: z.string().optional(),
   /** What the thread binds: the project's own folder, one of its worktrees, or a scratch folder. */
   workspace: z.enum(['root', 'existing_worktree', 'worktree', 'scratch']).optional(),
   /** The files the agent found under its thread's folder, and whether it could write there. */

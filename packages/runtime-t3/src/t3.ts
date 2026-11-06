@@ -70,6 +70,16 @@ const ThreadShellSchema = z.object({
 
 export type ThreadShell = z.infer<typeof ThreadShellSchema>;
 
+/** The statuses of a thread whose run still goes, as `t3_thread_list` filters on them. */
+const ACTIVE_STATUSES = ['preparing', 'queued', 'starting', 'running', 'waiting'] as const;
+
+/** A thread `t3_thread_list` lists: a delegated task's thread names the thread that delegated it. */
+const ListedThreadSchema = z.object({ threadId: z.string(), status: z.string().nullable(), parentThreadId: z.string().nullable().optional() });
+
+export type ListedThread = z.infer<typeof ListedThreadSchema>;
+
+const ThreadPageSchema = z.object({ threads: z.array(ListedThreadSchema), nextCursor: z.number().int().nullable().optional() });
+
 /** One timeline item of a thread's messages view, read in pages of text when it is long. */
 const ItemSchema = z.object({ itemId: z.string(), type: z.string(), text: z.string().nullable(), textTruncated: z.boolean(), nextTextOffset: z.number().int().nullable() });
 
@@ -149,6 +159,8 @@ export interface T3 {
   /** Starts a run of the thread with `message`; a repeated `clientRequestId` sends nothing more. */
   send(threadId: string, message: string, clientRequestId: string): Promise<void>;
   thread(threadId: string): Promise<ThreadShell>;
+  /** Every thread whose run still goes, in every project, delegated tasks' threads included. */
+  activeThreads(): Promise<ListedThread[]>;
   /** The thread's last assistant message, whole, or undefined when it wrote none. */
   lastReply(threadId: string): Promise<string | undefined>;
   /** Waits up to `timeoutMs` for the thread's latest run, and the work it delegated, to settle. */
@@ -230,6 +242,18 @@ function t3Over(client: Client): T3 {
     }, LaunchedSchema),
     send: async (threadId, message, clientRequestId) => { await call('t3_thread_send', { threadId, message, mode: 'auto', clientRequestId }, z.object({}).loose()); },
     thread: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, maxCharsPerItem: 1 }, z.object({ thread: ThreadShellSchema }))).thread,
+    activeThreads: async () => {
+      const threads: ListedThread[] = [];
+      let cursor: number | null | undefined = 0;
+
+      while (cursor !== null && cursor !== undefined) {
+        const page: z.infer<typeof ThreadPageSchema> = await call('t3_thread_list', { allProjects: true, includeSubagents: true, statuses: [...ACTIVE_STATUSES], cursor, limit: 100 }, ThreadPageSchema);
+        threads.push(...page.threads);
+        cursor = page.nextCursor;
+      }
+
+      return threads;
+    },
     lastReply: async (threadId) => {
       let reply: z.infer<typeof ItemSchema> | undefined;
       let afterPosition: number | undefined;

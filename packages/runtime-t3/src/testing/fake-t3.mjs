@@ -107,6 +107,13 @@ async function play(threadId) {
 
   if (thread.worktreePath) update(threadId, () => ({ sees: filesUnder(thread.worktreePath), couldWrite: canWrite(thread.worktreePath) }));
 
+  if (agent.delegatedWaits) {
+    // The task's own thread holds the approval; the step's run goes on, waiting for the task.
+    writeThread({ threadId: `${threadId}:task`, title: 'Delegated task', parentThreadId: threadId, projectId: thread.projectId, provider: thread.provider, status: 'running', settled: false, runCount: 1, pendingRequestCount: 1 });
+
+    return;
+  }
+
   if (agent.waits) {
     // The agent asks for an approval nobody gives. T3 keeps such a run `running`, with the request pending.
     update(threadId, () => ({ pendingRequestCount: 1 }));
@@ -292,6 +299,13 @@ const TOOLS = {
 
     return ok({ threadId: args.threadId, runId, status: thread.status, timedOut: !settled, ...(settled && { resultRun: { runId, status: config().resultRunStatus ?? thread.status } }) });
   },
+  // As T3 lists them: newest first, a delegated task's thread with its parent only when subagents are asked for.
+  t3_thread_list: (args) => {
+    const threads = fs.readdirSync(THREADS).filter((file) => file.endsWith('.json')).map((file) => JSON.parse(fs.readFileSync(path.join(THREADS, file), 'utf8')))
+      .filter((thread) => (args.includeSubagents || thread.parentThreadId === undefined) && (args.projectId === undefined || thread.projectId === args.projectId) && (args.statuses === undefined || args.statuses.includes(thread.status)));
+
+    return ok({ threads: threads.map((thread) => ({ threadId: thread.threadId, projectId: thread.projectId, status: thread.status, parentThreadId: thread.parentThreadId ?? null })), nextCursor: null, total: threads.length });
+  },
   t3_thread_read: (args) => {
     const thread = readThread(args.threadId);
 
@@ -327,9 +341,14 @@ const TOOLS = {
     if (config().interruptFails) return fail(`Thread ${args.threadId} has a run T3 cannot interrupt now.`);
     const lag = config().stopLagMs;
 
-    // As T3 does, it may acknowledge the stop before the provider's run has ended.
-    if (lag) setTimeout(() => update(args.threadId, () => ({ status: 'interrupted' })), lag);
-    else update(args.threadId, () => ({ status: 'interrupted' }));
+    // As T3 does, it may acknowledge the stop before the provider's run has ended. A stop also stops the tasks it delegated.
+    const stop = () => {
+      update(args.threadId, () => ({ status: 'interrupted' }));
+      update(`${args.threadId}:task`, () => ({ status: 'interrupted', pendingRequestCount: 0 }));
+    };
+
+    if (lag) setTimeout(stop, lag);
+    else stop();
 
     return ok({ threadId: args.threadId, runId: `run:${args.threadId}:1`, status: 'interrupt_requested' });
   },
