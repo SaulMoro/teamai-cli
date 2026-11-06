@@ -881,6 +881,26 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('answers a recover cancel with the end the runtime that ran the exec recorded while the stop ran, never silence', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const op = newOp();
+    first.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await first.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    // teamai is gone; the runtime that runs the exec outlives its stdin, and records the exec's end when it stops.
+    first.child.stdin.end();
+    // The engine answers the stop only after that runtime has seen its exec end and recorded it.
+    engine.stopHold(1_500);
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE }, 'recover');
+    second.send({ type: 'cancel', op });
+
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)))).toEqual({ op, event: 'cancelled' });
+  });
+
   it('answers a cancel of an exec that already ended with that end again, in the runtime that ran it and in a restarted one', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
