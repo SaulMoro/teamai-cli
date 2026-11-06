@@ -1191,13 +1191,36 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     if (!place.workspace) return undefined;
     const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
-    if ((place.kind === 'worktree' && place.member) || !journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) {
+    /** Stops this handle's agents and leaves the workspace open, for another handle or the member who works there too. */
+    const stopOwn = async (): Promise<RuntimeFailure | undefined> => {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record, deadline)))).flatMap((failure) => (failure ? [failure.message] : []));
 
       return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : undefined;
-    }
+    };
+
+    if ((place.kind === 'worktree' && place.member) || !journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) return stopOwn();
 
     const { id: workspaceId, name } = place.workspace;
+
+    // The member may work there too, as when they open the same directory in the app, which answers this workspace: an
+    // archive would stop their agents, so the close stops only its own and leaves the workspace to them.
+    const listing = (async (): Promise<{ ids: string[] } | { unlisted: string }> => {
+      try {
+        return { ids: await live.memberAgentsIn(workspaceId) };
+      } catch (error) {
+        return { unlisted: error instanceof Error ? error.message : String(error) };
+      }
+    })();
+
+    const listed = await Promise.race([listing, late(deadline)]);
+
+    if (listed === 'late' || 'unlisted' in listed) {
+      const why = listed === 'late' ? `did not answer within ${STOP_SETTLE_MS / 1000} s` : `failed: ${listed.unlisted}`;
+
+      return { code: 'close_failed', message: `Paseo's list of the agents in workspace ${name} (${workspaceId}) ${why}, so teamai cannot tell whether the member works there, and archived nothing. Close the step again; if it still fails, archive the workspace in the Paseo app.` };
+    }
+
+    if (listed.ids.length > 0) return stopOwn();
 
     const archiving = (async (): Promise<{ refused?: string }> => {
       try {

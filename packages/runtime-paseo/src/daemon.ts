@@ -232,6 +232,8 @@ export interface Daemon {
   models(tool: PaseoTool): Promise<Model[]>;
   /** Whether Paseo has an active workspace on a directory, as one the member opened in the app. */
   isOpen(cwd: string): Promise<boolean>;
+  /** The agents of a workspace that no archive closed and teamai did not start (they carry no `teamai-attempt` label): the member's. */
+  memberAgentsIn(workspaceId: string): Promise<string[]>;
   /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
   /**
@@ -443,6 +445,18 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
     },
     models,
     isOpen: (cwd) => isOpenIn(api, cwd),
+    async memberAgentsIn(workspaceId) {
+      const found: string[] = [];
+
+      for (let cursor: string | undefined; ;) {
+        const listed = await api.agents.list({ page: { limit: 200, ...(cursor !== undefined && { cursor }) } });
+        found.push(...listed.entries.flatMap(({ agent }) => (agent.workspaceId === workspaceId && !agent.archivedAt && agent.status !== 'closed' && !Object.hasOwn(agent.labels, 'teamai-attempt') ? [agent.id] : [])));
+        const next = listed.pageInfo.nextCursor;
+
+        if (!listed.pageInfo.hasMore || !next) return found;
+        cursor = next;
+      }
+    },
     async workspace(cwd) {
       const opened = await api.workspaces.open({ cwd });
       const current = opened.current();
