@@ -28,10 +28,13 @@ import { cliOf, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 //
 
 /**
- * The agent templates sbx ships for the tools teamai launches. With no `agent`, an attempt starts from its own tool's,
- * and a command step's from the bare `shell` template, which holds no agent.
+ * The agent template sbx ships for each tool teamai launches, when it ships one. With no `agent`, an attempt starts
+ * from its own tool's, and a command step's from the bare `shell` template, which holds no agent.
  */
-const TEMPLATES = ['claude', 'codex'] as const;
+const TEMPLATE_OF = { claude: 'claude', codex: 'codex', codebuddy: undefined } satisfies Record<(typeof LAUNCHABLE)[number], string | undefined>;
+
+/** The tools sbx ships a template for, which a sandbox with no `agent` offers. */
+const TEMPLATED = LAUNCHABLE.filter((tool) => TEMPLATE_OF[tool] !== undefined);
 
 const NOT_INSTALLED = 'sbx is not installed here, or not on PATH. Install Docker Sandboxes (https://docs.docker.com/ai/sandboxes/), sign in with `sbx login`, and start again.';
 
@@ -180,7 +183,7 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
         return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
       }
 
-      const found = agent === undefined ? { ok: true as const, tools: [...TEMPLATES] } : LAUNCHABLE.some((tool) => tool === agent) ? { ok: true as const, tools: [agent] } : await probeTools(agent);
+      const found = agent === undefined ? { ok: true as const, tools: [...TEMPLATED] } : LAUNCHABLE.some((tool) => tool === agent) ? { ok: true as const, tools: [agent] } : await probeTools(agent);
 
       if (!found.ok) return found;
       const stored = await storedLogins();
@@ -229,7 +232,8 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
     },
 
     async create(key, view, tool) {
-      const template = agent ?? (tool === undefined ? 'shell' : TEMPLATES.find((shipped) => shipped === tool));
+      const launched = LAUNCHABLE.find((each) => each === tool);
+      const template = agent ?? (tool === undefined ? 'shell' : launched && TEMPLATE_OF[launched]);
 
       if (template === undefined) {
         return { ok: false, failure: { code: 'bad_option', key: 'agent', message: `sbx ships no template for ${tool}, the tool of attempt ${key.attempt}. Set agent to a kit reference that brings ${tool}, or run the step on claude or codex` } };

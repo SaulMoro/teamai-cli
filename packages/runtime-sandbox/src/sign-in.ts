@@ -69,12 +69,18 @@ export function isGivenSignIn(tool: string, credentials: InitCredentials): boole
   return credentials.logins.includes(tool) || signInOf(tool)?.env.some((name) => credentials.env.includes(name)) === true;
 }
 
+/** What a sandbox offers of the tools it holds: those that can sign in, and why each other one cannot. */
+interface SignedIn {
+  tools: string[];
+  unavailable: Unavailable;
+}
+
 /**
  * The tools of `tools` that can sign in on `provider`: by a credential teamai gives, or, on sbx, by the login sbx keeps
  * for its service (`stored`); each other tool is `unavailable`, with how to sign it in. An older teamai names no
  * credentials: every tool is offered, as before.
  */
-export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): { tools: string[]; unavailable: Unavailable } {
+export function offerSignedIn({ tools, provider, credentials, stored }: { tools: readonly string[]; provider: SignInProvider; credentials: InitCredentials | undefined; stored: ReadonlySet<string> }): SignedIn {
   if (credentials === undefined) return { tools: [...tools], unavailable: {} };
 
   const isStored = (tool: string): boolean => {
