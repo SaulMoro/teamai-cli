@@ -57,10 +57,14 @@ export interface FakeEngine {
   calls(): string[][];
   /** The containers (and sbx sandboxes) that exist, by name. */
   containers(): string[];
+  /** The labels of the container named `name`, or undefined when there is none. */
+  labelsOf(name: string): Record<string, string> | undefined;
   /** The networks that exist, by name. */
   networks(): string[];
   env(): NodeJS.ProcessEnv;
 }
+
+const StoredSchema = z.object({ name: z.string(), labels: z.record(z.string(), z.string()) });
 
 export function fakeEngine(dir: string): FakeEngine {
   const bin = path.join(dir, 'engine-bin');
@@ -69,6 +73,17 @@ export function fakeEngine(dir: string): FakeEngine {
   const images: Record<string, string> = {};
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(state, { recursive: true });
+
+  /** Every container (and sbx sandbox) the fake engine holds, with its name and labels. */
+  const stored = (): Array<z.infer<typeof StoredSchema>> => {
+    const root = path.join(state, 'containers');
+
+    return (fs.existsSync(root) ? fs.readdirSync(root) : []).flatMap((id) => {
+      const file = path.join(root, id, 'container.json');
+
+      return fs.existsSync(file) ? [StoredSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')))] : [];
+    });
+  };
 
   for (const engine of ['docker', 'podman', 'sbx']) {
     fs.writeFileSync(path.join(bin, engine), `#!/bin/sh\nFAKE_ENGINE_NAME=${engine} exec "${process.execPath}" "${FAKE_ENGINE}" "$@"\n`, { mode: 0o755 });
@@ -111,15 +126,8 @@ export function fakeEngine(dir: string): FakeEngine {
       else fs.writeFileSync(path.join(state, 'no-policy'), '');
     },
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.array(z.string()).parse(JSON.parse(line))) : []),
-    containers: () => {
-      const root = path.join(state, 'containers');
-
-      return (fs.existsSync(root) ? fs.readdirSync(root) : []).flatMap((id) => {
-        const file = path.join(root, id, 'container.json');
-
-        return fs.existsSync(file) ? [z.object({ name: z.string() }).parse(JSON.parse(fs.readFileSync(file, 'utf8'))).name] : [];
-      });
-    },
+    containers: () => stored().map(({ name }) => name),
+    labelsOf: (name) => stored().find((container) => container.name === name)?.labels,
     networks: () => (fs.existsSync(path.join(state, 'networks')) ? fs.readdirSync(path.join(state, 'networks')).sort() : []),
     env: () => ({ PATH: `${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, FAKE_ENGINE_STATE: state, FAKE_ENGINE_LOG: log, FAKE_ENGINE_IMAGES: JSON.stringify(images) }),
   };
