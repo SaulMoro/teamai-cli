@@ -289,6 +289,10 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     // this stop began, and it ran out of time for, is dropped then, so none goes on past the stop that wanted it.
     if ((reached === 'late' || 'code' in reached) && reaching === connecting) reaching = undefined;
 
+    // One this stop joined failed, as when the stop that began it ran out of time first: this stop connects again within
+    // its own deadline, so a daemon that is back by then is reached.
+    if (reached !== 'late' && 'code' in reached && shared && Date.now() < deadline) return reachBy(deadline);
+
     if (reached !== 'late') return reached;
 
     if (!shared) abandon.abort();

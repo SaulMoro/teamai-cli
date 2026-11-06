@@ -1779,6 +1779,39 @@ describe('teamai-runtime-paseo', () => {
     expect(await recovering.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
   }, 40_000);
 
+  it('answers a recover-mode cancel that joined another cancel\'s connection by its own deadline, connecting again once that one gave up, so a daemon back by then is reached', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    first.send(promptRequest(handle, 'op-0000000c'));
+    await first.next(isOp('op-0000000b', 'display'));
+    await first.next(isOp('op-0000000c', 'display'));
+    await first.kill();
+    const { url } = daemon;
+    const port = Number(new URL(url).port);
+    await daemon.close();
+    const sockets = new Set<net.Socket>();
+    const silent = net.createServer((socket) => sockets.add(socket));
+    await new Promise<void>((resolve) => silent.listen(port, '127.0.0.1', resolve));
+    onTestFinished(() => {
+      for (const socket of sockets) socket.destroy();
+    });
+    const recovering = start();
+    await ready(recovering, { mode: 'recover', options: { url } });
+
+    recovering.send({ type: 'cancel', op: 'op-0000000b' });
+    await delay(4_000);
+    recovering.send({ type: 'cancel', op: 'op-0000000c' });
+    // The daemon is back, though the connection both cancels share still hangs on the host that never answered.
+    silent.close();
+    daemon = await startFakeDaemon({ state: daemonState, port });
+
+    expect(await recovering.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    expect(await recovering.next(isEnd('op-0000000c'))).toEqual({ op: 'op-0000000c', event: 'cancelled' });
+  }, 40_000);
+
   it('refuses to close a place whose record it cannot read, and never calls it gone', async () => {
     const runtime = start();
     await ready(runtime);
