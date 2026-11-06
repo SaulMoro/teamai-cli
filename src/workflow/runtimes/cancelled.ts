@@ -113,7 +113,12 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
     await writeHeldLoginBack(run, attempt, record, { isCollected: notCollected === undefined });
     const notClosed = await placed.close();
 
-    if (!notClosed) return true;
+    if (!notClosed) {
+      if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.`);
+      else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.`);
+
+      return true;
+    }
 
     return isReleased ? releaseAttempt(config, run, attempt, notClosed.message) : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
   } catch (error) {

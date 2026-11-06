@@ -488,6 +488,20 @@ Judge the review.
     expect(review).toMatchObject({ id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: `Step "review" runs on claude, which the driver of this run cannot launch here: toy: ${reason} Or remove tool from the step.` } });
   });
 
+  it('says which place teamai workflow cancel closed of a settled run, once the close an earlier one kept goes through', async () => {
+    writeDefinition('closeslater', [{ use: 'toy', options: { state, close_fails: true } }]);
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'closeslater'], repo, env());
+    const runId = runOf(ran);
+    const attempt = attemptOf(readRunState(runId).steps[0]);
+    writeDefinition('closeslater', [{ use: 'toy', options: { state } }]);
+
+    const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+    expect(envelope(cancelled)).toMatchObject({ error: { code: 'run_settled' } });
+    expect(cancelled.stderr).toContain(`Closed the place of attempt ${attempt} of run ${runId} on step runtime "toy", which an earlier close had kept.`);
+    expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+  });
+
   it('records why each runtime holds a step back, which the run\'s details show once the driver stops', async () => {
     setMemberWorkflows({ allow: { network: false } });
     writeDefinition('both', [{ use: 'toy', options: { state } }, { use: 'local' }]);
@@ -1399,6 +1413,7 @@ span('end');
       expect(pidAlive(pid)).toBe(false);
       const [review] = readRunState(run).steps;
       expect(runtimeRecord(run, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+      expect(cancelled.stderr).toContain(`Stopped attempt ${attemptOf(review)} of run ${run} on step runtime "toy" and closed its place.`);
       expect(cancelled.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attemptOf(review)} of run ${run} held.`);
       expect(fs.existsSync(lockFile())).toBe(false);
       // Codex refreshed the login before it was stopped: the dedicated home keeps the token Codex now holds.
