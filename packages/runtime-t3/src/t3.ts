@@ -100,9 +100,10 @@ const ItemPageSchema = z.object({ items: z.array(ItemSchema), nextPosition: z.nu
 /**
  * The T3 modes a step thread may run in, loosest first. `auto` is T3's Auto mode: the provider's own review approves
  * routine actions and asks the person about the rest (a provider without such a review asks about everything).
- * `approval-required` is Supervised: every command and edit waits for the person.
+ * `approval-required` is Supervised: every command and edit waits for the person. `full-access` asks nothing, and a
+ * thread runs in it only when the run's `runtime_mode` says so.
  */
-export const STEP_MODES = ['auto', 'auto-accept-edits', 'approval-required'] as const;
+export const STEP_MODES = ['full-access', 'auto', 'auto-accept-edits', 'approval-required'] as const;
 
 export type StepMode = (typeof STEP_MODES)[number];
 

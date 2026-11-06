@@ -10,10 +10,11 @@ import {
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import type { AddedProjects } from './added-projects.js';
+import type { SignInAccess } from './auth.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
-import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { STEP_MODES, T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
 // ─── teamai-runtime-t3 ───
@@ -52,8 +53,11 @@ const OptionsSchema = z.object({
   environment: z.literal('local'),
   /** A T3 provider instance to run every prompt on, by its id in T3 Settings → Providers; the tool's default one otherwise. */
   instance: z.string().min(1).optional(),
-  /** The mode every step thread runs in, in place of the member's T3 default; never full access. */
-  runtime_mode: z.enum(['auto', 'auto-accept-edits', 'approval-required']).optional(),
+  /**
+   * The mode every step thread runs in, in place of the member's T3 default. `full-access` is the member's explicit
+   * opt-in: threads run without asking, the sign-in asks for Full access, and every tool offered is reported so.
+   */
+  runtime_mode: z.enum(STEP_MODES).optional(),
 }).strict();
 
 /** The option names an effort maps to in T3's model options, by provider. */
@@ -156,7 +160,7 @@ export interface ServeOptions {
    * Connects to the environment for a run in `mode`, signing in when it has no valid sign-in. `recover`
    * signs in never: it only stops what an earlier run left. A failure names why and what the person does about it.
    */
-  connect(how: { mode: RuntimeMode }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  connect(how: { mode: RuntimeMode; access: SignInAccess }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
   /** T3 Code's data directory, where the member's settings are. */
@@ -497,10 +501,19 @@ export function serve(options: ServeOptions): Promise<void> {
   const inheritedMode = (mode: T3RuntimeMode | undefined, about: { op: OpId; handle: string }): StepMode => {
     if (mode !== 'full-access') return mode ?? 'auto';
 
-    if (!saidFullAccess) notice('T3\'s default mode is Full access; teamai starts its threads in Auto instead.', about);
+    if (!saidFullAccess) notice('T3\'s default mode is Full access; teamai starts its threads in Auto unless runtime_mode says full-access.', about);
     saidFullAccess = true;
 
     return 'auto';
+  };
+
+  /** The mode a thread of `work` starts in: `runtime_mode`, else the member's default; a judge never in full access. */
+  const launchMode = (work: Work, mode: T3RuntimeMode | undefined, about: { op: OpId; handle: string }): StepMode => {
+    const set = session?.runtimeMode;
+
+    if (set === 'full-access' && work.kind === 'judge') return 'auto';
+
+    return set ?? inheritedMode(mode, about);
   };
 
   /** `work`, counted as under way in `handle` until it settles. */
@@ -532,7 +545,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /** Connects in recover mode: with the sign-in teamai keeps, never signing in, since it only stops what an earlier run left. */
   const connectToRecover = async (): Promise<Reach> => {
-    const connected = await options.connect({ mode: 'recover' });
+    const connected = await options.connect({ mode: 'recover', access: 'auto' });
 
     if (!connected.ok) return { ok: false, failure: connected.error };
 
@@ -712,7 +725,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0]?.toString();
 
       const message = key === 'runtime_mode'
-        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access; runtime_mode sets it to auto, auto-accept-edits or approval-required. Remove it, or set one of those three`
+        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four`
         : `Runtime t3 takes { environment: local, instance?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
 
       write({ type: 'init', ok: false, error: { code: 'bad_option', message, ...(key && { key }) } });
@@ -724,7 +737,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const checkout = request.checkout ?? options.cwd;
     const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
     const answerBy = Date.now() + INIT_WAIT_MS;
-    const connecting = options.connect({ mode: request.mode });
+    const connecting = options.connect({ mode: request.mode, access: parsed.data.runtime_mode === 'full-access' ? 'full-access' : 'auto' });
     const reaching = request.mode === 'attended' ? { answered: true as const, value: await connecting } : await within(connecting, INIT_WAIT_MS);
 
     if (!reaching.answered) {
@@ -767,6 +780,8 @@ export function serve(options: ServeOptions): Promise<void> {
       const defaultTool = [...instances.instances].find(([, provider]) => provider.providerInstanceId === project.defaultModel?.instanceId)?.[0];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
+        // Full access is the member's opt-in, and teamai records the isolation of these steps as none.
+        ...(parsed.data.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
           // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own assets, and
@@ -1168,7 +1183,8 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     if (lease.permissions === 'unattended') {
-      // The offer says unattended: false, so teamai never sends one; a thread on the host never runs in full access.
+      // The offer says unattended: false, so teamai never sends one: an unattended lease needs a strict sandbox, which a
+      // thread on the host is not, even in full access.
       refuse({ op: request.op, state: 'failed', failure: { code: 'unattended_unsupported', message: 'Runtime t3 runs no step in unattended permissions on this machine.' } });
 
       return;
@@ -1216,7 +1232,7 @@ export function serve(options: ServeOptions): Promise<void> {
     // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
     // so a repeat in another mode would not find the thread it launched.
     const launch: LaunchRecord = pending ?? {
-      title: `${lease.step} · teamai ${opened.run}`, ...(selection.selection && { modelSelection: selection.selection }), runtimeMode: s.runtimeMode ?? inheritedMode(project.defaultMode, { op: request.op, handle: request.handle }), tool: lease.tool,
+      title: `${lease.step} · teamai ${opened.run}`, ...(selection.selection && { modelSelection: selection.selection }), runtimeMode: launchMode(work, project.defaultMode, { op: request.op, handle: request.handle }), tool: lease.tool,
       launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && opened.kind === 'worktree' && opened.binding === 'existing_worktree' && { worktreePath: request.cwd }),
     };
 
@@ -1273,7 +1289,9 @@ export function serve(options: ServeOptions): Promise<void> {
         finish({
           op: request.op, state: 'failed', failure: {
             code: 'sign_in_too_narrow',
-            message: `T3 Code refused to start the step's thread in ${launch.runtimeMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Auto access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.`,
+            message: launch.runtimeMode === 'full-access'
+              ? `T3 Code refused to start the step's thread in ${launch.runtimeMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Full access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.`
+              : `T3 Code refused to start the step's thread in ${launch.runtimeMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again; approve it with Auto access if T3 Code asks. Or set runtime_mode to a mode the sign-in allows.`,
           },
         });
       } else if (refused) finish({ op: request.op, state: 'failed', failure: { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${why}` } });

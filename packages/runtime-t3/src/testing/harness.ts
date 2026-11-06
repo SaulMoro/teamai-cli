@@ -106,6 +106,8 @@ export interface FakeT3Config {
   environmentMs?: number;
   /** T3 refuses every sign-in decision, as it does a pairing code it does not accept. */
   decisionRefused?: boolean;
+  /** The access the person picks in T3's sign-in page: Auto unless set. */
+  pageAccess?: 'auto' | 'full-access';
   /** T3 answers a sign-in decision with a redirect that carries no code. */
   decisionNoCode?: boolean;
   /** How long a sign-in decision takes to answer, in ms. */
@@ -317,12 +319,12 @@ export function credentialsFile(home: string): string {
 }
 
 /** Signs the member in to the fake server ahead of time, as an earlier attended run would have. */
-export function signIn(t3: FakeT3, token = 'fake-t3-token-0123456789', expiresInSeconds = 3600): void {
+export function signIn(t3: FakeT3, token = 'fake-t3-token-0123456789', expiresInSeconds = 3600, scope?: string): void {
   const origin = t3.origin();
   const file = credentialsFile(t3.home);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, JSON.stringify({
-    [`${origin}/mcp`]: { tokens: { access_token: token, token_type: 'Bearer' }, expiresAt: Date.now() + expiresInSeconds * 1000 },
+    [`${origin}/mcp`]: { tokens: { access_token: token, token_type: 'Bearer', ...(scope && { scope }) }, expiresAt: Date.now() + expiresInSeconds * 1000 },
   }), { mode: 0o600 });
 }
 

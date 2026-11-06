@@ -59,10 +59,12 @@ const connect: ServeOptions['connect'] = async (how) => {
     return { ok: false, error: { code: 't3_unavailable', message: `T3 Code at ${resource.origin} does not answer. Open T3 Code, or run \`t3 serve\`, then start the workflow again.` } };
   }
 
-  const silent = how.mode !== 'recover' && !validToken(state, resource.href) ? await signInSilently({ stateDir: state, resource, t3Home, t3Cli }) : undefined;
+  // A run signs in again when its kept sign-in does not grant the access it needs.
+  const { access } = how;
+  const silent = how.mode !== 'recover' && !validToken(state, resource.href, access) ? await signInSilently({ stateDir: state, resource, t3Home, t3Cli, access }) : undefined;
   const silentFailure = silent?.ok === false ? silent.reason : undefined;
 
-  if (how.mode !== 'attended' && !validToken(state, resource.href)) {
+  if (how.mode !== 'attended' && !validToken(state, resource.href, access)) {
     const message = silentFailure === undefined
       ? `teamai has no valid T3 Code sign-in for ${resource.origin}, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.`
       : `teamai has no valid T3 Code sign-in for ${resource.origin} and could not sign in through the t3 command (${silentFailure}), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.`;
@@ -70,10 +72,10 @@ const connect: ServeOptions['connect'] = async (how) => {
     return { ok: false, error: { code: 'login_required', message } };
   }
 
-  const signIn = how.mode === 'attended' ? await attendedSignIn({ stateDir: state, resource: resource.href, silentFailure, say: (message) => write({ event: 'notice', message }) }) : undefined;
+  const signIn = how.mode === 'attended' ? await attendedSignIn({ stateDir: state, resource: resource.href, access, silentFailure, say: (message) => write({ event: 'notice', message }) }) : undefined;
 
   try {
-    const t3 = await connectT3(resource, signIn?.provider ?? unattendedAuth(state, resource.href), () => signIn?.code() ?? Promise.reject(new Error('No sign-in.')));
+    const t3 = await connectT3(resource, signIn?.provider ?? unattendedAuth(state, resource.href, access), () => signIn?.code() ?? Promise.reject(new Error('No sign-in.')));
     const signedInAs = signInOf(state, resource.href);
 
     if (signedInAs === undefined) {
@@ -84,6 +86,11 @@ const connect: ServeOptions['connect'] = async (how) => {
 
     return { ok: true, t3, signIn: signedInAs };
   } catch (error) {
+    // T3's page grants the access the person picked there, which may be narrower than the run's.
+    if (access === 'full-access' && validToken(state, resource.href, 'auto') && !validToken(state, resource.href, access)) {
+      return { ok: false, error: { code: 'sign_in_too_narrow', message: 'teamai\'s T3 Code sign-in was approved without Full access, which runtime_mode full-access needs. Start the workflow again and pick Full access in the page T3 Code opens, or remove runtime_mode: full-access.' } };
+    }
+
     const detail = error instanceof Error ? error.message : String(error);
 
     return { ok: false, error: { code: 't3_unavailable', message: `Could not connect to T3 Code at ${resource.origin} (${detail.replace(/\.$/, '')}). Open T3 Code, or run \`t3 serve\`, then start the workflow again.` } };
