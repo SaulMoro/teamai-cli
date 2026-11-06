@@ -8,7 +8,7 @@ import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
 //
 //  One long-lived container per attempt, idle until teamai execs in it:
 //
-//    docker run -d --name teamai-<run>-<attempt> --label teamai.run=<run> --label teamai.attempt=<attempt>
+//    docker run -d --name teamai-<run>-<attempt> --label teamai.run=<run> --label teamai.attempt=<attempt> --label teamai.owner=<journal>
 //      --user <uid>:<gid>                      (podman: --userns keep-id)
 //      --env HOME=/tmp/teamai-home              a private home, never the member's
 //      -v <worktree>:<worktree>:rw -v <run dir>:<run dir>:rw -v <git path>:<git path>:ro …   every view path at its host path (,z on SELinux)
@@ -67,7 +67,8 @@ export interface Host {
   env: NodeJS.ProcessEnv;
 }
 
-export function containerProvider({ engine, image, host }: { engine: ContainerEngine; image: string; host: Host }): Provider {
+/** `owner`: the id of the journal whose attempts the containers are, which labels each one. */
+export function containerProvider({ engine, image, owner, host }: { engine: ContainerEngine; image: string; owner: string; host: Host }): Provider {
   const notInstalled = engine === 'docker'
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';
@@ -153,7 +154,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       const volumes = mounted.mounts.flatMap(({ at, mode }) => ['-v', `${at}:${at}:${mode}${label}`]);
 
       const created = await cli([
-        'run', '-d', '--name', sandboxName(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, ...user(),
+        'run', '-d', '--name', sandboxName(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(),
         '--env', `HOME=${CONTAINER_HOME}`, ...volumes, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
 
