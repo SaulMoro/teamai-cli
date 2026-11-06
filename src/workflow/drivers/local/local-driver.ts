@@ -35,8 +35,8 @@ import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSte
 import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
-import { credentialSecrets, credentialsForTool, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
+import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../../runtimes/login.js';
+import { credentialSecrets, credentialsForTool, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';

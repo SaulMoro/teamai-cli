@@ -18,7 +18,7 @@ import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceNames, toolOf } from '../../tool-registry.js';
 import type { StepRuntime } from './step-runtime.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
-import type { LaunchTool } from '../../tool-launch/tools.js';
+import { LOGIN_TOOLS, type LoginTool } from './login.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -178,11 +178,6 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
     },
   };
 }
-
-/** The tools whose login a runtime option may bring from a home dedicated to teamai, `<tool>: login`. */
-export const LOGIN_TOOLS = ['codex'] as const satisfies readonly LaunchTool[];
-
-export type LoginTool = (typeof LOGIN_TOOLS)[number];
 
 /** An environment variable's name, as a credential's name and the variable it is read from are written. */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;

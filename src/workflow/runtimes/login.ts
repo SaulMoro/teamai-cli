@@ -6,7 +6,7 @@ import { getTeamaiHomeDir } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
-import { LOGIN_TOOLS as LOGIN_TOOL_IDS, type LoginTool } from './sources.js';
+import type { LaunchTool } from '../../tool-launch/tools.js';
 
 // ─── A tool login teamai keeps for step runtimes ─────────
 //
@@ -21,6 +21,11 @@ import { LOGIN_TOOLS as LOGIN_TOOL_IDS, type LoginTool } from './sources.js';
 //  attempt, reattached, finishes and releases it. `teamai workflow cancel` of the holder's run releases it too.
 //
 
+/** The tools whose login a runtime option may bring from a home dedicated to teamai, `<tool>: login`. */
+export const LOGIN_TOOLS = ['codex'] as const satisfies readonly LaunchTool[];
+
+export type LoginTool = (typeof LOGIN_TOOLS)[number];
+
 /** The login file each tool keeps in its home, and the variable that names that home. */
 const LOGIN_FILES = { codex: 'auth.json' } as const satisfies Record<LoginTool, string>;
 
@@ -31,7 +36,7 @@ const WAIT_POLL_MS = 500;
 
 /** The file of a `tool` home that holds its login, which only `holdLogin` puts in a tool home, or undefined for a tool teamai keeps no login of. */
 export function loginFileOf(tool: string): string | undefined {
-  const login = LOGIN_TOOL_IDS.find((one) => one === tool);
+  const login = LOGIN_TOOLS.find((one) => one === tool);
 
   return login && LOGIN_FILES[login];
 }
@@ -132,7 +137,7 @@ export function loginWaitFile(attemptDirectory: string): string {
   return path.join(attemptDirectory, 'login-wait.json');
 }
 
-export const LoginWaitSchema = z.object({ tool: z.enum(LOGIN_TOOL_IDS), holder: z.object({ run: z.string(), attempt: z.string() }) });
+export const LoginWaitSchema = z.object({ tool: z.enum(LOGIN_TOOLS), holder: z.object({ run: z.string(), attempt: z.string() }) });
 
 /** What an attempt waiting for a login shows while it waits. */
 export type LoginWait = z.infer<typeof LoginWaitSchema>;
@@ -215,7 +220,7 @@ export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: Run
 export async function releaseEndedLogins(run: RunId, open: ReadonlySet<string>): Promise<Array<{ tool: LoginTool; attempt: AttemptId }>> {
   const released: Array<{ tool: LoginTool; attempt: AttemptId }> = [];
 
-  for (const tool of LOGIN_TOOL_IDS) {
+  for (const tool of LOGIN_TOOLS) {
     const holder = await loginHolder(tool);
 
     if (holder?.run !== run || open.has(holder.attempt)) continue;
