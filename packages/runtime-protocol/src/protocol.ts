@@ -31,6 +31,8 @@ import { z } from 'zod';
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
+//                                                   a handle already closed answers `closed` again: teamai closes one
+//                                                   again once it removed a clone or team folder of the run
 //    < {"event":"notice","op":"op-8b10…","message":"…"}   any time, op or handle optional: a line for the person; it answers nothing
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
 //                                                   or, when the stop is not confirmed, {"op":"op-8b10…","event":"failed",

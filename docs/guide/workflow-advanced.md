@@ -1796,6 +1796,8 @@ Set them over the process's environment only, and never write them to disk or to
 
 The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. A `cancel` of an operation that already ended answers that end again and stops nothing; only `cancel_failed` is replaced (below). teamai logs a warning, with a count, for an end of an operation it no longer waits on. An option it does not take fails `init` with `bad_option` and the key.
 
+Answer `closed` to a `close` of a handle you already closed. Once teamai removes a clone or a team folder of a run, it closes again the last place your runtime closed for that run, so your runtime can see at a `close` that the folder is gone, and remove what it added for it.
+
 A runtime that cannot end a place answers `close` with why. teamai then treats what ran there as still running: the attempt keeps its login, and the run's details show the failure under the step as *Not closed*:
 
 ```text

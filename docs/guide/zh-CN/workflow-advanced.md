@@ -1790,6 +1790,8 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 
 其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。对已经结束的操作发出的 `cancel`，再次给出那个结束结果，不停止任何东西；只有 `cancel_failed` 会被替换（见下文）。teamai 收到它已不再等待的操作的结束结果时，会记录一条带计数的警告。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
+对已经关闭过的句柄再次发来的 `close`，回答 `closed`。teamai 删除某次运行的克隆或团队目录后，会再关闭一次你的运行时为这次运行最后关闭的位置，这样你的运行时能在 `close` 时看到那个目录已经不在，并删除它为该目录添加的东西。
+
 无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
 
 ```text

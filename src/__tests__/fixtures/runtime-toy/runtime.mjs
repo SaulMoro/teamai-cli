@@ -145,7 +145,8 @@ function stopGroup(pgid) {
 // open, exec and prompt brings, to `credentials.jsonl` in its state, and sets an exec's over its process environment.
 // `exit_at: 'exec-accepted'` makes the toy itself exit right after it accepted an exec, which keeps running. With
 // `close_fails`, it answers every `close` with `close_failed`; set to a credential's name, its failure echoes the value
-// the place's open brought, so a test reads what teamai keeps of it.
+// the place's open brought, so a test reads what teamai keeps of it. Each `close` appends the handle and whether the
+// folder its place was opened in still exists to `closes.jsonl`, so a test reads what a runtime sees go at a close.
 // `display` is sent as given, valid or not, so a test reads what teamai keeps of it.
 function shown() {
   return options.display === undefined ? {} : { display: options.display };
@@ -601,6 +602,12 @@ function close(request) {
     return;
   }
 
+  let names;
+
+  try { names = fs.readdirSync(file('ops')); } catch { names = []; }
+  const opened = names.map((name) => readJson(file('ops', name), undefined)).find((record) => record?.kind === 'open' && record.handle === request.handle);
+  const folder = opened?.view?.worktree;
+  fs.appendFileSync(file('closes.jsonl'), `${JSON.stringify({ handle: request.handle, ...(folder && { present: fs.existsSync(folder) }) })}\n`);
   const handles = readHandles();
 
   for (const [key, handle] of Object.entries(handles)) if (handle === request.handle) delete handles[key];

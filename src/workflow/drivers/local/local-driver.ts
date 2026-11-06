@@ -1181,14 +1181,22 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (opened.kind === 'ready') localHandles.set(lease.attempt, opened.handle);
   };
 
+  // The handle of the last place each external runtime closed for this run, which it is sent again once teamai removed
+  // a clone or a team folder, so it sees the folder gone at a close, the verb it cleans up at.
+  const lastClosed = new Map<RuntimeSlot, string>();
+
   const closeRun = async (attempt: AttemptId): Promise<void> => {
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
-    const logins = slotOf.get(attempt)?.engine.logins ?? [];
+    const slot = slotOf.get(attempt);
+    const logins = slot?.engine.logins ?? [];
+    const closingHandle = slot?.kind === 'external' ? (await readAttemptRuntime(config, runId, attempt))?.open.handle : undefined;
     attemptRuns.delete(attempt);
     localHandles.delete(attempt);
     slotOf.delete(attempt);
     const notClosed = await closing?.close();
+
+    if (slot && closingHandle !== undefined && !notClosed) lastClosed.set(slot, closingHandle);
 
     if (handle !== undefined) await local.close(handle);
 
@@ -1473,8 +1481,18 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const { next } = offered;
 
       if (signalled || isStoppedByPerson) continue;
+
       // A clone whose steps all settled is not needed any more.
-      await sweepClones(config, runId);
+      if (await sweepClones(config, runId)) {
+        for (const [slot, closedHandle] of lastClosed) {
+          if (slot.kind !== 'external') continue;
+          const again = await slot.runtime.close(closedHandle);
+
+          if (!again.ok) log.debug(`Runtime ${slot.use} did not close ${closedHandle} again after teamai removed a clone: ${masked(again.failure.message, await maskedValues())}`);
+        }
+
+        lastClosed.clear();
+      }
 
       if (isWorkflowError(next)) return next;
 

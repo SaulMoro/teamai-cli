@@ -263,6 +263,15 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     expect(await runtime.reattach(opened.handle)).toEqual({ kind: 'gone' });
   });
 
+  it('answers closed to a close of a handle it already closed', async () => {
+    const runtime = await start();
+    const opened = await runtime.open(openRequest(), async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+
+    expect(await runtime.close(opened.handle)).toEqual({ ok: true });
+    expect(await runtime.close(opened.handle)).toEqual({ ok: true });
+  });
+
   it.runIf(subject.retains)('reattaches after its own restart with a finished exec and its complete stdout', async () => {
     const first = await start();
     const opened = await first.open(openRequest(), async () => {});

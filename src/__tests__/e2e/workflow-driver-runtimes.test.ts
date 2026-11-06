@@ -650,6 +650,27 @@ steps:
     expect(fs.existsSync(path.join(state, 'inits.jsonl'))).toBe(false);
   });
 
+  it('closes again, once teamai removed a clone, on each runtime that ran a place in it, so the runtime sees it gone', async () => {
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+    writeFlow('cloned', `  - id: trial
+    workspace: { clone: { commit: ${commit}, team: { treatment: none } } }
+    workflow:
+      steps:
+        - id: edit
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('clean.txt', 'C')"`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    writeDefinition('toyclone', [{ use: 'toy', options: { state, can: { workspace: ['read-only', 'new', 'continue', 'clone'] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'cloned', '--driver', 'toyclone'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const closes = fs.readFileSync(path.join(state, 'closes.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { handle: string; present?: boolean });
+    const [first] = closes;
+    expect(first).toMatchObject({ present: true });
+    expect(closes.at(-1)).toEqual({ handle: first?.handle, present: false });
+  });
+
   it('keeps what the runtime shows of the place in the attempt\'s record, for the run\'s details', async () => {
     const display = { label: 'toy place', url: 'https://runtimes.example.test/place/1', fields: { place: 'toy-1', image: 'warm:3f9c' } };
     writeDefinition('shown', [{ use: 'toy', options: { state, display } }]);

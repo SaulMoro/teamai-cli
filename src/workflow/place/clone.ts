@@ -356,9 +356,11 @@ export function cloneEnv(withhold: readonly string[]): ReturnType<typeof stepEnv
  * runs in it is still to settle. Every step there that settled had its evidence staged then. The evidence a report
  * staged for a pass there that did not succeed goes too, as no judge reads it. The clones of the team repo a run's steps
  * ran in go once it is not running, as a step that failed there kept its own. `runId` limits it to one run. A receipt this teamai cannot read is kept.
+ * Says whether it removed any clone.
  */
-export async function sweepClones(config: LocalConfig, runId?: string): Promise<void> {
+export async function sweepClones(config: LocalConfig, runId?: string): Promise<boolean> {
   const root = runsDir(config);
+  let isRemoved = false;
 
   const runs = runId !== undefined
     ? [runId]
@@ -371,7 +373,10 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
     if (await fs.stat(teamClones).then(() => true, () => false)) {
       const read = await readRun(config, id);
 
-      if (read === 'missing' || read === 'corrupt' || read.status !== 'running') await fs.rm(teamClones, { recursive: true, force: true });
+      if (read === 'missing' || read === 'corrupt' || read.status !== 'running') {
+        await fs.rm(teamClones, { recursive: true, force: true });
+        isRemoved = true;
+      }
     }
 
     for (const name of (await fs.readdir(dir).catch((): string[] => [])).filter((entry) => entry.endsWith('.json'))) {
@@ -389,10 +394,13 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
 
       if (run?.status === 'running' && run.steps.some((step) => !settled(step) && inClone(step.id))) continue;
       await removeRoot(receipt.root, file);
+      isRemoved = true;
 
       if (run) await removeUnjudgedEvidence(config, run, inClone);
     }
   }
+
+  return isRemoved;
 }
 
 /**
