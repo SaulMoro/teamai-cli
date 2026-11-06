@@ -2,26 +2,26 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
-import { COMMAND_MS, sandboxName, type ExecEnd, type Provider } from '../provider.js';
+import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
 //
 //  One microVM per attempt, from the agent's template, each place path at its host path through virtiofs:
 //
-//    sbx create --name teamai-<run>-<attempt> --no-progress <agent> <worktree> <result> <run dir> <tool home> <git path>:ro …
-//    sbx exec -w <cwd> -e NAME … teamai-<run>-<attempt> env -u WITHHELD … -- <argv>
-//    sbx stop teamai-<run>-<attempt>          ends every process; the next exec starts the sandbox again
-//    sbx rm --force teamai-<run>-<attempt>
+//    sbx create --name teamai-<journal>-<run>-<attempt> --no-progress <agent> <worktree> <result> <run dir> <tool home> <git path>:ro …
+//    sbx exec -w <cwd> -e NAME … teamai-<journal>-<run>-<attempt> env -u WITHHELD … -- <argv>
+//    sbx stop teamai-<journal>-<run>-<attempt>          ends every process; the next exec starts the sandbox again
+//    sbx rm --force teamai-<journal>-<run>-<attempt>
 //
 //  The worktree is the primary workspace. sbx does not follow a linked worktree's `.git` to its common directory, so
 //  the git paths the view names are mounted read-only at their own paths: `git status` works, `git commit` cannot
 //  write. No credential goes in at create: each exec brings its own, by name, from this process's environment. A
 //  login stored with `sbx secret set` stays in the host's proxy, which injects it into the requests; the sandbox holds
 //  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is the
-//  handle: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none) and its
-//  name names no journal, so no open sweeps sbx: one a killed runtime's create left stays until `sbx rm`. sbx's network policy lets a sandbox reach every host it allows, so
-//  this provider offers no judge, which must reach its model provider only.
+//  handle: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none), so
+//  its name carries the journal that owns it, the id a container's `teamai.owner` label carries. sbx's network policy
+//  lets a sandbox reach every host it allows, so this provider offers no judge, which must reach its model provider only.
 //
 
 const NOT_INSTALLED = 'sbx is not installed here, or not on PATH. Install Docker Sandboxes (https://docs.docker.com/ai/sandboxes/), sign in with `sbx login`, and start again.';
@@ -48,8 +48,12 @@ function namesListed(stdout: string): string[] | undefined {
   }
 }
 
-export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.ProcessEnv }): Provider {
+/** `owner`: the id of the journal whose attempts the sandboxes are, which starts each one's name. */
+export function sbxProvider({ agent, owner, env }: { agent: string; owner: string; env: NodeJS.ProcessEnv }): Provider {
   const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
+
+  /** An attempt's sandbox name, which is also its id: `teamai-<journal>-<run>-<attempt>`. */
+  const nameOf = ({ run, attempt }: PlaceKey): string => `teamai-${owner}-${run}-${attempt}`;
 
   /** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
   const messageOf = (ran: Ran): string => (ran.kind !== 'ran' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
@@ -58,7 +62,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
 
   const find: Provider['find'] = async (key) => {
     const ran = await cli(['ls', '--json'], { timeoutMs: COMMAND_MS });
-    const name = sandboxName(key);
+    const name = nameOf(key);
     const names = ran.kind === 'ran' && ran.code === 0 ? namesListed(ran.stdout) : undefined;
 
     if (names !== undefined) return { ok: true, id: names.includes(name) ? name : undefined };
@@ -118,7 +122,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
       const mounted = mountsOf('sbx', view);
 
       if (!mounted.ok) return mounted;
-      const name = sandboxName(key);
+      const name = nameOf(key);
       // mountsOf lists the worktree first, which sbx takes as the primary workspace.
       const paths = mounted.mounts.map(({ at, mode }) => (mode === 'ro' ? `${at}:ro` : at));
       const created = await cli(['create', '--name', name, '--no-progress', agent, ...paths]);
@@ -163,8 +167,8 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
 
     destroy: remove,
 
-    display: (key) => ({ label: `${sandboxName(key)} (sbx)`, fields: { sandbox: sandboxName(key), agent: path.basename(agent) } }),
+    display: (key) => ({ label: `${nameOf(key)} (sbx)`, fields: { sandbox: nameOf(key), agent: path.basename(agent) } }),
 
-    removal: (place) => `remove it with \`sbx rm --force ${sandboxName(place)}\``,
+    removal: (place) => `remove it with \`sbx rm --force ${nameOf(place)}\``,
   };
 }
