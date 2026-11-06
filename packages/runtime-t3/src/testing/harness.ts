@@ -273,6 +273,7 @@ const LineSchema = z.record(z.string(), z.json());
 export type Line = z.infer<typeof LineSchema>;
 
 export interface Connection {
+  child: ChildProcessWithoutNullStreams;
   send(request: Line): void;
   /** The first line the runtime wrote that `match` accepts and no earlier `next` took, waiting up to `ms` for it. */
   next(match: (line: Line) => boolean, ms?: number): Promise<Line>;
@@ -307,6 +308,7 @@ export function connect(executable: string, t3: FakeT3, env: Record<string, stri
   }));
 
   return {
+    child,
     lines,
     send: (request) => { child.stdin.write(`${JSON.stringify(request)}\n`); },
     async next(match, ms = 10_000) {

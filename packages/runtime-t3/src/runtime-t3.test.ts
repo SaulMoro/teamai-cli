@@ -1696,6 +1696,23 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['event'] === 'error')).toEqual([]);
     });
 
+    it('keeps running, and ends its prompt, when it notes a dropped line after teamai stopped reading its stderr', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000079'));
+      await runtime.next((line) => line['op'] === 'op-00000079' && line['event'] === 'display');
+      runtime.child.stderr.destroy();
+
+      // Its note about the dropped line goes to a stderr nobody reads.
+      runtime.send({ type: 'prompt', op: 'op-00000079', handle });
+      runtime.send({ type: 'reattach', handle });
+      await runtime.next((line) => line['event'] === 'alive');
+      await new Promise((resolve) => { setTimeout(resolve, 500); });
+      runtime.send({ type: 'cancel', op: 'op-00000079' });
+
+      expect(await ended(runtime, 'op-00000079')).toEqual({ op: 'op-00000079', event: 'cancelled' });
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
