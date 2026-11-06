@@ -832,6 +832,39 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
   });
 
+  it('takes interactive steps in an attended run only, where a person can work in the agent in the Paseo app', async () => {
+    expect(await ready(start(), { mode: 'attended' })).toMatchObject({ ok: true, can: { hitl: true } });
+    expect(await ready(start(), { mode: 'unattended' })).toMatchObject({ ok: true, can: { hitl: false } });
+  });
+
+  it('runs an interactive step as an agent the person works with in Paseo, ending it only once the agent wrote the result, though it idles between their turns', async () => {
+    // The agent's first turn ends with no result, as a turn that asks the person something does.
+    const runtime = start();
+    await ready(runtime, { mode: 'attended' });
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { interactive: true }));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await expect.poll(() => received().length).toBe(1);
+    expect(received()[0]).toMatchObject({ initialPrompt: expect.stringMatching(/^This step is interactive: work through it with the person in this Paseo agent\. Write the result file only once they say the step is done\.\n\nReview the change\./) });
+
+    // Idle, with no result: the person may still be in it.
+    await delay(3_000);
+    expect(runtime.lines.filter(isEnd('op-0000000b'))).toEqual([]);
+
+    // The person said it is done, and the agent's next turn wrote the result.
+    fs.writeFileSync(path.join(dir, 'out', 'result.json'), JSON.stringify({ output: { agreed: true } }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { agreed: true } } });
+  });
+
+  it('fails an interactive step, as any step, once its agent idles on a result file that is not a workflow result', async () => {
+    behave({ result: 'not a result' });
+    const runtime = start();
+    await ready(runtime, { mode: 'attended' });
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { interactive: true }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
+  });
+
   it('shows the workspace when it opens, and the agent with a link to it in Paseo in a display event once the agent exists', async () => {
     behave({ output: { ok: true } });
     const runtime = start();

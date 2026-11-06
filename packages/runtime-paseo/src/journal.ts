@@ -91,7 +91,8 @@ const PromptRecordSchema = z.discriminatedUnion('kind', [
      * message, reported with the level and access the runtime kept.
      */
     answer: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('result-file'), file: z.string() }),
+      /** `interactive`: a person works through the step with the agent, which idles between their turns until it writes the file. */
+      z.object({ kind: z.literal('result-file'), file: z.string(), interactive: z.literal(true).optional() }),
       z.object({ kind: z.literal('reply'), kept: ConfinedKeptSchema }),
     ]),
     /** The directory the agent works in: the worktree, or a confined prompt's directory. */
