@@ -1503,6 +1503,12 @@ A runtime that cannot end a place answers `close` with why. teamai then treats w
 ← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
 ```
 
+Each `teamai workflow cancel <run>` tries the close again. When the runtime can never confirm it, as for a create its provider refused, check that nothing of the attempt still runs there, then let the attempt go with `teamai workflow cancel <run> --release <attempt>`. teamai neither stops nor closes it, writes its login back and frees it, and no longer tries the close. The runtime may still keep the place:
+
+```text
+ℹ Released attempt a1 of run r7 without closing its place on step runtime "docker", as asked. That runtime may still keep the place.
+```
+
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
 
 teamai opens your runtime in `recover` mode whenever it must stop an attempt, as `workflow cancel` does after the driver was killed. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal, so a provider that is down or never answers cannot hold the stop. A runtime that answers `recover` with an error is opened again for new work, and when that fails too, the cancel names both failures:

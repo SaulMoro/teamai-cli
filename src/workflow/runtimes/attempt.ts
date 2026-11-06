@@ -56,7 +56,10 @@ export const AttemptRuntimeRecordSchema = z.object({
   sessionHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
   /** What the runtime last showed of the place, at `ready` or at a reattach, for the run's details. */
   display: RuntimeDisplaySchema.optional(),
-  /** Why the runtime could not close the place, which may still hold what ran there, for the run's details. */
+  /**
+   * Why the runtime could not close the place, which may still hold what ran there, for the run's details. Kept on a
+   * `closed` place only when the person released it without the runtime's close.
+   */
   closeFailed: RuntimeFailureSchema.optional(),
 });
 
@@ -72,6 +75,14 @@ export async function readAttemptRuntime(config: LocalConfig, run: RunId, attemp
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Records the place of attempt `attempt` as no longer teamai's to close, without its runtime's close, once the person
+ * checked that nothing of it still runs. Why the runtime could not close it stays in the record.
+ */
+export async function releaseAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId, record: AttemptRuntimeRecord): Promise<void> {
+  await writeJsonAtomic(recordPath(config, run, attempt), { ...record, phase: 'closed' });
 }
 
 /** The tool home of `tool` for attempt `attempt`: under the attempt directory, beside its record. */

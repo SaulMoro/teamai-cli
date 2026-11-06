@@ -1452,6 +1452,38 @@ span('end');
       fs.rmSync(lockFile(), { force: true });
     });
 
+    it('releases an attempt whose runtime cannot close its place once the person runs teamai workflow cancel --release, writing the login back', async () => {
+      loginDefinition('codexrelease', state);
+      const { run, pid, watched } = await holdingRun('codexrelease');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexrelease', state, { close_fails: true });
+      const attempt = attemptOf(readRunState(run).steps[0]);
+      const handle = `toy-${run}-${attempt}`;
+
+      const kept = await runCLI(['workflow', 'cancel', run], repo, env());
+
+      expect(pidAlive(pid)).toBe(false);
+      expect(kept.stderr).toContain(`Could not stop attempt ${attempt} of run ${run} on step runtime "toy" of driver "codexrelease": Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set. Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
+      expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+
+      const released = await runCLI(['workflow', 'cancel', run, '--release', attempt], repo, env());
+
+      // The run was cancelled already; that cancel tries the attempts again, and lets this one go.
+      expect(envelope(released), released.stderr).toMatchObject({ error: { code: 'run_settled' } });
+      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} without closing its place on step runtime "toy", as asked. That runtime may still keep the place.`);
+      expect(released.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+      expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed', closeFailed: { code: 'close_failed' } });
+      expect(fs.existsSync(lockFile())).toBe(false);
+      expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
+      // No close reached the toy, which still knows the place.
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'handles.json'), 'utf8'))).toMatchObject({ [`${run}/${attempt}`]: handle });
+
+      const again = await runCLI(['workflow', 'cancel', run], repo, env());
+
+      expect(again.stderr).not.toContain(`Could not stop attempt ${attempt}`);
+    });
+
     const initModes = (toyState: string): string[] => fs.readFileSync(path.join(toyState, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { mode: string }).mode);
     const signedOut = { code: 'signed_out', message: 'The toy is signed out of its provider. Sign in again, then start the run again.' };
     const cannotStop = (run: string) => ({ code: 'cancel_failed', message: `The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel ${run} again.` });

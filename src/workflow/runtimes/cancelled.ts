@@ -3,7 +3,7 @@ import { resolveRunMode } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { attemptRun, readAttemptRuntime } from './attempt.js';
+import { attemptRun, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
 import { disposeDriver, LOGIN_TOOLS, openDriver } from './sources.js';
 
@@ -20,9 +20,11 @@ import { disposeDriver, LOGIN_TOOLS, openDriver } from './sources.js';
 /**
  * Stops what each cancelled attempt of the locked run left open on its step runtime, and each other attempt whose place
  * a runtime still holds, such as one whose stop or close failed before, then releases the logins of the attempts that
- * no longer run. Says what it released, and which login stays held and how to free it.
+ * no longer run. Says what it released, and which login stays held and how to free it. Attempt `release` is not
+ * stopped or closed: the person checked that nothing of it still runs, so teamai only writes its login back and lets
+ * it go, as for a place whose runtime can never confirm the close.
  */
-export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock): Promise<void> {
+export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, release?: AttemptId): Promise<void> {
   const { run } = lock;
   const state = await readRun(config, run);
 
@@ -36,8 +38,12 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock):
     return attempt.success ? [attempt.data] : [];
   });
 
-  for (const attempt of new Set([...cancelled, ...await placesLeftOpen(config, run, leased)])) {
-    if (!await stopAttempt(config, run, attempt)) stillRunning.add(attempt);
+  const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)]);
+
+  if (release !== undefined && !left.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
+
+  for (const attempt of left) {
+    if (!await (attempt === release ? releaseAttempt(config, run, attempt) : stopAttempt(config, run, attempt))) stillRunning.add(attempt);
   }
 
   const open = new Set([...stillRunning, ...leased]);
@@ -100,21 +106,40 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId):
     const notCollected = record.phase === 'collected' ? undefined : await placed.collect();
 
     if (notCollected) log.warn(notCollected.message);
-    const tool = LOGIN_TOOLS.find((one) => one === record.toolHome?.tool);
-    const holder = tool && await loginHolder(tool);
-
-    if (tool && record.toolHome && holder?.run === run && holder.attempt === attempt) {
-      const notBack = await writeLoginBack({ tool, run, attempt, toolHome: record.toolHome.dir, collected: notCollected === undefined });
-
-      if (notBack) log.warn(notBack.message);
-    }
-
+    await writeHeldLoginBack(run, attempt, record, notCollected === undefined);
     const notClosed = await placed.close();
 
-    return notClosed ? cannot(notClosed.message) : true;
+    return notClosed ? cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`) : true;
   } catch (error) {
     return cannot(error instanceof Error ? error.message : String(error));
   } finally {
     await disposeDriver(opened.opened);
   }
+}
+
+/** Writes back the login attempt `attempt` holds, when it holds one; `collected` says its tool home came back. */
+async function writeHeldLoginBack(run: RunId, attempt: AttemptId, record: AttemptRuntimeRecord, collected: boolean): Promise<void> {
+  const tool = LOGIN_TOOLS.find((one) => one === record.toolHome?.tool);
+  const holder = tool && await loginHolder(tool);
+
+  if (tool && record.toolHome && holder?.run === run && holder.attempt === attempt) {
+    const notBack = await writeLoginBack({ tool, run, attempt, toolHome: record.toolHome.dir, collected });
+
+    if (notBack) log.warn(notBack.message);
+  }
+}
+
+/**
+ * Lets attempt `attempt` go without stopping or closing it on its step runtime, as the person asked: writes back the
+ * login it holds when its tool home came back, and records its place as no longer teamai's to close.
+ */
+async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<true> {
+  const record = await readAttemptRuntime(config, run, attempt);
+
+  if (!record || record.phase === 'closed') return true;
+  await writeHeldLoginBack(run, attempt, record, record.phase === 'collected');
+  await releaseAttemptRuntime(config, run, attempt, record);
+  log.info(`Released attempt ${attempt} of run ${run} without closing its place on step runtime "${record.runtime}", as asked. That runtime may still keep the place.`);
+
+  return true;
 }

@@ -975,11 +975,14 @@ export async function workflowRetry(runId: string, step: string): Promise<void> 
 /**
  * Cancels a run or step through the shared control operation. With no live driver of the run on this machine, it also
  * stops what the cancelled attempts left running on their step runtimes, then releases the logins they held. A live
- * driver keeps the run's lock and does both itself.
+ * driver keeps the run's lock and does both itself. `release` names an attempt to let go without its runtime's close.
  */
-export async function workflowCancel(runId: string, step?: string): Promise<void> {
+export async function workflowCancel(runId: string, step?: string, options: { release?: string } = {}): Promise<void> {
   await workflowControl(runId, async (config, secrets) => {
     const run = RunIdSchema.safeParse(runId);
+    const release = options.release === undefined ? undefined : AttemptIdSchema.safeParse(options.release);
+
+    if (release?.success === false) return { error: { code: 'invalid_arguments', message: `--release takes an attempt id, such as a0123abcd, not ${options.release}.` } };
 
     if (!run.success) return cancelRun(config, runId, secrets, step);
 
@@ -988,12 +991,16 @@ export async function workflowCancel(runId: string, step?: string): Promise<void
     const taken = await takeRunLock(config, run.data, async (lock) => {
       const cancelled = await cancelRun(config, runId, secrets, step);
 
-      if (!('error' in cancelled) || cancelled.error.code === 'run_settled') await stopCancelledAttempts(config, lock);
+      if (!('error' in cancelled) || cancelled.error.code === 'run_settled') await stopCancelledAttempts(config, lock, release?.data);
 
       return cancelled;
     }, { waitMs: 0 });
 
-    return taken.kind === 'held' ? taken.value : cancelRun(config, runId, secrets, step);
+    if (taken.kind === 'held') return taken.value;
+
+    if (release) log.warn(`A driver of run ${runId} is still live, so attempt ${release.data} is not released. Stop that driver, then run teamai workflow cancel ${runId} --release ${release.data} again.`);
+
+    return cancelRun(config, runId, secrets, step);
   });
 }
 
