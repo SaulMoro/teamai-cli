@@ -6,7 +6,7 @@ import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
 import { parseOptions, type SandboxOptions } from './options.js';
-import { sandboxName, unreachable, type PlaceKey, type Provider } from './provider.js';
+import { handleOf, unreachable, type PlaceKey, type Provider } from './provider.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -248,7 +248,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         if (!RUN_ID.test(key.run) || !ATTEMPT_ID.test(key.attempt)) return false;
 
         try {
-          return journal.place(sandboxName(key)) === undefined;
+          return journal.place(handleOf(key)) === undefined;
         } catch {
           // A record it cannot read may be this attempt's: its sandbox stays.
           return false;
@@ -259,7 +259,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       const byAttempt = new Map<string, { key: PlaceKey; ids: string[] }>();
 
       for (const { id, run, attempt } of orphans) {
-        const name = sandboxName({ run, attempt });
+        const name = handleOf({ run, attempt });
         byAttempt.set(name, { key: { run, attempt }, ids: [...(byAttempt.get(name)?.ids ?? []), id] });
       }
 
@@ -302,7 +302,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     const key = { run, attempt };
-    const handle = sandboxName(key);
+    const handle = handleOf(key);
 
     // A judge's place: nothing of the host, and no sandbox until its prompt names the directory.
     if (view === undefined) {

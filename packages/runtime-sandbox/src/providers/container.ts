@@ -1,7 +1,7 @@
 import type { ContainerEngine } from '../options.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
-import { COMMAND_MS, sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, handleOf, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -41,9 +41,9 @@ const ENGINE_SETTINGS = ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCK
 /** What a judge's container and its filter run with: no capability, and no way to gain one. */
 const LOCKED = ['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges'];
 
-const networkOf = (key: PlaceKey): string => `${sandboxName(key)}-net`;
+const networkOf = (key: PlaceKey): string => `${handleOf(key)}-net`;
 
-const filterOf = (key: PlaceKey): string => `${sandboxName(key)}-proxy`;
+const filterOf = (key: PlaceKey): string => `${handleOf(key)}-proxy`;
 
 /**
  * Whether a docker of `version` keeps DNS inside an internal network: before 26.0.0, 25.0.5 and 23.0.11 it forwarded a
@@ -95,7 +95,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
     if (listed.kind === 'ran' && listed.code === 0) return { ok: true, id: listed.stdout.trim().split('\n').find((line) => line !== '') };
 
-    return sandboxFailed(`${engine} could not look for the container of attempt ${key.attempt}: ${why(listed)}. Its container, if it has one, stays this attempt's until ${engine} answers again; to remove it now, run \`${engine} rm --force ${sandboxName(key)}\`.`);
+    return sandboxFailed(`${engine} could not look for the container of attempt ${key.attempt}: ${why(listed)}. Its container, if it has one, stays this attempt's until ${engine} answers again; to remove it now, run \`${engine} rm --force ${handleOf(key)}\`.`);
   };
 
   return {
@@ -169,7 +169,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       const volumes = mounted.mounts.flatMap(({ at, mode }) => ['-v', `${at}:${at}:${mode}${label}`]);
 
       const created = await cli([
-        'run', '-d', '--name', sandboxName(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(),
+        'run', '-d', '--name', handleOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(),
         '--env', `HOME=${CONTAINER_HOME}`, ...volumes, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
 
@@ -209,7 +209,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       const proxy = `http://${filterOf(key)}:${FILTER_PORT}`;
 
       const created = await cli([
-        'run', '-d', '--name', sandboxName(key), ...labels, ...user(), '--network', networkOf(key), ...LOCKED,
+        'run', '-d', '--name', handleOf(key), ...labels, ...user(), '--network', networkOf(key), ...LOCKED,
         '--env', `HOME=${CONTAINER_HOME}`, '--env', `HTTPS_PROXY=${proxy}`, '--env', `HTTP_PROXY=${proxy}`, '--env', 'NO_PROXY=',
         '-v', `${dir}:${EVIDENCE_DIR}:ro${host.selinux ? ',z' : ''}`, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
@@ -263,10 +263,10 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
     },
 
-    display: (key) => ({ label: `${sandboxName(key)} (${engine})`, fields: { container: sandboxName(key), image } }),
+    display: (key) => ({ label: `${handleOf(key)} (${engine})`, fields: { container: handleOf(key), image } }),
 
     removal: (place) => (place.confined
-      ? `remove it with \`${engine} rm --force ${sandboxName(place)} ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``
-      : `remove it with \`${engine} rm --force ${sandboxName(place)}\``),
+      ? `remove it with \`${engine} rm --force ${handleOf(place)} ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``
+      : `remove it with \`${engine} rm --force ${handleOf(place)}\``),
   };
 }
