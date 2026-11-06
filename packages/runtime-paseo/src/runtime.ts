@@ -596,7 +596,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       idempotencyKey: request.op,
       title: `teamai ${lease.step} · ${place.run}`,
       prompt: how.prompt,
-      labels: { 'teamai-attempt': `${place.run}/${place.attempt}` },
+      // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
+      labels: { 'teamai-attempt': `${place.run}/${place.attempt}`, 'teamai-run': place.run, 'teamai-step': lease.step },
       ...(how.env && { env: how.env }),
       config: { provider: `${tool}/${model.id}`, modeId: how.modeId, ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
     };

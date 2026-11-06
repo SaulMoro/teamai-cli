@@ -83,6 +83,12 @@ Mode      default
 Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-4e57d9b3cff1
 ```
 
+每个智能体都带有 `teamai-run` 和 `teamai-step` 标签，可以这样列出一次运行的智能体：
+
+```sh
+paseo ls --all --label teamai-run=r0769801107010602
+```
+
 智能体工作时，仪表盘的运行详情会显示它，并附带在 Paseo 中打开它的链接：
 
 ```json

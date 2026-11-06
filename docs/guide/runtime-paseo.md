@@ -83,6 +83,12 @@ Mode      default
 Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-4e57d9b3cff1
 ```
 
+Each agent carries the labels `teamai-run` and `teamai-step`, so you can list a run's agents:
+
+```sh
+paseo ls --all --label teamai-run=r0769801107010602
+```
+
 While the agent works, the run's details in the dashboard show it, with a link that opens it in Paseo:
 
 ```json
