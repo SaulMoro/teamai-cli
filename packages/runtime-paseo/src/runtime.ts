@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, type Creation, type Daemon, type Model, type PaseoTool, type StepMode } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type StepMode } from './daemon.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -194,6 +194,12 @@ function readResult(file: string): PromptResult | undefined {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The longest reason protocol 1 takes for a tool init names unavailable. */
+const UNAVAILABLE_MAX = 500;
+
+/** `text` cut to `max` characters, its end marked when it is cut. */
+const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 export interface Serving {
   input: Readable;
@@ -537,19 +543,16 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const installed = await connected.installedTools();
     const tools = installed.flatMap((entry) => (entry.canRun ? [entry] : []));
 
-    if (tools.length === 0) {
-      await connected.close();
+    // It starts though it can run no tool, so the run's command steps still go to the next runtime: each tool it cannot
+    // run is named with why, which teamai shows on a step on that tool.
+    const unavailable = Object.fromEntries(PASEO_TOOLS.flatMap((tool): Array<[PaseoTool, string]> => {
+      const entry = installed.find((candidate) => candidate.tool === tool);
 
-      const reasons = installed.flatMap((entry) => (entry.canRun ? [] : [`${entry.tool}: ${entry.reason}.`]));
+      if (entry?.canRun) return [];
+      const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${tool} on the daemon's PATH and sign in to it there`;
 
-      const message = reasons.length === 0
-        ? `The Paseo daemon at ${connected.url} has none of claude, codex or opencode installed. Install one on the daemon's host, and sign in to it there.`
-        : `The Paseo daemon at ${connected.url} runs no tool teamai-runtime-paseo can use. ${reasons.join(' ')}`;
-
-      write({ type: 'init', ok: false, error: { code: 'tool_unavailable', message } });
-
-      return;
-    }
+      return [[tool, clip(`The Paseo daemon at ${connected.url} cannot run ${tool}: ${reason}.`, UNAVAILABLE_MAX)]];
+    }));
 
     daemon = connected;
     mode = request.mode;
@@ -566,6 +569,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     write({
       type: 'init', ok: true, prompt: true,
       ...(judges.length > 0 && { confinedPrompt: true }),
+      ...(Object.keys(unavailable).length > 0 && { unavailable }),
       can: {
         // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
         // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.

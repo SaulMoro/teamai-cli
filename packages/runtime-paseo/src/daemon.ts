@@ -39,6 +39,9 @@ export function isPaseoTool(tool: string): tool is PaseoTool {
   return Object.hasOwn(CONFINED_MODES, tool);
 }
 
+/** The tools this runtime runs, in the order it offers them. */
+export const PASEO_TOOLS: readonly PaseoTool[] = Object.keys(CONFINED_MODES).filter(isPaseoTool);
+
 /**
  * The Paseo mode a step's agent starts in: the one Paseo sets as the tool's default, as the member's own agents start
  * in, or none, so Paseo starts the tool as it does when it sets no default (OpenCode). A default that never asks is
