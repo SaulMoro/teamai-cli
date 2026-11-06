@@ -10,7 +10,7 @@ import { z } from 'zod';
 //  teamai persists before it sends the request, and a runtime answers a repeated id with the same acceptance and the
 //  same terminal outcome until `close`. Both sides parse with the schemas below.
 //
-//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]}}
+//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude"}]}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","tool":"claude","view":{...},"credentials":{}}   tool: the prompt's, when it has one
@@ -285,9 +285,26 @@ export const InitCredentialsSchema = z.object({ env: z.array(z.string()), logins
 
 export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
 
+/**
+ * A tool instance the member may run: `name`, the name a step and `can.tools` give it; `tool`, the shipped tool it
+ * extends; `command`, the executable on PATH that starts it; `home`, its home under `$HOME` and the variable that moves
+ * it; `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its
+ * tool, teamai then launches `command` with `home.env` set to the attempt's tool home.
+ */
+export const InitInstanceSchema = z.object({
+  name: z.string().min(1),
+  tool: z.string().min(1),
+  command: z.string().min(1).optional(),
+  home: z.object({ dir: z.string().min(1), env: z.string().min(1).optional() }).optional(),
+  paths: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type InitInstance = z.infer<typeof InitInstanceSchema>;
+
 const InitRequestSchema = z.object({
   type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema,
   credentials: InitCredentialsSchema.optional(),
+  instances: z.array(InitInstanceSchema).optional(),
 });
 
 export const OpenRequestSchema = z.object({

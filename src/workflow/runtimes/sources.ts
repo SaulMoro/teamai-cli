@@ -13,7 +13,9 @@ import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
+import type { InitInstance, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
+import { acceptToolCommand } from '../../tool-instances.js';
+import { instanceNames, toolOf } from '../../tool-registry.js';
 import type { StepRuntime } from './step-runtime.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 
@@ -317,6 +319,22 @@ function badOption(driver: ResolvedDriver, use: string, key: string, message: st
  */
 export type DriverPurpose = 'run' | 'stop';
 
+/**
+ * The tool instances the member may run, as `init` gives them: their own, and the team's whose command needs no
+ * acceptance or was accepted on this machine. A runtime lists in `can.tools` the ones it can serve.
+ */
+async function runnableInstances(): Promise<InitInstance[]> {
+  const instances = instanceNames().flatMap((name) => toolOf(name)?.instance ?? []);
+  const accepted = await Promise.all(instances.map(async (instance) => (await acceptToolCommand(instance, { ask: undefined })).ok));
+
+  return instances.filter((_, index) => accepted[index]).map((instance) => ({
+    name: instance.name, tool: instance.extends,
+    ...(instance.command !== undefined && { command: instance.command }),
+    ...(instance.home && { home: { dir: instance.home.dir, ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
+    ...(instance.paths && { paths: instance.paths }),
+  }));
+}
+
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
 async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk, purpose }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
@@ -367,7 +385,8 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   }
 
   const runtime = spawned();
-  const ready = await runtime.init({ options: split.runtime, mode, credentials: { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins } });
+  const credentials = { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins };
+  const ready = await runtime.init({ options: split.runtime, mode, credentials, instances: await runnableInstances() });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
     await runtime.dispose();

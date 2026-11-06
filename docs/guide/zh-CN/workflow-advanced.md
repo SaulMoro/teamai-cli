@@ -1757,6 +1757,14 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
+`init` 还会列出你可以运行的[工具实例](reference.md#团队工具tools)：你自己的，以及团队中命令无需确认或已在本机确认过的实例。在 `can.tools` 中列出你的运行时能提供的实例。在自行 exec 工具的运行时上，teamai 会启动实例的 `command`，并把它的 `home.env` 设为该次尝试的工具主目录。没有任何运行时列出该实例时，在其上运行的步骤以 `tool_unsupported` 失败：
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":".acme-claude","env":"ACME_CLAUDE_CONFIG_DIR"}}]}
+← {"type":"init","ok":true,"can":{"tools":["claude","acme-claude"]}}
+✖ Step "review" failed with tool_unsupported: Step "review" runs on acme-claude, an instance of claude, which runtime sandbox of driver sandboxed cannot launch. Run it with --driver local.
+```
+
 值随请求发送：在 `open` 上，以及在每个需要它们的 `exec` 或 `prompt` 上。提示的工具 exec 会得到它们，命令步骤的 exec 得到 `{}`：
 
 ```text

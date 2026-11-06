@@ -77,6 +77,7 @@ import { Writes } from './writes.js';
 import { describeWorkflow } from './describe.js';
 import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import { CostSchema } from '../tool-launch/confined-level.js';
+import { toolOf } from '../tool-registry.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -1874,6 +1875,19 @@ function beyondSoleDriver(
   const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
 
   if (lackedByAll.includes('tools') && tool !== undefined) {
+    // A runtime off this host serves an instance only when it lists it; the member's own machine may launch it.
+    const extended = toolOf(tool)?.instance?.extends;
+    const prompted = sole.offers.filter((offer) => offer.can.prompt !== false);
+
+    if (extended !== undefined && prompted.length > 0 && prompted.every((offer) => offer.can.remote === true)) {
+      const runtimes = prompted.map((offer) => offer.runtime);
+
+      return {
+        code: 'tool_unsupported',
+        message: `Step "${step}" runs on ${tool}, an instance of ${extended}, which ${runtimes.length === 1 ? 'runtime' : 'runtimes'} ${runtimes.join(', ')} of driver ${sole.driver} cannot launch. Run it with --driver local.`,
+      };
+    }
+
     const reasons = sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
 
     return toolUnavailable(step, tool, isNamed, reasons);

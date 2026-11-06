@@ -1763,6 +1763,14 @@ teamai keeps `max_parallel` and `credentials` for itself: it strips them from th
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
+`init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. List in `can.tools` the ones your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with its `home.env` set to the attempt's tool home. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":".acme-claude","env":"ACME_CLAUDE_CONFIG_DIR"}}]}
+← {"type":"init","ok":true,"can":{"tools":["claude","acme-claude"]}}
+✖ Step "review" failed with tool_unsupported: Step "review" runs on acme-claude, an instance of claude, which runtime sandbox of driver sandboxed cannot launch. Run it with --driver local.
+```
+
 The values come in the requests, on `open` and on each `exec` or `prompt` that gets them. A prompt's tool exec gets them, and a command step's exec gets `{}`:
 
 ```text

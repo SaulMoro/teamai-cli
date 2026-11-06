@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { DriverCan } from '../requirements.js';
 
@@ -77,9 +77,10 @@ export interface StepRuntime {
   readonly name: string;
   /**
    * Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers, knowing the
-   * names of the `credentials` its definition gives it. In `recover` mode it only answers for the handles it recorded.
+   * names of the `credentials` its definition gives it and the tool `instances` the member may run. In `recover` mode it
+   * only answers for the handles it recorded.
    */
-  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials }): Promise<Initialized>;
+  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[] }): Promise<Initialized>;
   /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open` rejects with its error. */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;

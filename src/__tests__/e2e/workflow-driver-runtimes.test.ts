@@ -445,16 +445,53 @@ steps:
     onTestFinished(() => fs.rmSync(file, { force: true }));
   };
 
-  it('refuses a step on the member\'s own instance of claude on a runtime that execs claude, which would run the instance\'s command unchecked', async () => {
-    // An instance named like the tool it extends adjusts that tool: a step on claude then runs its command.
-    ownInstance('claude');
-    writeDefinition('toyexecs', [{ use: 'toy', options: { state, can: { tools: ['claude'] } } }]);
+  /** The member's own instance acme-claude of claude, with a command and a home variable of its own. */
+  const acmeInstance = (): void => {
+    const file = path.join(os.homedir(), '.teamai', 'tools', 'acme-claude.yaml');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\ncommand: acme-claude\nhome: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }\n');
+    fs.writeFileSync(path.join(bin, 'acme-claude'), fakeTool({ tool: 'acme-claude', version: '2.1.0 (Claude Code)', homeVariable: 'ACME_CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+    onTestFinished(() => {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(path.join(bin, 'acme-claude'), { force: true });
+    });
+  };
 
-    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyexecs'], repo, env());
+  it('runs a step on an instance a runtime that execs its tool lists, with the instance\'s command and its home variable at the attempt\'s tool home', async () => {
+    acmeInstance();
+    writeDefinition('toyacme', [{ use: 'toy', options: { state, can: { tools: ['claude', 'acme-claude'] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyacme', '--tools', 'default=acme-claude'], repo, env());
+
+    const runId = runOf(ran);
+    const [review] = readRunState(runId).steps;
+    expect(review, ran.stderr).toMatchObject({ status: 'succeeded' });
+    const [launch] = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string });
+    expect(launch?.home).toBe(path.join(attemptDir(runId, attemptOf(review)), 'tool-home', 'acme-claude'));
+  });
+
+  it('fails a step on an instance a runtime that execs its tool does not list, naming the instance and --driver local', async () => {
+    acmeInstance();
+    writeDefinition('toynoacme', [{ use: 'toy', options: { state, can: { tools: ['claude'] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toynoacme', '--tools', 'default=acme-claude'], repo, env());
 
     const [review] = readRunState(runOf(ran)).steps;
-    expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'tool_unsupported', message: expect.stringContaining('runs on claude, a tool instance') } });
+    expect(review, ran.stderr).toMatchObject({
+      status: 'failed',
+      failure: { code: 'tool_unsupported', message: 'Step "review" runs on acme-claude, an instance of claude, which runtime toy of driver toynoacme cannot launch. Run it with --driver local.' },
+    });
     expect(fs.existsSync(launches)).toBe(false);
+  });
+
+  it('gives a runtime the instances the member may run at init, with their command and home', async () => {
+    acmeInstance();
+    writeDefinition('toyagentacme', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+    await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env());
+
+    const inits = fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { instances?: unknown[] });
+    expect(inits.at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } }));
   });
 
   it('runs a step whose default tool is an instance on the next runtime when the first offers only the tool it extends', async () => {

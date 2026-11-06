@@ -46,7 +46,7 @@ import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type Star
 import { memberTools, type MemberTool } from '../../../tool-launch/member-tools.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
 import { acceptToolCommand } from '../../../tool-instances.js';
-import { instanceNames, isToolId } from '../../../tool-registry.js';
+import { instanceNames, isToolId, toolOf } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
@@ -595,10 +595,11 @@ async function promptReport(
 
   const cwd = lease.cwd ?? driver.workspace;
   const resultFile = attemptResultPath(config, lock.run, lease.attempt);
-  // On a step runtime that execs the tool, it keeps its session in a home of the attempt's, under the variable it reads.
-  // A runtime that launches agents its own way gives the tool its own home, where the member's sessions are found.
+  // On a step runtime that execs the tool, it keeps its session in a home of the attempt's, under the variable it reads:
+  // an instance's own `home.env`, else the one of the tool it extends. A runtime that launches agents its own way gives
+  // the tool its own home, where the member's sessions are found.
   const execs = onRuntime && !onRuntime.launchesAgents ? onRuntime : undefined;
-  const variable = execs ? toolHomeVariable(selected) : undefined;
+  const variable = execs ? target.instance?.home?.env ?? toolHomeVariable(selected) : undefined;
 
   if (execs && (variable === undefined || !isExecRuntimeTool(selected))) {
     return giveUp({
@@ -611,21 +612,15 @@ async function promptReport(
     return giveUp({ code: 'tool_unsupported', message: `Step "${lease.step}" is interactive, and a step runtime runs only headless prompts. Run the step with --driver local.` }, selected);
   }
 
-  // An instance's command is checked on this machine's PATH, which a runtime that execs its tool elsewhere never had.
-  if (execs && target.instance) {
-    return giveUp({
-      code: 'tool_unsupported',
-      message: `Step "${lease.step}" runs on ${launched}, a tool instance, and a step runtime that execs its tool runs only the tools teamai ships. Name ${selected} with the step's tool or --tools, or run the step with --driver local.`,
-    }, launched);
-  }
-
-  const toolHome = execs && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, selected) } : undefined;
-  const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(selected) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
+  // An instance reaches a runtime that execs its tool only when the runtime lists it, so its command is there. Its
+  // home, and the sessions there, are its own.
+  const toolHome = execs && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, launched) } : undefined;
+  const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
 
   if (toolHome) {
     await fs.mkdir(toolHome.dir, { recursive: true });
-    const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: selected, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
+    const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: launched, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
 
     if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
   } else {
@@ -636,7 +631,8 @@ async function promptReport(
 
   // A login the runtime brings is held by this attempt alone, on the whole machine, from before the place opens until
   // it is written back: another attempt waits for it here, naming the attempt that holds it.
-  const login = toolHome ? execs?.logins.find((tool) => tool === selected) : undefined;
+  // An instance keeps its own sign-in in its own home, so a login of the tool it extends is not copied there.
+  const login = toolHome ? execs?.logins.find((tool) => tool === launched) : undefined;
 
   if (login && toolHome) {
     const waitFile = loginWaitFile(attemptDir(config, lock.run, lease.attempt));
@@ -1111,14 +1107,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   if (!localReady.ok) return { error: { code: 'runtime_failed', message: localReady.failure.message } };
 
   // An external runtime is offered with what it said it can. One that execs the tool launches only the tools it can give
-  // a home; one that launches agents its own way gives each its own. It keeps `can.confined` only when its init said it
-  // answers confined prompts (the stdio reader drops it otherwise).
+  // a home, and the instances of them it lists; one that launches agents its own way gives each its own. It keeps
+  // `can.confined` only when its init said it answers confined prompts (the stdio reader drops it otherwise).
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
     ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
     : {
       kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
       ...(entry.unavailable && { unavailable: entry.unavailable }),
-      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), remote: true },
+      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(toolOf(tool)?.base ?? tool)), remote: true },
     });
 
   // Every definition has a host command slot: its `local`, or else one here that takes no prompt step but answer steps, last. While another
