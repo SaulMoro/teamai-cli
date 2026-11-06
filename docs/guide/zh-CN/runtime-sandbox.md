@@ -103,11 +103,17 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 /tmp/teamai-home                                        HOME，容器私有
 ```
 
-- 每个路径都保持主机上的路径，所以不需要复制回来，`git status` 也能用。
+- 每个路径都保持主机上的路径，所以不需要复制回来，`git status` 也能用。每种 `workspace` 都是这样：`new`、`continue`、`read-only`，以及 teamai 准备的 `clone` 或团队仓库副本，它们自己的 `.git` 就是只读的 git 目录。
 - 在容器里 `git commit` 会失败，因为 git 目录是只读的。teamai 在主机上提交时关闭钩子，所以步骤植入的钩子永远不会运行。
 - 步骤以你的身份运行：Docker 上是 `--user <你的 uid>:<gid>`，Podman 上是 `--userns keep-id`。它写的文件归你所有。在启用 SELinux 的主机上，挂载会带上共享标签（`:z`）。
 - 工具把会话保存在这次尝试的工具主目录里，所以这一轮的 `teamai-score` 运行能根据它的记录评判它，带 `session: { from: … }` 的后续步骤也能恢复它。
 - 命令步骤也在容器里运行，即使驱动定义在 sandbox 之后还列了 `local`。只有 teamai 自己的簿记工作，比如 `teamai-score` 运行收集证据和写标签的步骤，在这台机器上运行。
+
+**工具只在能登录的地方运行。** macOS 钥匙串或 `~/.claude` 里的 Claude 登录、你日常用的 `~/.codex`，都不会进入容器。所以只有当 `credentials` 写了某个工具的登录键（Claude 是 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`；Codex 是 `OPENAI_API_KEY`、`CODEX_API_KEY` 或 `codex: login`），或者在 sbx 上 sbx 替它保存了登录时，sandbox 才提供这个工具。一个都登录不了时，运行会在任何步骤之前停下，而不是停在 Claude 自己的 "Not logged in"：
+
+```text
+{"error":{"code":"runtime_failed","message":"Runtime \"sandbox\" of driver \"containers\" did not start (credential_missing): No tool in this docker sandbox can sign in, so every step there would stop at the tool's own \"Not logged in\". claude: a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again."}}
+```
 
 只有分配给步骤的变量名会进入容器：它的 `requires.env` 键、工作流的 `env`、teamai 的尝试标记、工具主目录变量，以及只给步骤工具的 `credentials`。你环境里的其他内容都不会进去，所以 `GH_TOKEN`、`SSH_AUTH_SOCK` 之类会留在外面。变量值从不出现在命令行里：容器创建时不带任何凭据，每次 `docker exec -e NAME` 都从容器引擎 CLI 自己的环境里读取值。变量值也不会写到磁盘上：运行时记下的每次 exec 结果里，工具打印出的凭据都会被遮盖。
 
@@ -199,13 +205,15 @@ runtimes:
   - use: local                                                # 接手评判
 ```
 
-**base URL 必须是容器能到达的地址。** 凭据里的 `localhost`、`127.0.0.1` 或 `::1` 指的是容器自己的回环地址，所以 sandbox 会在打开 attempt 时拒绝它，并说出变量名。把它指向容器眼中的你的机器：
+**本机上的网关可以直接用。** 凭据里的 `localhost`、`127.0.0.1` 或 `::1` 在容器里会是容器自己的回环地址，所以 teamai 会把它改成你的机器在容器里的名字，协议、端口和路径保持不变。评判的过滤器也只放行你机器上的那个端口。
 
-```sh
-# 本机 4000 端口上的网关
-export ANTHROPIC_BASE_URL=http://host.docker.internal:4000       # Docker Desktop
-# export ANTHROPIC_BASE_URL=http://host.containers.internal:4000 # Podman
+```text
+ANTHROPIC_BASE_URL=http://127.0.0.1:4000/anthropic   （你的 shell）
+ANTHROPIC_BASE_URL=http://host.docker.internal:4000/anthropic       （步骤，Docker Desktop 上）
+ANTHROPIC_BASE_URL=http://host.containers.internal:4000/anthropic   （步骤，Podman 上）
 ```
+
+Linux 上的 Docker Engine 不给你的机器这样的名字，所以在那里尝试会在创建任何东西之前以 `bad_option` 失败，信息里说出变量名，但从不说出它的值。请改用容器能到达的你的机器的地址。
 
 **镜像里需要 `node`** 来运行过滤器，Docker 也要能把 DNS 限制在 internal 网络里：26.0.0 或更高、25.0.5 或 23.0.11（更旧的版本会把容器的查询转发出去，CVE-2024-29018）。否则 sandbox 不提供评判，只有这个 sandbox 的驱动定义运行到评判时会以 `confined_pending` 停下。快速开始里的镜像带有 `node`。这个版本的 Podman 不提供评判：它的 rootless 网络无法把过滤器接到评判的网络上。
 
@@ -218,18 +226,30 @@ export ANTHROPIC_BASE_URL=http://host.docker.internal:4000       # Docker Deskto
 
 使用 `provider: sbx` 时，每次尝试都在一个有自己内核的微型虚拟机里运行，来自你指定的 agent 的模板。不需要构建镜像。
 
-**1. 每台机器做一次：** 安装 Docker Sandboxes、登录，并设置网络策略。没有网络策略时 sbx 不会创建任何沙箱，teamai 也从不替你设置。
+**1. 每台机器做一次：** 安装 Docker Sandboxes、登录、设置网络策略，并用 sbx 给你的工具登录。没有网络策略时 sbx 不会创建任何沙箱，teamai 也从不替你设置。
 
 ```sh
 sbx login
 sbx policy init balanced                 # 或者 deny-all，再放行你的模型提供方：
 # sbx policy allow network api.anthropic.com:443
+sbx run claude ~/scratch                 # 然后在 Claude Code 里用你的订阅执行 /login，再退出
+sbx rm <那个沙箱>                         # 名字见 sbx ls；登录保留，供每个沙箱使用
+sbx secret set openai --oauth            # Codex：你的 ChatGPT 登录
+sbx secret ls
 ```
 
-**2. 添加驱动定义。**
+```text
+SCOPE      TYPE      NAME        SECRET
+(global)   service   anthropic   (oauth configured)
+(global)   service   openai      (stored)
+```
+
+登录留在你机器上 sbx 的代理里，由代理加到工具的请求上，每个新沙箱都会复用它：你的环境里不需要令牌，这次尝试的工具主目录里也没有 `auth.json`。API key 也一样：`sbx secret set anthropic`。
+
+**2. 添加驱动定义。** 它不需要 credentials：
 
 ```yaml
-# drivers/sbx.yaml：用你的订阅令牌运行 Claude
+# drivers/sbx.yaml：用 sbx 替你保存的登录运行 Claude
 schemaVersion: v1alpha1
 name: sbx
 tool: claude
@@ -237,9 +257,7 @@ runtimes:
   - use: sandbox
     options:
       provider: sbx
-      agent: claude
-      credentials:
-        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+      agent: claude                      # 不需要 credentials：sbx 的代理替 Claude 登录
   - use: local                           # 负责评判：sbx 不提供评判
 ```
 
@@ -256,16 +274,10 @@ runtimes:
   - use: local                           # 负责评分步骤的评判：sbx 不提供评判
 ```
 
-用 Codex 时，每个成员在 sbx 里保存一次自己的登录。它留在你机器上 sbx 的代理里，由代理加到 Codex 的请求上，所以不会有 `auth.json` 写进这次尝试的工具主目录：
-
-```sh
-sbx secret set openai --oauth            # 你的 ChatGPT 登录；也可以把 API key 通过管道传给：sbx secret set openai
-sbx secret ls
-```
+两种方式都没给工具登录的成员，会在任何步骤开始之前拿到 sbx 命令：
 
 ```text
-SCOPE      TYPE      NAME     SECRET
-(global)   service   openai   (stored)
+{"error":{"code":"runtime_failed","message":"Runtime \"sandbox\" of driver \"sbx\" did not start (credential_missing): No tool in this sbx sandbox can sign in, so every step there would stop at the tool's own \"Not logged in\". claude: sign Claude in once with sbx: run `sbx run claude <any dir>`, then `/login` in Claude Code, and every new sandbox reuses that login (an API key instead: `sbx secret set anthropic`); or run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again."}}
 ```
 
 **3. 在上面运行工作流。**
@@ -292,11 +304,10 @@ teamai-5f0c2a9e1d7b4c38-rb2152f12cb75a939-aca6809de   claude   ● running      
 - 每次 `sbx exec` 都用 `-e NAME` 拿到步骤的变量名，命令行里从不出现值。严格步骤要扣下的变量，比如 sbx 为它的代理设置的 `GH_TOKEN`，会在步骤进程里被取消设置。步骤自己的 `HOME`、`XDG_*`、`SBX_*` 或 `DOCKER_*` 不会传进去：sbx CLI 自己读取它们，沙箱保留它自己的。
 - 取消或到达限制时执行 `sbx stop`，下一次 exec 会重新启动沙箱。尝试结束时 teamai 执行 `sbx rm --force`。sbx 也会自己停掉空闲的沙箱，这没有问题。
 
-**你机器上的网关**通过 `host.docker.internal` 访问，sbx 的代理会把它转到 `localhost`。放行一次它的端口：
+**你机器上的网关**可以直接用：teamai 把 `http://127.0.0.1:4000` 改成 `host.docker.internal:4000`，sbx 的代理会把它转到 `localhost`。沙箱能不能访问它由你的 sbx 策略决定，teamai 在打开尝试之前会问它（`sbx policy check`，只读）。不允许时，步骤失败并给出要添加的规则，teamai 从不修改策略：
 
-```sh
-sbx policy allow network localhost:4000
-export ANTHROPIC_BASE_URL=http://host.docker.internal:4000
+```text
+✖ Step "fix" failed with runtime_failed: Step runtime "sandbox" could not open attempt a2695fde5 (sandbox_unavailable): ANTHROPIC_BASE_URL points at port 4000 of this machine, which your sbx network policy does not let a sandbox reach. Allow it once with `sbx policy allow network localhost:4000`, and start again.
 ```
 
 **sbx 不提供评判。** 受限的评判只能访问它的模型提供方，而 sbx 沙箱能访问你的 sbx 策略放行的所有主机：balanced 策略放行包仓库和代码托管站点，评判可以借它们把读到的内容发出去。单个沙箱的规则只能拒绝它点名的主机，策略 profile 来自你所在组织的 sbx 治理设置，所以 teamai 没有办法把一个沙箱收窄到只能访问一个主机。在 sbx 之后列上 `local` 或一个 `docker` sandbox 来负责评判：
@@ -308,7 +319,7 @@ name: sbx-judged
 tool: claude
 runtimes:
   - use: sandbox
-    options: { provider: sbx, agent: claude, credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN } }
+    options: { provider: sbx, agent: claude }
   - use: sandbox
     options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
 ```
@@ -378,10 +389,10 @@ sbx ls -q
 
 | 错误 | 发生了什么 | 下一步 |
 | --- | --- | --- |
-| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，或者拉取不到镜像。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
-| `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN`；评判的情况，把信息里点名的密钥加到 `credentials` |
+| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
+| `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，sandbox 里没有能登录的工具，或者评判没有拿到它的工具会读取的环境变量凭据 | sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`。容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials`。评判的情况，把信息里点名的密钥加到 `credentials` |
 | `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
-| `bad_option` | `options` 里有键或值写错了（`sbx` 缺少 `agent`），或者 `ANTHROPIC_BASE_URL` 这类凭据指向容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；base URL 在 Docker Desktop 上改用 `host.docker.internal` |
+| `bad_option` | `options` 里有键或值写错了（`sbx` 缺少 `agent`），或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
 | `sandbox_failed` | 无法创建或查找这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>` |
