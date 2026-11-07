@@ -434,6 +434,16 @@ export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
  */
 export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed', 'usage_limited'] as const;
 
+/**
+ * Whether `text`, a tool's own error or last message, says it stopped on its usage limit: Claude Code's "You've hit your
+ * limit · resets 3pm (Europe/Madrid)", "5-hour limit reached ∙ resets 2pm" or older "Claude AI usage limit
+ * reached|<time>", and Codex's "You've hit your usage limit. … try again at 3:04 PM.". The tool's line starts the text,
+ * so a reply that only mentions a limit is not one. Such a failure is `usage_limited`.
+ */
+export function isUsageLimitText(text: string): boolean {
+  return /^(?:you(?:'|’)ve hit your (?:(?:usage|session|weekly|daily|monthly|5-hour) )?limit\b|claude ai usage limit reached\b|(?:5-hour|session|weekly|daily|monthly) limit reached\b)/i.test(text.trim());
+}
+
 /** What a runtime kept of a confined prompt: the level it enforced, and what the agent could do in the directory. */
 export const ConfinedKeptSchema = z.object({ level: ConfinedLevelSchema, access: z.enum(ACCESS_LEVELS) });
 
