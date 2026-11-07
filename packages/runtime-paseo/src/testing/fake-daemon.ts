@@ -130,6 +130,8 @@ const BehaviourSchema = z.object({
   refuse_archive: z.string().optional(),
   /** The daemon answers every agent lookup with this error. */
   refuse_fetch: z.string().optional(),
+  /** How long the daemon takes to answer an agent lookup, as a busy daemon does. */
+  fetch_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to list a provider's models, as a provider SDK that is slow to start does. */
   models_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to list its workspaces, answering with those open by then. */
@@ -455,6 +457,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       'agent.create.request': creating,
       archive_workspace_request: archiving,
       set_daemon_config_request: behaviour().config_ms,
+      fetch_agent_request: behaviour().fetch_ms,
     };
 
     const hold = holds[message.type] ?? 0;
