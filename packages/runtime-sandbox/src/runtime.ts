@@ -1083,8 +1083,16 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // The wrapper runs a link named after an instance outside any attempt too (`--version`): it reads them here.
     if (instances.length > 0) {
+      let kept: ReturnType<Journal['instances']> = {};
+
       try {
-        journal.saveInstances({ ...journal.instances(), ...Object.fromEntries(instances.map(({ name, tool, command }) => [name, { tool, ...(command !== undefined && { command }) }])) });
+        kept = journal.instances();
+      } catch (error) {
+        warn(`teamai-runtime-sandbox: warning: ${error instanceof Error ? error.message : String(error)} It is written again with the instances of this run.`);
+      }
+
+      try {
+        journal.saveInstances({ ...kept, ...Object.fromEntries(instances.map(({ name, tool, command }) => [name, { tool, ...(command !== undefined && { command }) }])) });
       } catch (error) {
         warn(`teamai-runtime-sandbox: warning: the instances teamai named could not be kept for teamai-sandbox-<instance> links: ${error instanceof Error ? error.message : String(error)}`);
       }

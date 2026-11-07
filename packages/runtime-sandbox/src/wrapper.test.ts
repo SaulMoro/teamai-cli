@@ -372,6 +372,22 @@ describe('an instance through the wrapper', () => {
     expect(reportOf(ran)).toMatchObject({ tool: 'acme-claude', home: at.toolHome, set: ['CLAUDE_CODE_OAUTH_TOKEN', 'ACME_CLAUDE_CONFIG_DIR'] });
   });
 
+  it('names the record it cannot read, and runs nothing, rather than take a broken record as none', async () => {
+    const state = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox');
+    fs.mkdirSync(path.join(state, 'places'), { recursive: true });
+    fs.writeFileSync(path.join(state, 'instances.json'), '{"acme-claude":');
+    fs.writeFileSync(path.join(state, 'places', 'teamai-broken.json'), 'not json');
+
+    const instance = await wrapper('acme-claude', ['--version'], { cwd: dir });
+    fs.writeFileSync(path.join(state, 'instances.json'), '{}');
+    const tool = await wrapper('claude', ['-p'], { cwd: dir });
+
+    expect(instance).toMatchObject({ code: 2, stdout: '' });
+    expect(instance.stderr).toContain(path.join(state, 'instances.json'));
+    expect(tool).toMatchObject({ code: 2, stdout: '' });
+    expect(tool.stderr).toContain(path.join(state, 'places', 'teamai-broken.json'));
+  });
+
   it('refuses an instance whose command the sandbox lacks, naming the command', async () => {
     const claudeOnly = 'ghcr.io/acme/claude-only:1';
     engine.image(claudeOnly, { claude: TOOL });
