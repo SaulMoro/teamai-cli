@@ -927,22 +927,9 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (fromThread?.ok === false) notice(`teamai could not read the T3 thread ${fromThread.threadId} this run was started from (${fromThread.why}), so a step that names no tool or model runs on your T3 Code default instead.`, {});
       const read = fromThread?.ok ? fromThread.selection : undefined;
-
-      const offered = read && providers.some((provider) => provider.providerInstanceId === read.instanceId && driverOfProvider(provider) !== undefined
-        && (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false);
-
-      const isMemberDefault = read?.instanceId === project.defaultModel?.instanceId && read?.model === project.defaultModel?.model;
-      const threadModel = offered && !isMemberDefault ? read : undefined;
-      // A run started from a thread runs as that thread does; else as the member's own new threads in this project.
-      const defaultModel = threadModel ?? project.defaultModel;
+      // The member's own default stays T3's to apply, with its options and the member's fallback.
+      const fromThreadModel = read?.instanceId === project.defaultModel?.instanceId && read?.model === project.defaultModel?.model ? undefined : read;
       const binaryPathOf = (instanceId: string): string | undefined => settings.providerInstances?.[instanceId]?.config?.binaryPath?.trim() || undefined;
-      const instances = instancesOf({ providers, instance: parsed.options.instance, project, defaultModel, binaryPathOf });
-
-      if (!instances.ok) {
-        write({ type: 'init', ok: false, error: instances.failure });
-
-        return;
-      }
 
       // The tool instances teamai gave, and each tool `instances` maps to a provider instance of its own.
       const mapped = parsed.options.instances;
@@ -958,6 +945,21 @@ export function serve(options: ServeOptions): Promise<void> {
           shown: (home) => tilde(home, options.home),
         },
       });
+
+      const instancesFor = (defaultModel: ModelSelection | undefined) => instancesOf({ providers, instance: parsed.options.instance, project, defaultModel, binaryPathOf });
+      const viaThread = fromThreadModel && instancesFor(fromThreadModel);
+      // A run started from a thread runs as that thread does, when the thread's instance is one that runs a step here;
+      // else as the member's own new threads in this project.
+      const runsThread = viaThread?.ok === true && [...viaThread.instances.values(), ...served.served.values()].some((provider) => provider.providerInstanceId === fromThreadModel?.instanceId);
+      const threadModel = runsThread ? fromThreadModel : undefined;
+      const defaultModel = threadModel ?? project.defaultModel;
+      const instances = runsThread && viaThread ? viaThread : instancesFor(defaultModel);
+
+      if (!instances.ok) {
+        write({ type: 'init', ok: false, error: instances.failure });
+
+        return;
+      }
 
       const toAdd = toBeAdded({ missing: served.missing, settings });
       const unavailable = { ...Object.fromEntries(Object.entries(served.unavailable)), ...toAdd.reasons };
