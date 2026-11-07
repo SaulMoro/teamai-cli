@@ -181,7 +181,7 @@ teamai 会重新登录，这次以 Full access 登录（配对码还会申请 `s
 
 ## 选择提供方实例和模型
 
-可用的工具是此刻能运行的 T3 提供方实例，不包括你为这个项目关掉的实例。没有指定工具的步骤，在同样没有指定工具的定义里，会在你的 T3 默认模型（项目的，否则是全局的）所属的工具上运行。一个提供方有多个实例时，`claude` 和 `codex` 只在运行提供方自己二进制文件的实例上运行（没有 Binary path，或者 Binary path 名为 `claude` 或 `codex`）：你的 T3 默认模型所在的实例，否则是以提供方命名的实例（Claude 是 `claudeAgent`，Codex 是 `codex`），再否则是第一个。Binary path 是包装命令（比如团队工具的命令）的实例只运行那个团队工具，即使它是你的 T3 默认实例；这时没有指定工具的步骤以 `claude` 在 `claudeAgent` 上运行。要让所有提示词都在某一个实例上运行，比如第二个 Claude 账号，在你机器的配置里写上它：
+可用的工具是此刻能运行的 T3 提供方实例，不包括你为这个项目关掉的实例。没有指定工具的步骤，在同样没有指定工具的定义里，会在你的 T3 默认模型（项目的，否则是全局的）所属的工具上运行。一个提供方有多个实例时，`claude` 和 `codex` 只在运行提供方自己二进制文件的实例上运行（没有 Binary path，或者 Binary path 名为 `claude` 或 `codex`）：你的 T3 默认模型所在的实例，否则是以提供方命名的实例（Claude 是 `claudeAgent`，Codex 是 `codex`），再否则是第一个。Binary path 是包装命令（比如团队工具的命令）的实例只运行那个团队工具，即使它是你的 T3 默认实例；这时没有指定工具的步骤在那个团队工具上运行，没有团队工具在它上面运行时，以 `claude` 在上面选出的实例上运行。要让所有提示词都在某一个实例上运行，比如第二个 Claude 账号，在你机器的配置里写上它：
 
 ```yaml
 # ~/.teamai/config.yaml
@@ -343,7 +343,7 @@ teamai workflow cancel r70d31098c8884803
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
 | `… teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access …` | teamai 需要添加团队工具的实例，而登录页面上批准的是 Auto。 | 重新启动工作流并选择 **Full access**，或者按消息所说自己添加实例。 |
 | `… No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command …` | 你已有一个同名实例，运行的是别的命令。teamai 不会改动它。 | 把它的 Binary path 指向工具的命令，或者用 `instances` 映射另一个实例。 |
-| `… teamai added the T3 Code provider instance "claude-work" for claude-work, but T3 Code cannot run it yet: Claude Code is not authenticated …` | teamai 已添加该实例，但 T3 Code 对它的检查没有通过，例如工具从未在该实例的 home 中登录。 | 按 T3 Code 的提示，在消息给出的 home 中处理（Claude 用 `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`），然后重试该步骤。 |
+| `… T3 Code cannot run the provider instance "claude-work" for claude-work yet: Claude Code is not authenticated …` | 该实例已存在，但 T3 Code 对它的检查没有通过，例如工具从未在该实例的 home 中登录。 | 按 T3 Code 的提示，在消息给出的 home 中处理（Claude 用 `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`），然后重试该步骤。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
 | `… (cancel_failed): The T3 thread t3code://threads/… ("review · teamai r70d…") still runs, and T3 Code did not stop it …` | teamai 取消了这个步骤，但 T3 没有在 10 秒内确认线程已停止。 | 从链接打开线程，用 Stop 按钮停止它，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… (cancel_failed): teamai launched the T3 thread "review · teamai r70d…", and T3 Code did not confirm the launch …`，或 `… could not be followed, so it may still run …` | 步骤失败了，但它的线程可能仍在 T3 中运行：T3 Code 没有回复启动请求，或在步骤运行期间断开了。teamai 会保留位置，不提交任何内容。 | 打开 T3 Code，然后运行 `teamai workflow cancel <run>`：它会找到线程并停止它。 |
