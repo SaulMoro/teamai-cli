@@ -889,7 +889,7 @@ async function finishRole(config: LocalConfig, files: PlaceFiles, record: Placed
     }
 
     case 'team': {
-      const finished = await finishTeamClone({ root: place.clone, dir, step, branch: place.workspace.branch, base: place.base, start: place.start, found: place.found });
+      const finished = await finishTeamClone({ config, root: place.clone, dir, step, branch: place.workspace.branch, base: place.base, start: place.start, found: place.found });
 
       return 'code' in finished ? { outcome: 'failed', message: finished.message, failure: finished } : { ...end, changes: finished.changes };
     }

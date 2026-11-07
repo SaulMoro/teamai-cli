@@ -29,6 +29,16 @@ function stepGit(): Git {
   return untrustedGit({ ...process.env, ...NON_INTERACTIVE_GIT_ENV });
 }
 
+/**
+ * The credential helpers the member's team checkout names, given on the command line: `untrustedGit` drops every
+ * helper in the clone's own config, where a step could have set one, so a push signs in with these instead.
+ */
+async function checkoutHelpers(checkout: string): Promise<string[]> {
+  const credentials = await checkoutCredentials(checkout);
+
+  return credentials.filter(([key]) => /^credential\.(?:.+\.)?helper$/i.test(key)).flatMap(([key, value]) => ['-c', `${key}=${value}`]);
+}
+
 /** What the clone started from: origin's default branch and its tip, and the branch tip it found, if origin had one. */
 export type TeamStart = { root: string; dir: string; target: string; base: string; start: string; found?: string };
 
@@ -231,7 +241,7 @@ async function teamFailures(dir: string): Promise<string[]> {
  * changes run from the commit the branch had, so they hold the merge of the default branch too. `dir` is where the
  * team files are: `root`, or its `.teamai/` in single-repo mode.
  */
-export async function finishTeamClone(input: { root: string; dir: string; step: string; branch: string; base: string; start: string; found?: string }): Promise<{ changes: StepChanges } | WorkflowFailure> {
+export async function finishTeamClone(input: { config: LocalConfig; root: string; dir: string; step: string; branch: string; base: string; start: string; found?: string }): Promise<{ changes: StepChanges } | WorkflowFailure> {
   const { root, dir, step, branch, base, found } = input;
   const committed = await commitWork(root, `teamai: ${step}`, input.start, stepGit());
 
@@ -257,10 +267,11 @@ export async function finishTeamClone(input: { root: string; dir: string; step: 
     };
   }
 
-  const pushed = await stepGit()(root, ['push', '-q', `--force-with-lease=refs/heads/${branch}:${found ?? ''}`, 'origin', `HEAD:refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
+  const helpers = await checkoutHelpers(input.config.repo.localPath);
+  const pushed = await stepGit()(root, [...helpers, 'push', '-q', `--force-with-lease=refs/heads/${branch}:${found ?? ''}`, 'origin', `HEAD:refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
 
   if (pushed.code === 0) return { changes };
-  const tip = await stepGit()(root, ['ls-remote', 'origin', `refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
+  const tip = await stepGit()(root, [...helpers, 'ls-remote', 'origin', `refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
   const now = tip.code === 0 ? tip.stdout.split('\t')[0]?.trim() ?? '' : undefined;
 
   if (now !== undefined && now !== (found ?? '')) {
