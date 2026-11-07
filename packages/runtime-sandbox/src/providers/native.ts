@@ -230,6 +230,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
   };
 
   return {
+    family: 'bind',
     async offer(credentials, instances) {
       const ready = await sandbox.preflight(env);
 

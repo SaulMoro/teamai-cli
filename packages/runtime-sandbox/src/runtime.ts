@@ -899,10 +899,18 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const collect = async (handle: string, provider: Provider): Promise<void> => {
     const placeKey = placeOf(handle);
 
-    if (provider.collect === undefined) {
-      write({ event: 'collected', handle });
+    switch (provider.family) {
+      case 'bind':
+        write({ event: 'collected', handle });
 
-      return;
+        return;
+      case 'copy':
+        break;
+      default: {
+        const unhandled: never = provider;
+
+        return unhandled;
+      }
     }
 
     const place = journal.place(placeKey);
@@ -1058,7 +1066,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const offered = await provider.offer(credentials, instances);
 
     if (!offered.ok) {
-      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
+      ready = { provider: unreachable(offered.failure, provider.family), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: false, error: offered.failure });
 
       return;

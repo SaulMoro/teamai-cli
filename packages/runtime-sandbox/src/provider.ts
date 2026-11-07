@@ -35,12 +35,13 @@ export function handleOf({ run, attempt }: PlaceKey): string {
 /**
  * The provider of a runtime that could not start one: `init` failed, or never came. teamai still sends a restarted
  * runtime its cancel, reattach, collect and close, so each is answered: a lookup fails with `failure`, and a sandbox
- * is never taken as absent, so a place stays its attempt's until a runtime that reaches the engine closes it.
+ * is never taken as absent, so a place stays its attempt's until a runtime that reaches the engine closes it. A bind
+ * provider's work is at its host paths, so its collect still answers; any other's fails, `family` unknown included.
  */
-export function unreachable(failure: RuntimeFailure): Provider {
+export function unreachable(failure: RuntimeFailure, family: Provider['family'] = 'copy'): Provider {
   const kept = (sandbox: string) => ({ ok: false as const, failure: { ...failure, message: `${failure.message} Sandbox ${sandbox}, if it exists, stays this attempt's until the sandbox runtime can reach it.` } });
 
-  return {
+  const sandboxing = {
     offer: async () => ({ ok: false, failure }),
     find: async (key) => kept(handleOf(key)),
     create: async (key) => kept(handleOf(key)),
@@ -49,7 +50,9 @@ export function unreachable(failure: RuntimeFailure): Provider {
     destroy: async (id) => kept(id),
     display: (key) => ({ label: handleOf(key) }),
     removal: (key) => `remove sandbox ${handleOf(key)} once the sandbox runtime reaches its engine`,
-  };
+  } satisfies Sandboxing;
+
+  return family === 'bind' ? { ...sandboxing, family } : { ...sandboxing, family, collect: async (id) => kept(id) };
 }
 
 export interface ExecSpec {
@@ -80,7 +83,8 @@ export interface Judges {
  */
 export type HostRoute = { ok: true; alias: string } | { ok: false; refusal: string };
 
-export interface Provider {
+/** What every provider does, whichever way its sandbox sees the place. */
+interface Sandboxing {
   /**
    * Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the
    * fix. It offers a tool only when it can sign in there with `credentials`, the names teamai gives, and lists each
@@ -107,11 +111,6 @@ export interface Provider {
    * `deadline` is the open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach.
    */
   create(key: PlaceKey, view: PlaceView, tool: string | undefined, deadline?: string): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
-  /**
-   * On a copy provider: copies the sandbox's work back to the place's host paths, ok once the host matches. A bind-mount
-   * provider has none: its work is at its host paths already.
-   */
-  collect?(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider with a warm image: makes the one an attempt with `view` and `tool` starts from, when it is not there
    * yet, before `create`, which then finds it. It may take minutes, and nothing but its open waits for it. `deadline` is
@@ -146,3 +145,12 @@ export interface Provider {
   /** How a person removes the place by hand, as the end of a sentence: "remove it with `…`". */
   removal(place: PlaceKey & { confined?: true }): string;
 }
+
+/**
+ * A sandbox technology. `bind`: the sandbox mounts the place at its host paths, so its work is there already. `copy`:
+ * the place is copied in, and `collect` copies the sandbox's work back to the host paths, ok once the host matches.
+ */
+export type Provider = Sandboxing & (
+  | { family: 'bind'; collect?: never }
+  | { family: 'copy'; collect(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> }
+);
