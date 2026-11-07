@@ -491,13 +491,18 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       await save(opening);
 
+      // A place opened again keeps the handle it recorded until it is ready: one made in steps (a runtime through
+      // another) is accepted first with part of its handle, which must not replace the whole one if the rest fails.
       const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(deadline !== undefined && { deadline }), ...(view && { view }) }, async (handle) => {
         const now = await current();
 
-        if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
+        if (now) await save({ ...now, open: { op, handle: before?.open.handle ?? handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
       });
 
       if (opened.kind !== 'ready') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${opened.failure.code}): ${opened.failure.message}`) };
+      const ready = await current();
+
+      if (ready && ready.open.handle !== opened.handle) await save({ ...ready, open: { op, handle: opened.handle } });
       await shown(opened.display);
 
       return { ok: true, handle: opened.handle };
