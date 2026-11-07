@@ -22,7 +22,8 @@ import { applyTar, readTar } from './vercel-copy.js';
 //             the worktree, run directory and tool homes in, as that user; the git paths in as root, read only
 //             view.json kept on this machine last: a sandbox found without it was never fully copied in, and goes
 //    exec     runCommand({ cmd, args, cwd, env: the exec's names, detached }), its output streamed
-//    collect  tar of the worktree, result and tool homes, read back and applied by vercel-copy.ts
+//    collect  tar of the worktree, result, tool homes and run directory, read back and applied by vercel-copy.ts; of the
+//             run directory, which other steps write too, nothing is deleted
 //    close    delete(), never stop(): nothing of an attempt is kept as a snapshot
 //    sweep    Sandbox.list({ namePrefix: teamai-<journal>- }): one whose attempt this machine no longer records goes
 //
@@ -536,14 +537,14 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       const file = '/tmp/teamai-work.tar';
 
       try {
-        const why = await must(sandbox, 'Packing the work', 'tar', ['-cf', file, '--no-xattrs', '-C', '/', ...roots.map(relative)]);
+        const why = await must(sandbox, 'Packing the work', 'tar', ['-cf', file, '--no-xattrs', '-C', '/', ...[...roots, view.runDir].map(relative)]);
 
         if (why !== undefined) return failed(`${why}. Nothing was copied back.`);
         const data = await sandbox.readFileToBuffer({ path: file });
         await run(sandbox, 'rm', ['-f', file]);
 
         if (data === null) return failed(`Vercel sandbox ${id} lost the packed work before it was read. Nothing was copied back.`);
-        applyTar(readTar(data), { roots, kept: view.readonly });
+        applyTar(readTar(data), { roots, added: [view.runDir], kept: view.readonly });
 
         return { ok: true };
       } catch (error) {
