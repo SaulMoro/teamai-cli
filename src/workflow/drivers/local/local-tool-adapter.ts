@@ -127,10 +127,10 @@ function unattendedArgs(tool: LaunchTool): readonly string[] | 'none' {
 }
 
 /**
- * An absolute path as a Claude permission rule matches it, after the `/` that marks a rule absolute: as it is, and on
- * Windows in the POSIX form Claude matches, so `C:\a\b` is `/c/a/b`.
+ * An absolute path as a Claude or CodeBuddy permission rule matches it, after the `/` that marks a rule absolute: as it
+ * is, and on Windows in the POSIX form Claude matches, so `C:\a\b` is `/c/a/b`.
  */
-function claudeRulePath(file: string): string {
+function permissionRulePath(file: string): string {
   if (process.platform !== 'win32') return file;
 
   return file.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replaceAll('\\', '/');
@@ -150,11 +150,12 @@ export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor:
   const resume = input.resume ? ['--resume', input.resume] : [];
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
 
+  // Claude's and CodeBuddy's default mode asks before any write, so the result file, and only it, is allowed: the mode
+  // stays as it is. One argument: the flag is variadic, and would take a prompt after it as a rule too.
+  const result = `--allowedTools=Edit(/${permissionRulePath(input.resultPath)})`;
+
   switch (family) {
     case 'claude': {
-      // Claude's default mode asks before any write, so the result file, and only it, is allowed: the mode stays as it is.
-      const result = `--allowedTools=Edit(/${claudeRulePath(input.resultPath)})`;
-
       if (interactive) return [...unattended, result, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
 
       // Only partial messages state each message's final usage as it ends, which the budget meter counts.
@@ -163,9 +164,9 @@ export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor:
 
     case 'codebuddy':
       // Claude's flags, with no --effort.
-      if (interactive) return [...unattended, ...agent, ...model, ...resume, prompt];
+      if (interactive) return [...unattended, result, ...agent, ...model, ...resume, prompt];
 
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...unattended, ...turns, ...agent, ...model, ...resume];
+      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...unattended, result, ...turns, ...agent, ...model, ...resume];
     case 'codex': {
       if (interactive) return [...(input.resume ? ['resume', input.resume] : []), ...unattended, ...model, ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
       const codexModel = input.model?.name ?? input.agent?.model;

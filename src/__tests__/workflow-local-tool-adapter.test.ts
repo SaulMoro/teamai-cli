@@ -266,14 +266,15 @@ describe('local tool adapter', () => {
   });
 
   // Claude's default mode asks before every write, so an attended step asked for this one and an unattended one failed.
-  it.each([['headless', false], ['interactive', true]] as const)('lets %s Claude write the result file, and only it, without asking', async (_, interactive) => {
-    const resultPath = path.join(os.tmpdir(), `teamai-workflow-grant-${String(interactive)}-${Date.now()}.json`);
+  // CodeBuddy takes the same --allowedTools rule (codebuddy.ai/docs/cli/iam: `Edit(//abs/path)`).
+  it.each([['headless', 'claude', false], ['interactive', 'claude', true], ['headless', 'codebuddy', false], ['interactive', 'codebuddy', true]] as const)('lets %s %s write the result file, and only it, without asking', async (_, tool, interactive) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-grant-${tool}-${String(interactive)}-${Date.now()}.json`);
     files.push(resultPath);
     const spawnTool = vi.fn(() => child(interactive ? '' : claudeStream('claude-sonnet', { result: JSON.stringify({ ok: true }) }))) as unknown as ToolSpawn;
-    const adapter = createLocalToolAdapter(spawnTool, () => 'claude');
+    const adapter = createLocalToolAdapter(spawnTool, () => tool);
     const input = { prompt: 'Plan.', cwd: os.tmpdir(), resultPath, secrets: {} };
 
-    await (interactive ? adapter.runInteractive('claude', input) : adapter.run('claude', input));
+    await (interactive ? adapter.runInteractive(tool, input) : adapter.run(tool, input));
 
     const args = vi.mocked(spawnTool).mock.calls[0]?.[1] ?? [];
     // One argument: the flag is variadic, so a separate value would take the interactive prompt after it as a rule too.
