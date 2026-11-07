@@ -91,6 +91,16 @@ Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-
 paseo ls --all --label teamai-run=r0769801107010602
 ```
 
+从 Paseo 智能体内部启动的运行（Paseo 会在每个智能体的 shell 中设置 `PASEO_AGENT_ID`），还会给每个步骤智能体加上 `teamai-parent=<agent>` 标签，步骤提示词的第一行会链接回该智能体：
+
+```text
+This agent runs step "classify" of teamai workflow run r0769801107010602, started from the Paseo agent paseo://h/srv_vL5abcnfKUWY/agent/1f78c282-039d-452f-9621-bb6677c76eec.
+```
+
+```sh
+paseo ls --all --label teamai-parent=1f78c282-039d-452f-9621-bb6677c76eec
+```
+
 智能体工作时，仪表盘的运行详情会显示它，并附带在 Paseo 中打开它的链接：
 
 ```json
@@ -356,7 +366,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 团队工具实例上的步骤，在 Paseo 中运行于它自己的 Paseo 自定义提供方上。守护进程在本机时，teamai 在第一个运行该实例的步骤开始时添加这个提供方，无论是否有人值守。该提供方以实例命名，扩展实例所属的工具，从你的 `PATH` 运行实例的命令；实例有自己的主目录时，还会设置该工具的主目录变量。它会保留供以后的运行使用，运行会提示一次如何删除它：
 
 ```text
-⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`.
+⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
 ```
 
 之后 `paseo daemon config get agents.providers --json` 会显示它添加的这一项，守护进程原有的每一项都保持不变：
@@ -372,6 +382,8 @@ Judge whether the change does what the step asked. Read the diff and the session
 ```
 
 守护进程已有合适的提供方时，就用那个：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径）的那个；对只有主目录的实例，则是运行该工具自身命令、且 `env` 中设有该主目录的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。实例的登录和会话在其提供方 `env` 所设的主目录中查找，没有时在实例自己的主目录中查找；该提供方的主目录不是 teamai 为该实例使用的主目录时，运行会提示一次。未登录的实例会给出它自己的命令，例如 `CODEX_HOME=~/.codex-acme acme-codex login`。
+
+实例无法在 teamai 刚添加的提供方上运行时（例如未登录），teamai 会再次删除该提供方，所以失败的步骤不会在 Paseo 的配置中留下任何东西，之后的步骤会重新添加它。如果 Paseo 拒绝删除，步骤的失败信息会说明这一点，提供方保留，并给出上面的提示。
 
 守护进程在另一台主机上、命令不在你的 `PATH` 上、实例名称不是合法的 Paseo 提供方 id（小写字母、数字和连字符），或同名提供方已运行别的东西时，teamai 不会添加提供方。此时不提供该实例，该实例上的步骤会说明该怎么做：
 

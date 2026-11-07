@@ -91,6 +91,16 @@ Each agent carries the labels `teamai-run` and `teamai-step`, so you can list a 
 paseo ls --all --label teamai-run=r0769801107010602
 ```
 
+A run started from inside a Paseo agent (Paseo sets `PASEO_AGENT_ID` in each agent's shell) also labels each step agent `teamai-parent=<agent>`, and the step's prompt starts with a line that links back to that agent:
+
+```text
+This agent runs step "classify" of teamai workflow run r0769801107010602, started from the Paseo agent paseo://h/srv_vL5abcnfKUWY/agent/1f78c282-039d-452f-9621-bb6677c76eec.
+```
+
+```sh
+paseo ls --all --label teamai-parent=1f78c282-039d-452f-9621-bb6677c76eec
+```
+
 While the agent works, the run's details in the dashboard show it, with a link that opens it in Paseo:
 
 ```json
@@ -356,7 +366,7 @@ The agent gets the step's prompt. A later pass of the step starts a new agent: i
 A step on a team tool instance runs in Paseo on a Paseo custom provider of its own. When the daemon runs on this machine, teamai adds that provider at the first step that runs the instance, attended or not. The provider is named after the instance, extends the instance's tool, runs the instance's command from your `PATH`, and sets the tool's home variable when the instance has a home of its own. It stays for later runs, and the run says once how to remove it:
 
 ```text
-⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`.
+⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
 ```
 
 `paseo daemon config get agents.providers --json` then shows the entry it added, beside every one the daemon held:
@@ -372,6 +382,8 @@ An instance with only a home of its own, such as `claude-work` (`extends: claude
 ```
 
 A provider the daemon already holds is used instead: the one that extends the instance's tool and runs its command, by name or as an absolute path to it, or, for an instance with only a home, the one that runs the tool's own command with that home in its `env`. Its steps and judges take that tool's modes, grants and sign-in check, and their sessions name the instance. The instance's sign-in and sessions are looked for in the home its provider's `env` sets, else in the instance's own home, and the run says once when that provider's home is not teamai's home for the instance. A signed-out instance names its own command, such as `CODEX_HOME=~/.codex-acme acme-codex login`.
+
+When the instance cannot run on the provider teamai just added, for example because it is signed out, teamai removes that provider again, so a failed step leaves nothing in Paseo's config, and a later step adds it again. If Paseo refuses the removal, the step's failure says so and the provider stays, with the notice above.
 
 teamai adds no provider on a daemon on another host, for a command not on your `PATH`, for an instance whose name is not a Paseo provider id (lowercase letters, digits and dashes), or when a provider of that name already runs something else. The instance is then not offered, and a step on it says what to do:
 
