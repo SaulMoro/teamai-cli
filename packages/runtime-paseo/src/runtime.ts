@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, isUsageLimitText, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, fitReason, isUsageLimitText, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -203,9 +203,6 @@ function readResult(file: string): PromptResult | undefined {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** `text` cut to `max` characters, its end marked when it is cut. */
-const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 /**
  * What the person reads once teamai added a Paseo provider for instance `name`: what it holds, that it stays, and how to
@@ -661,7 +658,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       if (entry?.canRun) return [];
       const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${name} on the daemon's PATH and sign in to it there`;
 
-      return [[name, clip(`The Paseo daemon at ${connected.url} cannot run ${name}: ${reason}.`, UNAVAILABLE_REASON_MAX)]];
+      return [[name, fitReason(`The Paseo daemon at ${connected.url} cannot run ${name}: ${reason}.`)]];
     }).concat(foreign.map((name): [string, string] => {
       const passed = instances.find((instance) => instance.name === name);
 
@@ -669,7 +666,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         ? `it extends ${passed.tool}, which Paseo does not run. Remove ${name} from the providers option.`
         : `the runtime's providers option names it, and teamai passed no tool instance ${name} here; a team tool runs here once its command is accepted on this machine. If it is no team tool, remove ${name} from the providers option.`;
 
-      return [name, clip(`The Paseo daemon at ${connected.url} cannot run ${name}: ${why}`, UNAVAILABLE_REASON_MAX)];
+      return [name, fitReason(`The Paseo daemon at ${connected.url} cannot run ${name}: ${why}`)];
     })));
 
     daemon = connected;
