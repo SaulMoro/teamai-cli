@@ -1514,6 +1514,21 @@ describe('teamai-runtime-t3', () => {
       });
 
       // A second account of the same tool: no command of its own, a home of its own.
+      it('fails the open and stays up when T3 Code fails to list its instances after the add, and a later open runs on the instance', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        t3.config({ providersFailOnceAdded: 'acme-claude' });
+        const { runtime } = await initOn({ mode: 'unattended' });
+
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({
+          event: 'failed',
+          failure: {
+            code: 'open_failed',
+            message: 'T3 Code cannot run the provider instance "acme-claude" for acme-claude yet: T3 Code did not say which provider instances it runs (T3 Code is restarting its providers). Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.',
+          },
+        });
+        expect(await openFor(runtime, 'acme-claude', 'op-0000000b', 'b2c3d4e5')).toMatchObject({ event: 'ready' });
+      });
+
       it('fails the open saying what T3 Code needs, when the instance it added cannot run, such as a tool not signed in in its home', async () => {
         signIn(t3, undefined, undefined, FULL);
         t3.config({ addedInstanceConstraints: ['Claude Code is not authenticated. Run `claude auth login` and try again.'] });
