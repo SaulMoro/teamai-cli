@@ -356,3 +356,34 @@ describe('the session store of an OpenCode prompt on a runtime that launches age
     expect(await attemptSessionStore(config(), RUN, FIRST)).toBe(path.join(root, '.local', 'share', 'opencode'));
   });
 });
+
+describe('a place a restarted teamai opens again', () => {
+  const config = (): LocalConfig => ({ repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') });
+
+  it('keeps the handle it recorded while a place made in steps is opened again, so a failed reopen still names the whole place', async () => {
+    const whole = JSON.stringify({ outer: 'box-1', inner: 'app-1' });
+    const recorded = { runtime: 'app through box', driver: 'd', phase: 'running', open: { op: newOpId(), handle: whole }, prompt: { op: newOpId() } } satisfies AttemptRuntimeRecord;
+    fs.mkdirSync(attemptDir(config(), RUN, FIRST), { recursive: true });
+    fs.writeFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), JSON.stringify(recorded));
+    // The outer accepts again; the inner's open then fails, as one that timed out.
+    const runtime: StepRuntime = {
+      name: 'app through box',
+      init: async () => ({ ok: true, can: {}, launchesAgents: true }),
+      open: async (_request, onAccepted) => {
+        await onAccepted(JSON.stringify({ outer: 'box-1' }));
+
+        return { kind: 'failed', failure: { code: 'runtime_unanswered', message: 'the inner did not answer' } };
+      },
+      exec: () => new Promise<ExecEnd>(() => {}),
+      prompt: () => new Promise<PromptEnd>(() => {}),
+      cancel: async () => {},
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'gone' }),
+      close: async () => ({ ok: true }),
+      dispose: async () => {},
+    };
+
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).open(undefined)).toMatchObject({ ok: false });
+    expect((await readAttemptRuntime(config(), RUN, FIRST))?.open.handle).toBe(whole);
+  });
+});
