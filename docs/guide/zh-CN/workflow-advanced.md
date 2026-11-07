@@ -1793,11 +1793,11 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 
 如果你的运行时改为把这个实例列在 `unavailable` 里并说明原因，这个步骤的每一种拒绝都会引用这个原因：步骤以 `tool_unavailable` 失败并带上它；没有单个运行时能接手的严格步骤会在 `tools` 旁边写出它，例如 `runtime sandbox lacks tools (sandbox: acme-claude runs acme-claude, which is not in the image: …)`。
 
-当运行时的定义或成员配置让某个工具在不弹出权限提示的情况下运行时，运行时会在 `can` 旁边以 `permissions` 报告。teamai 从不替你设置这个选项。在沙箱之外，运行会提示一次，并把其步骤的隔离记录为 `none`。`permissions: unattended` 的步骤只在该运行时报告的工具上运行，并且仍然需要 `requires: { isolation: sandbox, strict: true }`：
+当运行时的定义或成员配置让某个工具在不弹出权限提示的情况下运行时，运行时会在 `can` 旁边以 `permissions` 报告。teamai 从不替你设置这个选项。在沙箱之外，运行会提示一次，说明这个选项是在哪里设置的，以及无人值守的运行随后会自己批准该运行时的完全访问登录（T3 的登录），并把其步骤的隔离记录为 `none`。`permissions: unattended` 的步骤只在该运行时报告的工具上运行，并且仍然需要 `requires: { isolation: sandbox, strict: true }`：
 
 ```text
 ← {"type":"init","ok":true,"can":{"tools":["claude"]},"permissions":{"claude":"full-access"}}
-⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as /repo/.teamai/drivers/t3-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 值随请求发送：在 `open` 上，以及在每个需要它们的 `exec` 或 `prompt` 上。提示的工具 exec 会得到它们，命令步骤的 exec 得到 `{}`：

@@ -1799,11 +1799,11 @@ When your runtime's provider keeps its own login for a tool, such as a sandbox s
 
 When your runtime lists the instance in `unavailable` instead, with why, every refusal of its step quotes that reason: the step fails `tool_unavailable` with it, and a strict step that no single runtime takes names it beside `tools`, as in `runtime sandbox lacks tools (sandbox: acme-claude runs acme-claude, which is not in the image: …)`.
 
-A runtime whose definition or member config opts a tool into running without permission prompts reports it as `permissions`, beside `can`. teamai never sets that option for you. Outside a sandbox, the run warns once and records its steps' isolation as `none`. A `permissions: unattended` step runs on such a runtime only on a tool it reports there, and still needs `requires: { isolation: sandbox, strict: true }`:
+A runtime whose definition or member config opts a tool into running without permission prompts reports it as `permissions`, beside `can`. teamai never sets that option for you. Outside a sandbox, the run warns once, naming where the option was set and that an unattended run then approves the runtime's own full-access sign-in (T3's), and records its steps' isolation as `none`. A `permissions: unattended` step runs on such a runtime only on a tool it reports there, and still needs `requires: { isolation: sandbox, strict: true }`:
 
 ```text
 ← {"type":"init","ok":true,"can":{"tools":["claude"]},"permissions":{"claude":"full-access"}}
-⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as /repo/.teamai/drivers/t3-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 The values come in the requests, on `open` and on each `exec` or `prompt` that gets them. A prompt's tool exec gets them, and a command step's exec gets `{}`:
