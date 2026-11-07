@@ -32,10 +32,10 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
-import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedMemberModel, seedToolHome, setupLeftElsewhere, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep } from '../../runtimes/cancelled.js';
+import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { ensureLogin, holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../../runtimes/login.js';
 import { credentialsForTool, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { credentialSecrets, newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
@@ -369,7 +369,7 @@ const LocalLeaseSchema = LeaseWireSchema.or(z.preprocess((raw) => (isRecord(raw)
  * then fails, and the workspace it was preparing is removed. A prompt step's place is prepared for `launches`, the tool
  * `promptReport` launches there, when the lease names none.
  */
-async function stageLease(lease: Lease, { config, lock, root, env, mode, signal, launches, setUpOn }: {
+async function stageLease(lease: Lease, { config, lock, root, env, mode, signal, launches, setUpOn, runsOn }: {
   config: LocalConfig;
   lock: RunLock;
   root: string;
@@ -379,15 +379,19 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
   launches?: string;
   /** The attempt's run on its step runtime, which runs setup once the step opens its place there (`runtimeSetup`). */
   setUpOn?: AttemptRun;
+  /** The step runtime this driver gives the attempt, by its definition's name; undefined for this host. */
+  runsOn?: string;
 }): Promise<WorkflowFailure | undefined> {
   if (lease.unreadableWorkspace) return unreadablePlace(lock.run);
   // A lease is handed back to a driver after one of this run was killed: the setup or command that one left running
   // in the attempt's place is stopped before the attempt is staged again.
   await stopRecordedGroup(attemptDir(config, lock.run, lease.attempt));
-  // So is one a killed teamai left on the step runtime, which may write into the place by its path; one left on a
-  // runtime this driver does not run cannot be, so the place is kept.
-  const attempt = AttemptIdSchema.safeParse(lease.attempt);
-  const leftSetup = setUpOn ? (await setUpOn.stopLeftSetup())?.failure : attempt.success ? setupLeftElsewhere(await readAttemptRuntime(config, lock.run, attempt.data), lease.attempt, undefined) : undefined;
+  // So is what a killed teamai left on a step runtime, which may write into the place by its path: on another runtime,
+  // through the driver recorded for it; on this one, its setup here.
+  const moved = await stopLeftElsewhere({ config, run: lock.run, attempt: lease.attempt, runsOn, checkout: root });
+
+  if (moved) return moved;
+  const leftSetup = (await setUpOn?.stopLeftSetup())?.failure;
 
   if (leftSetup) return { code: 'runtime_lost', message: leftSetup.message };
 
@@ -411,6 +415,25 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
   if (prepared.prompt !== undefined) lease.prompt = prepared.prompt;
 
   return setUpOn ? undefined : runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env, signal });
+}
+
+/**
+ * Stops what a killed teamai left of attempt `attempt` open on a step runtime other than `runsOn`, the one this driver
+ * gives it (undefined: this host), through the driver recorded for it, as `teamai workflow cancel` does. Once that place
+ * is closed, the attempt starts again here: its record of the other runtime goes. Answers why the stop is not confirmed,
+ * which keeps the place and the record.
+ */
+async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { config: LocalConfig; run: RunId; attempt: string; runsOn: string | undefined; checkout: string }): Promise<WorkflowFailure | undefined> {
+  const id = AttemptIdSchema.safeParse(attempt);
+  const record = id.success ? await readAttemptRuntime(config, run, id.data) : undefined;
+
+  if (!id.success || !record || record.phase === 'closed' || record.runtime === runsOn) return undefined;
+  const notStopped = await stopOnRecordedDriver(config, run, id.data, { checkout });
+
+  if (notStopped) return notStopped;
+  await fs.rm(attemptRuntimePath(config, run, id.data), { force: true });
+
+  return undefined;
 }
 
 /**
@@ -1190,6 +1213,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return created;
   };
 
+  /** The external step runtime the lease's attempt is bound to, by its definition's name; undefined on this host. */
+  const externalOf = (lease: Lease): string | undefined => {
+    const slot = slotOf.get(lease.attempt);
+
+    return slot?.kind === 'external' ? slot.use : undefined;
+  };
+
   /** Binds a lease to the runtime it was offered on. A `local` attempt's place is opened at once: it is the host's. */
   const bind = async (lease: Lease, slot: RuntimeSlot): Promise<void> => {
     slotOf.set(lease.attempt, slot);
@@ -1602,7 +1632,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         inFlight.set(lease.attempt, { lease, command: stageThenStart(
           lease,
           async (signal) => {
-            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, setUpOn: runOf(lease) });
+            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, setUpOn: runOf(lease), runsOn: externalOf(lease) });
 
             return staged ?? refuseDirtyAdoptedCommand({ config, run: lock.run, attempt: lease.attempt });
           },
@@ -1672,7 +1702,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const { confined: place, prompt } = lease;
 
           if (lease.answer && prompt !== undefined) {
-            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal });
+            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease) });
 
             if (!startable(lease, controller.signal)) {
               await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -1693,8 +1723,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             const onRuntime = runOf(lease);
 
             if (!onRuntime) await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
+            const moved = await stopLeftElsewhere({ config, run: runId, attempt: lease.attempt, runsOn: externalOf(lease), checkout: root });
 
             if (!startable(lease, controller.signal)) return undefined;
+
+            if (moved) return unstaged(lease, moved);
             const confinedLease = { ...lease, confined: place };
 
             const ended = onRuntime && slot
@@ -1712,7 +1745,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
           const slot = slotOf.get(lease.attempt);
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), slot?.can.default_tool) : undefined;
-          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease) });
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease) });
 
           if (!startable(lease, controller.signal)) {
             await abandon(lease.attempt);

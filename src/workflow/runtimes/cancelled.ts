@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { resolveRunMode } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
-import type { RunStatus } from '../types.js';
+import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { attemptRun, attemptRuntimePath, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
@@ -54,7 +54,7 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   for (const attempt of left) {
     // A step that failed because its stop was not confirmed can run again once it is.
     const lost = state.steps.find((step) => step.status === 'failed' && step.attempt === attempt && (step.failure?.code === 'runtime_lost' || step.failure?.code === CANCEL_FAILED));
-    const ended = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout, ...(lost && { retry: { run, step: lost.id } }) });
+    const { ended } = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout, ...(lost && { retry: { run, step: lost.id } }) });
 
     if (ended === 'running') stillRunning.add(attempt);
     else if (ended !== 'none') stopped[ended].push(attempt);
@@ -106,19 +106,39 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
 const RELEASE = { release: true } as const;
 
 /**
- * Stops attempt `attempt` on the step runtime its record names, or says why it could not and answers false. A released
- * attempt the runtime cannot stop or close is let go instead, as the person asked.
+ * Stops what a killed teamai left of attempt `attempt` on the step runtime its record names, through the driver recorded
+ * for it, as `teamai workflow cancel` does, and closes its place there, before a driver without that runtime runs the
+ * attempt's step again. Answers why the stop or the close is not confirmed, so the place is kept, or undefined once it
+ * is closed, or when the attempt holds no place open there.
  */
-async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string } }): Promise<AttemptStop> {
+export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, attempt: AttemptId, { checkout }: { checkout: string }): Promise<WorkflowFailure | undefined> {
+  const record = await readAttemptRuntime(config, run, attempt);
+  const stopped = await stopAttempt(config, run, attempt, { isReleased: false, checkout, isQuiet: true });
+
+  if (stopped.ended !== 'running' || !record) return undefined;
+
+  return {
+    code: 'runtime_lost',
+    message: `Attempt ${attempt} ran on step runtime "${record.runtime}" of driver "${record.driver}", which could not stop what ran there, so it may still run: ${stopped.why} Resume the run with --driver ${record.driver}.`,
+  };
+}
+
+/**
+ * Stops attempt `attempt` on the step runtime its record names, or says why it could not (`running`, with `why`). A
+ * released attempt the runtime cannot stop or close is let go instead, as the person asked. `isQuiet` leaves the warning
+ * to the caller, which reports `why` itself.
+ */
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<{ ended: AttemptStop; why?: string }> {
   const record = await readAttemptRuntime(config, run, attempt);
 
-  if (!record || record.phase === 'closed') return 'none';
+  if (!record || record.phase === 'closed') return { ended: 'none' };
 
-  const cannot = async (why: string): Promise<AttemptStop> => {
-    if (isReleased) return releaseAttempt(config, run, attempt, why, record);
-    log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
+  const cannot = async (why: string): Promise<{ ended: AttemptStop; why: string }> => {
+    if (isReleased) return { ended: await releaseAttempt(config, run, attempt, why, record), why };
 
-    return 'running';
+    if (!isQuiet) log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
+
+    return { ended: 'running', why };
   };
 
   const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout });
@@ -151,10 +171,10 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
       if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.${then}`);
       else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.${then}`);
 
-      return 'closed';
+      return { ended: 'closed' };
     }
 
-    return isReleased ? releaseAttempt(config, run, attempt, notClosed.message, record) : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
+    return isReleased ? { ended: await releaseAttempt(config, run, attempt, notClosed.message, record) } : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
   } catch (error) {
     return cannot(error instanceof Error ? error.message : String(error));
   } finally {

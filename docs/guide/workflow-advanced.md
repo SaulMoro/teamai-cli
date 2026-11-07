@@ -1736,6 +1736,15 @@ When only the close had failed, the line names the place it closed instead: `Clo
 
 A driver that still runs when you cancel, and a `workflow resume` that finds such an exec still running, fail the step `runtime_lost` with the same advice, and keep the place and the login the same way. `teamai workflow cancel` of that run stops it once the runtime can.
 
+A `workflow resume` with a driver that does not use the runtime an attempt ran on, `--driver local` included, first stops what the killed driver left there through the driver recorded for it, as `teamai workflow cancel` does, then runs the step again on its own runtime:
+
+```console
+$ teamai workflow resume r48201aa --driver local
+ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
+```
+
+When that runtime cannot confirm the stop, the step fails `runtime_lost`, names the driver to resume with, and keeps the place.
+
 ### Write a step runtime
 
 A runtime reads one JSON request per line on stdin and answers with JSON lines on stdout, protocol `1`. `src/__tests__/fixtures/runtime-toy/runtime.mjs` is a complete one that runs steps on the host. It imports `@teamai/runtime-protocol`, so the tests bundle it into one file before they run it (`src/__tests__/helpers/toy-runtime.ts`).
