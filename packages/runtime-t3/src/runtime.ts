@@ -725,8 +725,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /**
    * The provider instance teamai adds for each of `missing` on the first open that runs it: named after the instance,
-   * running its command from PATH, in the home teamai gives it when it has one of its own (Claude reads its own config
-   * file elsewhere once its home is set at all). It may when its kept sign-in may change T3's settings, or can come to:
+   * running its command from PATH, in the home teamai gives it when that is not its tool's own (Claude reads its own
+   * config file elsewhere once its home is set at all). It may when its kept sign-in may change T3's settings, or can come to:
    * through the `t3` command, or in an attended run through T3's page. Else why not, for `unavailable`.
    */
   const toBeAdded = ({ missing, mode }: { missing: ServedInstances['missing']; mode: WorkMode }): { pending: Map<string, NewInstance>; reasons: Record<string, string> } => {
@@ -735,9 +735,10 @@ export function serve(options: ServeOptions): Promise<void> {
     const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
     const mayAdd = options.mayWriteSettings() || options.t3Cli.isInstalled() || mode === 'attended';
 
-    for (const { instance: { name, home }, instance, driver, command } of missing) {
+    for (const { instance: { name }, instance, driver, command } of missing) {
       const binaryPath = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
-      const homePath = home && teamaiToolHome(instance, driver, options.home);
+      const toolHome = teamaiToolHome(instance, driver, options.home);
+      const homePath = toolHome === path.join(options.home, DRIVERS[driver].home) ? undefined : toolHome;
       const setting = `with driver ${DRIVERS[driver].label} and Binary path ${binaryPath ?? `the absolute path of ${command} (command -v ${command})`}${homePath ? `, and Home path ${tilde(homePath, options.home)}` : ''}`;
 
       if (binaryPath === null) {
