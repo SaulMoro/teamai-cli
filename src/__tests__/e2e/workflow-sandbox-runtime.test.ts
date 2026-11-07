@@ -2,15 +2,16 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { SIGN_IN_VARIABLES } from '@teamai/runtime-protocol';
 import { stringify } from 'yaml';
+import { z } from 'zod';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { CLAUDE_SESSIONS, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
-// The workflow's setup on the sandbox runtime teamai ships, on a fake docker whose containers run on the host
-// (packages/runtime-sandbox/src/testing/fake-engine.mjs): setup runs in the step's container, with setup's keys only,
-// and teamai's checks of what it left still hold there.
+// The sandbox runtime teamai ships, on a fake docker whose containers run on the host
+// (packages/runtime-sandbox/src/testing/fake-engine.mjs), driven by the built CLI.
 
 const IMAGE = 'e2e/agent:1';
 const FAKE_ENGINE = path.join(ROOT, 'packages', 'runtime-sandbox', 'src', 'testing', 'fake-engine.mjs');
@@ -20,6 +21,9 @@ let repo: string;
 let engineLog: string;
 let engineEnv: NodeJS.ProcessEnv;
 let dataHome: string;
+/** The member's sign-in variables, kept out of every run here and put back after. */
+const signIns = Object.values(SIGN_IN_VARIABLES).flatMap(({ signIn, alongside = [] }) => [...signIn, ...alongside]);
+const savedSignIns = Object.fromEntries(signIns.map((name) => [name, process.env[name]]));
 
 const writeFlow = (name: string, setup: string): void => {
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1
@@ -53,12 +57,13 @@ const readRunState = (ran: Ran): RunState => {
 };
 
 /** Each command the fake docker ran, as its argv. */
-const engineCalls = (): string[][] => (fs.existsSync(engineLog) ? fs.readFileSync(engineLog, 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as string[]).slice(1)) : []);
+const engineCalls = (): string[][] => (fs.existsSync(engineLog) ? fs.readFileSync(engineLog, 'utf8').trim().split('\n').map((line) => z.array(z.string()).parse(JSON.parse(line)).slice(1)) : []);
 
 /** The names each `exec` passes into the container with `-e`. */
 const passedNames = (exec: string[]): string[] => exec.flatMap((arg, at) => (exec[at - 1] === '-e' ? [arg] : []));
 
 beforeAll(async () => {
+  for (const name of signIns) delete process.env[name];
   dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sandbox-setup-e2e-')));
   repo = path.join(dir, 'repo');
   engineLog = path.join(dir, 'engine.log');
@@ -92,7 +97,11 @@ beforeAll(async () => {
     schemaVersion: 'v1alpha1', name: 'containers', tool: 'claude',
     runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }],
   }));
+  fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'keychain.yaml'), stringify({
+    schemaVersion: 'v1alpha1', name: 'keychain', tool: 'claude', runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE } }],
+  }));
   fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'review.yaml'), 'schemaVersion: v1alpha1\nname: review\ndescription: review\nsteps:\n  - id: review\n    tool: claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
   // Setup prints the names it gets, then fails, so its output is quoted in the failure.
   writeFlow('setupnames', 'env | cut -d= -f1 | sort | tr "\\n" " "; exit 3');
   writeFlow('setupsecret', 'printf "%s" "$NPM_TOKEN" > .npmrc');
@@ -102,40 +111,55 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  for (const [name, value] of Object.entries(savedSignIns)) if (value !== undefined) process.env[name] = value;
   if (dir) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-it("runs setup in the step's container with setup's keys only, and fails the step with setup_failed when it exits non-zero", async () => {
-  const before = engineCalls().length;
-  const ran = await start('setupnames');
+describe("the workflow's setup", () => {
+  it("runs setup in the step's container with setup's keys only, and fails the step with setup_failed when it exits non-zero", async () => {
+    const before = engineCalls().length;
+    const ran = await start('setupnames');
 
-  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
-  const [review] = readRunState(ran).steps;
-  expect(review).toMatchObject({ id: 'review', status: 'failed', failure: { code: 'setup_failed', message: expect.stringContaining('exited with code 3, so the step did not run') } });
-  const printed = String(review?.failure?.message);
-  expect(printed).toMatch(/\bNPM_TOKEN\b/);
-  expect(printed).not.toMatch(/\bPROMPT_KEY\b/);
-  expect(printed).not.toMatch(/\bCLAUDE_CODE_OAUTH_TOKEN\b/);
-  // Setup ran in the container teamai created for the attempt, and the step's tool never started.
-  const calls = engineCalls().slice(before);
-  const execs = calls.filter(([command]) => command === 'exec');
-  expect(execs).toEqual([expect.arrayContaining(['/bin/sh', '-c'])]);
-  expect(passedNames(execs[0] ?? []).sort()).toEqual(['NPM_TOKEN', 'TEAMAI_MODE', 'TEAMAI_RUN_DIR', 'TEAMAI_WORKFLOW_ATTEMPT']);
-  expect(execs.flat()).not.toContain('claude');
-  expect(JSON.stringify(calls)).not.toMatch(/npm-value|prompt-value|oauth-value/);
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const [review] = readRunState(ran).steps;
+    expect(review).toMatchObject({ id: 'review', status: 'failed', failure: { code: 'setup_failed', message: expect.stringContaining('exited with code 3, so the step did not run') } });
+    const printed = review !== undefined && 'failure' in review ? String(review.failure?.message) : '';
+    expect(printed).toMatch(/\bNPM_TOKEN\b/);
+    expect(printed).not.toMatch(/\bPROMPT_KEY\b/);
+    expect(printed).not.toMatch(/\bCLAUDE_CODE_OAUTH_TOKEN\b/);
+    // Setup ran in the container teamai created for the attempt, and the step's tool never started.
+    const calls = engineCalls().slice(before);
+    const execs = calls.filter(([command]) => command === 'exec');
+    expect(execs).toEqual([expect.arrayContaining(['/bin/sh', '-c'])]);
+    expect(passedNames(execs[0] ?? []).sort()).toEqual(['NPM_TOKEN', 'TEAMAI_MODE', 'TEAMAI_RUN_DIR', 'TEAMAI_WORKFLOW_ATTEMPT']);
+    expect(execs.flat()).not.toContain('claude');
+    expect(JSON.stringify(calls)).not.toMatch(/npm-value|prompt-value|oauth-value/);
+  });
+
+  it("fails the step with setup_secret when setup in the container leaves a key's value in a file, naming the file, never the value", async () => {
+    const before = engineCalls().length;
+    const ran = await start('setupsecret');
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(readRunState(ran).steps).toMatchObject([{
+      id: 'review', status: 'failed',
+      failure: { code: 'setup_secret', message: expect.stringMatching(/left the value of NPM_TOKEN in \.npmrc/) },
+    }]);
+    expect(`${ran.stdout}${ran.stderr}`).not.toContain('npm-value-7f3a');
+    const execs = engineCalls().slice(before).filter(([command]) => command === 'exec');
+    expect(execs).toHaveLength(1);
+    expect(execs.flat()).not.toContain('claude');
+  });
 });
 
-it("fails the step with setup_secret when setup in the container leaves a key's value in a file, naming the file, never the value", async () => {
+it('fails a Claude step whose only login is on this machine, in the Keychain, naming CLAUDE_CODE_OAUTH_TOKEN, before any container starts', async () => {
   const before = engineCalls().length;
-  const ran = await start('setupsecret');
+  const ran = await runCLI(['workflow', 'start', 'review', '--driver', 'keychain'], repo, engineEnv);
 
   expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
   expect(readRunState(ran).steps).toMatchObject([{
     id: 'review', status: 'failed',
-    failure: { code: 'setup_secret', message: expect.stringMatching(/left the value of NPM_TOKEN in \.npmrc/) },
+    failure: { code: 'tool_unavailable', message: expect.stringMatching(/a Claude login kept in the macOS Keychain or in ~\/\.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN/) },
   }]);
-  expect(`${ran.stdout}${ran.stderr}`).not.toContain('npm-value-7f3a');
-  const execs = engineCalls().slice(before).filter(([command]) => command === 'exec');
-  expect(execs).toHaveLength(1);
-  expect(execs.flat()).not.toContain('claude');
+  expect(engineCalls().slice(before).filter(([command, ...rest]) => command === 'run' && rest.includes('-d'))).toEqual([]);
 });
