@@ -749,6 +749,17 @@ export async function finishPlace(input: {
   // A setup that failed gave the place up, and a prepare that failed in git made none: the report carries that failure.
   if ((recorded.phase === 'abandoned' || recorded.phase === 'opening') && end.outcome === 'failed') return end;
 
+  // A step that failed before its setup ran, as on a step runtime that could not open the place setup runs in, gives
+  // the place up as a failed setup does: the report carries the step's own failure.
+  if (recorded.phase === 'staged' && end.outcome === 'failed') {
+    const { unrestored } = await giveUpSetup(config, recorded);
+
+    if (!unrestored) return end;
+    const message = `${end.message ?? end.failure?.message ?? ''} ${unrestored}`.trim();
+
+    return { ...end, message, ...(end.failure && { failure: { ...end.failure, message } }) };
+  }
+
   if (recorded.phase !== 'ready') {
     const failure = { code: 'workspace_base', message: `Step "${recorded.step}" has no place to finish: ${unfinishedPlace(recorded.phase)}.` };
 

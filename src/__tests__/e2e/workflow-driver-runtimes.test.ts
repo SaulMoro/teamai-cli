@@ -331,6 +331,18 @@ steps:
       }]);
       expect(fs.existsSync(launches)).toBe(false);
     });
+
+    it('keeps the failure a runtime opens the place with when setup never ran there, and gives up the worktree', async () => {
+      await writeSetupFlow('toybadopenflow');
+      writeDefinition('toybadopensetup', [{ use: 'toy', options: { state, path: toySetup('exit 0'), open_fails: { code: 'bad_option', message: 'Option "image" names acme/agent:9, which this machine cannot pull' } } }]);
+      const worktrees = (): string[] => execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' }).split('\n').filter((line) => line.startsWith('worktree '));
+      const worktreesBefore = worktrees();
+
+      const ran = await runCLI(['workflow', 'start', 'toybadopenflow', '--driver', 'toybadopensetup'], repo, env());
+
+      expect(readRunState(runOf(ran)).steps, ran.stderr).toMatchObject([{ id: 'review', status: 'failed', failure: { message: expect.stringContaining('(bad_option): Option "image" names acme/agent:9') } }]);
+      expect(worktrees()).toEqual(worktreesBefore);
+    });
   });
 
   it('fails a step whose requirements no single runtime meets, naming each runtime and what it lacks', async () => {
