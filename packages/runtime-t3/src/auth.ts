@@ -35,13 +35,13 @@ const SILENT_SIGN_IN_MS = 8_000;
  */
 export type SignInAccess = Extract<StepMode, 'auto' | 'full-access'>;
 
+/** The scope T3 requires to change its settings, which a provider instance is part of. */
+const SETTINGS_WRITE = 'settings:write';
+
 /**
  * The scopes T3 grants a sign-in approved with each access (`mcpClientScopes` in T3's server): reading and operating
  * threads, and for Full access also writing settings and source control, which T3 requires for it.
  */
-/** The scope T3 requires to change its settings, which a provider instance is part of. */
-const SETTINGS_WRITE = 'settings:write';
-
 const SCOPES = {
   auto: ['orchestration:read', 'orchestration:operate'],
   'full-access': ['orchestration:read', 'orchestration:operate', SETTINGS_WRITE, 'source-control:write'],

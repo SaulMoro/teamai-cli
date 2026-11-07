@@ -78,6 +78,7 @@ const settings = () => {
  */
 function providers() {
   const { providers: listed, addedInstanceConstraints = [] } = config();
+
   const added = Object.entries(settings().providerInstances ?? {}).flatMap(([id, instance]) => {
     const like = listed.find((one) => one.driverKind === instance.driver);
 
