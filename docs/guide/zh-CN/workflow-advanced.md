@@ -1977,7 +1977,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 ✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
 ```
 
-teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude 或 Codex 自己的错误里识别额度用完，并保留其原文，包括重置时间：
+teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude 或 Codex 自己的错误里识别额度用完，并保留其原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算作额度用完：
 
 ```text
 ✖ Step "review" failed with usage_limited: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r7a1… review

@@ -1971,6 +1971,18 @@ steps:
       });
     });
 
+    it('fails a Claude step the API refused on its rate limit usage_limited, with Claude\'s own text and the retry to run', async () => {
+      const refused = 'API Error: Request rejected (429) · This request would exceed your account\'s rate limit. Please try again later.';
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'local', '--tools', 'default=claude'], repo, env({ FAKE_TOOL_ERROR: refused }));
+
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(review, ran.stderr).toMatchObject({
+        status: 'failed',
+        failure: { code: 'usage_limited', message: `claude hit its usage limit: ${refused} Then run: teamai workflow retry ${runId} review` },
+      });
+    });
+
     it('masks an env credential in the failure of a place its runtime could not close', async () => {
       writeDefinition('tokenunclosed', [{ use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, close_fails: 'TOY_TEAM' } }]);
 
