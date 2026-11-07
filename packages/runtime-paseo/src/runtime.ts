@@ -169,12 +169,20 @@ const noSession = (tool: string): RuntimeFailure => ({
 
 /**
  * The failure of an agent that stopped on its tool's usage limit, saying what the tool said, or undefined when it did
- * not: the tool's own line starts its error or last message, so a reply that only mentions a limit is not one.
+ * not: the tool's own line starts its error, so a reply that only mentions a limit is not one.
  */
 function usageLimited(tool: string, said: string | null | undefined): RuntimeFailure | undefined {
   const text = said?.trim();
 
   return text && isUsageLimitText(text) ? { code: 'usage_limited', message: `The ${tool} agent hit its usage limit in Paseo: ${text}` } : undefined;
+}
+
+/**
+ * The failure of an agent whose last message is its tool's usage-limit line, or undefined. The tool writes that line
+ * alone, so a message that goes on past its first line is the agent's own, as when it reports a limit it hit elsewhere.
+ */
+function usageLimitedReply(tool: string, said: string | null | undefined): RuntimeFailure | undefined {
+  return said?.trim().includes('\n') ? undefined : usageLimited(tool, said);
 }
 
 /** A confined prompt's answer: the JSON value its agent replied with. */
@@ -1289,7 +1297,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
             }
 
             if (output === undefined) {
-              settle(op, { op, state: 'failed', failure: usageLimited(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } }, following);
+              settle(op, { op, state: 'failed', failure: usageLimitedReply(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } }, following);
 
               return;
             }
@@ -1325,7 +1333,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
 
           if (!result) {
             // A tool that stopped on its usage limit says so in its last message, and writes no result.
-            settle(op, { op, state: 'failed', failure: usageLimited(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } }, following);
+            settle(op, { op, state: 'failed', failure: usageLimitedReply(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } }, following);
 
             return;
           }

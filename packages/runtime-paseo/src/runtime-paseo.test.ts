@@ -3046,6 +3046,15 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
   });
 
+  it('fails tool_failed, not usage_limited, a step whose agent writes no result after a last message of its own that starts with a limit it hit elsewhere', async () => {
+    behave({ reply: 'Rate limit reached on the GitHub API while listing the pull requests.\n\nI could not finish the review; run it again once the limit resets.' });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
+  });
+
   it('fails a step whose agent wrote its result but has no session in Paseo, saying so rather than blaming the result', async () => {
     behave({ output: { verdict: 'approve' }, no_session: true });
     const runtime = start();
