@@ -16,7 +16,7 @@ import { stdioStepRuntime } from './stdio.js';
 import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceNames, toolOf } from '../../tool-registry.js';
-import type { StepRuntime } from './step-runtime.js';
+import { credentialSecrets, type StepRuntime } from './step-runtime.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 
@@ -205,11 +205,6 @@ const EngineOptionsSchema = z.object({
 export interface EngineOptions {
   maxParallel?: number;
   logins: LoginTool[];
-}
-
-/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
-export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
 }
 
 /** A credential a runtime entry declares from the member's environment: the name its processes get, and the variable it is read from. */

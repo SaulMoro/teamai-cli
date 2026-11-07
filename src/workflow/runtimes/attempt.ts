@@ -16,9 +16,8 @@ import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
 import { loginFileOf } from './login.js';
-import { credentialSecrets } from './sources.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { credentialSecrets, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
