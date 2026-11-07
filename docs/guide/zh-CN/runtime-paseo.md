@@ -91,7 +91,7 @@ Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-
 paseo ls --all --label teamai-run=r0769801107010602
 ```
 
-从 Paseo 智能体内部启动的运行（Paseo 会在每个智能体的 shell 中设置 `PASEO_AGENT_ID`），还会给每个步骤智能体加上 `teamai-parent=<agent>` 标签，步骤提示词的第一行会链接回该智能体：
+从 Paseo 智能体内部启动的运行（Paseo 会在每个智能体的 shell 中设置 `PASEO_AGENT_ID`），还会给每个步骤智能体和评判智能体加上 `teamai-parent=<agent>` 标签，步骤提示词的第一行会链接回该智能体：
 
 ```text
 This agent runs step "classify" of teamai workflow run r0769801107010602, started from the Paseo agent paseo://h/srv_vL5abcnfKUWY/agent/1f78c282-039d-452f-9621-bb6677c76eec.
