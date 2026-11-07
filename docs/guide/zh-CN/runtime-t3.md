@@ -218,11 +218,7 @@ workflows:
 
 实例以工具命名。它的 Binary path 是你的 PATH 找到的工具命令（`claude-work` 则是 Claude 自己的二进制文件），工具有自己的 home 且不是基础工具的 home（`~/.claude`、`~/.codex`）时，Home path 就是那个 home，否则 teamai 不设置它。teamai 把它写进 T3 的设置，其他设置保持不变，T3 Code 会立即读取。两个运行只会添加一次，之后的运行直接使用它，不再改动。从不用到这个工具的运行不会添加任何东西。
 
-T3 只允许以 Full access 批准的登录修改它的设置（`settings:write`），所以 teamai 第一次添加实例时会以 Full access 重新登录：任何运行都通过 `t3` 命令；没有该命令时，在 T3 的页面上进行，你在那里选择 **Full access**。之后的运行沿用这次登录。每个线程仍按原来的模式启动。没有 `t3` 命令、也没有这样的登录的无人值守运行不会添加任何东西，也不提供这个工具：
-
-```text
-No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on acme-claude once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
-```
+teamai 以你的身份写入 T3 的设置文件，有人值守和无人值守的运行都一样，就像它用 `t3` 命令添加项目那样。它不会向 T3 申请更大的登录权限：每个线程仍按原来的模式启动。如果 T3 Code 同时也在写这个文件，teamai 会重新读取，并保留 T3 写入的内容。
 
 T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它、运行它的实例被关掉了，或者 T3 已有一个同名实例），它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机）；在没有其他运行时能运行它的定义上，会在任何线程启动之前失败，并给出原因：
 
@@ -341,7 +337,6 @@ teamai workflow cancel r70d31098c8884803
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | 有人在 T3 的登录页面里选了比 Full access 窄的权限。 | 重新启动工作流并选 Full access，或者删掉 `runtime_mode: full-access`。 |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | 这个检出不是 T3 项目，`t3 project add` 也失败了。括号里的文字说明原因。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
-| `… teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access …` | teamai 需要添加团队工具的实例，而登录页面上批准的是 Auto。 | 重新启动工作流并选择 **Full access**，或者按消息所说自己添加实例。 |
 | `… No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command …` | 你已有一个同名实例，运行的是别的命令。teamai 不会改动它。 | 把它的 Binary path 指向工具的命令，或者用 `instances` 映射另一个实例。 |
 | `… T3 Code cannot run the provider instance "claude-work" for claude-work yet: Claude Code is not authenticated …` | 该实例已存在，但 T3 Code 对它的检查没有通过，例如工具从未在该实例的 home 中登录。 | 按 T3 Code 的提示，在消息给出的 home 中处理（Claude 用 `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`），然后重试该步骤。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |

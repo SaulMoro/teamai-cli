@@ -151,14 +151,6 @@ export interface ServeOptions {
    * signs in never: it only stops what an earlier run left. A failure names why and what the person does about it.
    */
   connect(how: { mode: RuntimeMode; access: SignInAccess }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
-  /** Whether teamai's kept sign-in may change T3's settings, such as add a provider instance (`settings:write`). */
-  mayWriteSettings(): boolean;
-  /**
-   * Widens teamai's kept sign-in so it may change T3's settings, to add a provider instance for `adding`: through the
-   * `t3` command in any run, else, in an attended one, in T3's page. T3 grants `settings:write` only with Full access.
-   * The connection runs on as it is; later connections use the wider sign-in. Says why it could not.
-   */
-  widen(how: { mode: WorkMode; adding: string[] }): Promise<{ ok: true; signIn: string } | { ok: false; why: string }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
   /** T3 Code's data directory, where the member's settings are. */
@@ -220,10 +212,10 @@ type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailu
 type PromptRequest = Extract<RuntimeRequest, { type: 'prompt' }>;
 
 /**
- * Why a tool instance's provider instance cannot run: teamai could not add it, and whether a person approving its
- * sign-in would let it; or teamai added it, and T3 cannot run it yet, such as a tool not signed in in its home.
+ * Why a tool instance's provider instance cannot run: teamai could not add it; or it is there, and T3 cannot run it
+ * yet, such as a tool not signed in in its home.
  */
-type NotAdded = { ok: false; kind: 'not-added'; why: string; needsApproval: boolean } | { ok: false; kind: 'not-ready'; id: string; why: string };
+type NotAdded = { ok: false; kind: 'not-added'; why: string } | { ok: false; kind: 'not-ready'; id: string; why: string };
 
 /** What a prompt runs: a step on its attempt's worktree, or a judge confined to its directory. */
 type Work = { kind: 'step'; place: PlaceRecord & { kind: 'worktree' } } | { kind: 'judge'; confined: ConfinedPrompt };
@@ -731,14 +723,13 @@ export function serve(options: ServeOptions): Promise<void> {
   /**
    * The provider instance teamai adds for each of `missing` on the first open that runs it: named after the instance,
    * running its command from PATH, in the home teamai gives it when that is not its tool's own (Claude reads its own
-   * config file elsewhere once its home is set at all). It may when its kept sign-in may change T3's settings, or can come to:
-   * through the `t3` command, or in an attended run through T3's page. Else why not, for `unavailable`.
+   * config file elsewhere once its home is set at all). teamai writes T3's settings file as the member, in any run, as
+   * Paseo's runtime adds a provider. One it cannot add is in `unavailable`, saying why.
    */
-  const toBeAdded = ({ missing, mode, settings }: { missing: ServedInstances['missing']; mode: WorkMode; settings: ReturnType<typeof readSettings> }) => {
+  const toBeAdded = ({ missing, settings }: { missing: ServedInstances['missing']; settings: ReturnType<typeof readSettings> }) => {
     const pending = new Map<string, NewInstance>();
     const reasons: Record<string, string> = {};
     const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
-    const mayAdd = options.mayWriteSettings() || options.t3Cli.isInstalled() || mode === 'attended';
 
     for (const { instance: { name }, instance, driver, command } of missing) {
       const found = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
@@ -748,7 +739,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const homePath = toolHome === path.join(options.home, DRIVERS[driver].home) ? undefined : toolHome;
       const setting = `with driver ${DRIVERS[driver].label} and Binary path ${binaryPath ?? `the absolute path of ${command} (command -v ${command})`}${homePath ? `, and Home path ${tilde(homePath, options.home)}` : ''}`;
       const wanted: NewInstance | undefined = binaryPath === null ? undefined : { id: name, driver, displayName: name, command, binaryPath, ...(homePath && { homePath }) };
-      // One another run added, which T3 has not listed yet, needs no write.
+      // One another run added, which T3 has not listed yet, is not in the way.
       const present = wanted && findProviderInstance({ settings, instance: wanted, userHome: options.t3UserHome });
 
       if (wanted === undefined) {
@@ -757,8 +748,6 @@ export function serve(options: ServeOptions): Promise<void> {
         reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code takes no provider instance named "${name}" (a letter, then letters, digits, _ or -). Add one in T3 Code under Settings → Providers, ${setting}, and map it with instances: { ${name}: <its id> } in the definition's t3 options.`);
       } else if (present === undefined && settings.providerInstances?.[name] !== undefined) {
         reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code already has a provider instance "${name}" that runs another command. Point its Binary path at ${command}, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
-      } else if (present === undefined && !mayAdd) {
-        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on ${name} once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, ${setting}.`);
       } else {
         pending.set(name, wanted);
       }
@@ -766,9 +755,6 @@ export function serve(options: ServeOptions): Promise<void> {
 
     return { pending, reasons };
   };
-
-  /** The widening of teamai's kept sign-in under way, which every instance added at once waits for. */
-  let widening: ReturnType<ServeOptions['widen']> | undefined;
 
   /** The adding of each instance under way, by name, so the opens of parallel steps add it once. */
   const adding = new Map<string, Promise<NotAdded | { ok: true }>>();
@@ -778,18 +764,6 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /** Adds the provider instance of `name` teamai offered to add, then waits until T3 can run it. */
   const addInstance = async (s: Session, name: string, instance: NewInstance, about: { op: OpId }): Promise<NotAdded | { ok: true }> => {
-    // One already in T3's settings, such as one another run added, needs no wider sign-in.
-    const present = findProviderInstance({ settings: readSettings(options.t3Home), instance, userHome: options.t3UserHome });
-
-    if (present === undefined && !options.mayWriteSettings()) {
-      widening ??= options.widen({ mode: s.mode, adding: [...s.pending.keys()] }).finally(() => { widening = undefined; });
-      const widened = await widening;
-
-      if (!widened.ok) return { ok: false, kind: 'not-added', why: widened.why, needsApproval: true };
-      // The connection sends the wider sign-in from now on, so a launch is recorded under it.
-      s.signIn = widened.signIn;
-    }
-
     const added = await addProviderInstance({ t3Home: options.t3Home, lockFile: options.settingsLock, userHome: options.t3UserHome, instance });
 
     switch (added.kind) {
@@ -799,7 +773,7 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'found':
         break;
       case 'failed':
-        return { ok: false, kind: 'not-added', why: added.why, needsApproval: false };
+        return { ok: false, kind: 'not-added', why: added.why };
       default: {
         const unhandled: never = added;
 
@@ -840,7 +814,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     // A failure nobody expected still answers the open, and leaves nothing for the process to die of.
     const going = adding.get(name) ?? addInstance(s, name, instance, about).catch((error) => ({
-      ok: false, kind: 'not-added', why: error instanceof Error ? error.message : String(error), needsApproval: false,
+      ok: false, kind: 'not-added', why: error instanceof Error ? error.message : String(error),
     } satisfies NotAdded));
 
     adding.set(name, going);
@@ -851,18 +825,14 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /** What a step whose instance cannot run is told: why, and what the person does about it. */
-  const notAdded = (s: Session, name: string, instance: NewInstance | undefined, failure: NotAdded): string => {
+  const notAdded = (name: string, instance: NewInstance | undefined, failure: NotAdded): string => {
     const home = instance?.homePath ? tilde(instance.homePath, options.home) : undefined;
     const setting = instance ? `, with driver ${DRIVERS[instance.driver].label} and Binary path ${instance.binaryPath}${home ? `, and Home path ${home}` : ''}` : '';
     const why = failure.why.replace(/\.$/, '');
 
     switch (failure.kind) {
       case 'not-added':
-        if (!failure.needsApproval) return `teamai could not add a T3 Code provider instance for ${name}: ${why}. Add one in T3 Code under Settings → Providers${setting}.`;
-
-        return s.mode === 'attended'
-          ? `teamai could not add a T3 Code provider instance for ${name}: ${why}. Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add one in T3 Code under Settings → Providers${setting}.`
-          : `teamai could not add a T3 Code provider instance for ${name}: ${why}. Run a step on ${name} once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers${setting}.`;
+        return `teamai could not add a T3 Code provider instance for ${name}: ${why}. Add one in T3 Code under Settings → Providers${setting}.`;
       case 'not-ready':
         return `T3 Code cannot run the provider instance "${failure.id}" for ${name} yet: ${why}.${home ? ` It runs in ${home}.` : ''} Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.`;
       default: {
@@ -948,7 +918,7 @@ export function serve(options: ServeOptions): Promise<void> {
         },
       });
 
-      const toAdd = toBeAdded({ missing: served.missing, mode: request.mode, settings });
+      const toAdd = toBeAdded({ missing: served.missing, settings });
       const unavailable = { ...Object.fromEntries(Object.entries(served.unavailable)), ...toAdd.reasons };
 
       // A step that never names a misspelt key would never show its reason.
@@ -1017,7 +987,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const done = await ready;
 
       if (!done.ok) {
-        fail(request.op, { code: 'open_failed', message: notAdded(session, request.tool, instance, done) });
+        fail(request.op, { code: 'open_failed', message: notAdded(request.tool, instance, done) });
 
         return;
       }
@@ -1401,7 +1371,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const added = await instanceFor(s, lease.tool, { op: request.op });
 
     if (added && !added.ok) {
-      refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: notAdded(s, lease.tool, toAdd, added) } });
+      refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: notAdded(lease.tool, toAdd, added) } });
 
       return;
     }
