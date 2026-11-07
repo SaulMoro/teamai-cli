@@ -807,7 +807,16 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       const available = new Set(providers.filter((entry) => entry.available).map((entry) => entry.provider));
       const teamInstances = instances.flatMap((instance) => (isPaseoTool(instance.tool) && !isPaseoTool(instance.name) ? [{ instance, tool: instance.tool }] : []));
       // Read only when an instance or a named provider needs it: a provider's env may hold a secret, and none is kept.
-      const parsed = teamInstances.length > 0 || Object.keys(named).length > 0 ? CustomProvidersSchema.safeParse((await api.config.get()).config.providers) : undefined;
+      let unread: string | undefined;
+      let parsed: ReturnType<typeof CustomProvidersSchema.safeParse> | undefined;
+
+      try {
+        parsed = teamInstances.length > 0 || Object.keys(named).length > 0 ? CustomProvidersSchema.safeParse((await api.config.get()).config.providers) : undefined;
+      } catch (error) {
+        // Only what needs a custom provider is left out: each tool on its own provider still runs.
+        unread = `Paseo did not answer with its providers (${paseoSaid(error)}); run \`paseo daemon config get agents.providers --json\` on the daemon's host to see why`;
+      }
+
       const customs = keptOf(parsed?.success ? parsed.data : {}, instances.flatMap((instance) => (instance.home?.env === undefined ? [] : [instance.home.env])));
       custom = new Map(Object.entries(customs));
 
@@ -831,13 +840,13 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const provider = named[tool];
 
         if (provider === undefined) return available.has(tool) ? [{ name: tool, tool, provider: tool }] : [];
-        const problem = namedProblem(provider, tool, customs);
+        const problem = unread ?? namedProblem(provider, tool, customs);
 
         return [problem === undefined ? { name: tool, tool, provider } : { name: tool, tool, canRun: false, reason: problem }];
       });
 
       const teams = teamInstances.map(({ instance, tool }): (Target & { toAdd?: ProviderToAdd }) | Unavailable => {
-        const found = providerOf(instance, tool, { custom: customs, named: named[instance.name], onThisMachine: isOnThisMachine(url), ...ownHome(instance, tool) });
+        const found = unread === undefined ? providerOf(instance, tool, { custom: customs, named: named[instance.name], onThisMachine: isOnThisMachine(url), ...ownHome(instance, tool) }) : { cannot: unread };
 
         if ('cannot' in found) return { name: instance.name, tool, canRun: false, reason: found.cannot };
 

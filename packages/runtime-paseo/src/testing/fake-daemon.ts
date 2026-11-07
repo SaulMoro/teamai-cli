@@ -124,6 +124,8 @@ const BehaviourSchema = z.object({
   config_ms: z.number().int().nonnegative().default(0),
   /** The daemon refuses every config change with this error. */
   refuse_config: z.string().optional(),
+  /** The daemon fails every read of its config with this error. */
+  refuse_config_read: z.string().optional(),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
   /** The daemon answers every agent lookup with this error. */
@@ -678,6 +680,12 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       }
 
       case 'get_daemon_config_request':
+        if (behaviour().refuse_config_read !== undefined) {
+          reply({ type: 'rpc_error', payload: { requestId: message.requestId, requestType: message.type, error: behaviour().refuse_config_read ?? '', code: 'handler_error' } });
+
+          return;
+        }
+
         // Its `providers` are the custom providers of `agents.providers`, as the daemon answers them.
         reply({ type: 'get_daemon_config_response', payload: { requestId: message.requestId, config: { mcp: { injectIntoAgents: true }, providers: behaviour().custom_providers } } });
 
