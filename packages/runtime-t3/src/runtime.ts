@@ -741,7 +741,9 @@ export function serve(options: ServeOptions): Promise<void> {
     const mayAdd = options.mayWriteSettings() || options.t3Cli.isInstalled() || mode === 'attended';
 
     for (const { instance: { name }, instance, driver, command } of missing) {
-      const binaryPath = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
+      const found = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
+      // A PATH folder named relatively finds it relative to this folder, which T3 does not run in.
+      const binaryPath = found === null ? null : path.resolve(found);
       const toolHome = teamaiToolHome(instance, driver, options.home);
       const homePath = toolHome === path.join(options.home, DRIVERS[driver].home) ? undefined : toolHome;
       const setting = `with driver ${DRIVERS[driver].label} and Binary path ${binaryPath ?? `the absolute path of ${command} (command -v ${command})`}${homePath ? `, and Home path ${tilde(homePath, options.home)}` : ''}`;
