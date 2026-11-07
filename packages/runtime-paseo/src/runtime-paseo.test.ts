@@ -605,6 +605,30 @@ describe('teamai-runtime-paseo', () => {
       expect([...notices(first), ...notices(second)]).toHaveLength(1);
     });
 
+    it('adds a provider once when another runtime opens an instance while this one adds two at once', async () => {
+      const { file, env } = installed('acme-claude');
+      installed('beta-claude');
+      const acme: InitInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+      const beta: InitInstance = { name: 'beta-claude', tool: 'claude', command: 'beta-claude' };
+      // acme-claude's add takes long; beta-claude's, which this runtime starts while it adds acme-claude, does not.
+      behave({ provider_config_ms: { 'acme-claude': 1500 } });
+      const [first, second] = [start(env), start(env)];
+
+      for (const runtime of [first, second]) expect(await ready(runtime, { instances: [acme, beta] })).toMatchObject({ can: { tools: ['claude', 'opencode', 'acme-claude', 'beta-claude'] } });
+      first.send(openRequest('op-0000000a', ATTEMPT, 'acme-claude'));
+      await until(() => configChanges().length === 1);
+      first.send(openRequest('op-0000000b', 'a0123abce', 'beta-claude'));
+      await delay(200);
+      second.send(openRequest('op-0000000c', 'a0123abcf', 'acme-claude'));
+
+      for (const [runtime, op] of [[first, 'op-0000000a'], [first, 'op-0000000b'], [second, 'op-0000000c']] as const) expect(await runtime.next(isOp(op, 'ready'))).toMatchObject({ event: 'ready' });
+      expect(configChanges()).toEqual([
+        expect.objectContaining({ config: { providers: { 'acme-claude': { extends: 'claude', label: 'acme-claude', command: [file] } } } }),
+        expect.objectContaining({ config: { providers: { 'beta-claude': { extends: 'claude', label: 'beta-claude', command: [path.join(dir, 'bin', 'beta-claude')] } } } }),
+      ]);
+      expect(notices(second)).toEqual([]);
+    });
+
     it('adds a provider that runs its tool\'s own command in its own home for an instance with only a home of its own, and runs on one already there that does', async () => {
       const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
       const home = path.join(dir, 'home', '.claude-work');
