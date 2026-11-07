@@ -65,7 +65,7 @@ function instanceStore(platform: string) {
 
   if (definition.adapterAs === undefined || home === undefined) return undefined;
 
-  return { store: definition.store, adapterAs: definition.adapterAs, home, base: hosted.platform };
+  return { store: definition.store, adapterAs: definition.adapterAs, home };
 }
 
 /** The factory of `platform`: a shipped platform's, or an instance's own, in its shipped platform's format. */
@@ -83,24 +83,18 @@ function instancePlatforms(): string[] {
 
 /**
  * The store directory `platform`'s adapter is built on from `root`: the member's recorded tool roots, or a tool home an
- * attempt ran in. An instance's store sits in the instance's home, or in the tool home it ran in. An instance of a tool
- * that keeps its sessions in an XDG data home (OpenCode) keeps them in its home when its home moves `XDG_DATA_HOME`,
- * else in the member's own data home, as the tool it extends does. Empty for a platform whose adapter finds its own
- * store, or that teamai has no facts for.
+ * attempt ran in. An instance's store sits in the instance's home, or in the tool home it ran in. Empty for a platform
+ * whose adapter finds its own store, or that teamai has no facts for.
  */
 export function storeDirOf(platform: string, root: SessionStoreRoot): string {
   if (isSessionPlatform(platform)) return isStoredSessionPlatform(platform) ? sessionStoreDir(platform, root) : '';
   const instance = instanceStore(platform);
 
   if (!instance) return '';
-  const { store, home, base } = instance;
+  const { store, home } = instance;
   const dir = store.in === 'tool-home' ? store.dir : store.child;
 
-  if (root.kind === 'tool-home') return path.join(root.dir, dir);
-
-  if (store.in === 'tool-home' || home.env === 'XDG_DATA_HOME') return path.join(instanceHomeDir(home), dir);
-
-  return sessionStoreDir(base, root);
+  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir(home), dir);
 }
 
 /** `platform`'s adapter on `storeDir`, a store directory the caller already resolved (`storeDirOf`). */

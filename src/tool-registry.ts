@@ -16,13 +16,16 @@ import { type HookFormat, type InstallGate, type RunTimeVia } from '@teamai/tool
 const REGISTRY = makeToolRegistry(TOOLS, () => instanceTable, hostsInstances);
 
 /**
- * Whether an instance of a tool whose sessions `platform` holds keeps its own there: its format carries another platform
- * id, in a store teamai resolves (a tool home, or an XDG data home, which a home of its own can move).
+ * Whether `instance`, of a tool whose sessions `platform` holds, keeps its own there: the format carries another platform
+ * id, in a store its home moves. A store in an XDG data home (OpenCode) moves only with a home that moves `XDG_DATA_HOME`;
+ * otherwise the instance writes the tool's own store, and its sessions are credited to the tool it extends.
  */
-function hostsInstances(platform: SessionPlatform): boolean {
+function hostsInstances(platform: SessionPlatform, instance: ResolvedToolInstance): boolean {
   const definition: SessionPlatformDefinition = SESSION_PLATFORM_FACTS[platform];
 
-  return !locatesOwnStore(definition) && definition.adapterAs !== undefined;
+  if (locatesOwnStore(definition) || definition.adapterAs === undefined) return false;
+
+  return definition.store.in === 'tool-home' || instance.home?.env === 'XDG_DATA_HOME';
 }
 
 /** The instances of every team repo and member's directory loaded in this process, by name. */

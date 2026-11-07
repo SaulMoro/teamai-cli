@@ -206,14 +206,14 @@ describe('the sessions of an instance', () => {
     expect(adapterOn('opencode-work', { kind: 'recorded', toolRoots: undefined }).platform).toBe('opencode-work');
   });
 
-  it('reads an OpenCode instance that moves only its config directory in the member\'s own data home, where OpenCode keeps its sessions', async () => {
+  it('keeps no platform for an OpenCode instance that moves only its config directory, whose sessions OpenCode keeps in the member\'s own data home', async () => {
     vi.stubEnv('XDG_DATA_HOME', '');
     await load(teamRepo({ 'tools/opencode-review.yaml': 'schemaVersion: v1alpha1\nname: opencode-review\nextends: opencode\nhome: { dir: .opencode-review, env: OPENCODE_CONFIG_DIR }\n' }));
     const { AgentSession } = await import('../session-flow/agent-session.js');
-    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+    const { listAvailablePlatforms } = await import('../session-flow/adapters/index.js');
 
-    expect(AgentSession.platformForTool('opencode-review')).toBe('opencode-review');
-    expect(storeDirOf('opencode-review', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(home, '.local', 'share', 'opencode'));
+    expect(AgentSession.platformForTool('opencode-review')).toBeUndefined();
+    expect(listAvailablePlatforms()).not.toContain('opencode-review');
   });
 });
 
