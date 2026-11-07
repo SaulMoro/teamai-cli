@@ -39,6 +39,21 @@ steps:
     command: node ${JSON.stringify(edit)}
 `;
 
+/** A workflow whose team step is kept from TEAM_DEPLOY_TOKEN, which its later deploy step requires. */
+const guarded = (edit: string): string => `schemaVersion: v1alpha1
+name: edit-guarded
+description: Add a line to the team's notes rule, then deploy with a token the edit never sees.
+inputs: { topic: string }
+steps:
+  - id: edit
+    workspace: { team: { branch: "teamai/notes/{{ inputs.topic }}" } }
+    command: node ${JSON.stringify(edit)}
+  - id: deploy
+    needs: [edit]
+    requires: { env: [TEAM_DEPLOY_TOKEN] }
+    command: node -e "console.log('deployed')"
+`;
+
 const RunSchema = z.object({
   steps: z.array(z.object({ id: z.string(), status: z.string(), failure: z.object({ code: z.string(), message: z.string() }).optional() })),
   deliveries: z.array(z.object({ url: z.string(), branch: z.string(), base: z.string(), step: z.string(), pass: z.number() })).optional(),
@@ -119,7 +134,7 @@ describe('a step in the team workspace, run through the real CLI', () => {
     gh = fakeGhHost(path.join(fixture.root, 'gh'));
     fs.symlinkSync(gh.bin, path.join(fixture.bin, 'gh'));
     edit = path.join(fixture.root, 'edit.js');
-    fixture.pushTeam({ 'workflows/edit-team.yaml': workflow(edit), 'workflows/edit-any.yaml': anyBranch(edit), 'rules/old.md': '# Old\n', 'rules/notes.md': '# Notes\n' });
+    fixture.pushTeam({ 'workflows/edit-team.yaml': workflow(edit), 'workflows/edit-any.yaml': anyBranch(edit), 'workflows/edit-guarded.yaml': guarded(edit), 'rules/old.md': '# Old\n', 'rules/notes.md': '# Notes\n' });
     const pulled = await fixture.teamai(['pull']);
     expect(pulled.code, said(pulled)).toBe(0);
   }, 120_000);
@@ -150,6 +165,26 @@ describe('a step in the team workspace, run through the real CLI', () => {
     expect(planted.outcome, planted.said).toBe('succeeded');
     expect(onBranch('teamai/notes/hooked', 'rules/notes.md')).toBe('# Notes\nhooked');
     expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
+  }, 120_000);
+
+  it('keeps from git in the clone each variable the step is kept from, so a filter of the member\'s own reads none of them', async () => {
+    const mark = path.join(fixture.root, 'filter-saw');
+    const gitconfig = z.string().parse(fixture.env.GIT_CONFIG_GLOBAL);
+    execFileSync('git', ['config', '--file', gitconfig, 'filter.probe.clean', `sh -c 'echo "\${TEAM_DEPLOY_TOKEN:-unset}" >> ${mark}; cat'`]);
+    fixture.env.TEAM_DEPLOY_TOKEN = 'deploy-secret';
+
+    try {
+      const ran = await run("const fs = require('fs'); fs.writeFileSync('.git/info/attributes', '* filter=probe\\n'); fs.appendFileSync('rules/notes.md', 'guarded\\n');", { name: 'edit-guarded', inputs: { topic: 'guarded' } });
+
+      expect(ran.outcome, ran.said).toBe('succeeded');
+      expect(onBranch('teamai/notes/guarded', 'rules/notes.md')).toBe('# Notes\nguarded');
+      const saw = fs.readFileSync(mark, 'utf8').split('\n').filter(Boolean);
+      expect(saw.length).toBeGreaterThan(0);
+      expect(saw.every((line) => line === 'unset'), saw.join(', ')).toBe(true);
+    } finally {
+      delete fixture.env.TEAM_DEPLOY_TOKEN;
+      execFileSync('git', ['config', '--file', gitconfig, '--unset', 'filter.probe.clean']);
+    }
   }, 120_000);
 
   it('pushes the step\'s work with the credential helper the member\'s team checkout names, to an origin that asks for one', async () => {

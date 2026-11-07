@@ -399,7 +399,7 @@ async function prepareTeam(input: {
   }
 
   const { dir, root: clone, base: commit, start, found } = opened;
-  const ready: Placed = { ...base, dir, place: { role: 'team', workspace, clone, base: commit, start, found }, phase: 'ready' };
+  const ready: Placed = { ...base, dir, place: { role: 'team', workspace, clone, base: commit, start, found, withhold: lease.envScope?.withhold ?? [] }, phase: 'ready' };
   await writePlaceRecord(config, ready);
 
   return preparedOf(ready, lease.prompt);
@@ -889,7 +889,12 @@ async function finishRole(config: LocalConfig, files: PlaceFiles, record: Placed
     }
 
     case 'team': {
-      const finished = await finishTeamClone({ config, root: place.clone, dir, step, branch: place.workspace.branch, base: place.base, start: place.start, found: place.found });
+      const scoped = await cloneEnv(place.withhold);
+
+      if (!scoped.ok) return { outcome: 'failed', message: scoped.failure.message, failure: scoped.failure };
+      const finished = await finishTeamClone({
+        config, root: place.clone, dir, step, branch: place.workspace.branch, base: place.base, start: place.start, found: place.found, env: scoped.env,
+      });
 
       return 'code' in finished ? { outcome: 'failed', message: finished.message, failure: finished } : { ...end, changes: finished.changes };
     }

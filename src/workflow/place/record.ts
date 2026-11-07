@@ -41,7 +41,8 @@ const CloneRoleSchema = z.object({
 /**
  * A lease in `clone`, a fresh clone of the team repo, on `workspace.branch`, which commits there from `start` and pushes
  * the branch only where origin still has it as the clone found it. `base` is the commit of origin's default branch the
- * clone merged, or started from, which the step's changes are compared with.
+ * clone merged, or started from, which the step's changes are compared with. Git there runs without `withhold`, as in a
+ * clone, except the calls that reach origin.
  */
 const TeamRoleSchema = z.object({
   role: z.literal('team'),
@@ -51,6 +52,8 @@ const TeamRoleSchema = z.object({
   start: z.string(),
   /** The commit origin's branch was at when the clone was made; absent when origin had no such branch. */
   found: z.string().optional(),
+  /** Absent in a record an older teamai wrote, which withheld nothing. */
+  withhold: z.array(z.string()).default([]),
 });
 
 /** Where a `deliver: publish` step runs: a checkout of its data branch at `base`, or nowhere it could publish from, for `reason`. */
