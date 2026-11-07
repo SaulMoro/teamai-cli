@@ -40,8 +40,8 @@ export type ServedInstances =
 
 /**
  * The provider instance that serves each of `instances` T3 can run: the one `mapped` names, checked, else the one whose
- * Binary path runs its command. One it cannot find is not served, and `unavailable` says what to add; a mapping that
- * cannot hold, or a command two instances run, fails init, naming the setting to change.
+ * Binary path runs its command. One it cannot find, or whose command two instances run, is not served, and `unavailable`
+ * says what to set; a mapping that cannot hold fails init, naming the setting to change.
  */
 export function servedInstances({ instances, mapped, lookup }: { instances: InitInstance[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
   const served = new Map<string, Provider>();
@@ -91,10 +91,11 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
       return provider.driverKind === driver && lookup.isUsable(provider) && binaryPath !== undefined && runsCommand(binaryPath, command);
     });
 
+    // teamai passes every instance the member may run, so an ambiguous one is not offered rather than failing them all.
     if (found.length > 1) {
       const names = found.map((provider) => `"${provider.providerInstanceId}"`);
-
-      return failed(`T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${command}. Pick one with instances: { ${name}: <its id> }`);
+      unavailable[name] = `T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${command}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`.slice(0, UNAVAILABLE_REASON_MAX);
+      continue;
     }
 
     const [provider] = found;

@@ -411,15 +411,16 @@ describe('teamai-runtime-t3', () => {
         });
       });
 
-      it('fails init, naming both and the option that picks one, when two instances run its command', async () => {
+      // teamai passes every instance the member may run, so one that is ambiguous must not stop the steps on the others.
+      it('does not offer it, naming both and the option that picks one, when two instances run its command, and still offers the rest', async () => {
         const reply = await initWith({
           binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude', 'acme-claude-2': '/usr/local/bin/acme-claude' },
           providers: [CLAUDE, ACME, { ...ACME, providerInstanceId: 'acme-claude-2' }],
         });
 
-        expect(reply).toEqual({
-          type: 'init', ok: false,
-          error: { code: 'bad_option', key: 'instances', message: 'T3 Code provider instances "acme-claude-t3" and "acme-claude-2" both run acme-claude. Pick one with instances: { acme-claude: <its id> }' },
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude'] } });
+        expect(reply['unavailable']).toEqual({
+          'acme-claude': 'T3 Code provider instances "acme-claude-t3" and "acme-claude-2" both run acme-claude. Pick one with instances: { acme-claude: <its id> } in the definition\'s t3 options.',
         });
       });
 
