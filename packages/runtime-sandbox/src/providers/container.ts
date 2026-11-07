@@ -5,7 +5,7 @@ import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protoco
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, tailOf, WARM_BY, type WarmPlan } from '../warm.js';
+import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -112,7 +112,6 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   /** Makes the warm image of `plan` from `image` with the `cache` files of `checkout`, in a scratch container or build. */
   const makeWarm = async (plan: WarmPlan, checkout: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const scratch = scratchOf({ cache: plan.cache, checkout });
-    const failed = (what: string, ran: Ran) => sandboxFailed(`${what}${ran.kind === 'ran' ? `, exiting with code ${ran.code}. It printed: ${tailOf(`${ran.stdout}\n${ran.stderr}`) || 'nothing'}` : `: ${ran.message}`}. No step ran; fix warm, and start again.`);
 
     try {
       const { make } = plan;
@@ -120,24 +119,25 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
       if ('containerfile' in make) {
         const built = await cli(['build', '-t', plan.tag, '-f', make.containerfile, scratch.dir]);
 
-        return built.kind === 'ran' && built.code === 0 ? { ok: true } : failed(`${engine} could not build the warm image ${plan.tag} from ${make.containerfile}`, built);
+        return built.kind === 'ran' && built.code === 0 ? { ok: true } : warmFailed(`${engine} could not build the warm image ${plan.tag} from ${make.containerfile}`, built);
       }
 
       const name = `teamai-warm-${plan.key}-${crypto.randomBytes(3).toString('hex')}`;
+
       const created = await cli([
         'run', '-d', '--name', name, '--label', `teamai.owner=${owner}`, '--label', `teamai.warm-by=${WARM_BY}`, ...user(), '--env', `HOME=${CONTAINER_HOME}`,
         '-v', `${scratch.dir}:${WARM_DIR}:rw${host.selinux ? ',z' : ''}`, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
 
-      if (!(created.kind === 'ran' && created.code === 0)) return failed(`${engine} could not start a container from ${image} to prepare the warm image ${plan.tag}`, created);
+      if (!(created.kind === 'ran' && created.code === 0)) return warmFailed(`${engine} could not start a container from ${image} to prepare the warm image ${plan.tag}`, created);
 
       try {
         const prepared = await cli(['exec', '-w', WARM_DIR, name, '/bin/sh', '-c', make.prepare]);
 
-        if (!(prepared.kind === 'ran' && prepared.code === 0)) return failed(`The warm image's prepare, \`${make.prepare}\`, failed in a container from ${image}`, prepared);
+        if (!(prepared.kind === 'ran' && prepared.code === 0)) return warmFailed(`The warm image's prepare, \`${make.prepare}\`, failed in a container from ${image}`, prepared);
         const committed = await cli(['commit', name, plan.tag]);
 
-        return committed.kind === 'ran' && committed.code === 0 ? { ok: true } : failed(`${engine} could not save the warm image ${plan.tag}`, committed);
+        return committed.kind === 'ran' && committed.code === 0 ? { ok: true } : warmFailed(`${engine} could not save the warm image ${plan.tag}`, committed);
       } finally {
         await cli(['rm', '--force', name], { timeoutMs: COMMAND_MS });
       }

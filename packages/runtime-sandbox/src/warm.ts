@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type { WarmOptions } from './options.js';
+import type { Ran } from './providers/cli.js';
 
 // ─── The warm image ──────────────────────────────────────
 //
@@ -71,11 +72,18 @@ export interface WarmPlan {
   make: { prepare: string } | { containerfile: string };
 }
 
-/** The last lines of `output`, for a failure. */
-export function tailOf(output: string): string {
+/** The end of `output`, at most TAIL characters of it, for a failure. */
+function tailOf(output: string): string {
   const trimmed = output.trim();
 
   return trimmed.length > TAIL ? `…${trimmed.slice(-TAIL)}` : trimmed;
+}
+
+/** `sandbox_failed` for a step of making a warm image, `what` happened, that `ran` failed: with its code and output, or why it did not run. */
+export function warmFailed(what: string, ran: Ran) {
+  const how = ran.kind === 'ran' ? `, exiting with code ${ran.code}. It printed: ${tailOf(`${ran.stdout}\n${ran.stderr}`) || 'nothing'}` : `: ${ran.message}`;
+
+  return { ok: false as const, failure: { code: 'sandbox_failed', message: `${what}${how}. No step ran; fix warm, and start again.` } satisfies RuntimeFailure };
 }
 
 /**
@@ -115,7 +123,7 @@ export function planWarm({ base, recipe, checkout }: { base: string; recipe: War
  * A fresh scratch directory outside the checkout holding copies of the `cache` files of `checkout`, at their relative
  * paths, and what removes it.
  */
-export function scratchOf({ cache, checkout }: { cache: readonly string[]; checkout: string }): { dir: string; remove: () => void } {
+export function scratchOf({ cache, checkout }: { cache: readonly string[]; checkout: string }) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `teamai-warm-${process.pid}-`)));
 
   for (const file of cache) {
