@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { onPath, type NativeSandbox, type Sandboxed } from './native.js';
+import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
 
 // ─── seatbelt: macOS's own sandbox, through sandbox-exec ───
 //
@@ -13,6 +13,7 @@ import { onPath, type NativeSandbox, type Sandboxed } from './native.js';
 //    (allow file-read-data … (subpath R…))           the view's git paths and the PATH's tools, read only,
 //    (allow file-read-data … file-write* (subpath W…)) and the place: worktree, result, run directory, tool homes, and
 //                                                    the step's own home and temp directory
+//    (deny file-write* (subpath R…))                 … except a read-only path inside the place: the worktree's .git
 //
 //  A later rule wins over an earlier one, so the allows open the place inside the denied home. A path goes in as a `-D`
 //  parameter, never into the profile's text, so no path can change the profile. Metadata stays readable, so a step can
@@ -52,6 +53,9 @@ export function profileOf({ writable, readable, hidden }: Pick<Sandboxed, 'writa
     return `(subpath (param "${prefix}${index}"))`;
   }).join(' ');
 
+  // A read-only path inside a writable one (the worktree's .git) needs its own deny, after the allow it is inside of.
+  const lockedIn = readable.filter((at) => writable.some((place) => isWithin(at, place)));
+
   const lines = [
     '(version 1)',
     '(allow default)',
@@ -60,6 +64,7 @@ export function profileOf({ writable, readable, hidden }: Pick<Sandboxed, 'writa
     '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
     ...(readable.length > 0 ? [`(allow ${READ} ${subpaths('READ', readable)})`] : []),
     `(allow ${READ} file-write* ${subpaths('WRITE', writable)})`,
+    ...(lockedIn.length > 0 ? [`(deny file-write* ${subpaths('LOCKED', lockedIn)})`] : []),
   ];
 
   return { profile: lines.join('\n'), params };

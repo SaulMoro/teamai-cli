@@ -85,7 +85,7 @@ export function realOf(at: string): string {
 }
 
 /** Whether `inner` is `outer` or inside it. */
-function isWithin(inner: string, outer: string): boolean {
+export function isWithin(inner: string, outer: string): boolean {
   const relative = path.relative(outer, inner);
 
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));

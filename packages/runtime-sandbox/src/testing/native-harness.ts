@@ -92,10 +92,12 @@ export function newOp(): string {
   return `op-${opCount.toString(16).padStart(8, '0')}`;
 }
 
-/** An attempt's place view on the host: its worktree, git path, result, run directory and tool home. */
+/** An attempt's place view on the host: its worktree, git paths, result, run directory and tool home. */
 export interface Place {
   worktree: string;
   git: string;
+  /** The worktree's own `.git` file, read only inside the writable worktree, as teamai gives a linked worktree's. */
+  dotGit: string;
   result: string;
   runDir: string;
   toolHome: string;
@@ -103,9 +105,10 @@ export interface Place {
 
 /** A place under `root`, its worktree and git path made, as teamai makes them before `open`. */
 export function placeIn(root: string): Place {
-  const at = { worktree: path.join(root, 'worktree'), git: path.join(root, 'repo.git'), result: path.join(root, 'attempts', ATTEMPT, 'out'), runDir: path.join(root, 'runs', RUN, 'scratch'), toolHome: path.join(root, 'attempts', ATTEMPT, 'tool-home', 'claude') };
+  const at = { worktree: path.join(root, 'worktree'), git: path.join(root, 'repo.git'), result: path.join(root, 'attempts', ATTEMPT, 'out'), runDir: path.join(root, 'runs', RUN, 'scratch'), toolHome: path.join(root, 'attempts', ATTEMPT, 'tool-home', 'claude'), dotGit: path.join(root, 'worktree', '.git') };
   fs.mkdirSync(at.worktree, { recursive: true });
   fs.mkdirSync(at.git, { recursive: true });
+  fs.writeFileSync(at.dotGit, `gitdir: ${at.git}\n`);
 
   return at;
 }
@@ -118,7 +121,7 @@ export async function init(connection: Connection, options: Message, credentials
 
 /** Opens the attempt's place and waits until it is ready, or failed. */
 export async function openPlace(connection: Connection, at: Place, { op = newOp(), tool, credentials = {} }: { op?: string; tool?: string; credentials?: Record<string, string> } = {}): Promise<{ accepted: Message; ready: Message }> {
-  connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, ...(tool && { tool }), credentials, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+  connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, ...(tool && { tool }), credentials, view: { worktree: at.worktree, readonly: [at.git, at.dotGit], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
   const accepted = await connection.next((message) => message.op === op && (message.event === 'accepted' || message.event === 'failed'));
   const ready = accepted.event === 'failed' ? accepted : await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
 
