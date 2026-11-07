@@ -177,7 +177,7 @@ export interface FakeT3 {
   threads(): FakeThread[];
   /** A thread someone else launched, such as the person, ended at `status`; a task that thread delegated names it as its parent. */
   /** Adds a thread the person has in T3, last changed at `updatedAt` (now, unless set). */
-  addThread(thread: { threadId: string; title: string; status: string; parentThreadId?: string; updatedAt?: string }): void;
+  addThread(thread: { threadId: string; title: string; status: string; parentThreadId?: string; updatedAt?: string; instanceId?: string; model?: string; runtimeMode?: string }): void;
   /** The person deletes the thread in T3 Code: T3 answers every later call on it `thread_not_found`. */
   deleteThread(threadId: string): void;
   /** Starts the fake server, or starts it again on the same state. */
@@ -242,7 +242,7 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
     threads: () => fs.readdirSync(path.join(state, 'threads')).filter((file) => file.endsWith('.json')).map((file) => ThreadSchema.parse(JSON.parse(fs.readFileSync(path.join(state, 'threads', file), 'utf8')))),
     addThread(thread) {
       fs.mkdirSync(path.join(state, 'threads'), { recursive: true });
-      fs.writeFileSync(path.join(state, 'threads', `${encodeURIComponent(thread.threadId)}.json`), JSON.stringify({ updatedAt: new Date().toISOString(), ...thread, provider: 'claudeAgent', settled: false, runCount: 1 }));
+      fs.writeFileSync(path.join(state, 'threads', `${encodeURIComponent(thread.threadId)}.json`), JSON.stringify({ updatedAt: new Date().toISOString(), provider: 'claudeAgent', ...thread, settled: false, runCount: 1 }));
     },
     deleteThread: (threadId) => fs.rmSync(path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`)),
     async start() {

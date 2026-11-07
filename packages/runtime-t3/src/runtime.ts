@@ -205,6 +205,8 @@ interface Session extends Reached {
   runtimeMode: StepMode | undefined;
   /** The run's checkout, as `init` names it, else the folder teamai started the runtime in. */
   checkout: string;
+  /** The instance and model of the T3 thread the run was started from, which take the place of the member's T3 default. */
+  startedFromModel: ModelSelection | undefined;
 }
 
 type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };
@@ -260,12 +262,12 @@ async function projectAt(t3: T3, dir: string): Promise<Project | undefined> {
 }
 
 /**
- * The usable instance of each tool: the one `instance` names; else the instance of the member's default model when it
- * runs that tool's own binary, then the one whose id is the provider's name, then the first of that provider that runs
+ * The usable instance of each tool: the one `instance` names; else the instance of `defaultModel`, the member's default
+ * or the started-from thread's, when it runs that tool's own binary, then the one whose id is the provider's name, then the first of that provider that runs
  * its own binary. An instance the member turned off for the project is never used, and another instance that runs a
  * wrapper or a team tool's command never runs the base tool unless `instance` names it.
  */
-function instancesOf({ providers, instance, project, binaryPathOf }: { providers: Provider[]; instance: string | undefined; project: ProjectSettings; binaryPathOf(instanceId: string): string | undefined }): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
+function instancesOf({ providers, instance, project, defaultModel, binaryPathOf }: { providers: Provider[]; instance: string | undefined; project: ProjectSettings; defaultModel: ModelSelection | undefined; binaryPathOf(instanceId: string): string | undefined }): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
   const usable = providers.filter((provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false);
   const tools = new Map<ToolId, Provider>();
 
@@ -287,13 +289,32 @@ function instancesOf({ providers, instance, project, binaryPathOf }: { providers
     const own = usable.filter((provider) => provider.driverKind === driver && runsOwnBinary(binaryPathOf(provider.providerInstanceId), driver));
 
     // The instance named after the provider runs it whatever its Binary path, such as a Claude version file.
-    const found = own.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId)
+    const found = own.find((provider) => provider.providerInstanceId === defaultModel?.instanceId)
       ?? usable.find((provider) => provider.driverKind === driver && provider.providerInstanceId === driver) ?? own[0];
 
     if (found) tools.set(DRIVERS[driver].tool, found);
   }
 
   return { ok: true, instances: tools };
+}
+
+/**
+ * The instance and model of the T3 thread `threadId`, the one the run was started from: none when the run was not, or
+ * when the thread names none; a failure says why T3 could not read it. Its options stay T3's: T3 reports none of them.
+ */
+async function startedFromModel(t3: T3, threadId: string | undefined): Promise<{ ok: true; selection: ModelSelection | undefined } | { ok: false; why: string } | undefined> {
+  if (threadId === undefined) return undefined;
+
+  try {
+    const { providerInstanceId, model } = await t3.thread(threadId);
+
+    return { ok: true, selection: providerInstanceId && model ? { instanceId: providerInstanceId, model } : undefined };
+  } catch (error) {
+    // T3's own message, not the refusal's JSON, such as "Thread … is no longer available".
+    const why = error instanceof T3Error ? error.refusal?.message ?? error.message : error instanceof Error ? error.message : String(error);
+
+    return { ok: false, why: why.replace(/\.$/, '') };
+  }
 }
 
 /**
@@ -882,7 +903,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     try {
-      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
+      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout), startedFromModel(connected.t3, options.startedFrom)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
 
       if (!asking.answered) {
         void connected.t3.close().catch(() => {});
@@ -890,11 +911,16 @@ export function serve(options: ServeOptions): Promise<void> {
         return unanswered();
       }
 
-      const [environment, providers, here] = asking.value;
+      const [environment, providers, here, fromThread] = asking.value;
       const settings = readSettings(options.t3Home);
       const project = projectSettings(settings, here);
+
+      if (fromThread?.ok === false) notice(`teamai could not read the T3 thread ${options.startedFrom ?? ''} this run was started from (${fromThread.why}), so a step that names no tool or model runs on your T3 Code default instead.`, {});
+      const startedFrom = fromThread?.ok ? fromThread.selection : undefined;
+      // A run started from a thread runs as that thread does; else as the member's own new threads in this project.
+      const defaultModel = startedFrom ?? project.defaultModel;
       const binaryPathOf = (instanceId: string): string | undefined => settings.providerInstances?.[instanceId]?.config?.binaryPath?.trim() || undefined;
-      const instances = instancesOf({ providers, instance: parsed.options.instance, project, binaryPathOf });
+      const instances = instancesOf({ providers, instance: parsed.options.instance, project, defaultModel, binaryPathOf });
 
       if (!instances.ok) {
         write({ type: 'init', ok: false, error: instances.failure });
@@ -941,12 +967,12 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
       const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => unavailable[tool] === undefined));
-      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, startedFromModel: startedFrom };
       // An instance teamai adds on its first open is offered as well: the open adds it, or fails saying why.
       const tools = [...runs.keys(), ...toAdd.pending.keys()];
-      // A step that names no tool runs on the member's effective T3 default, when its instance is the one offered.
+      // A step that names no tool runs on the member's effective T3 default, or the started-from thread's, when its instance is the one offered.
       // When that instance runs a wrapper no tool instance here runs, its provider's own tool, which runs on its own instance.
-      const defaultProvider = providers.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId && (provider.constraints ?? []).length === 0);
+      const defaultProvider = providers.find((provider) => provider.providerInstanceId === defaultModel?.instanceId && (provider.constraints ?? []).length === 0);
       const defaultDriver = defaultProvider && driverOfProvider(defaultProvider);
       const onWrapper = defaultProvider !== undefined && defaultDriver !== undefined && !runsOwnBinary(binaryPathOf(defaultProvider.providerInstanceId), defaultDriver);
       const defaultTool = [...runs].find(([, provider]) => provider === defaultProvider)?.[0] ?? (onWrapper && runs.has(DRIVERS[defaultDriver].tool) ? DRIVERS[defaultDriver].tool : undefined);
@@ -1409,7 +1435,12 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const settingsProjectId = opened.kind === 'worktree' ? opened.settingsProjectId ?? opened.projectId : undefined;
     const project = projectSettings(readSettings(options.t3Home), settingsProjectId === undefined ? undefined : { id: settingsProjectId });
-    const selection = modelSelection({ provider: instance, lease, defaultModel: project.defaultModel, appliedByT3: opened.kind !== 'worktree' || settingsProjectId === opened.projectId });
+
+    // T3 applies only the project's default to a launch that names no model, so a started-from thread's is named.
+    const selection = modelSelection({
+      provider: instance, lease, defaultModel: s.startedFromModel ?? project.defaultModel,
+      appliedByT3: s.startedFromModel === undefined && (opened.kind !== 'worktree' || settingsProjectId === opened.projectId),
+    });
 
     if (!selection.ok) {
       refuse({ op: request.op, state: 'failed', failure: selection.failure });
