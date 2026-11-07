@@ -2691,6 +2691,27 @@ describe('a warm image', () => {
     expect(builds()).toMatchObject({ saves: [expect.anything()], prepares: [expect.anything()] });
   });
 
+  it.each(PROVIDERS)('closes an attempt on $options.provider at once while its warm image is still being made, and makes no sandbox for it', async ({ options, save }) => {
+    engine.delay(save, 5_000);
+    const connection = start();
+    await init(connection, { ...options, warm: WARM });
+    const at = checkout();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-1' }, view: { worktree: at.worktree, readonly: [at.git], result: path.join(dir, 'attempts', ATTEMPT, 'out'), runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: path.join(dir, 'attempts', ATTEMPT, 'tool-home', 'claude') } } });
+    await connection.next((message) => message.op === op && message.event === 'accepted', 5_000);
+    await vi.waitFor(() => { expect(builds().prepares).toHaveLength(1); }, { timeout: 10_000 });
+
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 2_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 15_000)).toMatchObject({
+      event: 'failed', failure: { code: 'sandbox_failed', message: `Attempt ${ATTEMPT} was closed while its warm image was being made, so no sandbox was made for it.` },
+    });
+    // The image is kept for the next attempt; the scratch sandbox it was made in is gone, and the attempt never had one.
+    expect(engine.savedImages()).toHaveLength(1);
+    await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 5_000 });
+  }, 30_000);
+
   it.each(PROVIDERS)('fails the open on $options.provider with the last lines of a prepare that fails, and leaves nothing', async ({ options }) => {
     const connection = start();
     await init(connection, { ...options, warm: { prepare: 'echo "npm error 401 Unauthorized" >&2; exit 7', cache: ['package-lock.json'] } });

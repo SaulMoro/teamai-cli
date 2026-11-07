@@ -168,6 +168,13 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
     return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not give the tool in sandbox ${name} the login sbx keeps for it: ${messageOf(ran) || 'the link failed'}. Remove it with \`sbx rm --force ${name}\`, and start again.` } };
   };
 
+  /** The template an attempt of `tool` starts from: the agent's, else the tool's own, or none sbx ships for it. */
+  const templateOf = (tool: string | undefined): string | undefined => {
+    const launched = LAUNCHABLE.find((each) => each === tool);
+
+    return agent ?? (tool === undefined ? 'shell' : launched && TEMPLATE_OF[launched]);
+  };
+
   const once = oneBuildPerKey<{ ok: true } | { ok: false; failure: RuntimeFailure }>();
 
   /** Whether sbx keeps the warm template of `plan` already; a list sbx cannot give is taken as not, so it is saved again. */
@@ -316,9 +323,18 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
       };
     },
 
+    async warm(view, tool) {
+      const template = templateOf(tool);
+
+      // A tool sbx ships no template for has no warm template either: create fails it with bad_option.
+      if (template === undefined) return { ok: true };
+      const from = await warmFrom(template, view.worktree);
+
+      return from.ok ? { ok: true } : from;
+    },
+
     async create(key, view, tool) {
-      const launched = LAUNCHABLE.find((each) => each === tool);
-      const template = agent ?? (tool === undefined ? 'shell' : launched && TEMPLATE_OF[launched]);
+      const template = templateOf(tool);
 
       if (template === undefined) {
         return { ok: false, failure: { code: 'bad_option', key: 'agent', message: `sbx ships no template for ${tool}, the tool of attempt ${key.attempt}. Set agent to a kit reference that brings ${tool}, or run the step on claude or codex` } };

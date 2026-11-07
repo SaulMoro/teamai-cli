@@ -251,6 +251,12 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
       };
     },
 
+    async warm(view) {
+      const from = await imageFor(view.worktree);
+
+      return from.ok ? { ok: true } : from;
+    },
+
     async create(key, view) {
       const mounted = mountsOf(engine, view);
 
