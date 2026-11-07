@@ -1730,6 +1730,15 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 你取消时仍在运行的驱动，以及发现这样的 exec 仍在运行的 `workflow resume`，都会让步骤失败为 `runtime_lost` 并给出同样的建议，同样保留位置和登录。运行时能够停止它之后，对这个运行执行 `teamai workflow cancel` 就会停止它。
 
+用一个不使用某个尝试所在运行时的驱动执行 `workflow resume`（包括 `--driver local`）时，会先通过为它记录的驱动停止被杀掉的驱动留在那里的东西，和 `teamai workflow cancel` 一样，然后在自己的运行时上重新运行这个步骤：
+
+```console
+$ teamai workflow resume r48201aa --driver local
+ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
+```
+
+那个运行时无法确认停止时，步骤失败为 `runtime_lost`，给出应该用来恢复的驱动，并保留位置。
+
 ### 编写步骤运行时
 
 运行时从 stdin 每行读取一个 JSON 请求，在 stdout 上用 JSON 行回答，协议版本 `1`。`src/__tests__/fixtures/runtime-toy/runtime.mjs` 是一个完整的例子，它在主机上运行步骤。它导入 `@teamai/runtime-protocol`，所以测试在运行它之前先把它打包成一个文件（`src/__tests__/helpers/toy-runtime.ts`）。

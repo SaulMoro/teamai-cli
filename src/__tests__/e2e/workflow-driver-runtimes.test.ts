@@ -391,31 +391,47 @@ steps:
       expect(fs.existsSync(place.dir)).toBe(true);
     });
 
-    it('fails the step runtime_lost and keeps the place when the run resumes on another runtime than the one a killed driver left a setup on', async () => {
+    it('stops, through the driver recorded for it, the setup a killed driver left on a runtime the resumed run does not use, then runs the step again', async () => {
       const otherDir = path.join(os.homedir(), '.teamai', 'runtimes', 'othertoy');
       fs.mkdirSync(otherDir, { recursive: true });
       fs.copyFileSync(TOY_RUNTIME, path.join(otherDir, 'runtime'));
       fs.chmodSync(path.join(otherDir, 'runtime'), 0o755);
-      const { runId } = await killedDuringSetup('toymovedsetupflow', 'toymovedsetup');
-      writeDefinition('othertoysetup', [{ use: 'othertoy', options: { state: fs.mkdtempSync(path.join(sandbox, 'othertoy-')) } }]);
+      const { runId, pid, options } = await killedDuringSetup('toymovedsetupflow', 'toymovedsetup');
+      writeDefinition('othertoysetup', [{ use: 'othertoy', options: { state: fs.mkdtempSync(path.join(sandbox, 'othertoy-')), path: options.path } }]);
 
       const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'othertoysetup'], repo, env());
 
       const [review] = readRunState(runId).steps;
-      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('left running on step runtime "toy" of driver "toymovedsetup", which this driver cannot stop, so it may still run there. Resume the run with --driver toymovedsetup') } });
-      // The runtime the setup was left on is not open here to stop it, so its place is left as the setup has it.
-      const place = JSON.parse(fs.readFileSync(path.join(attemptDir(runId, attemptOf(review)), 'place.json'), 'utf8')) as { phase: string; dir: string };
-      expect(place.phase).toBe('setting-up');
-      expect(fs.existsSync(place.dir)).toBe(true);
+      expect(review, resumed.stderr).toMatchObject({ status: 'succeeded' });
+      expect(resumed.stderr).toContain(`Stopped attempt ${attemptOf(review)} of run ${runId} on step runtime "toy" and closed its place.`);
+      // Stopped first, through the driver it was left on, it wrote nothing into the place prepared again.
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(execFileSync('git', ['log', '--all', '--name-only', '--format='], { cwd: repo, encoding: 'utf8' })).not.toContain('left-by-old-setup');
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'othertoy', driver: 'othertoysetup', phase: 'closed' });
     });
 
-    it('fails the step runtime_lost and keeps the place when the run resumes on the local driver after a killed driver left a setup on a runtime', async () => {
-      const { runId } = await killedDuringSetup('toylocalsetupflow', 'toylocalsetup');
+    it('stops, through the driver recorded for it, the setup a killed driver left on a runtime when the run resumes on the local driver', async () => {
+      const { runId, pid } = await killedDuringSetup('toylocalsetupflow', 'toylocalsetup');
 
       const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'local'], repo, env());
 
       const [review] = readRunState(runId).steps;
-      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('left running on step runtime "toy" of driver "toylocalsetup", which this driver cannot stop, so it may still run there. Resume the run with --driver toylocalsetup') } });
+      // Setup runs on this machine now, where toy-setup is not found: the step fails on that, not on the left setup.
+      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'setup_failed' } });
+      expect(resumed.stderr).toContain(`Stopped attempt ${attemptOf(review)} of run ${runId} on step runtime "toy" and closed its place.`);
+      expect(() => process.kill(pid, 0)).toThrow();
+    });
+
+    it('fails the step runtime_lost and keeps the place when the driver recorded for a setup a killed driver left cannot stop it', async () => {
+      const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down.' };
+      const { runId, options } = await killedDuringSetup('toystuckmovedflow', 'toystuckmoved');
+      writeDefinition('toystuckmoved', [{ use: 'toy', options: { ...options, cancel_fails: stuck } }]);
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'local'], repo, env());
+
+      const [review] = readRunState(runId).steps;
+      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining(`Attempt ${attemptOf(review)} ran on step runtime "toy" of driver "toystuckmoved", which could not stop what ran there, so it may still run: `) } });
+      expect(review).toMatchObject({ failure: { message: expect.stringContaining(`${stuck.message} Resume the run with --driver toystuckmoved.`) } });
       const place = JSON.parse(fs.readFileSync(path.join(attemptDir(runId, attemptOf(review)), 'place.json'), 'utf8')) as { phase: string; dir: string };
       expect(place.phase).toBe('setting-up');
       expect(fs.existsSync(place.dir)).toBe(true);
@@ -1482,6 +1498,28 @@ steps:
       expect(review).toMatchObject({ status: 'succeeded', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true } });
       expect(sends().map((line) => line.op)).toEqual([sent?.op, sent?.op]);
       expect(endings()).toEqual([[sent?.op, 'finished']]);
+    });
+
+    it('stops, through the driver recorded for it, a prompt a killed teamai left running when the run resumes on a driver without that runtime, then runs the step there', async () => {
+      const release = path.join(state, 'release-never');
+      writeDefinition('agentmoved', [{ use: 'toy', options: { state, agent: { release, output: { ok: true } } } }]);
+      const before = runIds();
+      const first = await startKilled(['workflow', 'start', 'oneprompt', '--driver', 'agentmoved']);
+      await until(() => sends().length === 1);
+      first.child.kill('SIGKILL');
+      expect((await first.ended).signal).toBe('SIGKILL');
+      const runId = String([...runIds()].find((id) => !before.has(id)));
+      const [sent] = sends();
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'local'], repo, env());
+
+      const [review] = readRunState(runId).steps;
+      expect(review, resumed.stderr).toMatchObject({ status: 'succeeded' });
+      expect(resumed.stderr).toContain(`Stopped attempt ${attemptOf(review)} of run ${runId} on step runtime "toy" and closed its place.`);
+      // The toy's agent was told to stop, and its place closed, before the step ran again on this machine; no prompt went again.
+      expect(fs.existsSync(path.join(state, 'cancel', String(sent?.op)))).toBe(true);
+      expect(fs.readFileSync(path.join(state, 'closes.jsonl'), 'utf8')).toContain(`"handle":"toy-${runId}-${attemptOf(review)}"`);
+      expect(sends()).toHaveLength(1);
     });
 
     it('keeps the display the runtime gives with the prompt\'s acceptance while the prompt runs, for the run\'s details', async () => {

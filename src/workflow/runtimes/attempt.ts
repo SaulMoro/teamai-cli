@@ -95,17 +95,6 @@ function isSetupLeftRunning(record: AttemptRuntimeRecord): boolean {
 }
 
 /**
- * Why a setup a killed teamai left running on the step runtime `record` names cannot be stopped from `runtime`, the step
- * runtime that now takes attempt `attempt`, or from none: it may still write into the place. Undefined when no setup was
- * left, or it was left on `runtime`, which stops it (`AttemptRun.stopLeftSetup`).
- */
-export function setupLeftElsewhere(record: AttemptRuntimeRecord | undefined, attempt: string, runtime: string | undefined): RuntimeFailure | undefined {
-  if (!record || !isSetupLeftRunning(record) || record.runtime === runtime) return undefined;
-
-  return { code: 'runtime_failed', message: `Attempt ${attempt} has a setup a teamai before this one left running on step runtime "${record.runtime}" of driver "${record.driver}", which this driver cannot stop, so it may still run there. Resume the run with --driver ${record.driver}.` };
-}
-
-/**
  * Records the place of attempt `attempt` as no longer teamai's to close, without its runtime's close, once the person
  * checked that nothing of it still runs. Why the runtime could not close it stays in the record.
  */
@@ -435,11 +424,14 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   return {
     async open(view, { tool, toolHome: home, credentials = {} } = {}) {
       openedWith = credentials;
-      const before = await current();
+      const found = await current();
+      // A place closed on another runtime holds nothing of this one: the attempt starts again here.
+      const before = found && (found.runtime === runtime.name || found.phase !== 'closed') ? found : undefined;
 
-      // The record names another runtime when the run is resumed with another driver: the attempt is not moved.
-      if (before && before.runtime !== runtime.name) {
-        return { ok: false, failure: runtimeFailure(runtime.name, `cannot continue attempt ${attempt}, which runs on step runtime "${before.runtime}" of driver "${before.driver}". Resume the run with --driver ${before.driver}, or retry the step.`) };
+      // A record of another runtime is one whose place there is still open: what ran there was not stopped
+      // (`stopOnRecordedDriver`), so the attempt does not move while it may still run.
+      if (before && before.runtime !== runtime.name && before.phase !== 'closed') {
+        return { ok: false, failure: runtimeFailure(runtime.name, `cannot continue attempt ${attempt}, whose place on step runtime "${before.runtime}" of driver "${before.driver}" is still open, so what ran there may still run. Resume the run with --driver ${before.driver}.`) };
       }
 
       const op = before?.open.op ?? newOpId();
@@ -661,12 +653,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       const before = await current();
       const handle = before?.open.handle;
 
-      if (!before?.setup || !isSetupLeftRunning(before) || handle === undefined) return undefined;
-
-      // Resumed with another driver, the runtime the setup was left on is not open here to stop it.
-      const elsewhere = setupLeftElsewhere(before, attempt, runtime.name);
-
-      if (elsewhere) return lostFor(elsewhere);
+      // One left on another runtime was stopped through the driver recorded for it before this attempt reached here.
+      if (!before?.setup || !isSetupLeftRunning(before) || before.runtime !== runtime.name || handle === undefined) return undefined;
       const notStopped = await stopLeftRunning(handle, before.setup.op);
 
       return notStopped && leftSetupNotStopped(notStopped);
