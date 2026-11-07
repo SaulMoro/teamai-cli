@@ -349,6 +349,12 @@ const InitRequestSchema = z.object({
   instances: z.array(InitInstanceSchema).optional(),
   /** The run's checkout, an absolute path: teamai starts the runtime there too. */
   checkout: z.string().min(1).optional(),
+  /**
+   * Set when teamai only asks whether a run could start now, as describe does from an app's session, and opens nothing
+   * after: the runtime signs in nothing and writes nothing, here or in its app, and answers as `mode` would, else fails
+   * naming what is missing. An older teamai never sends it.
+   */
+  checkOnly: z.literal(true).optional(),
 });
 
 export const OpenRequestSchema = z.object({

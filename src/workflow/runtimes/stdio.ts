@@ -304,7 +304,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   return {
     name,
 
-    async init({ options, mode, credentials, instances, checkout }) {
+    async init({ options, mode, credentials, instances, checkout, checkOnly }) {
       if (dead) return { ok: false, failure: dead };
 
       try {
@@ -341,7 +341,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
         timer.unref();
         onInit = settle;
-        send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options, ...(credentials && { credentials }), ...(instances && { instances }), ...(checkout !== undefined && { checkout }) });
+        send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options, ...(credentials && { credentials }), ...(instances && { instances }), ...(checkout !== undefined && { checkout }), ...(checkOnly && { checkOnly }) });
       });
     },
 

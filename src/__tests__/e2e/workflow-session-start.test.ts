@@ -33,9 +33,12 @@ describe('a workflow started from an app\'s agent session', () => {
     fs.writeFileSync(path.join(repo, '.teamai', 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\n${body}`);
   };
 
-  const inits = (): Array<{ mode: string }> => (fs.existsSync(path.join(state, 'inits.jsonl'))
-    ? fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { mode: string })
+  const inits = (): Array<{ mode: string; checkOnly?: true }> => (fs.existsSync(path.join(state, 'inits.jsonl'))
+    ? fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { mode: string; checkOnly?: true })
     : []);
+
+  /** The operations the toy was sent after `init`, such as an `open`, which is where a runtime creates what it lacks. */
+  const operations = (): string[] => (fs.existsSync(path.join(state, 'ops')) ? fs.readdirSync(path.join(state, 'ops')) : []);
 
   const readRunState = (runId: string): RunState => JSON.parse(fs.readFileSync(path.join(dataHome, 'workflows', 'runs', `${runId}.json`), 'utf8')) as RunState;
 
@@ -102,7 +105,17 @@ steps:
     expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: {
       kind: 'background', start: 'teamai workflow start review --driver t3', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
     } } } });
-    expect(inits()).toEqual([expect.objectContaining({ mode: 'unattended' })]);
+    expect(inits()).toEqual([expect.objectContaining({ mode: 'unattended', checkOnly: true })]);
+    expect(operations()).toEqual([]);
+  });
+
+  it('answers as outside the app when the app\'s driver declares a credential whose variable is unset', async () => {
+    writeT3({ credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' }, can: { hitl: true, env: true } });
+
+    const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, thread);
+
+    expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start review --driver skill' } } } });
+    expect(inits()).toEqual([]);
   });
 
   it('answers as outside the app when no run could start on its driver now, and outside a thread asks nothing of the driver', async () => {

@@ -173,7 +173,7 @@ function init(request) {
   }
 
   fs.mkdirSync(request.options.state, { recursive: true });
-  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode, cwd: process.cwd(), ...(request.checkout && { checkout: request.checkout }), ...(request.instances && { instances: request.instances }) })}\n`);
+  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode, cwd: process.cwd(), ...(request.checkout && { checkout: request.checkout }), ...(request.instances && { instances: request.instances }), ...(request.checkOnly && { checkOnly: true }) })}\n`);
 
   // A sign-in check whose provider never answers: an init for new work stalls, and recover mode, which checks nothing, does not.
   if (request.mode !== 'recover' && request.options.answer?.init === 'silent') return;

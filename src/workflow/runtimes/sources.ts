@@ -347,9 +347,9 @@ function badOption(driver: ResolvedDriver, use: string, key: string, message: st
  * `stop` only stops and closes attempts, which bring no credential, so a cancel works in a shell without them. A runtime
  * opened to stop is opened in `recover` mode, which runs no sign-in or tool check and answers only for the handles it
  * recorded, so a provider that is down or stalls cannot hold the stop; only one that refuses that mode is opened for new
- * work instead. `check` only asks whether a run could start on it now: each runtime opens as for an `unattended` run,
- * which signs in only without a page or a prompt, with no credential, and a team runtime no one accepted here is not
- * asked about.
+ * work instead. `check` only asks whether a run could start on it now: each runtime gets `init` as for an `unattended`
+ * run, marked `checkOnly`, and nothing more, a credential variable left unset fails it as it would the run, and a team
+ * runtime no one accepted here is not asked about.
  */
 export type DriverPurpose = 'run' | 'stop' | 'check';
 
@@ -392,7 +392,8 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     return { ok: true, opened: { kind: 'local', use: 'local', engine: split.engine } };
   }
 
-  const values = purpose === 'run' ? credentialValues(driver, use, split.credentials, process.env) : { ok: true as const, values: {} };
+  // A check fails as the run would for an unset variable, and sends no value.
+  const values = purpose === 'stop' ? { ok: true as const, values: {} } : credentialValues(driver, use, split.credentials, process.env);
 
   if (!values.ok) return values;
   const accepted = await acceptRuntime(source, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
@@ -425,9 +426,9 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const runtime = spawned();
   const credentials = { env: [...split.credentials.map((credential) => credential.name), ...Object.keys(found)], logins: split.engine.logins };
 
-  const ready = purpose === 'check'
-    ? await runtime.init({ options: split.runtime, mode: 'unattended', instances: await runnableInstances(), checkout })
-    : await runtime.init({ options: split.runtime, mode, credentials, instances: await runnableInstances(), checkout });
+  const ready = await runtime.init({
+    options: split.runtime, mode: purpose === 'check' ? 'unattended' : mode, credentials, instances: await runnableInstances(), checkout, ...(purpose === 'check' && { checkOnly: true as const }),
+  });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
     await runtime.dispose();
