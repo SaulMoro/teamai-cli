@@ -31,12 +31,16 @@ type ExecRequest = z.infer<typeof ExecRequestSchema>;
 
 type PromptRequest = z.infer<typeof PromptRequestSchema>;
 
-/** What `init` settled: the provider, what it offered, and the member's gateways a login it keeps replaces. */
+/**
+ * What `init` settled: the provider, what it offered, the member's gateways a login it keeps replaces, and the tool each
+ * instance teamai passed extends, by the instance's name, which teamai gives as the `tool` of an instance's open.
+ */
 interface Ready {
   provider: Provider;
   can: Can;
   host: HostRoute;
   unusedGateways: UnusedGateways;
+  instanceTools: ReadonlyMap<string, string>;
 }
 
 /** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
@@ -135,7 +139,7 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
 
 export function serve({ input, write: send, journal, warn, provider: providerFor }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
-  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED, unusedGateways: {} };
+  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
@@ -333,13 +337,15 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     write({ op, event: 'accepted', handle });
     // Its own place is saved first, so the sweep keeps it.
     void sweep(provider);
+    // An instance's place is its tool's: the same template, sign-in link and gateway; its command and home come in exec.
+    const launched = tool === undefined ? undefined : current.instanceTools.get(tool) ?? tool;
 
     /** The attempt's sandbox, found or created, kept under its id. */
     const make = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
       const found = await provider.find(key);
 
       if (!found.ok) return found;
-      const created = found.id === undefined ? await provider.create(key, view, tool) : { ok: true as const, id: found.id };
+      const created = found.id === undefined ? await provider.create(key, view, launched) : { ok: true as const, id: found.id };
 
       // A place a released close forgot meanwhile stays forgotten: its sandbox is left to a later open's sweep.
       if (created.ok && journal.place(handle) !== undefined) journal.savePlace(handle, { ...key, id: created.id });
@@ -356,11 +362,11 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    const unused = tool === undefined ? undefined : current.unusedGateways[tool];
+    const unused = launched === undefined ? undefined : current.unusedGateways[launched];
 
     // A definition that gives the step the gateway, or a sign-in of its own, is not signed in on sbx's login.
-    if (tool !== undefined && unused !== undefined && !unused.ownSignIn.some((name) => name in credentials) && !toldGateway.has(tool)) {
-      toldGateway.add(tool);
+    if (launched !== undefined && unused !== undefined && !unused.ownSignIn.some((name) => name in credentials) && !toldGateway.has(launched)) {
+      toldGateway.add(launched);
       write({ event: 'notice', op, message: unused.notice });
     }
 
@@ -820,7 +826,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
-      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {} };
+      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
       write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
@@ -829,7 +835,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const provider = providerFor(parsed.options);
 
     if (mode === 'recover') {
-      ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {} };
+      ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
       write({ type: 'init', ok: true, can: {} });
 
       return;
@@ -838,7 +844,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const offered = await provider.offer(credentials, instances);
 
     if (!offered.ok) {
-      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {} };
+      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
       write({ type: 'init', ok: false, error: offered.failure });
 
       return;
@@ -847,7 +853,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const { confined: offers = [], ...rest } = offered.can;
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
-    ready = { provider, can, host: offered.host, unusedGateways: offered.unusedGateways };
+    ready = { provider, can, host: offered.host, unusedGateways: offered.unusedGateways, instanceTools: new Map(instances.map(({ name, tool }) => [name, tool])) };
     write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }), ...(Object.keys(offered.unavailable).length > 0 && { unavailable: offered.unavailable }), ...(offered.ownLogins.length > 0 && { ownLogins: offered.ownLogins }) });
   };
 

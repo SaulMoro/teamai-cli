@@ -2403,7 +2403,7 @@ describe('an attempt in an sbx sandbox', () => {
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'claude-fast'] }, unavailable: { 'acme-claude': expect.stringMatching(/acme-claude.*sbx's claude template.*agent.*kit.*--driver local/) } });
   });
 
-  it("signs a Claude instance in on the login sbx keeps, in the instance's own home", async () => {
+  it("opens a Claude instance teamai names in open from sbx's claude template, and signs it in on the login sbx keeps, in the instance's own home", async () => {
     engine.image('claude', { claude: "const fs = require('node:fs'); const signedIn = fs.existsSync(`${process.env.ACME_CLAUDE_CONFIG_DIR}/.credentials.json`); console.log(signedIn ? 'signed in' : 'Not logged in · Please run /login'); process.exit(signedIn ? 0 : 1);" });
     engine.secret('anthropic', true);
     const connection = start();
@@ -2412,7 +2412,7 @@ describe('an attempt in an sbx sandbox', () => {
     expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [instance])).toMatchObject({ ok: true, can: { tools: ['claude', 'claude-work'] } });
     const at = place();
     const op = newOp();
-    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { ACME_CLAUDE_CONFIG_DIR: at.toolHome } } });
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude-work', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { ACME_CLAUDE_CONFIG_DIR: at.toolHome } } });
     expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'ready' });
 
     expect((await exec(connection, { argv: ['claude', '-p', 'Fix it.'], env: { ACME_CLAUDE_CONFIG_DIR: at.toolHome }, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0, stdout: 'signed in\n' });
