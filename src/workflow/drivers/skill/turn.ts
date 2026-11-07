@@ -20,7 +20,7 @@ import { childCap, reportedByAgent, type Answer, type Refusal } from './transiti
  */
 export type DescribedInput = { name: string; type: OutputSchema; value?: unknown; why?: string };
 
-/** How describe says to start: as is, after one question to the person, or with the local driver. */
+/** How describe says to start: as is, after one question to the person, in the background, or with the local driver. */
 export type DescribeAsk =
   /**
    * `say`: the facts to tell the person before running `start`, a line each. `inputs`: in an unattended run, the inputs
@@ -35,7 +35,14 @@ export type DescribeAsk =
       inputs: DescribedInput[];
       options: Array<{ label: string; start: Literal }>;
     };
+    /** Each option starts on the driver of the app the session runs in: the agent runs the one picked as `background`. */
+    background?: string;
   }
+  /**
+   * Start on the driver of the app the session runs in: the agent runs `start` in the background and waits for it to
+   * end. `background`: where the run's steps appear. `say`: the facts to tell the person first, a line each.
+   */
+  | { kind: 'background'; say?: string; start: Literal; background: string }
   | { kind: 'local'; reason: string; start: Literal }
   /** The session names no tool the run needs: the agent fills `describe`'s `{tool}` slot with the one of `tools` it works in, and describes again. */
   | { kind: 'tool'; reason: string; describe: Literal; tools: string[] }

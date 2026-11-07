@@ -16,6 +16,7 @@ import { agentSessionFromEnv } from '../../../utils/session-id.js';
 import { WorkflowOffers } from '../../../workflow-offers.js';
 import { agentEvidence, isAttemptRunner, type AgentEvidence } from '../../attempt-marker.js';
 import { inProcessClient, invokeDeniedMessage, type ResumeClaim, type WorkflowClient } from '../../protocol.js';
+import type { SessionApp } from '../../session-apps.js';
 import type { WorkflowFailure } from '../../types.js';
 import { AttemptIdSchema, RunIdSchema, runsDir, takeRunLock, type AttemptId, type LockTaken, type RunId, type RunLock } from '../../store.js';
 import { canFor, HOST_CHOICES, sessionOffers, type HostChoice } from './host-profiles.js';
@@ -25,7 +26,7 @@ import { askFor, attendedReason, ceilingOf, checkStartAnswers, localPromptTool, 
 import { drivesRun, readSkillState, writeSkillState } from './skill-state.js';
 import { detachedRunners, runRunner } from './skill-runner.js';
 import { agentReport, foreground, plannedState, poll } from './tick.js';
-import { describeRow, judgedBy, startRow, type ResumeAnswers, type RowId } from './transitions.js';
+import { APP_CHECKED_ROWS, describeRow, judgedBy, startRow, type DescribeInput, type ResumeAnswers, type RowId } from './transitions.js';
 import { errorOf, type SkillAnswer, type SkillError } from './turn.js';
 
 // What the runs offered on teamai-reports are judged by outside this driver, as a resume through it judges them.
@@ -102,6 +103,11 @@ export interface SkillContext {
   evidence: AgentEvidence;
   /** The run mode of the calling process, which describe answers for and a start keeps for the run. */
   mode: RunMode;
+  /**
+   * The app the calling session runs in, undefined outside one, with whether a run could start on its driver now, which
+   * describe asks before it offers that start: its runtimes open as for an unattended run, so none asks for a sign-in.
+   */
+  app: { session: SessionApp; canStart(): Promise<boolean> } | undefined;
   /** The tool of that session, which a child's model is resolved for; undefined when its host names none. */
   tool: ToolId | undefined;
   /** The tools the member names for `config`'s scope, the most specific first: TEAMAI_AI_TOOL, then `ai.tool`. */
@@ -120,13 +126,14 @@ export interface SkillContext {
  * The context of a call from this process: its agent session, how the member ran teamai, the in-process protocol,
  * detached runners, and the real clock.
  */
-export async function skillContext(input: Pick<SkillContext, 'config' | 'toolPaths' | 'env' | 'cwd' | 'aiTools' | 'trace'>): Promise<SkillContext> {
+export async function skillContext(input: Pick<SkillContext, 'config' | 'toolPaths' | 'env' | 'cwd' | 'aiTools' | 'trace'> & { app?: SkillContext['app'] }): Promise<SkillContext> {
   const { config, env } = input;
   const session = await agentSessionFromEnv();
   const evidence = agentEvidence(process.env);
 
   return {
     ...input,
+    app: input.app,
     session: session.id,
     // Only a coding agent drives --driver skill, so a host that sets no session variable is still an agent's.
     evidence: evidence.kind === 'none' ? { kind: 'skill-driver' } : evidence,
@@ -468,15 +475,22 @@ async function start(call: Extract<SkillCall, { kind: 'describe' | 'start' }>, c
   const { description, judging, undeliverable } = described;
   const local = localReason(description);
   const why = local !== undefined ? { local } : {};
-  const denied = description.invoke === 'deny' && context.evidence.kind !== 'none' ? { denied: invokeDeniedMessage(description.name, context.evidence, { kind: 'start' }) } : {};
+  const { app } = context;
+  const from = app && { place: app.session.terminal, driver: app.session.driver };
+  const denied = description.invoke === 'deny' && context.evidence.kind !== 'none' ? { denied: invokeDeniedMessage(description.name, context.evidence, { kind: 'start', ...(from && { from }) }) } : {};
 
   if (call.kind === 'describe') {
     const attended = attendedReason(description, 'start');
 
-    const { row, verdict } = describeRow({
+    const input: DescribeInput = {
       needed: neededAnswers(description), ...denied, undeliverable: undeliverable?.message, ...why, judged: judgedBy(judging) !== undefined,
-      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }),
-    });
+      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }), ...(app && { app: { session: app.session, isReady: false } }),
+    };
+
+    const unchecked = describeRow(input);
+    // Whether a run could start on the app's driver is asked only where the answer would change.
+    const isChecked = app !== undefined && context.mode === 'attended' && APP_CHECKED_ROWS.has(unchecked.row);
+    const { row, verdict } = isChecked ? describeRow({ ...input, app: { session: app.session, isReady: await app.canStart() } }) : unchecked;
 
     context.trace?.(row);
     const caller = { session: context.session, tool: call.tool ?? context.tool };

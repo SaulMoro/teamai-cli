@@ -24,6 +24,8 @@ const SKILL_IMPORTS = {
   // What a driver nobody attends says once it offered a run to a person, as the local driver logs it.
   'src/workflow/handoff.ts': { names: ['offeredToPerson'] },
   'src/workflow/attempt-marker.ts': {},
+  // The app a session runs in, which the command layer detects and checks the driver of before describe answers.
+  'src/workflow/session-apps.ts': { typeOnly: true },
   // The wire shapes the engine answers with, which every driver parses with the same schema.
   'src/workflow/lease-wire.ts': { names: ['LeaseWireSchema', 'ConfinedLease'] },
   'src/workflow/step-state.ts': { names: ['FailureSchema', 'ConfinedRunReportSchema', 'TokenUsageSchema'] },

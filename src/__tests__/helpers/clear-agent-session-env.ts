@@ -7,6 +7,7 @@ import { TOOLS } from '../../tools.js';
 import { homeVariables, isToolId } from '../../tool-registry.js';
 import { GIT_REPOSITORY_ENV } from '../../utils/git-env.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
+import { SESSION_APPS } from '../../workflow/session-apps.js';
 import { SIGN_IN_VARIABLES } from '@teamai/runtime-protocol';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),
@@ -14,14 +15,16 @@ import { SIGN_IN_VARIABLES } from '@teamai/runtime-protocol';
 // agentSessionIdFromEnv; a test that does not isolate HOME would also write
 // that live session's state into the real ~/.teamai. Start every test file,
 // and the CLIs it spawns, with none set (an OpenCode shell's
-// TEAMAI_AGENT_SESSION_ID and a Pi shell's PI_SESSION_ID included). A workflow
-// step that runs the tests carries its runner's TEAMAI_WORKFLOW_ATTEMPT, which
+// TEAMAI_AGENT_SESSION_ID and a Pi shell's PI_SESSION_ID included), and in no
+// app's session (a T3 thread sets T3CODE_THREAD_ID), whose driver a describe
+// would open. A workflow step that runs the tests carries its runner's
+// TEAMAI_WORKFLOW_ATTEMPT, which
 // would make a spawned `workflow report --driver skill` that runner, and a
 // launched step's TEAMAI_LAUNCHED_BY keeps its sessions out of the totals. CI
 // runners set CI, and a shell may set TEAMAI_MODE, either of which makes every
 // workflow run here unattended; a test that needs that mode sets it. Both
 // vitest configs seed these in `test.env`, so the scrub always has one to remove.
-for (const name of [...AGENT_SESSION_ENV, ATTEMPT_ENV, LAUNCHED_BY_ENV, RUN_MODE_ENV, 'CI']) {
+for (const name of [...AGENT_SESSION_ENV, ...SESSION_APPS.map((app) => app.variable), ATTEMPT_ENV, LAUNCHED_BY_ENV, RUN_MODE_ENV, 'CI']) {
   delete process.env[name];
 }
 

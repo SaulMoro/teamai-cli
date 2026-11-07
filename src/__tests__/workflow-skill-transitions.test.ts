@@ -22,7 +22,10 @@ import type { Runners } from '../workflow/drivers/skill/skill-driver.js';
 // The doc comparison reads the table itself; every behaviour below goes through runSkillCall.
 // oxlint-disable-next-line teamai/workflow-boundaries -- checks runtime coverage of every transition
 import { TRANSITIONS } from '../workflow/drivers/skill/transitions.js';
+import { SESSION_APPS } from '../workflow/session-apps.js';
 import { fakeConfinedClaude, fakeJudge, githubOrigin, LABEL_PASS, scoringStarted, sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
+
+const T3_APP = SESSION_APPS.find((app) => app.driver === 't3') ?? SESSION_APPS[0];
 
 const CHECK = `schemaVersion: v1alpha1
 name: check
@@ -1029,15 +1032,62 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'an agent session asking about an invoke: deny workflow is told why, with nothing to run',
-    rows: ['R1'],
+    name: 'an agent session asking about an invoke: deny workflow is given the start the person runs, on the driver of the app it runs in, and an unattended one nothing to run',
+    rows: ['R1', 'R31'],
     run: async () => {
       const made = await harness({ locked: LOCKED }, { evidence: { kind: 'session', variable: 'CLAUDE_CODE_SESSION_ID' } });
-      const answer = await made.call({ kind: 'describe', name: 'locked' });
-      expect(answer).toMatchObject({ data: { describe: { ask: {
-        kind: 'denied', reason: expect.stringContaining('Workflow "locked" has invoke: deny, so no coding agent starts it, with any driver, and this command runs inside an agent session (CLAUDE_CODE_SESSION_ID is set). The person can start it from their own terminal'),
+      const describeCall = { kind: 'describe', name: 'locked' } as const;
+      expect(await made.call(describeCall)).toMatchObject({ data: { describe: { ask: {
+        kind: 'local', start: 'teamai workflow start locked --driver local --tools default=claude',
+        reason: expect.stringContaining('Workflow "locked" has invoke: deny, so no coding agent starts it, with any driver, and this command runs inside an agent session (CLAUDE_CODE_SESSION_ID is set). The person can start it from their own terminal with teamai workflow start locked --driver local.'),
       } } } });
-      expect(answer).not.toMatchObject({ data: { describe: { ask: { start: expect.anything() } } } });
+      const unready = { session: T3_APP, canStart: () => Promise.reject(new Error('describe asked the app\'s driver about a workflow no agent starts')) };
+      expect(await made.call(describeCall, { app: unready })).toMatchObject({ data: { describe: { ask: {
+        kind: 'local', start: 'teamai workflow start locked --driver t3',
+        reason: expect.stringContaining('The person can start it from this thread\'s T3 terminal with teamai workflow start locked --driver t3.'),
+      } } } });
+      const unattended = await made.call(describeCall, { mode: 'unattended', app: unready });
+      expect(unattended).toMatchObject({ data: { describe: { ask: { kind: 'denied', reason: expect.stringContaining('has invoke: deny') } } } });
+      expect(unattended).not.toMatchObject({ data: { describe: { ask: { start: expect.anything() } } } });
+      return made.rows;
+    },
+  },
+  {
+    name: 'in an app\'s session whose driver a run could start on now, describe answers a start on that driver in the background, asking the person first when something is left to ask',
+    rows: ['R30', 'R3'],
+    run: async () => {
+      const made = await harness({ check: CHECK, gated: GATED, approved: APPROVED });
+      const ready = { session: T3_APP, canStart: () => Promise.resolve(true) };
+      expect(await made.call({ kind: 'describe', name: 'check' }, { app: ready })).toMatchObject({ data: { describe: { ask: {
+        kind: 'background', start: 'teamai workflow start check --driver t3', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
+      } } } });
+      expect(await made.call({ kind: 'describe', name: 'gated' }, { app: ready })).toMatchObject({ data: { describe: { ask: {
+        kind: 'ask', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
+        question: { options: [{ label: 'Yes, start it', start: 'teamai workflow start gated --driver t3 --confirmed' }] },
+      } } } });
+      expect(await made.call({ kind: 'describe', name: 'approved' }, { app: ready })).toMatchObject({ data: { describe: { ask: {
+        kind: 'ask',
+        question: {
+          text: expect.stringContaining('This session\'s agent asks you at optional approvals as the run reaches them; "answer optional approvals automatically" answers each approval yes.'),
+          options: [
+            { label: 'Start it, and ask me at optional approvals', start: 'teamai workflow start approved --driver t3' },
+            { label: 'Same, but answer optional approvals automatically', start: 'teamai workflow start approved --driver t3 --auto-approve' },
+          ],
+        },
+      } } } });
+      return made.rows;
+    },
+  },
+  {
+    name: 'in an app\'s session whose driver no run could start on now, or in an unattended run, describe answers as outside the app',
+    rows: ['R4', 'R18'],
+    run: async () => {
+      const made = await harness({ check: CHECK });
+      const asked: string[] = [];
+      const unready = { session: T3_APP, canStart: () => { asked.push('canStart'); return Promise.resolve(false); } };
+      expect(await made.call({ kind: 'describe', name: 'check' }, { app: unready })).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start check --driver skill' } } } });
+      expect(await made.call({ kind: 'describe', name: 'check' }, { app: unready, mode: 'unattended' })).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start check --driver skill --auto-approve' } } } });
+      expect(asked).toEqual(['canStart']);
       return made.rows;
     },
   },

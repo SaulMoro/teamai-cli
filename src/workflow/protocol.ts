@@ -207,9 +207,10 @@ export interface InvokeCaller {
 /**
  * What a caller asks of a workflow: to start a run; to continue run `run`, by `workflow resume` or a takeover; or to
  * claim it with a `next` payload, which has no field for the person's yes. A start a shortcut command makes may say, in
- * `instead`, what the person and the agent run in its place, for an `invoke: deny` refusal.
+ * `instead`, what the person and the agent run in its place, for an `invoke: deny` refusal; a start from an app's
+ * session names in `from` where the person starts it and on which driver, else their own terminal and `local`.
  */
-export type InvokeAct = { kind: 'start'; instead?: string } | { kind: 'continue'; run: RunId } | { kind: 'claim'; run: RunId };
+export type InvokeAct = { kind: 'start'; instead?: string; from?: { place: string; driver: string } } | { kind: 'continue'; run: RunId } | { kind: 'claim'; run: RunId };
 
 /** What shows an agent runs the calling process, as the clause the `invoke` refusals end their first sentence with. */
 function agentClause(evidence: Exclude<AgentEvidence, { kind: 'none' }>): string {
@@ -233,7 +234,7 @@ export function invokeDeniedMessage(name: string, evidence: Exclude<AgentEvidenc
   switch (act.kind) {
     case 'start':
       return `Workflow "${name}" has invoke: deny, so no coding agent starts it, with any driver, and ${agentClause(evidence)}. ${act.instead
-        ?? `The person can start it from their own terminal with teamai workflow start ${name} --driver local. To let agents start it, the team sets invoke: allow, or invoke: ask for a start after the person agrees, in workflows/${name}.yaml.`}`;
+        ?? `The person can start it from ${act.from?.place ?? 'their own terminal'} with teamai workflow start ${name} --driver ${act.from?.driver ?? 'local'}. To let agents start it, the team sets invoke: allow, or invoke: ask for a start after the person agrees, in workflows/${name}.yaml.`}`;
     case 'continue':
     case 'claim':
       return `Workflow "${name}" has invoke: deny, so no coding agent continues it, with any driver, and ${agentClause(evidence)}. The person can continue it from their own terminal with teamai workflow resume ${act.run}. To let agents continue it, the team sets invoke: allow, or invoke: ask for a resume after the person agrees, in workflows/${name}.yaml.`;

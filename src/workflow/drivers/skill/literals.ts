@@ -72,6 +72,19 @@ export function localStartLiteral(invocation: Invocation, name: string, options:
   return LiteralSchema.parse([`${invocation} workflow start ${name} --driver local`, ...toolsWords(options.tool)].join(' '));
 }
 
+/**
+ * Starts `name` on `driver`, the driver of the app the session runs in. The agent runs it in the background; for a
+ * workflow no agent may start, the person runs it. It names no prompt tool, so the app's own default comes first.
+ */
+export function appStartLiteral(invocation: Invocation, name: string, driver: string, options: { confirmed?: boolean; autoApprove?: boolean; inputs?: boolean } = {}): Literal {
+  return LiteralSchema.parse([
+    `${invocation} workflow start ${name} --driver ${shellWord(driver)}`,
+    ...(options.confirmed ? ['--confirmed'] : []),
+    ...(options.autoApprove ? ['--auto-approve'] : []),
+    ...(options.inputs ? ["--inputs '{inputs}'"] : []),
+  ].join(' '));
+}
+
 /** Continues `run` with the local driver: shown to the person for their own terminal, never run by the agent. `tool`: its prompt tool; `claim`: take it from the install that owns it. */
 export function resumeLiteral(invocation: Invocation, run: RunId, options: { tool?: string; claim?: true } = {}): Literal {
   return LiteralSchema.parse([`${invocation} workflow resume ${run}`, ...toolsWords(options.tool), ...(options.claim ? ['--claim'] : [])].join(' '));

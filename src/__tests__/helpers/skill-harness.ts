@@ -259,6 +259,8 @@ interface HarnessOptions {
   aiTool?: string;
   /** The tool the session's host names, which its runners also run under; claude unless a test sets it, null for none. */
   tool?: ToolId | null;
+  /** The app the session runs in, and whether a run could start on its driver now; none unless a test sets it. */
+  app?: SkillContext['app'];
 }
 
 /** A member's install of a `sharedTeam`: its config, and the business checkout its runs start from. */
@@ -359,7 +361,7 @@ export async function skillHarness(workflows: Record<string, string>, options: H
   const client = scheduler.settingUp(inProcessClient({ config, env }));
   const rows: string[] = [];
   const context: SkillContext = {
-    config, toolPaths, env, client: options.client ? options.client(client) : client, session: options.session ?? 'session-a', tool: options.tool === null ? undefined : options.tool ?? 'claude', aiTools: production.aiTools, invocation: 'teamai', evidence: options.evidence ?? { kind: 'none' }, mode: options.mode ?? 'attended', cwd: work,
+    config, toolPaths, env, client: options.client ? options.client(client) : client, session: options.session ?? 'session-a', tool: options.tool === null ? undefined : options.tool ?? 'claude', aiTools: production.aiTools, invocation: 'teamai', evidence: options.evidence ?? { kind: 'none' }, mode: options.mode ?? 'attended', app: options.app, cwd: work,
     now: scheduler.now, runners: scheduler.track(options.runners ? options.runners(scheduler.runners) : scheduler.runners),
     locks: { take: (run, body, waitMs) => takeRunLock(config, run, body, { waitMs }) },
     trace: (row) => { rows.push(row); },
@@ -373,8 +375,8 @@ export async function skillHarness(workflows: Record<string, string>, options: H
     advance: scheduler.advance,
     /** Makes the runner of `attempt` crash where it is parked at the next sleep. Whether one is alive to crash. */
     crashRunner: scheduler.crash,
-    /** Makes `call` as the session, or with another session, agent evidence, run mode, lock, config, session tool or working directory in its context. */
-    call: (call: SkillCall, overrides: Partial<Pick<SkillContext, 'session' | 'evidence' | 'mode' | 'locks' | 'config' | 'tool' | 'cwd'>> = {}) => runSkillCall(call, { ...context, ...overrides }),
+    /** Makes `call` as the session, or with another session, agent evidence, run mode, lock, config, session tool, working directory or app in its context. */
+    call: (call: SkillCall, overrides: Partial<Pick<SkillContext, 'session' | 'evidence' | 'mode' | 'locks' | 'config' | 'tool' | 'cwd' | 'app'>> = {}) => runSkillCall(call, { ...context, ...overrides }),
   };
 }
 

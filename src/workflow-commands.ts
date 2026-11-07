@@ -23,7 +23,8 @@ import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriver
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive, drivesHere } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
-import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { checkDriver, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { sessionAppOf } from './workflow/session-apps.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
 import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
 import type { SoleDriver } from './workflow/engine.js';
@@ -455,13 +456,25 @@ async function skillAnswer(raw: Parameters<typeof parseSkillCall>[0]): Promise<{
     return { envelope: refused, secrets: collectEnvSecrets() };
   }
 
+  const app = sessionAppOf(process.env);
+
   const context = await skillContext({
     config: loaded.config, toolPaths: loaded.teamConfig.toolPaths, env: loaded.env, cwd: process.cwd(),
     aiTools: (await memberTools(loaded.config)).map(({ tool }) => tool),
+    app: app && { session: app, canStart: () => canStartOn(loaded.config, app.driver, process.cwd()) },
     trace: (row) => log.debug(`[workflow] skill driver took row ${row}`),
   });
 
   return { envelope: await runSkillCall(call, context), secrets: loaded.secrets };
+}
+
+/** Whether a run could start now on `driver`, from `checkout`. Why not is logged for `--verbose`: describe answers without it. */
+async function canStartOn(config: LocalConfig, driver: string, checkout: string): Promise<boolean> {
+  const checked = await checkDriver(config, driver, checkout);
+
+  if (!checked.ok) log.debug(`A run cannot start on driver ${driver} now, so describe does not offer it (${checked.failure.code}): ${checked.failure.message}`);
+
+  return checked.ok;
 }
 
 const TIMEOUT_MESSAGE = '--timeout must be a positive duration, such as 500ms, 30s, 10m, 2h, or 14d';
