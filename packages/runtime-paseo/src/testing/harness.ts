@@ -68,7 +68,8 @@ export const TEST_CLIENT = path.join(ROOT, 'node_modules', '@getpaseo', 'client'
  * `PASEO_CLIENT_PATH`; `env` sets or, with undefined, removes names over that.
  */
 export function startRuntime(home: string, env: Record<string, string | undefined> = {}): Runtime {
-  const merged = { ...process.env, HOME: home, PASEO_CLIENT_PATH: TEST_CLIENT, ...env };
+  // A test run inside a Paseo agent does not make every runtime it starts one started from that agent.
+  const merged = { ...process.env, PASEO_AGENT_ID: undefined, HOME: home, PASEO_CLIENT_PATH: TEST_CLIENT, ...env };
   const given = Object.fromEntries(Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined));
   // Its stderr reaches the test's own, through a pipe a test can close as teamai does when it stops reading.
   const child = spawn(process.execPath, [bundledRuntime()], { env: given, stdio: ['pipe', 'pipe', 'pipe'] });

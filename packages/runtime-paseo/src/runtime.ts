@@ -39,6 +39,8 @@ interface Launch {
   env?: AgentCreate['env'];
   answer: AgentPrompt['answer'];
   cwd: string;
+  /** The Paseo agent the run was started from, which labels this one. */
+  parent?: string;
 }
 
 // ─── teamai-runtime-paseo ────────────────────────────────
@@ -204,6 +206,20 @@ function readResult(file: string): PromptResult | undefined {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** How long a step waits for the daemon to show the agent its run was started from, before naming it by its id alone. */
+const PARENT_LOOKUP_MS = 5_000;
+
+/**
+ * The first line of a step's agent in a run started from Paseo agent `parent`: which step and run it is, and that agent,
+ * linked when the daemon holds it. An agent this daemon does not know, or does not show within 5 s, is named by its id
+ * alone, never linked to a server that does not hold it.
+ */
+async function startedFromLine(live: Daemon, parent: string, step: string, run: string): Promise<string> {
+  const known = await Promise.race([live.agent(parent), delay(PARENT_LOOKUP_MS).then(() => null)]).catch(() => null);
+
+  return `This agent runs step "${step}" of teamai workflow run ${run}, started from the Paseo agent ${known ? live.link(parent) : parent}.`;
+}
+
 /**
  * What the person reads once teamai added a Paseo provider for instance `name`: what it holds, that it stays, and how to
  * remove it from the config of the Paseo home the member's Paseo uses. Paseo's CLI cannot unset one provider (0.14
@@ -224,6 +240,8 @@ export interface Serving {
   /** Writes a line for a person, never for teamai: stderr. */
   note(text: string): void;
   journal: Journal;
+  /** The Paseo agent the run was started from, when it was (Paseo sets PASEO_AGENT_ID in its agents). */
+  startedFrom?: string;
 }
 
 /** What a request line names, read without the rest of the request, so a line that cannot be read is answered on its own. */
@@ -236,7 +254,7 @@ const NamedSchema = z.object({
 /** What init offered of an installed tool: its steps and judges, its steps only, or nothing, with why not. */
 type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } | { runs: 'nothing'; reason: string };
 
-export function serve({ input, write: emit, note, journal }: Serving): Promise<void> {
+export function serve({ input, write: emit, note, journal, startedFrom }: Serving): Promise<void> {
   /** How many lines ended each op in this process: a request that throws ends its op only when nothing else did meanwhile. */
   const ends = new Map<OpId, number>();
 
@@ -860,7 +878,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       title: `teamai ${lease.step} · ${place.run}`,
       prompt: how.prompt,
       // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
-      labels: { 'teamai-attempt': `${place.run}/${place.attempt}`, 'teamai-run': place.run, 'teamai-step': lease.step },
+      // `teamai-parent` lists the agents of a run started from that agent.
+      labels: { 'teamai-attempt': `${place.run}/${place.attempt}`, 'teamai-run': place.run, 'teamai-step': lease.step, ...(how.parent && { 'teamai-parent': how.parent }) },
       ...(how.env && { env: how.env }),
       config: { provider: `${provider}/${model.id}`, ...(how.modeId !== undefined && { modeId: how.modeId }), ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
     };
@@ -967,8 +986,10 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const following = begin(op, request.handle);
 
     try {
+      const brief = [startedFrom && await startedFromLine(live, startedFrom, lease.step, place.run), lease.interactive && INTERACTIVE_BRIEF, lease.prompt].filter(Boolean).join('\n\n');
+
       await launch(live, request, following, target, {
-        place, modeId: modeIds.get(tool), prompt: lease.interactive ? `${INTERACTIVE_BRIEF}\n\n${lease.prompt}` : lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
+        place, modeId: modeIds.get(tool), prompt: brief, env: { [RUN_DIR_ENV]: place.runDir }, ...(startedFrom && { parent: startedFrom }),
         options: stepGrant(target.tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result, ...(lease.interactive && { interactive: true }) }, cwd: place.cwd,
       });
     } finally {
