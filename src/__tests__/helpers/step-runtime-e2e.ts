@@ -96,7 +96,8 @@ if (process.env.FAKE_TOOL_ERROR) {
   process.exit(1);
 }
 fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
-fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
+// With FAKE_TOOL_RESULT_ECHO, its result also holds the value of the variable it names, as an agent that writes its token.
+fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true, ...(process.env.FAKE_TOOL_RESULT_ECHO && { echoed: process.env[process.env.FAKE_TOOL_RESULT_ECHO] }) } }));
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-${tool}', session_id: session }) + '\\n');
 process.stdout.write(JSON.stringify({ type: 'result', session_id: session, usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
 `;
