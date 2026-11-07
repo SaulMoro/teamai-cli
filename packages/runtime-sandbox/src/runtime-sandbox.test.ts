@@ -756,6 +756,30 @@ describe('a prompt attempt in a container', () => {
     expect(Date.now() - sent).toBeLessThan(15_000);
   }, 60_000);
 
+  // A step's stop keeps its sandbox, so an exec still on its way to the engine when the stop lands starts after it.
+  it.each<{ options: Message }>([
+    { options: { provider: 'docker', image: IMAGE } },
+    { options: { provider: 'podman', image: IMAGE } },
+    { options: { provider: 'sbx', agent: 'claude' } },
+  ])('ends a step cancelled, with nothing left running, when its $options.provider stop overtakes the start of its exec', async ({ options }) => {
+    engine.image('claude', { claude: CLAUDE });
+    const connection = start();
+    await init(connection, options);
+    const at = place();
+    await openPlace(connection, at);
+    const execsBefore = engine.calls().filter(([, command]) => command === 'exec').length;
+    engine.holdExec(1_500);
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo $$ > pid.tmp; mv pid.tmp pid; while :; do sleep 1; done'] });
+    await vi.waitFor(() => { expect(engine.calls().filter(([, command]) => command === 'exec').length).toBeGreaterThan(execsBefore); }, { timeout: 10_000 });
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await connection.next(ended(op), 15_000)).toEqual({ op, event: 'cancelled' });
+    const file = path.join(at.worktree, 'pid');
+    expect(fs.existsSync(file) && isRunning(Number(fs.readFileSync(file, 'utf8')))).toBe(false);
+  }, 60_000);
+
   it('reports a retried cancel running until its stop is confirmed, never the failure the cancel before left, then cancelled', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

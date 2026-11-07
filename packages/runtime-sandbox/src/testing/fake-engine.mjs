@@ -22,7 +22,8 @@
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
 //                       exists, before it answers, as a create still on its way; a file `exec-hold` holding a number
 //                       of milliseconds makes docker's or podman's `exec` wait that long once it found its container, before it
-//                       starts the process, as an exec still on its way to the daemon; a file `owned-hold` makes a `ps`
+//                       starts the process, as an exec still on its way to the daemon (sbx's `exec` waits before it
+//                       looks its sandbox up, and starts a stopped one again, as sbx does); a file `owned-hold` makes a `ps`
 //                       filtered by `teamai.owner` wait until it is removed (60 s at most), with a file `owned-listing`
 //                       there while it waits; each list of one journal's containers it answered adds a character to
 //                       a file `owned-listed`
@@ -475,6 +476,8 @@ function sbx() {
     case 'exec': {
       const { found, rest: positional } = options(rest, ['-w', '--workdir', '-e', '--env', '-u', '--user'], ['-i', '-t']);
       const [name, ...argv] = positional;
+      // Held before the lookup: sbx starts a stopped sandbox again for an exec that reaches it after a stop.
+      waitAsLongAs('exec-hold');
       const sandbox = readContainer(name);
 
       if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls', 125);
