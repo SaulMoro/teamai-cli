@@ -266,7 +266,7 @@ runtimes:
 
 ```text
 $ teamai workflow start fix --driver paseo-in-vm
-⚠ Runtime paseo of driver paseo-in-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime paseo of driver paseo-in-vm runs steps in full access on this machine, as /repo/drivers/paseo-in-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 Paseo 设定的默认模式或 `mode` 指定的模式不在它为该工具列出的模式中时，不提供该工具。评判以一个在编辑或运行任何东西前先询问的模式启动：

@@ -174,7 +174,7 @@ runtimes:
 运行开始时会提示一次，并把这些步骤的隔离级别记为 `none`：
 
 ```text
-⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as /repo/.teamai/drivers/t3-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 teamai 会重新登录，这次以 Full access 登录（配对码还会申请 `settings:write` 和 `source-control:write`）。评审的线程仍以 Auto 运行。仍不提供 `permissions: unattended` 步骤。

@@ -174,7 +174,7 @@ runtimes:
 The run says so once, as it starts, and records the steps' isolation as `none`:
 
 ```text
-⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as /repo/.teamai/drivers/t3-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 teamai signs in again, this time with Full access (the pairing code also asks for `settings:write` and `source-control:write`). A judge's thread still runs in Auto. `permissions: unattended` steps are still not offered.
