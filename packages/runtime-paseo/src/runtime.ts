@@ -10,6 +10,7 @@ import {
 import { z } from 'zod';
 import { loadClient } from './client.js';
 import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type Target } from './daemon.js';
+import { parseOptions } from './options.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
 /** A worktree place Paseo opened as a workspace. */
@@ -60,21 +61,6 @@ interface Launch {
 //              before it edits or runs anything; any request for permission ends it. Its answer is its last message,
 //              reported best-effort: nothing stops a read outside the directory
 //
-
-const OptionsSchema = z.object({
-  /** The daemon's WebSocket address, for a daemon Paseo's own config on this machine does not name (`daemonUrl`). */
-  url: z.string().regex(/^(?:wss?|ws\+unix):\/\/\S+$/, 'The Paseo url is a ws://, wss:// or ws+unix:// address, such as ws://127.0.0.1:6767/ws').optional(),
-  /**
-   * The Paseo mode each tool's agents start in, over Paseo's default. A mode that never asks, such as Claude's
-   * bypassPermissions, is the member's explicit opt-in to full access, which init reports in `permissions`.
-   */
-  mode: z.record(z.string().refine(isPaseoTool, 'mode maps claude, codex or opencode to a Paseo mode'), z.string().min(1)).optional(),
-  /**
-   * The Paseo provider id a tool or a team instance runs on, over the one the runtime finds: for an instance, the custom
-   * provider whose command is the instance's.
-   */
-  providers: z.record(z.string().min(1), z.string().min(1)).optional(),
-}).strict();
 
 /** How long an attended step waits between looks at a permission request a person has not answered yet. */
 const PERMISSION_POLL_MS = 1000;
@@ -542,25 +528,24 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   };
 
   async function init(request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> {
-    const options = OptionsSchema.safeParse(request.options);
+    const parsed = parseOptions(request.options);
 
-    if (!options.success) {
-      const issue = options.error.issues[0];
-      // The option a nested issue sits under, else the unknown option itself.
-      const key = issue?.path[0] ?? (issue?.code === 'unrecognized_keys' ? issue.keys[0] : undefined);
-      write({ type: 'init', ok: false, error: { code: 'bad_option', message: `teamai-runtime-paseo takes options url, mode and providers only: ${issue?.message ?? 'bad options'}`, ...(key !== undefined && { key: String(key) }) } });
+    if (!parsed.ok) {
+      write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
     }
+
+    const { options } = parsed;
 
     const instances = request.instances ?? [];
     const runsAs = new Set<string>([...PASEO_TOOLS, ...instances.flatMap((instance) => (isPaseoTool(instance.tool) ? [instance.name] : []))]);
     // teamai passes every instance the member may run, so a provider for one it did not pass, such as a team tool this
     // machine has not accepted, leaves that name unavailable rather than failing the other tools.
-    const foreign = Object.keys(options.data.providers ?? {}).filter((name) => !runsAs.has(name));
+    const foreign = Object.keys(options.providers ?? {}).filter((name) => !runsAs.has(name));
 
     // The daemon the definition names, else the one the member's Paseo config names.
-    const address = options.data.url === undefined ? daemonUrl(process.env) : { url: options.data.url };
+    const address = options.url === undefined ? daemonUrl(process.env) : { url: options.url };
 
     if (request.mode === 'recover') {
       // Only to stop what it ran: no sign-in or tool check, and no connection until a cancel or close needs one. A config
@@ -595,8 +580,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    const modes = Object.fromEntries(Object.entries(options.data.mode ?? {}).filter(([tool]) => isPaseoTool(tool)));
-    const installed = await connected.installedTools({ modes, instances, providers: options.data.providers ?? {} });
+    const modes = Object.fromEntries(Object.entries(options.mode ?? {}).filter(([tool]) => isPaseoTool(tool)));
+    const installed = await connected.installedTools({ modes, instances, providers: options.providers ?? {} });
     const tools = installed.flatMap((entry) => (entry.canRun ? [entry] : []));
 
     // It starts though it can run no tool, so the run's command steps still go to the next runtime: each tool it cannot
