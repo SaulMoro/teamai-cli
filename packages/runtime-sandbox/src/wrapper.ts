@@ -115,6 +115,8 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
 
   if ('refused' in answer) return refuse(`teamai-sandbox-${name} (${answer.refused.code}): ${answer.refused.message}`);
 
+  if ('unsafe' in answer) return refuse(`teamai-sandbox-${name}: the attempt socket is not safe to ask, so nothing runs: ${answer.unsafe}. Remove that directory, and run \`teamai workflow resume ${attempt.run}\`.`);
+
   if ('unreadable' in answer) return refuse(`teamai-sandbox-${name}: the sandbox runtime of attempt ${attempt.attempt} answered what this wrapper cannot read (${answer.unreadable}), so nothing runs. Install the same teamai-cli version as the run's.`);
 
   if ('connected' in answer) return refuse(`teamai-sandbox-${name}: the attempt socket answered an ask as a registration, so nothing runs.`);

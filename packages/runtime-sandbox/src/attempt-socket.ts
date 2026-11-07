@@ -254,8 +254,25 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
   };
 }
 
-/** Asks the socket at `socketPath` once, as the wrapper does: its answer, or why it could not reach the runtime. */
-export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unreachable: string } | { unreadable: string }> {
+/**
+ * Asks the socket at `socketPath` once, as the wrapper does: its answer, or why it could not reach the runtime. A
+ * socket whose directory is not this user's own at 0700 is never asked: whoever made it would choose what runs.
+ */
+export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unreachable: string } | { unreadable: string } | { unsafe: string }> {
+  const dir = path.dirname(socketPath);
+
+  const stat = (() => {
+    try {
+      return fs.lstatSync(dir);
+    } catch {
+      return undefined;
+    }
+  })();
+
+  if (stat !== undefined && (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)) {
+    return Promise.resolve({ unsafe: `${dir} is not a directory of this user's that only this user may open (0700)` });
+  }
+
   return new Promise((resolve) => {
     const client = net.connect(socketPath);
     client.on('error', (error) => resolve({ unreachable: error.message }));
@@ -266,7 +283,8 @@ export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unre
       try {
         resolve(AnswerSchema.parse(JSON.parse(line)));
       } catch (error) {
-        resolve({ unreadable: `${line.slice(0, 200)}: ${error instanceof Error ? error.message : String(error)}` });
+        // Never the line itself: a grant this version cannot read still holds the step's credentials.
+        resolve({ unreadable: error instanceof z.ZodError ? `an answer of ${line.length} bytes whose shape this version does not know` : `an answer of ${line.length} bytes that is not JSON` });
       }
     });
     client.on('end', () => resolve({ unreachable: 'it closed the connection without an answer' }));
