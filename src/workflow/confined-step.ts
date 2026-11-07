@@ -232,7 +232,8 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
 
   if (signal?.aborted) stop();
 
-  const end = await attemptRun.prompt({
+  // Stopped while the place opened: no operation runs there yet, so the prompt is not sent at all.
+  const end: PromptEnd = stopped ? { kind: 'cancelled' } : await attemptRun.prompt({
     lease: {
       step: lease.step, tool, prompt: lease.prompt ?? '', result: attemptResultPath(config, run, lease.attempt), permissions: 'approval-required', interactive: false,
       ...(model && { model: model.effort ? { name: model.name, effort: model.effort } : { name: model.name } }),
