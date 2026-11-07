@@ -225,6 +225,51 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Holds `key` in `dir` for one runtime at a time across the runtimes on a journal, waiting while another live runtime
+ * holds it, and taking it from one that died or has held it for `HOLD_STALE_MS`. Resolves to its release, which leaves a
+ * hold another runtime took over; rejects when the hold cannot be written.
+ */
+async function hold(dir: string, key: string): Promise<() => void> {
+  const file = path.join(dir, createHash('sha256').update(key).digest('hex').slice(0, 32));
+  fs.mkdirSync(dir, { recursive: true });
+  // Written whole, then linked into place, so another runtime never reads a hold with no pid in it. Each hold is told
+  // apart from every other, so a hold found stale is never mistaken for one another runtime took since.
+  const mine = path.join(dir, `.${process.pid}.${randomUUID()}.tmp`);
+  const text = `${process.pid} ${randomUUID()}`;
+
+  try {
+    for (;;) {
+      try {
+        // Written again before each try, so a hold's age counts from when it was taken, not from when it began to wait
+        // for it.
+        fs.writeFileSync(mine, text, { mode: 0o600 });
+        fs.linkSync(mine, file);
+
+        return () => releaseHold({ file, text });
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      }
+
+      const held = holdAt(file);
+
+      // Released since the link failed: try again.
+      if (held === undefined) continue;
+
+      if (held.pid !== undefined && held.pid !== process.pid && isAlive(held.pid) && Date.now() - held.takenAt < HOLD_STALE_MS) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        continue;
+      }
+
+      // Its runtime is gone, or held it too long. A hold another runtime took in its place since it was read is put
+      // back, so two runtimes that both found it stale never both hold.
+      releaseHold({ file, text: held.text });
+    }
+  } finally {
+    fs.rmSync(mine, { force: true });
+  }
+}
+
 export function journal(root: string) {
   const placeFile = (handle: string): string => path.join(root, 'places', `${encodeURIComponent(handle)}.json`);
   const promptFile = (op: OpId): string => path.join(root, 'ops', `${op}.json`);
@@ -292,46 +337,12 @@ export function journal(root: string) {
      * holds it, and taking it from one that died or has held it for `HOLD_STALE_MS`. Resolves to its release, which
      * leaves a hold another open took over; rejects when the hold cannot be written.
      */
-    async holdOpen(directory: string): Promise<() => void> {
-      const dir = path.join(root, 'opening');
-      const file = path.join(dir, createHash('sha256').update(resolvedDir(directory)).digest('hex').slice(0, 32));
-      fs.mkdirSync(dir, { recursive: true });
-      // Written whole, then linked into place, so another runtime never reads a hold with no pid in it. Each hold is told
-      // apart from every other, so a hold found stale is never mistaken for one another runtime took since.
-      const mine = path.join(dir, `.${process.pid}.${randomUUID()}.tmp`);
-      const text = `${process.pid} ${randomUUID()}`;
-
-      try {
-        for (;;) {
-          try {
-            // Written again before each try, so a hold's age counts from when it was taken, not from when its open began
-            // to wait for it.
-            fs.writeFileSync(mine, text, { mode: 0o600 });
-            fs.linkSync(mine, file);
-
-            return () => releaseHold({ file, text });
-          } catch (error) {
-            if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-          }
-
-          const hold = holdAt(file);
-
-          // Released since the link failed: try again.
-          if (hold === undefined) continue;
-
-          if (hold.pid !== undefined && hold.pid !== process.pid && isAlive(hold.pid) && Date.now() - hold.takenAt < HOLD_STALE_MS) {
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            continue;
-          }
-
-          // Its runtime is gone, or held it too long. A hold another runtime took in its place since it was read is put
-          // back, so two runtimes that both found it stale never both hold.
-          releaseHold({ file, text: hold.text });
-        }
-      } finally {
-        fs.rmSync(mine, { force: true });
-      }
-    },
+    holdOpen: (directory: string): Promise<() => void> => hold(path.join(root, 'opening'), resolvedDir(directory)),
+    /**
+     * Holds the custom providers of the daemon at `url` for one runtime at a time on this journal, as `holdOpen` holds a
+     * directory: two inits that would add the same provider add it once.
+     */
+    holdProviders: (url: string): Promise<() => void> => hold(path.join(root, 'providers'), url),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
     savePrompt(op: OpId, record: PromptRecord): void {
       // Indexed under the directory `savePlace` made: a handle `forget` removed gets none back.
