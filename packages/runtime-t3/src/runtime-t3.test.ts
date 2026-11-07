@@ -2809,6 +2809,23 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.message).toBeUndefined();
     });
 
+    it('neither copies nor briefs a judge whose place the person released while T3 launched its thread', async () => {
+      t3.config({ launchMs: 12_000 });
+      const { runtime, handle } = await opened();
+      runtime.send(judge(handle, 'op-000000b2'));
+      await runtime.next((line) => line['op'] === 'op-000000b2' && line['event'] === 'accepted');
+
+      runtime.send({ type: 'close', handle, release: true });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted' && !isNotice(line), 15_000)).toMatchObject({ event: 'close_failed', handle, failure: { code: 't3_unavailable' } });
+      expect(await ended(runtime, 'op-000000b2')).toEqual({
+        op: 'op-000000b2', event: 'failed',
+        failure: { code: 'released', message: 'teamai released the place while T3 Code launched the judge thread, so it did not brief that thread, and the judge did not start.' },
+      });
+      expect(t3.threads()[0]?.message).toBeUndefined();
+      expect(fs.readdirSync(z.string().parse(t3.threads()[0]?.worktreePath))).toEqual([]);
+    }, 40_000);
+
     it('reconnects to the same judge after its own restart, and copies and briefs it only once', async () => {
       const release = path.join(dir, 'release');
       t3.config({ agent: { release, reply: JSON.stringify(REPLY) } });

@@ -417,6 +417,9 @@ function copyReadOnly({ dir, copy }: { dir: string; copy: string }): void {
 /** teamai could not copy a judge's directory into its thread's folder: a fault on this machine, not in T3. */
 class JudgeCopyFailed extends Error {}
 
+/** The person released the judge's place while T3 launched its thread, so the thread is left idle and unbriefed. */
+class JudgeReleased extends Error {}
+
 /** The JSON value a judge replied with, in a fenced block or bare, or undefined when it is none. */
 function replyValue(text: string): JsonValue | undefined {
   try {
@@ -999,6 +1002,8 @@ export function serve(options: ServeOptions): Promise<void> {
     if (shell.worktreePath === null) throw new Error(`T3 Code gave the thread ${threadId} no folder.`);
     const launched = known ?? journalThread(threadId, shell.worktreePath, scratch?.modelSelection?.model);
 
+    if (shell.runCount === 0 && released.has(request.handle)) throw new JudgeReleased('teamai released the place while T3 Code launched the judge thread, so it did not brief that thread, and the judge did not start.');
+
     if (shell.runCount === 0) {
       try {
         copyReadOnly({ dir: confined.dir, copy: shell.worktreePath });
@@ -1320,6 +1325,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const refused = !state.thread && error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code) ? error.refusal : undefined;
 
       if (error instanceof JudgeCopyFailed) finish({ op: request.op, state: 'failed', failure: { code: 'judge_copy_failed', message: why } });
+      else if (error instanceof JudgeReleased) finish({ op: request.op, state: 'failed', failure: { code: 'released', message: why } });
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       else if (refused?.code === 'runtime_mode_escalation_denied') {
         finish({
