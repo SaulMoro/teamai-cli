@@ -97,9 +97,10 @@ export interface Provider {
   /**
    * The sandboxes this runtime's journal owns (by their `teamai.owner` label, or on sbx by their name's prefix) that
    * name a run and an attempt (a judge's filter: the attempt it filters for), each with them, within COMMAND_MS. A
-   * provider that cannot tell its journal's sandboxes from another's has none: nothing of it is ever swept.
+   * provider that cannot tell its journal's sandboxes from another's has none: nothing of it is ever swept. `leftWarm`:
+   * the ids of the scratch sandboxes of warm builds whose process no longer runs (warm.ts), which `destroy` removes.
    */
-  owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }> } | { ok: false; failure: RuntimeFailure }>;
+  owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }>; leftWarm?: string[] } | { ok: false; failure: RuntimeFailure }>;
   /**
    * Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. `tool` is the
    * attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set.

@@ -5,7 +5,7 @@ import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protoco
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { oneBuildPerKey, planWarm, scratchOf, tailOf, type WarmPlan } from '../warm.js';
+import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, tailOf, WARM_BY, type WarmPlan } from '../warm.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -21,7 +21,7 @@ import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSP
 //
 //  With `warm`, each attempt's container starts from teamai-warm:<key> (warm.ts), made once per key from the image:
 //
-//    docker run -d --name teamai-warm-<key>-<random> --env HOME=/tmp/teamai-home -v <scratch>:/teamai-warm:rw … <image>
+//    docker run -d --name teamai-warm-<key>-<random> --label teamai.warm-by=<host>:<pid> --env HOME=/tmp/teamai-home -v <scratch>:/teamai-warm:rw … <image>
 //    docker exec -w /teamai-warm teamai-warm-<key>-<random> /bin/sh -c <prepare>        no credential, with the network
 //    docker commit teamai-warm-<key>-<random> teamai-warm:<key>; docker rm --force …
 //      or: docker build -t teamai-warm:<key> -f <checkout>/<containerfile> <scratch>
@@ -125,7 +125,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
 
       const name = `teamai-warm-${plan.key}-${crypto.randomBytes(3).toString('hex')}`;
       const created = await cli([
-        'run', '-d', '--name', name, '--label', `teamai.owner=${owner}`, '--label', `teamai.warm=${plan.key}`, ...user(), '--env', `HOME=${CONTAINER_HOME}`,
+        'run', '-d', '--name', name, '--label', `teamai.owner=${owner}`, '--label', `teamai.warm-by=${WARM_BY}`, ...user(), '--env', `HOME=${CONTAINER_HOME}`,
         '-v', `${scratch.dir}:${WARM_DIR}:rw${host.selinux ? ',z' : ''}`, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
 
@@ -237,17 +237,15 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     find,
 
     async owned() {
-      const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}{{.Label "teamai.judge"}}'], { timeoutMs: COMMAND_MS });
+      const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}{{.Label "teamai.judge"}} {{.Label "teamai.warm-by"}}'], { timeoutMs: COMMAND_MS });
 
       if (!(listed.kind === 'ran' && listed.code === 0)) return sandboxFailed(`${engine} could not list the containers this runtime's journal owns: ${why(listed)}`);
+      const lines = listed.stdout.split('\n').map((line) => line.trim().split(' '));
 
       return {
         ok: true,
-        sandboxes: listed.stdout.split('\n').flatMap((line) => {
-          const [id, run, attempt] = line.trim().split(' ');
-
-          return id && run && attempt ? [{ id, run, attempt }] : [];
-        }),
+        sandboxes: lines.flatMap(([id, run, attempt]) => (id && run && attempt ? [{ id, run, attempt }] : [])),
+        leftWarm: lines.flatMap(([id, run, attempt, by]) => (id && !run && !attempt && by && isLeftBehind(by) ? [id] : [])),
       };
     },
 

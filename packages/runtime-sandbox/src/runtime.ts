@@ -9,6 +9,7 @@ import { maskedAsGiven, onThisMachine, rewrittenMasks, toAlias } from './loopbac
 import { parseOptions, type SandboxOptions } from './options.js';
 import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type Provider } from './provider.js';
 import type { UnusedGateways } from './sign-in.js';
+import { removeLeftScratch } from './warm.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -293,6 +294,13 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
           if (!removed.ok) warn(`teamai-runtime-sandbox: warning: ${provider.display(key).label} was left by an earlier run, and ${removed.failure.message}`);
         }));
+
+        await Promise.all((listed.leftWarm ?? []).map(async (id) => {
+          const removed = await provider.destroy(id);
+
+          if (!removed.ok) warn(`teamai-runtime-sandbox: warning: the scratch sandbox ${id} of a warm image was left by a runtime that stopped while it made it, and ${removed.failure.message}`);
+        }));
+        removeLeftScratch();
       } catch (error) {
         warn(`teamai-runtime-sandbox: warning: removing what an earlier run left failed: ${error instanceof Error ? error.message : String(error)}`);
       }

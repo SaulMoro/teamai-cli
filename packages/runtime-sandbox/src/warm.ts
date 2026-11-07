@@ -25,6 +25,41 @@ import type { WarmOptions } from './options.js';
 /** The repository part of every warm image's tag: `teamai-warm:<key>`. */
 export const WARM_REPOSITORY = 'teamai-warm';
 
+/**
+ * Who makes a warm image here: this machine and process. A scratch sandbox carries it, and a scratch directory this
+ * process's pid, so a sweep removes what a build left whose process no longer runs, and never one that still runs.
+ */
+export const WARM_BY = `${os.hostname()}:${process.pid}`;
+
+/** Whether `pid` names a process that runs, or one this process may not signal; a pid it cannot read is taken as running. */
+export function isRunning(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
+}
+
+/** Whether `by`, what a scratch sandbox's WARM_BY says, names a process of this machine that no longer runs. */
+export function isLeftBehind(by: string): boolean {
+  const at = by.lastIndexOf(':');
+
+  return at > 0 && by.slice(0, at) === os.hostname() && !isRunning(Number(by.slice(at + 1)));
+}
+
+/** Removes the scratch directories warm builds left whose process no longer runs (a runtime killed while it built). */
+export function removeLeftScratch(): void {
+  for (const name of fs.readdirSync(os.tmpdir())) {
+    const pid = /^teamai-warm-(\d+)-/.exec(name)?.[1];
+
+    if (pid !== undefined && !isRunning(Number(pid))) fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true });
+  }
+}
+
 /** The most of a failed build's or prepare's output its failure quotes. */
 const TAIL = 600;
 
@@ -81,7 +116,7 @@ export function planWarm({ base, recipe, checkout }: { base: string; recipe: War
  * paths, and what removes it.
  */
 export function scratchOf({ cache, checkout }: { cache: readonly string[]; checkout: string }): { dir: string; remove: () => void } {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-warm-')));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `teamai-warm-${process.pid}-`)));
 
   for (const file of cache) {
     const to = path.join(dir, file);
