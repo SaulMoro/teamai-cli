@@ -2038,6 +2038,21 @@ steps:
       expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
     });
 
+    it('masks the result file a tool wrote with a sign-in teamai found by name when teamai workflow cancel stops the run of a killed driver', async () => {
+      writeDefinition('founddies', [{ use: 'toy', options: { state, die_at: 'exec-exited' } }]);
+      const signedIn = { ANTHROPIC_API_KEY: VALUE, FAKE_TOOL_RESULT_ECHO: 'ANTHROPIC_API_KEY' };
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'founddies'], repo, env(signedIn));
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const runId = /Run (r[0-9a-f]+) started/.exec(killed.stderr)?.[1] ?? '';
+      // The tool wrote its result, the sign-in's value in it, before teamai could read and mask it.
+      expect(holding(path.join(dataHome, 'workflows', 'runs', runId), VALUE)).not.toEqual([]);
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env(signedIn));
+
+      expect(cancelled.code, cancelled.stderr).toBe(0);
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+    });
+
     it('masks the result file an agent wrote itself with a credential\'s value when teamai workflow cancel stops the run of a killed driver', async () => {
       writeDefinition('echodies', [{ use: 'toy', options: { state, die_at: 'prompt-finished', credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, agent: { echo: 'TOY_TEAM' } } }]);
       writeFlow('echoedkilled', `  - id: review
