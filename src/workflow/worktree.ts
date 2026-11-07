@@ -327,7 +327,9 @@ async function plantableIn(input: { cwd: string; env: NodeJS.ProcessEnv; expires
   // Reading the index starts the fsmonitor its config names.
   const staged = await spawnGit(cwd, [...UNTRUSTED_CONFIG, 'ls-files', '--stage', '-z'], boundedBy(undefined, expiresAt), env);
 
-  if (staged.code !== 0) return { error: staged };
+  // An index git cannot read lists no submodule, and fails the command itself where it would reach one: that command
+  // says what is wrong with it.
+  if (staged.code !== 0) return { entries: own };
   const entries = [own];
 
   for (const line of gitlinkLines(staged.stdout)) {
