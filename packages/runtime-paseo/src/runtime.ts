@@ -911,9 +911,10 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   async function launch(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, following: Following, target: Target, how: Launch): Promise<void> {
     const { op } = request;
     // Accepted already: a provider no open added yet for a team instance is added now, which may wait on another runtime.
-    const unadded = await ensureProvider(live, target.name, op);
+    // A cancel or a close meanwhile ends the prompt at once; the add goes on for the instance's later steps.
+    const unadded = await Promise.race([ensureProvider(live, target.name, op), following.stopped]);
 
-    if (!goesOn(op, following)) return;
+    if (!goesOn(op, following) || unadded === 'stopped') return;
 
     if (unadded) {
       settle(op, { op, state: 'failed', failure: unadded }, following);
