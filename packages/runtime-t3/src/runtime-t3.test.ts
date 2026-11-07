@@ -1509,6 +1509,20 @@ describe('teamai-runtime-t3', () => {
         expect(settingsNow()).toEqual(taken);
       });
 
+      it('offers the instance another run just added and T3 has not listed yet, and runs on it, writing nothing and asking for nothing', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const added = { ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } };
+        t3.settings(added);
+        t3.config({ unlistedOnce: ['acme-claude'] });
+        const { runtime, reply } = await initOn({ mode: 'unattended' });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+        expect(reply).not.toHaveProperty('unavailable');
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toEqual(added);
+        expect(pairings()).toEqual([]);
+      });
+
       it('does not offer it, naming what to do, when its name is not one T3 takes for a provider instance', async () => {
         signIn(t3, undefined, undefined, FULL);
         const { reply } = await initOn({ mode: 'unattended', instances: [{ ...ACME, name: 'acme.claude' }] });

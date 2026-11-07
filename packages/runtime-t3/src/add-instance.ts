@@ -82,6 +82,11 @@ function isSame({ settings, id, instance, userHome }: { settings: z.infer<typeof
   return instance.homePath === undefined || instanceToolHome(settings, { instanceId: id, driver: instance.driver, userHome }) === instance.homePath;
 }
 
+/** The id of the provider instance in `settings` that is `instance` already, such as one another run added. */
+export function findProviderInstance({ settings, instance, userHome }: { settings: z.infer<typeof SettingsSchema>; instance: NewInstance; userHome: string }): string | undefined {
+  return Object.keys(settings.providerInstances ?? {}).find((id) => isSame({ settings, id, instance, userHome }));
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -182,8 +187,7 @@ function addTo(file: string, instance: NewInstance, userHome: string): AddedInst
     if (!parsed.success) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
     const settings = parsed.data;
     const instances = FileSchema.catch({}).parse(settings['providerInstances'] ?? {});
-    const read = SettingsSchema.catch({}).parse(settings);
-    const found = Object.keys(instances).find((id) => isSame({ settings: read, id, instance, userHome }));
+    const found = findProviderInstance({ settings: SettingsSchema.catch({}).parse(settings), instance, userHome });
 
     if (found) return { kind: 'found', id: found };
 
