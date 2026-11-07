@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
 import { askSocket } from './attempt-socket.js';
 import type { Journal } from './journal.js';
 import { LAUNCHABLE } from './providers/cli.js';
+import { isWithin, realOf } from './providers/native.js';
 
 // ─── The sandbox wrapper: `teamai-sandbox-<tool>` ────────
 //
@@ -60,14 +59,6 @@ function passThrough(argv: readonly string[], env: NodeJS.ProcessEnv, signalling
   });
 }
 
-function realOf(dir: string): string {
-  try {
-    return fs.realpathSync(dir);
-  } catch {
-    return path.resolve(dir);
-  }
-}
-
 function refuse(line: string): WrapperEnd {
   process.stderr.write(`${line}\n`);
 
@@ -91,11 +82,7 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
   const agent = env.PASEO_AGENT_ID === undefined || env.PASEO_AGENT_ID === '' ? null : env.PASEO_AGENT_ID;
   const at = realOf(env.PASEO_AGENT_CWD ?? cwd);
 
-  const attempt = journal.outerPlaces().map((place) => ({ ...place, root: realOf(place.outer.worktree) })).filter(({ root }) => {
-    const relative = path.relative(root, at);
-
-    return !relative.startsWith('..') && !path.isAbsolute(relative);
-  }).sort((a, b) => b.root.length - a.root.length)[0];
+  const attempt = journal.outerPlaces().map((place) => ({ ...place, root: realOf(place.outer.worktree) })).filter(({ root }) => isWithin(at, root)).sort((a, b) => b.root.length - a.root.length)[0];
 
   if (attempt === undefined) {
     // Paseo lists Codex's models with no agent, outside any step: without it no Codex agent can be made there.

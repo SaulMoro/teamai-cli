@@ -13,6 +13,7 @@ import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type 
 import type { UnusedGateways } from './sign-in.js';
 import { removeLeftScratch } from './warm.js';
 import { heldProbe, LAUNCHABLE } from './providers/cli.js';
+import { isWithin, realOf } from './providers/native.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -335,11 +336,14 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return { ok: false, failure: { code: 'credentials_pending', message: 'The sandbox runtime restarted and has not got the step\'s credentials back yet: teamai sends them again when it reattaches the attempt. The step\'s app starts the tool again once it has.' } };
     }
 
-    const relative = path.relative(record.outer.worktree, cwd);
+    const worktree = realOf(record.outer.worktree);
 
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (!isWithin(realOf(cwd), worktree)) {
       return { ok: false, failure: { code: 'isolation_unproven', message: `${cwd} is not in this attempt's worktree ${record.outer.worktree}, so its sandbox runs nothing for it.` } };
     }
+
+    // The sandbox mounts the worktree at the path teamai named, which a symlink may lead to (/tmp on macOS).
+    const at = path.join(record.outer.worktree, path.relative(worktree, realOf(cwd)));
 
     const instance = instances.get(tool);
     const base = instance?.tool ?? tool;
@@ -374,9 +378,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return { ok: false, failure: { code: 'tool_unsupported', message: `${command} is not installed in this sandbox (${where}). Add it to the image or template the sandbox starts from, or run the step with --driver local.` } };
     }
 
-    const client = provider.client(id, { argv: [command], env: { ...inSandbox(credentials, host), ...record.outer.toolHome }, unset: [], cwd });
+    const client = provider.client(id, { argv: [command], env: { ...inSandbox(credentials, host), ...record.outer.toolHome }, unset: [], cwd: at });
 
-    return client.ok ? { ok: true, grant: { argv: client.argv, cwd, env: client.env, ...(client.signal && { signal: client.signal }) } } : client;
+    return client.ok ? { ok: true, grant: { argv: client.argv, cwd: at, env: client.env, ...(client.signal && { signal: client.signal }) } } : client;
   };
 
   /**
