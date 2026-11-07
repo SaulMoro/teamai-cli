@@ -639,6 +639,21 @@ describe('teamai-runtime-paseo', () => {
       });
     });
 
+    it('ends a prompt cancelled at once, and closes its place, when the place closes while the prompt adds its instance\'s provider', async () => {
+      const { env } = installed('acme-claude');
+      behave({ output: { ok: true }, config_ms: 11000 });
+      const runtime = start(env);
+      await ready(runtime, { instances: [ACME] });
+      const handle = await opened(runtime);
+      runtime.send(promptRequest(handle, 'op-0000000b', { tool: 'acme-claude' }));
+      await runtime.next(isOp('op-0000000b', 'accepted'));
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+      expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+      expect(received().filter((request) => request.type === 'agent.create.request')).toEqual([]);
+    });
+
     it('fails the open of an instance whose providers it cannot hold, naming the directory to make writable, and adds the provider at a later open once it can', async () => {
       const { file, env } = installed('acme-claude');
       const holds = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'providers');
