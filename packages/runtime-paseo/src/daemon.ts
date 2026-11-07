@@ -327,7 +327,8 @@ type Planned = (Target & { kind: 'found' }) | (Target & { kind: 'add'; toAdd: Pr
 
 /**
  * How Paseo runs an instance on the provider teamai added for it, or why it cannot; `added` says whether this call added
- * that provider, which stays though the instance cannot run on it, as when it is signed out there.
+ * that provider and left it in Paseo's config: one it added for an instance that cannot run on it is removed again,
+ * unless Paseo refuses.
  */
 export type Added = { provider: string; added: boolean; home?: string; providerHome?: string } | { cannot: string; added: boolean };
 
@@ -660,9 +661,8 @@ export interface Daemon {
    * The tool home a finished session of `tool` lives in, when the runtime can tell: Claude's from Paseo's diagnostic at
    * init, Codex's found by the session's rollout on a daemon on this machine, in `homeDir`: `.codex` under a home there,
    * or a team instance's own home, absolute, and OpenCode's data directory on a daemon on this machine, its `XDG_DATA_HOME`. The home a
-   * Paseo provider's env sets comes first.
+   * Paseo provider's env sets comes first. `where.since`: when the step's agent was created, as Paseo reports it.
    */
-  /** `where.since`: when the step's agent was created, as Paseo reports it. */
   sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; providerHome: string | undefined; homeDir: string; since: number | undefined }): string | undefined;
   close(): Promise<void>;
 }
@@ -981,7 +981,8 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       /**
        * Why the instance cannot run on `provider`. One this call added is removed again, through the same config change
        * Paseo's app removes a provider with: no agent ran on it yet, so none loses its logs. One Paseo will not remove
-       * stays, and the caller says how to remove it.
+       * stays, and the caller says how to remove it. Every add runs under the journal's hold of this daemon's providers,
+       * so no other add changed `custom` since `before` was read.
        */
       const cannotRun = async (why: string): Promise<Added> => {
         if (!added) return { cannot: why, added };
