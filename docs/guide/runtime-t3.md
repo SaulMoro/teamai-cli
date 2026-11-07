@@ -218,11 +218,7 @@ When no instance runs it, teamai adds one the first time a step runs on it, and 
 
 The instance is named after the tool. Its Binary path is the tool's command as your PATH finds it (Claude's own binary for `claude-work`), and its Home path the tool's own home, when that is not its base tool's (`~/.claude`, `~/.codex`), which teamai leaves unset. teamai writes it into T3's settings and keeps every other setting; T3 Code picks it up at once. Two runs add it once, and later runs use it with no change. A run that never runs the tool adds nothing.
 
-T3 lets a sign-in change its settings (`settings:write`) only with Full access, so the first time teamai adds an instance it signs in again with Full access: through the `t3` command, in any run, or, without one, in T3's page, where you pick **Full access**. It keeps that sign-in for later runs. Each thread still starts in the mode it would. An unattended run with no `t3` command and no such sign-in adds nothing, and does not offer the tool:
-
-```text
-No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on acme-claude once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
-```
+teamai writes T3's settings file as you, in attended and unattended runs alike, as it adds a project with the `t3` command. It asks T3 for no wider sign-in: each thread still starts in the mode it would. When T3 Code writes the file at the same moment, teamai reads it again and keeps what T3 wrote.
 
 When T3 does not offer the tool (the command is not on your PATH, two instances run it, one that runs it is turned off, or T3 already has an instance of its name), its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`; on a definition with no other runtime for it they fail before any thread starts, with that reason:
 
@@ -341,7 +337,6 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | Someone picked a narrower access than Full access in T3's sign-in page. | Start the workflow again and pick Full access, or remove `runtime_mode: full-access`. |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | The checkout is not a T3 project, and `t3 project add` failed. The text in brackets says why. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
-| `… teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access …` | teamai had to add the team tool's instance, and the sign-in page was approved with Auto. | Start the workflow again and pick **Full access**, or add the instance yourself as the message says. |
 | `… No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command …` | An instance of that name, yours, runs something else. teamai never changes it. | Point its Binary path at the tool's command, or map another instance with `instances`. |
 | `… T3 Code cannot run the provider instance "claude-work" for claude-work yet: Claude Code is not authenticated …` | The instance is there, and T3 Code's own check of it failed, such as a tool never signed in in the instance's home. | Do what T3 Code says, in the home the message names (for Claude, `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`), then retry the step. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
