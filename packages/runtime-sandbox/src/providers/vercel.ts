@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Sandbox, type Command } from '@vercel/sandbox';
+import type { Command, Sandbox } from '@vercel/sandbox';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
@@ -40,6 +40,9 @@ const DEFAULT_MS = 45 * 60_000;
 const MARGIN_MS = 5 * 60_000;
 
 const NO_SIGN_IN = 'Vercel Sandbox needs a sign-in on this machine: set VERCEL_TOKEN (a token from https://vercel.com/account/tokens), VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN (`vercel link`, then `vercel env pull`), or name where to read them in the definition\'s provider_auth, such as VERCEL_TOKEN: file:~/.config/vercel-token';
+
+// The SDK loads on a vercel sandbox's first call, never at start: evaluating it costs every other provider ~95 ms.
+const sdk = () => import('@vercel/sandbox');
 
 const NotFoundSchema = z.object({ response: z.object({ status: z.literal(404) }) });
 
@@ -125,7 +128,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     if (!auth.ok) return auth;
 
     try {
-      return { ok: true, sandbox: await Sandbox.get({ name: id, ...auth.credentials }) };
+      return { ok: true, sandbox: await (await sdk()).Sandbox.get({ name: id, ...auth.credentials }) };
     } catch (error) {
       return NotFoundSchema.safeParse(error).success ? { ok: true, sandbox: undefined } : { ok: false, message: (error instanceof Error ? error.message : String(error)) };
     }
@@ -236,7 +239,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       let sandbox: Sandbox;
 
       try {
-        sandbox = await Sandbox.create({ name: id, persistent: false, timeout: lifetime.ms, ...(options.runtime !== undefined && { runtime: options.runtime }), tags: { 'teamai-run': key.run, 'teamai-attempt': key.attempt }, ...auth.credentials });
+        sandbox = await (await sdk()).Sandbox.create({ name: id, persistent: false, timeout: lifetime.ms, ...(options.runtime !== undefined && { runtime: options.runtime }), tags: { 'teamai-run': key.run, 'teamai-attempt': key.attempt }, ...auth.credentials });
       } catch (error) {
         // Another open of the same attempt created it first: that sandbox is this attempt's.
         const raced = await sandboxOf(id);
