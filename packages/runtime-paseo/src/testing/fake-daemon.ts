@@ -71,7 +71,7 @@ const BehaviourSchema = z.object({
    * provider and runs its own command, as a team tool instance does. Paseo lists one beside the built-in ones, with the
    * modes and models of the provider it extends, and calls it available once its command is on the daemon's PATH.
    */
-  custom_providers: z.record(z.string(), z.object({ extends: z.string(), command: z.array(z.string()).min(1) })).default({}),
+  custom_providers: z.record(z.string(), z.object({ extends: z.string(), label: z.string().optional(), command: z.array(z.string()).min(1), env: z.record(z.string(), z.string()).optional() })).default({}),
   /** Directories the member already has open as Paseo workspaces, as the app opens a project. */
   member_workspaces: z.array(z.string()).default([]),
   /**

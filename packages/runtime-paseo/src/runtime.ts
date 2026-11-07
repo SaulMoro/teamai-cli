@@ -299,6 +299,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   let sessionHomes = new Map<string, string>();
   /** The home directory under `$HOME` each team instance keeps its sessions in, by its name. */
   let homeDirs = new Map<string, string>();
+  /** The tool home each offered tool or instance runs in when its Paseo provider's env sets one, by its name. */
+  let providerHomes = new Map<string, string>();
 
   /**
    * Why a new step or judge on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was
@@ -473,7 +475,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   /** A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. */
   const sessionOf = (live: Daemon, tool: string, id: string): z.infer<typeof PromptSessionSchema> => {
     const target = targets.get(tool);
-    const home = target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex' });
+    const home = target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), providerHome: providerHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex' });
 
     return { tool, id, ...(home !== undefined && { home }) };
   };
@@ -608,10 +610,18 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       }
     }
 
+    // A provider that moves a tool's home away from teamai's own for it: its steps sign in and keep sessions there.
+    for (const { name, provider, providerHome } of tools) {
+      if (providerHome && path.resolve(providerHome.dir) !== path.resolve(providerHome.teamaiHome)) {
+        write({ event: 'notice', message: `Paseo provider ${provider} runs ${name} with ${providerHome.variable}=${providerHome.dir}, not teamai's home for it (${providerHome.teamaiHome}): its steps sign in and keep their sessions in ${providerHome.dir}, where teamai reads them.` });
+      }
+    }
+
     targets = new Map(tools.map(({ name, tool, provider }) => [name, { name, tool, provider }]));
     homeDirs = new Map(instances.flatMap((instance) => (instance.home ? [[instance.name, instance.home.dir]] : [])));
     modeIds = new Map(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'unset' ? [] : [[name, stepMode.id]])));
     sessionHomes = new Map(tools.flatMap(({ name, home }) => (home === undefined ? [] : [[name, home]])));
+    providerHomes = new Map(tools.flatMap(({ name, providerHome }) => (providerHome === undefined ? [] : [[name, providerHome.dir]])));
     offers = new Map(installed.map((entry): [string, Offer] => {
       if (!entry.canRun) return [entry.name, { runs: 'nothing', reason: entry.reason }];
       const confinedMode = CONFINED_MODES[entry.tool];
