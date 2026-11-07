@@ -2710,6 +2710,41 @@ span('end');
       }
     });
 
+    it('keeps the place and the login when a run resumed on another runtime cannot stop the exec a killed driver left on the first', async () => {
+      const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
+      const otherDir = path.join(os.homedir(), '.teamai', 'runtimes', 'othertoy');
+      fs.mkdirSync(otherDir, { recursive: true });
+      fs.copyFileSync(TOY_RUNTIME, path.join(otherDir, 'runtime'));
+      fs.chmodSync(path.join(otherDir, 'runtime'), 0o755);
+      const otherState = fs.mkdtempSync(path.join(sandbox, 'toy-state-'));
+      // Both written before any run, so no read-only step sees the repository change under it: the first toy runs the
+      // exec, which needs no cancel, and cannot stop it later.
+      loginDefinition('codexfirst', state, { cancel_fails: stuck });
+      writeDefinition('codexother', [{ use: 'othertoy', options: { state: otherState, credentials: { codex: 'login' } } }], { tool: 'codex' });
+      const { run, pid, watched } = await holdingRun('codexfirst');
+      watched.kill();
+      await watched.ended;
+
+      try {
+        const resumed = await runCLI(['workflow', 'resume', run, '--driver', 'codexother'], repo, env());
+
+        expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+        const [review] = readRunState(run).steps;
+        const attempt = attemptOf(review);
+        expect(review).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining(stuck.message) } });
+        expect(pidAlive(pid)).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        expect(runtimeRecord(run, attempt)).toMatchObject({ runtime: 'toy', driver: 'codexfirst' });
+        expect(runtimeRecord(run, attempt)).not.toMatchObject({ phase: 'closed' });
+        // The other runtime never saw the first one's place.
+        expect(fs.existsSync(path.join(otherState, 'closes.jsonl'))).toBe(false);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+        fs.rmSync(otherDir, { recursive: true, force: true });
+      }
+    });
+
     it('fails the step with the runtime\'s advice, keeping the place and the login, when the restarted driver cannot stop the exec a killed one left running', async () => {
       const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
       // Both written before any run, so no read-only step sees the repository change under it: the restart reaches the
