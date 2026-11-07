@@ -2770,6 +2770,20 @@ describe('a warm image', () => {
     expect(engine.calls().find(([, command, ...rest]) => command === 'run' && rest.includes(HANDLE))).toContain(tag);
   });
 
+  it('fails the open with bad_option on warm.cache naming a cache file that links out of the checkout, and copies nothing of where it points', async () => {
+    const outside = path.join(dir, 'host-secret');
+    fs.writeFileSync(outside, 'TOKEN=host-only');
+    const at = checkout();
+    fs.rmSync(path.join(at.worktree, 'package-lock.json'));
+    fs.symlinkSync(outside, path.join(at.worktree, 'package-lock.json'));
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: WARM });
+
+    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.cache', message: expect.stringContaining('package-lock.json is a link to a file outside the checkout') } });
+    expect(builds()).toEqual({ saves: [], prepares: [] });
+    expect(engine.containers()).toEqual([]);
+  });
+
   it('fails the open with bad_option on warm.cache naming a cache file the checkout does not hold, before any sandbox exists', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE, warm: { prepare: PREPARE, cache: ['pnpm-lock.yaml'] } });

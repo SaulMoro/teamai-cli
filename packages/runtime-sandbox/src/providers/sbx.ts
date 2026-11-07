@@ -191,8 +191,8 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
   };
 
   /** Saves the warm template of `plan` from `template`, prepared in a scratch sandbox on copies of the `cache` files. */
-  const makeWarm = async (plan: WarmPlan, template: string, prepare: string, checkout: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
-    const scratch = scratchOf({ cache: plan.cache, checkout });
+  const makeWarm = async (plan: WarmPlan, template: string, prepare: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const scratch = scratchOf(plan.cache);
     const name = `${journalPrefix}warm-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
 
 
@@ -222,7 +222,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
 
     if (!planned.ok) return planned;
     const { plan } = planned;
-    const made = await once(plan.key, async () => ((await isSaved(plan)) ? { ok: true } : makeWarm(plan, template, warm.prepare, checkout)));
+    const made = await once(plan.key, async () => ((await isSaved(plan)) ? { ok: true } : makeWarm(plan, template, warm.prepare)));
 
     return made.ok ? { ok: true, args: ['-t', plan.tag] } : made;
   };
