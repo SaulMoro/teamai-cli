@@ -192,6 +192,29 @@ describe('the sessions of an instance', () => {
     expect(platforms).toContain('acme-claude');
     expect(platforms).not.toContain('review-claude');
   });
+
+  it('reads an OpenCode instance whose home moves XDG_DATA_HOME on a platform of its own, in that home\'s opencode', async () => {
+    vi.stubEnv('XDG_DATA_HOME', '');
+    await load(teamRepo({ 'tools/opencode-work.yaml': 'schemaVersion: v1alpha1\nname: opencode-work\nextends: opencode\nhome: { dir: .opencode-work, env: XDG_DATA_HOME }\n' }));
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { adapterOn, listAvailablePlatforms, storeDirOf } = await import('../session-flow/adapters/index.js');
+
+    expect(AgentSession.platformForTool('opencode-work')).toBe('opencode-work');
+    expect(listAvailablePlatforms()).toContain('opencode-work');
+    expect(storeDirOf('opencode-work', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(home, '.opencode-work', 'opencode'));
+    expect(storeDirOf('opencode-work', { kind: 'tool-home', dir: path.join(root, 'attempt-home') })).toBe(path.join(root, 'attempt-home', 'opencode'));
+    expect(adapterOn('opencode-work', { kind: 'recorded', toolRoots: undefined }).platform).toBe('opencode-work');
+  });
+
+  it('reads an OpenCode instance that moves only its config directory in the member\'s own data home, where OpenCode keeps its sessions', async () => {
+    vi.stubEnv('XDG_DATA_HOME', '');
+    await load(teamRepo({ 'tools/opencode-review.yaml': 'schemaVersion: v1alpha1\nname: opencode-review\nextends: opencode\nhome: { dir: .opencode-review, env: OPENCODE_CONFIG_DIR }\n' }));
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+
+    expect(AgentSession.platformForTool('opencode-review')).toBe('opencode-review');
+    expect(storeDirOf('opencode-review', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(home, '.local', 'share', 'opencode'));
+  });
 });
 
 describe('personal tool instances', () => {

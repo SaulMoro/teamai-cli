@@ -15,11 +15,14 @@ import { type HookFormat, type InstallGate, type RunTimeVia } from '@teamai/tool
  */
 const REGISTRY = makeToolRegistry(TOOLS, () => instanceTable, hostsInstances);
 
-/** Whether an instance of a tool whose sessions `platform` holds keeps its own there: its format carries another platform id, in a home it can move. */
+/**
+ * Whether an instance of a tool whose sessions `platform` holds keeps its own there: its format carries another platform
+ * id, in a store teamai resolves (a tool home, or an XDG data home, which a home of its own can move).
+ */
 function hostsInstances(platform: SessionPlatform): boolean {
   const definition: SessionPlatformDefinition = SESSION_PLATFORM_FACTS[platform];
 
-  return !locatesOwnStore(definition) && definition.store.in === 'tool-home' && definition.adapterAs !== undefined;
+  return !locatesOwnStore(definition) && definition.adapterAs !== undefined;
 }
 
 /** The instances of every team repo and member's directory loaded in this process, by name. */

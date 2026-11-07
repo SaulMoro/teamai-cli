@@ -320,7 +320,17 @@ Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an 
 Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
 ```
 
-Its own sessions need a tool whose format carries another platform id: Claude Code, Qoder, Codex, JoyCode and Cursor. An instance of another tool launches and receives files, and teamai reads no sessions of it. teamai does not render agents for an instance yet. Instances never appear on the [tool support](./tool-support.md) page.
+Its own sessions need a tool whose format carries another platform id: Claude Code, Qoder, Codex, JoyCode, Cursor and OpenCode. An instance of another tool launches and receives files, and teamai reads no sessions of it. OpenCode keeps its sessions under its data home, not its config directory, so where teamai reads an OpenCode instance's sessions depends on the variable its `home` moves:
+
+```yaml
+# tools/opencode-work.yaml: sessions in ~/.opencode-work/opencode
+schemaVersion: v1alpha1
+name: opencode-work
+extends: opencode
+home: { dir: .opencode-work, env: XDG_DATA_HOME }
+```
+
+With `env: OPENCODE_CONFIG_DIR`, the instance keeps its own settings and its sessions stay in your OpenCode data home (`$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`). teamai does not render agents for an instance yet. Instances never appear on the [tool support](./tool-support.md) page.
 
 ---
 

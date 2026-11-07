@@ -15,5 +15,6 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'opencode',
     adapter: (storeDir): AgentAdapter => new OpencodeAdapter(storeDir),
+    adapterAs: (platform, storeDir): AgentAdapter => new OpencodeAdapter(storeDir, platform),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

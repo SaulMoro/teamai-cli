@@ -63,9 +63,9 @@ function instanceStore(platform: string) {
   const definition: StoredPlatformDefinition = SESSION_PLATFORM_FACTS[hosted.platform];
   const { home } = hosted.instance;
 
-  if (definition.store.in !== 'tool-home' || definition.adapterAs === undefined || home === undefined) return undefined;
+  if (definition.adapterAs === undefined || home === undefined) return undefined;
 
-  return { dir: definition.store.dir, adapterAs: definition.adapterAs, home };
+  return { store: definition.store, adapterAs: definition.adapterAs, home, base: hosted.platform };
 }
 
 /** The factory of `platform`: a shipped platform's, or an instance's own, in its shipped platform's format. */
@@ -83,16 +83,24 @@ function instancePlatforms(): string[] {
 
 /**
  * The store directory `platform`'s adapter is built on from `root`: the member's recorded tool roots, or a tool home an
- * attempt ran in. An instance's store sits in the instance's home, or in the tool home it ran in. Empty for a platform
- * whose adapter finds its own store, or that teamai has no facts for.
+ * attempt ran in. An instance's store sits in the instance's home, or in the tool home it ran in. An instance of a tool
+ * that keeps its sessions in an XDG data home (OpenCode) keeps them in its home when its home moves `XDG_DATA_HOME`,
+ * else in the member's own data home, as the tool it extends does. Empty for a platform whose adapter finds its own
+ * store, or that teamai has no facts for.
  */
 export function storeDirOf(platform: string, root: SessionStoreRoot): string {
   if (isSessionPlatform(platform)) return isStoredSessionPlatform(platform) ? sessionStoreDir(platform, root) : '';
-  const store = instanceStore(platform);
+  const instance = instanceStore(platform);
 
-  if (!store) return '';
+  if (!instance) return '';
+  const { store, home, base } = instance;
+  const dir = store.in === 'tool-home' ? store.dir : store.child;
 
-  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir(store.home), store.dir);
+  if (root.kind === 'tool-home') return path.join(root.dir, dir);
+
+  if (store.in === 'tool-home' || home.env === 'XDG_DATA_HOME') return path.join(instanceHomeDir(home), dir);
+
+  return sessionStoreDir(base, root);
 }
 
 /** `platform`'s adapter on `storeDir`, a store directory the caller already resolved (`storeDirOf`). */

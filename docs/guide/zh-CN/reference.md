@@ -320,7 +320,17 @@ Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an 
 Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
 ```
 
-实例要有自己的会话，被扩展的工具的格式必须能带另一个平台 id：Claude Code、Qoder、Codex、JoyCode 和 Cursor。其他工具的实例可以启动、接收文件，但 teamai 不读取它的会话。teamai 目前还不为实例渲染 agents。实例不会出现在[工具支持](./tool-support.md)页面上。
+实例要有自己的会话，被扩展的工具的格式必须能带另一个平台 id：Claude Code、Qoder、Codex、JoyCode、Cursor 和 OpenCode。其他工具的实例可以启动、接收文件，但 teamai 不读取它的会话。OpenCode 把会话放在它的数据目录下，而不是配置目录下，所以 teamai 在哪里读取 OpenCode 实例的会话，取决于它的 `home` 移动的是哪个变量：
+
+```yaml
+# tools/opencode-work.yaml：会话在 ~/.opencode-work/opencode
+schemaVersion: v1alpha1
+name: opencode-work
+extends: opencode
+home: { dir: .opencode-work, env: XDG_DATA_HOME }
+```
+
+如果是 `env: OPENCODE_CONFIG_DIR`，实例有自己的设置，会话仍在你的 OpenCode 数据目录中（`$XDG_DATA_HOME/opencode`，否则为 `~/.local/share/opencode`）。teamai 目前还不为实例渲染 agents。实例不会出现在[工具支持](./tool-support.md)页面上。
 
 ---
 

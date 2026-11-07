@@ -258,7 +258,7 @@ function assistantTurns(message: z.infer<typeof AssistantMessage>): Message[] {
   return turns;
 }
 
-function sessionFromExport(stdout: string): Session {
+function sessionFromExport(stdout: string, platform: string): Session {
   const exported = ExportedSession.parse(JSON.parse(stdout));
   const messages: Message[] = [];
 
@@ -277,7 +277,7 @@ function sessionFromExport(stdout: string): Session {
     sessionId: info.id,
     title: info.title,
     cwd: info.location.directory,
-    platform: 'opencode',
+    platform,
     createdAt: iso(info.time.created),
     updatedAt: iso(info.time.updated),
     messages,
@@ -444,13 +444,16 @@ function blockText(block: ContentBlock): string {
 export class OpencodeAdapter extends AgentAdapter {
   static readonly platform = 'opencode';
 
-  /** @param storageRoot OpenCode's data directory (`sessionStoreDir`): `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default. */
-  constructor(private readonly storageRoot: string) {
+  /**
+   * @param storageRoot OpenCode's data directory (`sessionStoreDir`): `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default.
+   * @param platform The session platform this store is: 'opencode', or an instance's own name.
+   */
+  constructor(private readonly storageRoot: string, private readonly sessionPlatform = 'opencode') {
     super();
   }
 
   get platform(): string {
-    return 'opencode';
+    return this.sessionPlatform;
   }
 
   isReady(): boolean {
@@ -507,7 +510,7 @@ export class OpencodeAdapter extends AgentAdapter {
       sessionId: listed.id,
       title: listed.title,
       cwd: listed.directory,
-      platform: 'opencode',
+      platform: this.platform,
       createdAt: iso(listed.created),
       updatedAt: iso(listed.updated),
       // The listing carries no message count or size, so neither is reported; exporting each
@@ -521,7 +524,7 @@ export class OpencodeAdapter extends AgentAdapter {
 
     if (result.code !== 0) throw new Error(result.stderr.trim() || `opencode session export exited ${result.code}`);
 
-    return sessionFromExport(result.stdout);
+    return sessionFromExport(result.stdout, this.platform);
   }
 
   /**
