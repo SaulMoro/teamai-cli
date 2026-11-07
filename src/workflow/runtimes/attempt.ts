@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
+import { sessionPlatformFacts } from '../../session-flow/adapters/platform-facts.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { defaultToolHome, homeEnvOf, realHost } from '../../tool-home.js';
@@ -36,6 +37,16 @@ export type ExecRuntimeTool = (typeof EXEC_RUNTIME_TOOLS)[number];
 
 export function isExecRuntimeTool(tool: string): tool is ExecRuntimeTool {
   return EXEC_RUNTIME_TOOLS.some((known) => known === tool);
+}
+
+/**
+ * Whether `tool`, or the tool an instance extends, keeps its sessions in XDG data (OpenCode): the session home a runtime
+ * reports for it is then the directory the tool uses as `XDG_DATA_HOME`, not a tool home.
+ */
+function keepsSessionsInXdgData(tool: string): boolean {
+  const platform = AgentSession.platformForTool(baseToolOf(tool));
+
+  return platform !== undefined && sessionPlatformFacts(platform)?.store.in === 'xdg-data';
 }
 
 
@@ -133,7 +144,7 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
   const record = await readAttemptRuntime(config, runId.data, attemptId.data);
   const home = record?.toolHome ?? record?.sessionHome;
   // An instance, as a runtime that launches agents its own way records it, is read as the tool it extends.
-  const platform = home && isExecRuntimeTool(baseToolOf(home.tool)) ? AgentSession.platformForTool(home.tool) : undefined;
+  const platform = home && (isExecRuntimeTool(baseToolOf(home.tool)) || keepsSessionsInXdgData(home.tool)) ? AgentSession.platformForTool(home.tool) : undefined;
   const store = home && platform ? storeDirOf(platform, { kind: 'tool-home', dir: home.dir }) : '';
 
   return store === '' ? undefined : store;
@@ -401,14 +412,18 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
   /**
    * Records the home outside the attempt a finished prompt's session lives in: the one its runtime reported, else, as
-   * protocol 1 reads an omitted home, the tool's default home under $HOME, whatever moved the member's own.
+   * protocol 1 reads an omitted home, the tool's default home under $HOME (for a tool that keeps its sessions in XDG
+   * data, `~/.local/share`), whatever moved the member's own.
    */
   const keptIn = async (end: PromptEnd): Promise<PromptEnd> => {
     const now = await current();
 
     if (end.kind !== 'finished' || !now) return end;
     const { tool } = end.session;
-    const home = end.session.home ?? (isToolId(tool) ? defaultToolHome(tool, realHost()) : undefined);
+    const host = realHost();
+
+    const home = end.session.home
+      ?? (keepsSessionsInXdgData(tool) ? host.path.join(host.home, '.local', 'share') : isToolId(tool) ? defaultToolHome(tool, host) : undefined);
 
     if (home !== undefined) await save({ ...now, sessionHome: { tool, dir: home } });
 

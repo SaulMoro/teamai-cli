@@ -184,8 +184,10 @@ export type RuntimeDisplay = z.infer<typeof RuntimeDisplaySchema>;
 /**
  * A tool's session: the tool that keeps it, and its id there, which a later pass resumes and scoring reads. `home` is
  * the absolute path of the tool home it lives in (the directory `CLAUDE_CONFIG_DIR` or `CODEX_HOME` would name), when
- * that is not the tool's default home, such as a T3 provider instance's own. A runtime that omits it, as one before
- * protocol 1 had it does, keeps the session in the tool's default home.
+ * that is not the tool's default home, such as a T3 provider instance's own. For `opencode`, which keeps its sessions
+ * in XDG data, `home` is the directory OpenCode uses as `XDG_DATA_HOME` (its store is `<home>/opencode`). A runtime
+ * that omits it, as one before protocol 1 had it does, keeps the session in the tool's default home (`~/.local/share`
+ * for `opencode`).
  */
 export const PromptSessionSchema = z.object({
   tool: z.string().min(1),
