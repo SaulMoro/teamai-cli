@@ -1873,6 +1873,26 @@ steps:
       for (const { names } of sent) expect(names.filter((name) => name.startsWith('ANTHROPIC_'))).toEqual(claudeNames);
     });
 
+    // An instance is scoped as the tool it extends: it gets that tool's sign-in variables, and none when the provider
+    // keeps that tool's login, whichever name the runtime gives it in ownLogins.
+    it.each([
+      { ownLogins: undefined, claudeNames: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'] },
+      { ownLogins: ['claude'], claudeNames: [] },
+      { ownLogins: ['acme-claude'], claudeNames: [] },
+    ])('scopes the sign-in variables found by name for an instance step as for the tool it extends: ownLogins $ownLogins', async ({ ownLogins, claudeNames }) => {
+      acmeInstance();
+      writeDefinition('acmelogin', [{ use: 'toy', options: { state, can: { tools: ['claude', 'acme-claude'] }, ...(ownLogins && { own_logins: ownLogins }) } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'acmelogin', '--tools', 'default=acme-claude'], repo, env({ ANTHROPIC_AUTH_TOKEN: VALUE, ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', OPENAI_API_KEY: 'toy-openai-value' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      const sent = noted().filter((line) => line.handle === `toy-${runId}-${attemptOf(review)}`);
+      expect(sent.map(({ type }) => type)).toEqual(['open', 'exec']);
+      for (const { names } of sent) expect(names.filter((name) => name.startsWith('ANTHROPIC_') || name.startsWith('OPENAI_'))).toEqual(claudeNames);
+    });
+
     it('fails at start, naming the variable, when an env credential is unset', async () => {
       credentialDefinition('tokenunset');
 
