@@ -380,12 +380,12 @@ describe('teamai-runtime-t3', () => {
       const INSTANCE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
 
       /** The init reply for `instances` given in init, `options` added to the definition's, and each provider instance's Binary path. */
-      const initWith = async ({ binaryPaths, options = {}, providers = [CLAUDE, CODEX, ACME] }: { binaryPaths: Record<string, string>; options?: Line; providers?: FakeT3Config['providers'] }): Promise<Line> => {
+      const initWith = async ({ binaryPaths, options = {}, providers = [CLAUDE, CODEX, ACME], instances = [INSTANCE] }: { binaryPaths: Record<string, string>; options?: Line; providers?: FakeT3Config['providers']; instances?: Line[] }): Promise<Line> => {
         signIn(t3);
         t3.config({ providers });
         t3.settings({ providerInstances: Object.fromEntries(Object.entries(binaryPaths).map(([id, binaryPath]) => [id, { config: { binaryPath } }])) });
         const runtime = start();
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, instances: [INSTANCE] });
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, instances });
         const reply = await runtime.next((line) => line['type'] === 'init');
         expect(RuntimeMessageSchema.safeParse(reply).success, JSON.stringify(reply)).toBe(true);
 
@@ -424,12 +424,12 @@ describe('teamai-runtime-t3', () => {
         });
       });
 
-      it('fails init, naming the key, when `instances` maps a name that is neither a tool T3 runs nor an instance teamai passed', async () => {
+      it('keeps its other tools, naming the key under unavailable, when `instances` maps a name that is neither a tool T3 runs nor an instance teamai passed', async () => {
         const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude' }, options: { instances: { 'acme-cluade': 'acme-claude-t3' } } });
 
-        expect(reply).toEqual({
-          type: 'init', ok: false,
-          error: { code: 'bad_option', key: 'instances', message: 'instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has. Remove instances.acme-cluade, or name the instance as its tool definition does.' },
+        expect(reply).toMatchObject({
+          ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] },
+          unavailable: { 'acme-cluade': 'instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.' },
         });
       });
 
@@ -443,10 +443,26 @@ describe('teamai-runtime-t3', () => {
         { case: 'that T3 lacks', mapped: 'acme-sandbox', message: 'T3 Code has no provider instance "acme-sandbox", which instances maps acme-claude to. Add or enable it in T3 Code under Settings → Providers, or remove instances.acme-claude' },
         { case: 'of another driver', mapped: 'codex', message: 'T3 Code provider instance "codex" runs codex, and acme-claude extends claude. Map acme-claude to a Claude instance in instances.acme-claude' },
         { case: 'whose Binary path runs another file', mapped: 'acme-claude-t3', message: 'T3 Code provider instance "acme-claude-t3" has the Binary path /opt/acme/bin/claude, which is not acme-claude, the command acme-claude runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of acme-claude (command -v acme-claude), or change instances.acme-claude' },
-      ])('fails init, naming the setting, for a mapping to an instance $case', async ({ mapped, message }) => {
+      ])('offers the other tools and names the setting under unavailable, for a mapping to an instance $case', async ({ mapped, message }) => {
         const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/claude' }, options: { instances: { 'acme-claude': mapped } } });
 
-        expect(reply).toEqual({ type: 'init', ok: false, error: { code: 'bad_option', key: 'instances', message } });
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] }, unavailable: { 'acme-claude': message } });
+      });
+
+      it('keeps offering claude on its default instance when the team adjusts claude with no command of its own', async () => {
+        const reply = await initWith({ binaryPaths: {}, instances: [{ name: 'claude', tool: 'claude', home: { dir: '/home/member/.claude-team', env: 'CLAUDE_CONFIG_DIR' } }] });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
+        expect(reply).not.toHaveProperty('unavailable');
+      });
+
+      it('offers no claude, naming the setting under unavailable, when `instances` maps claude to an instance T3 lacks, and keeps codex', async () => {
+        const reply = await initWith({ binaryPaths: {}, options: { instances: { claude: 'claude-work' } } });
+
+        expect(reply).toMatchObject({
+          ok: true, can: { tools: ['codex'] },
+          unavailable: { claude: 'T3 Code has no provider instance "claude-work", which instances maps claude to. Add or enable it in T3 Code under Settings → Providers, or remove instances.claude' },
+        });
       });
     });
 

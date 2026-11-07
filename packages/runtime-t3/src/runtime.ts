@@ -796,13 +796,8 @@ export function serve(options: ServeOptions): Promise<void> {
         },
       });
 
-      if (!served.ok) {
-        write({ type: 'init', ok: false, error: served.failure });
-
-        return;
-      }
-
-      const runs = new Map<string, Provider>([...instances.instances, ...served.served]);
+      // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
+      const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => served.unavailable[tool] === undefined));
       session = { t3: connected.t3, mode: request.mode, environment, instances: runs, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn, checkout };
       const tools = [...runs.keys()];
       // A step that names no tool runs on the member's effective T3 default, when its instance is the one offered.

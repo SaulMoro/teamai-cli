@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { UNAVAILABLE_REASON_MAX, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { UNAVAILABLE_REASON_MAX, type InitInstance } from '@teamai/runtime-protocol';
 import { DRIVER_NAMES, DRIVERS, driverOf, type Driver } from './sessions.js';
 import type { Provider } from './t3.js';
 
@@ -34,23 +34,26 @@ export interface InstanceLookup {
   binaryPathOf(instanceId: string): string | undefined;
 }
 
-export type ServedInstances =
-  | { ok: true; served: Map<string, Provider>; unavailable: Record<string, string> }
-  | { ok: false; failure: RuntimeFailure };
+export interface ServedInstances {
+  served: Map<string, Provider>;
+  unavailable: Record<string, string>;
+}
 
 /**
  * The provider instance that serves each of `instances` T3 can run: the one `mapped` names, checked, else the one whose
- * Binary path runs its command. One it cannot find, or whose command two instances run, is not served, and `unavailable`
- * says what to set; a mapping that cannot hold fails init, naming the setting to change.
+ * Binary path runs its command. One it cannot find, whose command two instances run, or whose mapping cannot hold is
+ * not served, and `unavailable` says what to set. teamai passes every instance the member may run at init, so a problem
+ * with one never fails the others.
  */
 export function servedInstances({ instances, mapped, lookup }: { instances: InitInstance[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
   const served = new Map<string, Provider>();
   const unavailable: Record<string, string> = {};
-  const failed = (message: string): ServedInstances => ({ ok: false, failure: { code: 'bad_option', key: 'instances', message } });
-  // A misspelt name would map nothing, and its steps would run on another instance.
-  const stray = Object.keys(mapped ?? {}).find((name) => !instances.some((instance) => instance.name === name));
+  const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
 
-  if (stray !== undefined) return failed(`instances names ${stray}, which is neither claude, codex nor a tool instance teamai has. Remove instances.${stray}, or name the instance as its tool definition does.`);
+  // A misspelt name maps nothing, so it is named; it may also be a team tool this machine has not accepted.
+  for (const stray of Object.keys(mapped ?? {}).filter((name) => !instances.some((instance) => instance.name === name))) {
+    unavailable[stray] = reason(`instances names ${stray}, which is neither claude, codex nor a tool instance teamai has here. Remove instances.${stray}, or name the instance as its tool definition does.`);
+  }
 
   for (const instance of instances) {
     const driver = driverOf(instance.tool);
@@ -64,24 +67,38 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
     if (id !== undefined) {
       const provider = lookup.providers.find((one) => one.providerInstanceId === id);
 
-      if (!provider) return failed(`T3 Code has no provider instance "${id}", which instances maps ${name} to. Add or enable it in T3 Code under Settings → Providers, or remove instances.${name}`);
+      if (!provider) {
+        unavailable[name] = reason(`T3 Code has no provider instance "${id}", which instances maps ${name} to. Add or enable it in T3 Code under Settings → Providers, or remove instances.${name}`);
+        continue;
+      }
 
-      if (provider.driverKind !== driver) return failed(`T3 Code provider instance "${id}" runs ${provider.driverKind}, and ${name} extends ${instance.tool}. Map ${name} to a ${label} instance in instances.${name}`);
+      if (provider.driverKind !== driver) {
+        unavailable[name] = reason(`T3 Code provider instance "${id}" runs ${provider.driverKind}, and ${name} extends ${instance.tool}. Map ${name} to a ${label} instance in instances.${name}`);
+        continue;
+      }
 
-      if (!lookup.isUsable(provider)) return failed(`T3 Code provider instance "${id}", which instances maps ${name} to, cannot run now: ${(provider.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or change instances.${name}`);
+      if (!lookup.isUsable(provider)) {
+        unavailable[name] = reason(`T3 Code provider instance "${id}", which instances maps ${name} to, cannot run now: ${(provider.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or change instances.${name}`);
+        continue;
+      }
+
       const binaryPath = lookup.binaryPathOf(id);
 
       if (command !== undefined && binaryPath !== undefined && !runsCommand(binaryPath, command)) {
-        return failed(`T3 Code provider instance "${id}" has the Binary path ${binaryPath}, which is not ${command}, the command ${name} runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of ${command} (command -v ${command}), or change instances.${name}`);
+        unavailable[name] = reason(`T3 Code provider instance "${id}" has the Binary path ${binaryPath}, which is not ${command}, the command ${name} runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of ${command} (command -v ${command}), or change instances.${name}`);
+        continue;
       }
 
       served.set(name, provider);
       continue;
     }
 
+    // One named like the tool it adjusts, with no command of its own, is that tool, on the instance T3 runs it on.
+    if (command === undefined && name === instance.tool) continue;
+
     // An instance with no command of its own runs the tool's, so no Binary path tells it apart.
     if (command === undefined) {
-      unavailable[name] = `${name} names no command of its own, so teamai cannot tell which T3 Code provider instance runs it. Map one with instances: { ${name}: <its id> } in the definition's t3 options.`.slice(0, UNAVAILABLE_REASON_MAX);
+      unavailable[name] = reason(`${name} names no command of its own, so teamai cannot tell which T3 Code provider instance runs it. Map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
       continue;
     }
 
@@ -91,20 +108,19 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
       return provider.driverKind === driver && lookup.isUsable(provider) && binaryPath !== undefined && runsCommand(binaryPath, command);
     });
 
-    // teamai passes every instance the member may run, so an ambiguous one is not offered rather than failing them all.
     if (found.length > 1) {
       const names = found.map((provider) => `"${provider.providerInstanceId}"`);
-      unavailable[name] = `T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${command}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`.slice(0, UNAVAILABLE_REASON_MAX);
+      unavailable[name] = reason(`T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${command}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`);
       continue;
     }
 
     const [provider] = found;
 
     if (provider) served.set(name, provider);
-    else unavailable[name] = `No T3 Code provider instance runs ${command}. Add one in T3 Code under Settings → Providers, with driver ${label} and Binary path the absolute path of ${command} (command -v ${command}), or map one with instances: { ${name}: <its id> } in the definition's t3 options.`.slice(0, UNAVAILABLE_REASON_MAX);
+    else unavailable[name] = reason(`No T3 Code provider instance runs ${command}. Add one in T3 Code under Settings → Providers, with driver ${label} and Binary path the absolute path of ${command} (command -v ${command}), or map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
   }
 
-  return { ok: true, served, unavailable };
+  return { served, unavailable };
 }
 
 /** The T3 driver of `provider`, when this runtime runs it. */
