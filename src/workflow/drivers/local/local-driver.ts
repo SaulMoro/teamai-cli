@@ -745,7 +745,7 @@ async function promptReport(
   if (onRuntime?.launchesAgents) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials, setUp, tool: launched });
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
