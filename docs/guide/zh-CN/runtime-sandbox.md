@@ -137,6 +137,26 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e CLAUDE_CONFIG_DIR -e TEAMAI_WORKFLOW_RESULT -e CLAUDE_CODE_OAUTH_TOKEN teamai-r7c41d09e2b6a5f13-a3e9b0c51 claude -p …
 ```
 
+**工作流的 `setup` 也在步骤的容器里运行**，在步骤之前，只带 setup 自己的 `requires.env` 键，不带步骤的任何键：步骤的键会被取消设置，`credentials` 只给工具。
+
+```yaml
+# workflows/review.yaml
+setup:
+  command: npm ci
+  requires: { env: [NPM_TOKEN] }
+```
+
+```text
+docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e NPM_TOKEN -e TEAMAI_WORKFLOW_ATTEMPT -e TEAMAI_MODE -e TEAMAI_RUN_DIR teamai-r7c41d09e2b6a5f13-a3e9b0c51 env -u SIGNING_KEY -- /bin/sh -c 'npm ci'
+```
+
+之后 teamai 和在 `local` 上一样，在主机上检查 setup 在工作树里留下了什么。setup 失败、改动了被跟踪的文件，或者把某个键的值写进了文件，都会让步骤在工具启动前停下：
+
+```text
+✖ Step "review" failed with setup_failed: Setup "npm ci" exited with code 1, so the step did not run. It printed: npm error 401 Unauthorized - GET https://npm.acme.internal/@acme%2fui Fix setup, then retry the step.
+✖ Step "review" failed with setup_secret: Setup "npm ci" left the value of NPM_TOKEN in .npmrc, where the step could read it, so the step did not run. Make setup remove the files it writes NPM_TOKEN to, then retry the step.
+```
+
 ## 在 sandbox 里评判
 
 被评分的一轮由它的 `teamai-score` 运行评判，其中的评判步骤只读取 teamai 收集的证据。sandbox 也运行这个评判，所以只有 `sandbox` 的驱动定义不需要你机器上有任何 agent CLI 就能评判。每次评判都有一个全新的容器：
@@ -427,7 +447,7 @@ sbx ls -q
 ## 这个版本还不支持
 
 - `bwrap`、`seatbelt` 和托管沙箱。在它们发布之前，驱动定义会在 `provider` 上以 `bad_option` 失败。
-- 预装依赖的预热镜像或模板，以及在沙箱里运行工作流的 `setup`。setup 仍在主机上运行。
+- 预装依赖的预热镜像或模板。
 - 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
 - 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。只有评判的网络会被过滤。
 - 用工具登录的评判。评判用环境变量凭据登录。
