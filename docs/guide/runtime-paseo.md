@@ -356,7 +356,7 @@ The agent gets the step's prompt. A later pass of the step starts a new agent: i
 A step on a team tool instance runs in Paseo on a Paseo custom provider of its own. When the daemon runs on this machine, teamai adds that provider at the first step that runs the instance, attended or not. The provider is named after the instance, extends the instance's tool, runs the instance's command from your `PATH`, and sets the tool's home variable when the instance has a home of its own. It stays for later runs, and the run says once how to remove it:
 
 ```text
-⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; remove it with `paseo daemon config unset agents.providers.acme-claude`.
+⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`.
 ```
 
 `paseo daemon config get agents.providers --json` then shows the entry it added, beside every one the daemon held:

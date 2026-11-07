@@ -523,7 +523,7 @@ describe('teamai-runtime-paseo', () => {
 
       expect(notices(runtime)).toEqual([{
         event: 'notice', op: 'op-0000000a',
-        message: `teamai added the Paseo provider acme-claude to the daemon at ${daemon.url} for its acme-claude steps: it extends claude and runs ${file}, with CLAUDE_CONFIG_DIR=${home}. It stays for later runs; remove it with \`paseo daemon config unset agents.providers.acme-claude --home ${path.join(dir, 'paseo')}\`.`,
+        message: `teamai added the Paseo provider acme-claude to the daemon at ${daemon.url} for its acme-claude steps: it extends claude and runs ${file}, with CLAUDE_CONFIG_DIR=${home}. It stays for later runs; to remove it, delete agents.providers.acme-claude from ${path.join(dir, 'paseo', 'config.json')}, then run \`paseo daemon reload --home ${path.join(dir, 'paseo')}\`.`,
       }]);
       runtime.send(promptRequest(handle, 'op-0000000b', { tool: 'acme-claude' }));
 

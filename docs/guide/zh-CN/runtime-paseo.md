@@ -356,7 +356,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 团队工具实例上的步骤，在 Paseo 中运行于它自己的 Paseo 自定义提供方上。守护进程在本机时，teamai 在第一个运行该实例的步骤开始时添加这个提供方，无论是否有人值守。该提供方以实例命名，扩展实例所属的工具，从你的 `PATH` 运行实例的命令；实例有自己的主目录时，还会设置该工具的主目录变量。它会保留供以后的运行使用，运行会提示一次如何删除它：
 
 ```text
-⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; remove it with `paseo daemon config unset agents.providers.acme-claude`.
+⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`.
 ```
 
 之后 `paseo daemon config get agents.providers --json` 会显示它添加的这一项，守护进程原有的每一项都保持不变：
