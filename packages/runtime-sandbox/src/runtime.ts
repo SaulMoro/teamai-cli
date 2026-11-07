@@ -55,6 +55,9 @@ const FOLLOW_MS = 100;
  */
 const BOUND_MS = 10_000;
 
+/** How long a stopped step's exec may take to end before its sandbox is stopped again, within BOUND_MS. */
+const RESTOP_MS = 1_000;
+
 /**
  * How long a sweep of what earlier runs left may take before it says so on stderr. Nothing waits for it, so its bound is
  * its own: past its slowest sound run, a list then a judge's container, filter and network removed in turn, each within
@@ -628,8 +631,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   /**
    * Stops what `op` runs, and when this process runs it, waits for its process to end: why the stop is not confirmed,
    * or undefined once it is, all within BOUND_MS. A judge's container is removed, so an exec still on its way to the
-   * engine has nothing to start in; a step's restarts, ready for the step's next exec. One the engine cannot look up is
-   * not stopped.
+   * engine has nothing to start in; a step's restarts, ready for the step's next exec, and is stopped again while that
+   * exec has not ended. One the engine cannot look up is not stopped.
    */
   const stopOf = async (op: OpId, { handle }: ExecRecord, provider: Provider): Promise<RuntimeFailure | undefined> => {
     const deadline = Date.now() + BOUND_MS;
@@ -646,16 +649,33 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return !found.ok ? found : found.id === undefined ? { ok: true } : place?.confined ? provider.destroy(found.id) : provider.stop(found.id);
     };
 
-    const stopped = await by(deadline, stopping());
+    const stop = async (): Promise<RuntimeFailure | undefined> => {
+      const stopped = await by(deadline, stopping());
 
-    if (stopped.kind === 'late') return overdue(`The stop of sandbox ${handle} did not end`);
+      if (stopped.kind === 'late') return overdue(`The stop of sandbox ${handle} did not end`);
 
-    if (!stopped.value.ok) return stopped.value.failure;
+      return stopped.value.ok ? undefined : stopped.value.failure;
+    };
+
+    const unstopped = await stop();
+
+    if (unstopped !== undefined) return unstopped;
     const ended = running.get(op)?.ended;
 
-    if (ended === undefined || (await by(deadline, ended)).kind === 'done') return undefined;
+    if (ended === undefined) return undefined;
 
-    return overdue(`Sandbox ${handle} was stopped, but exec ${op} did not end`);
+    // A step's sandbox outlives its stop, so an exec still on its way to the engine when the stop landed starts after it
+    // (sbx starts a stopped sandbox again for it): each later stop ends what started since, until the exec ends.
+    const waitUntil = (): number => (place?.confined ? deadline : Math.min(deadline, Date.now() + RESTOP_MS));
+
+    while ((await by(waitUntil(), ended)).kind === 'late') {
+      if (Date.now() >= deadline) return overdue(`Sandbox ${handle} was stopped, but exec ${op} did not end`);
+      const again = await stop();
+
+      if (again !== undefined) return again;
+    }
+
+    return undefined;
   };
 
   const cancel = async (op: OpId, provider: Provider): Promise<void> => {

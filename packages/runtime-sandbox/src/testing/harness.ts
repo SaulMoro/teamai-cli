@@ -55,7 +55,10 @@ export interface FakeEngine {
   failFormat(shouldFail: boolean): void;
   /** Makes every later `run -d` wait `ms` once its container exists, before it answers; 0 answers at once again. */
   holdCreate(ms: number): void;
-  /** Makes every later docker or podman `exec` wait `ms` once it found its container, before it starts its process; 0 starts at once again. */
+  /**
+   * Makes every later `exec` wait `ms` before it starts its process: docker's or podman's once it found its container,
+   * sbx's before it looks its sandbox up; 0 starts at once again.
+   */
   holdExec(ms: number): void;
   /** Holds every later list of one journal's containers (`ps --filter label=teamai.owner=…`) until released. */
   holdOwned(isHeld: boolean): void;
