@@ -9,8 +9,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const command = path.join(ROOT, 'scripts/check-docs.mjs');
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
-// Each run of the check is a new process that compiles and loads about 320 TypeScript modules: about 2.5 s of one core
-// when the machine is idle, and up to 16 s while the full suite keeps every core busy. A case gets 30 s per run.
+// Each run of the check is a new process that pulls every workflow example of the guide pages into a temporary team
+// repo and runs the lease examples through the engine, with about 120 short git processes: about 4 s of one core when
+// the machine is idle, and several times that while the full suite keeps every core busy. A case gets 30 s per run.
 const RUN_MS = 30_000;
 vi.setConfig({ testTimeout: RUN_MS });
 /** The shipped tool ids check-docs generates for teamai/tool-facts. */

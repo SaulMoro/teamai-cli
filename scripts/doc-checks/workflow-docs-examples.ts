@@ -299,6 +299,13 @@ for (const page of [...PAGES, ...SCORER_PAGES, ...OTHER_PAGES]) {
         ),
       );
 
+      // A page with no complete workflow and no diagnostic it shows has nothing for pull to check.
+      if (byFile.size === 0 && shown.size === 0) {
+        assert.deepEqual(failures, []);
+
+        return;
+      }
+
       // The scorers a workflow example lists are the ones the scorer pages show.
       for (const example of SCORER_PAGES.flatMap(scorerExamplesOf)) {
         fs.mkdirSync(path.dirname(path.join(config.repo.localPath, example.file)), { recursive: true });
