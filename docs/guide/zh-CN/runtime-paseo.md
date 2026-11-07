@@ -219,7 +219,7 @@ Codex 步骤的一轮也以同样方式评分。Paseo 不报告 Codex 的主目�
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
 ```
 
-OpenCode 把会话存放在数据库中，运行时无法在其中查找单个会话，所以不报告 OpenCode 的主目录：只有 teamai 以守护进程的 `HOME` 运行时，OpenCode 的一轮才会被评分。
+OpenCode 步骤的一轮也以同样方式评分。OpenCode 把所有会话存放在其数据目录（`XDG_DATA_HOME`，默认为 `~/.local/share`）下的一个数据库中，所以守护进程在本机时，运行时报告存有 `opencode/opencode.db` 的那个数据目录：依次是其 Paseo 提供方 `env` 所设的目录、你的 `XDG_DATA_HOME`、`$HOME` 下的 `.local/share`、你账户主目录下的 `.local/share`。teamai 在那里读取会话，即使它用自己的 `HOME` 运行也一样。守护进程在另一台机器上时，teamai 在它自己的数据目录中读取。
 
 ## 选项
 
@@ -227,7 +227,7 @@ OpenCode 把会话存放在数据库中，运行时无法在其中查找单个�
 | --- | --- | --- |
 | `url` | `$PASEO_HOME/config.json` 中 `daemon.listen` 所指的地址，没有时为 `ws://127.0.0.1:6767/ws` | Paseo 守护进程的 WebSocket 地址：`ws://`、`wss://`，Unix 套接字则为 `ws+unix://<套接字路径>:/ws`。 |
 | `mode` | 每个工具在 Paseo 中的默认模式，但从不是一个从不询问的模式 | 每个工具的智能体启动时所用的 Paseo 模式，例如 `{ claude: plan }`。它必须是 Paseo 为该工具列出的模式。指定一个从不询问的模式，就是你主动选择完全访问（见 [工具、模型和模式](#工具模型和模式)）。 |
-| `providers` | 运行每个团队实例命令的自定义提供方 | 工具或团队实例所用的 Paseo 提供方 id，例如 `{ acme-claude: claude-acme }`（见 [团队工具实例](#团队工具实例)）。 |
+| `providers` | 运行每个团队实例的自定义提供方，没有时为 teamai 添加的那个 | 工具或团队实例所用的 Paseo 提供方 id，例如 `{ acme-claude: claude-acme }`（见 [团队工具实例](#团队工具实例)）。 |
 
 `max_parallel` 是 teamai 自己的键，见 [运行时选项](workflow-advanced.md#运行时选项)。Paseo 本身没有并发上限。
 
@@ -353,23 +353,33 @@ Judge whether the change does what the step asked. Read the diff and the session
 
 ## 团队工具实例
 
-团队工具实例（例如 `acme-claude`，`extends: claude`，`command: acme-claude`）上的步骤，在 Paseo 中运行于一个命令为该实例命令的 Paseo 自定义提供方上。在守护进程所在主机上添加一次这个提供方。Paseo 整体设置 `agents.providers`，所以请保留其中已有的每一项：
-
-```sh
-paseo daemon config get agents.providers --json
-paseo daemon config set agents.providers '{
-  "claude-acme": { "extends": "claude", "label": "Claude (acme)", "command": ["acme-claude"] }
-}'
-paseo daemon reload
-```
-
-运行时自己找到这个提供方：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径）的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。Codex 实例的登录在实例自己的主目录中检查，未登录的实例会给出它自己的命令，例如 `CODEX_HOME=~/.codex-acme acme-codex login`。没有这样的提供方时，不提供该实例，该实例上的步骤会说明如何添加：
+团队工具实例上的步骤，在 Paseo 中运行于它自己的 Paseo 自定义提供方上。守护进程在本机时，teamai 在第一个运行该实例的步骤开始时添加这个提供方，无论是否有人值守。该提供方以实例命名，扩展实例所属的工具，从你的 `PATH` 运行实例的命令；实例有自己的主目录时，还会设置该工具的主目录变量。它会保留供以后的运行使用，运行会提示一次如何删除它：
 
 ```text
-✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
+⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; remove it with `paseo daemon config unset agents.providers.acme-claude`.
 ```
 
-有两个提供方都运行该命令时，用 `providers` 选项指定要用的那个：
+之后 `paseo daemon config get agents.providers --json` 会显示它添加的这一项，守护进程原有的每一项都保持不变：
+
+```json
+{ "acme-claude": { "extends": "claude", "label": "acme-claude", "command": ["/Users/ana/.local/bin/acme-claude"], "env": { "CLAUDE_CONFIG_DIR": "/Users/ana/.claude-acme" } } }
+```
+
+只有自己主目录的实例，例如 `claude-work`（`extends: claude`，`home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`），会得到一个在该主目录中运行 Claude 自身命令的提供方，所以第二个 Claude 账户无需任何设置即可运行：
+
+```json
+{ "claude-work": { "extends": "claude", "label": "claude-work", "env": { "CLAUDE_CONFIG_DIR": "/Users/ana/.claude-work" } } }
+```
+
+守护进程已有合适的提供方时，就用那个：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径）的那个；对只有主目录的实例，则是运行该工具自身命令、且 `env` 中设有该主目录的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。实例的登录和会话在其提供方 `env` 所设的主目录中查找，没有时在实例自己的主目录中查找；该提供方的主目录不是 teamai 为该实例使用的主目录时，运行会提示一次。未登录的实例会给出它自己的命令，例如 `CODEX_HOME=~/.codex-acme acme-codex login`。
+
+守护进程在另一台主机上、命令不在你的 `PATH` 上、实例名称不是合法的 Paseo 提供方 id（小写字母、数字和连字符），或同名提供方已运行别的东西时，teamai 不会添加提供方。此时不提供该实例，该实例上的步骤会说明该怎么做：
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://10.0.0.5:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude, and teamai adds one only on a daemon on this machine; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
+```
+
+有两个提供方都能运行该实例时，用 `providers` 选项指定要用的那个：
 
 ```yaml
 # drivers/paseo-acme.yaml
