@@ -37,7 +37,8 @@ const OverrideSchema = z.object({
   providerInstances: lenient(z.record(z.string(), z.object({ enabled: z.boolean().optional() }).catch({}))),
 });
 
-const SettingsSchema = z.object({
+/** T3's settings file, each field read on its own. */
+export const SettingsSchema = z.object({
   defaultModelSelection: lenient(ModelSelectionSchema.nullable()),
   defaultRuntimeMode: lenient(z.enum(RUNTIME_MODES)),
   defaultProjectScripts: lenient(z.array(ScriptSchema)),
@@ -45,6 +46,7 @@ const SettingsSchema = z.object({
   projectScriptOverrides: lenient(z.record(z.string(), lenient(z.array(ScriptSchema).nullable()))),
   projectSettingsOverrides: lenient(z.record(z.string(), OverrideSchema.catch({}))),
   providerInstances: lenient(z.record(z.string(), z.object({
+    driver: lenient(z.string()),
     enabled: lenient(z.boolean().nullable()),
     /**
      * Where the instance runs its tool: `homePath`, and for Codex `shadowHomePath`, which T3 runs it in when set; and
