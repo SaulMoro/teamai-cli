@@ -7,7 +7,7 @@ import type { WarmOptions } from '../options.js';
 import { isRunning, oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
-import { cliOf, commandsOf, definedOnly, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
+import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
 //
@@ -389,9 +389,9 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
     },
 
     client(id, spec) {
-      const { args, env: clientEnv } = execOf(id, spec, { isInteractive: true });
+      const { args, env: clientEnv } = execOf(id, { ...spec, argv: [] }, { isInteractive: true });
 
-      return { ok: true, argv: [executable, ...args], env: definedOnly(clientEnv) };
+      return { ok: true, ...signalled([executable, ...args], spec.argv), env: definedOnly(clientEnv) };
     },
 
     async exec(id, spec, onOutput): Promise<ExecEnd> {

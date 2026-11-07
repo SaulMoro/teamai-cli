@@ -6,7 +6,7 @@ import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
-import { cliOf, commandsOf, definedOnly, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
+import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
 //
@@ -367,7 +367,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     },
 
     client(id, spec) {
-      return { ok: true, argv: [executable, ...execArgs(id, spec, { isInteractive: true })], env: definedOnly(execEnv(spec)) };
+      return { ok: true, ...signalled([executable, ...execArgs(id, { ...spec, argv: [] }, { isInteractive: true })], spec.argv), env: definedOnly(execEnv(spec)) };
     },
 
     async exec(id, spec, onOutput): Promise<ExecEnd> {

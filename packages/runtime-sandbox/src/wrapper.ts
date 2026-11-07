@@ -22,19 +22,33 @@ export type WrapperEnd = { code: number } | { signal: NodeJS.Signals };
 
 const REFUSED = 2;
 
-/** Runs `argv` with stdio, exit status and the signals this process gets passed through. */
-function passThrough(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<WrapperEnd> {
+/**
+ * Runs `argv` with stdio, exit status and the signals this process gets passed through: to the process it starts, and,
+ * through `signalling` (the grant's `signal`), to the tool in the sandbox when that process does not pass them on.
+ */
+function passThrough(argv: readonly string[], env: NodeJS.ProcessEnv, signalling?: readonly string[]): Promise<WrapperEnd> {
   const [command = '', ...rest] = argv;
 
   return new Promise((resolve) => {
     const child = spawn(command, rest, { env, stdio: 'inherit' });
     const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-    const forward = (signal: NodeJS.Signals): void => { child.kill(signal); };
 
-    for (const signal of signals) process.on(signal, forward);
+    const forward = (received: NodeJS.Signals): void => {
+      if (signalling === undefined) {
+        child.kill(received);
+
+        return;
+      }
+
+      const [sender = '', ...senderArgs] = signalling;
+
+      spawn(sender, [...senderArgs, received.replace(/^SIG/, '')], { env, stdio: 'ignore' }).on('error', () => child.kill(received));
+    };
+
+    for (const each of signals) process.on(each, forward);
 
     const done = (end: WrapperEnd): void => {
-      for (const signal of signals) process.off(signal, forward);
+      for (const each of signals) process.off(each, forward);
       resolve(end);
     };
 
@@ -100,5 +114,5 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
 
   if ('connected' in answer) return refuse(`teamai-sandbox-${name}: the attempt socket answered an ask as a registration, so nothing runs.`);
 
-  return passThrough([...answer.grant.argv, ...args], answer.grant.env);
+  return passThrough([...answer.grant.argv, ...args], answer.grant.env, answer.grant.signal);
 }

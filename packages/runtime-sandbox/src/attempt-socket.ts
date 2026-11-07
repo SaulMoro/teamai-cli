@@ -50,7 +50,13 @@ export type SocketRequest = z.infer<typeof SocketRequestSchema>;
 export type Ask = Extract<SocketRequest, { ask: unknown }>['ask'];
 
 /** How the wrapper starts the tool: `argv` with `env` as the whole environment of that process, nothing of its own. */
-export const GrantSchema = z.object({ argv: z.array(z.string()).min(1), cwd: z.string(), env: z.record(z.string(), z.string()) });
+export const GrantSchema = z.object({
+  argv: z.array(z.string()).min(1),
+  cwd: z.string(),
+  env: z.record(z.string(), z.string()),
+  /** The command line that sends a signal to the tool in the sandbox, its name last, when the exec client does not. */
+  signal: z.array(z.string()).min(1).optional(),
+});
 
 export type Grant = z.infer<typeof GrantSchema>;
 
