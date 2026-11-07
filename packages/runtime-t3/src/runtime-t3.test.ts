@@ -360,7 +360,7 @@ describe('teamai-runtime-t3', () => {
         {
           set: 'the default instance runs another command than Claude\'s own, a wrapper teamai has no tool for',
           settings: { defaultModelSelection: { instanceId: 'acme-claude-t3', model: 'claude-opus-5-5' }, providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } },
-          providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3' }], tool: undefined,
+          providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3' }], tool: 'claude',
         },
       ])('reports the tool of the member\'s effective T3 default when $set', async ({ settings, providers, options, tool }) => {
         signIn(t3);
