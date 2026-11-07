@@ -344,3 +344,171 @@ describe('vercel: an attempt', () => {
     expect(sandboxNames()).toEqual([]);
   });
 });
+
+/** A prepare that fills a store in the sandbox's home from the lockfile, leaves node_modules, and lists its variables. */
+const PREPARE = 'mkdir -p "$HOME/.store" node_modules && cksum package-lock.json > "$HOME/.store/index" && echo dep > node_modules/dep.js && env | cut -d= -f1 > "$HOME/.store/names"';
+
+const WARM = { provider: 'vercel', runtime: 'node24', warm: { prepare: PREPARE, cache: ['package-lock.json'] } };
+
+/** Opens attempt `attempt` of `at` and waits until it is ready, or failed. */
+async function openAttempt(connection: Connection, at: Place, attempt: string): Promise<Message> {
+  const op = newOp();
+  connection.send({ type: 'open', op, run: RUN, attempt, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+
+  return connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
+}
+
+/** A place whose worktree holds a lockfile. */
+function lockedPlace(lock = 'lock v1\n'): Place {
+  const at = preparedPlace();
+  fs.writeFileSync(path.join(at.worktree, 'package-lock.json'), lock);
+
+  return at;
+}
+
+const snapshotsDir = (): string => path.join(stateDir, 'snapshots');
+
+function snapshotIds(): string[] {
+  return fs.existsSync(snapshotsDir()) ? fs.readdirSync(snapshotsDir()) : [];
+}
+
+/** Every file a snapshot holds, as its path inside the sandbox. */
+function filesOf(id: string): string[] {
+  const root = path.join(snapshotsDir(), id, 'root');
+
+  return fs.readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((file) => fs.lstatSync(path.join(root, file)).isFile()).map((file) => `/${file}`);
+}
+
+const CreateSchema = z.looseObject({ call: z.literal('create'), name: z.string(), source: z.object({ type: z.literal('snapshot'), snapshotId: z.string() }).optional() });
+
+/** The sandboxes created for attempts, with the snapshot each started from. */
+function attemptCreates(): Array<z.infer<typeof CreateSchema>> {
+  return calls().flatMap((call) => { const created = CreateSchema.safeParse(call); return created.success && !created.data.name.includes('-warm-') ? [created.data] : []; });
+}
+
+describe('vercel: the warm snapshot', () => {
+  it('prepares it in a scratch sandbox with no credential, keeps a store but no checkout file, node_modules or credential, and starts the attempt from it', async () => {
+    const connection = start();
+    await init(connection, WARM);
+    const at = lockedPlace();
+
+    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    const scratch = calls().find((call) => call.call === 'create' && String(call.name).includes('-warm-'));
+    const [id = ''] = snapshotIds();
+
+    expect(scratch).toMatchObject({ persistent: false, runtime: 'node24' });
+    expect(calls().filter((call) => call.call === 'runCommand' && call.sandbox === scratch?.name).every((call) => Array.isArray(call.env) && call.env.length === 0)).toBe(true);
+    expect(calls().filter((call) => call.call === 'snapshot')).toEqual([expect.objectContaining({ sandbox: scratch?.name, expiration: 30 * 24 * 3_600_000 })]);
+    expect(snapshotIds()).toHaveLength(1);
+    expect(filesOf(id)).toContain('/home/vercel-sandbox/.store/index');
+    expect(filesOf(id).filter((file) => file.includes('node_modules') || file.endsWith('package-lock.json') || file.startsWith(at.worktree))).toEqual([]);
+    expect(fs.readFileSync(path.join(snapshotsDir(), id, 'root', 'home/vercel-sandbox/.store/names'), 'utf8')).not.toMatch(/VERCEL_|CLAUDE_/);
+    expect(filesOf(id).filter((file) => fs.readFileSync(path.join(snapshotsDir(), id, 'root', file), 'utf8').includes('vercel-token-value'))).toEqual([]);
+    // The scratch sandbox goes once the snapshot is kept; the attempt's starts from it.
+    expect(sandboxNames()).toEqual([expect.stringMatching(new RegExp(`-${RUN}-${ATTEMPT}$`))]);
+    expect(attemptCreates()).toEqual([expect.objectContaining({ source: { type: 'snapshot', snapshotId: id } })]);
+    expect(attemptCreates()[0]).not.toHaveProperty('runtime');
+    expect(fs.existsSync(inSandbox(sandboxNames()[0] ?? '', '/home/vercel-sandbox/.store/index'))).toBe(true);
+  });
+
+  it('reuses the snapshot from a runtime started again while the lockfile is unchanged, and prepares a new one once it changes', async () => {
+    const at = lockedPlace();
+    const first = start();
+    await init(first, { ...WARM, warm: { ...WARM.warm, expiration: '12h' } });
+
+    expect(await openAttempt(first, at, 'a00000001')).toMatchObject({ event: 'ready' });
+    await first.end();
+    const second = start();
+    await init(second, { ...WARM, warm: { ...WARM.warm, expiration: '12h' } });
+
+    expect(await openAttempt(second, at, 'a00000002')).toMatchObject({ event: 'ready' });
+    expect(calls().filter((call) => call.call === 'snapshot')).toEqual([expect.objectContaining({ expiration: 12 * 3_600_000 })]);
+    fs.writeFileSync(path.join(at.worktree, 'package-lock.json'), 'lock v2\n');
+
+    expect(await openAttempt(second, at, 'a00000003')).toMatchObject({ event: 'ready' });
+    expect(snapshotIds()).toHaveLength(2);
+    const [one, two, three] = attemptCreates().map((created) => created.source?.snapshotId);
+
+    expect(two).toBe(one);
+    expect(three).not.toBe(one);
+    expect(three).toBeDefined();
+  });
+
+  it('builds one snapshot for two opens at once', async () => {
+    const connection = start();
+    await init(connection, WARM);
+    const at = lockedPlace();
+    const opened = await Promise.all([openAttempt(connection, at, 'a00000001'), openAttempt(connection, at, 'a00000002')]);
+
+    expect(opened).toEqual([expect.objectContaining({ event: 'ready' }), expect.objectContaining({ event: 'ready' })]);
+    expect(calls().filter((call) => call.call === 'snapshot')).toHaveLength(1);
+    expect(new Set(attemptCreates().map((created) => created.source?.snapshotId)).size).toBe(1);
+  });
+
+  it.each([
+    ['expired', (id: string) => fs.writeFileSync(path.join(snapshotsDir(), id, 'meta.json'), JSON.stringify({ expiresAt: Date.now() - 1_000 }))],
+    ['gone', (id: string) => fs.rmSync(path.join(snapshotsDir(), id), { recursive: true, force: true })],
+  ])('prepares the snapshot again once the kept one is %s', async (_case, lose) => {
+    const at = lockedPlace();
+    const first = start();
+    await init(first, WARM);
+    await openAttempt(first, at, 'a00000001');
+    await first.end();
+    const [kept = ''] = snapshotIds();
+    lose(kept);
+    const second = start();
+    await init(second, WARM);
+
+    expect(await openAttempt(second, at, 'a00000002')).toMatchObject({ event: 'ready' });
+    expect(calls().filter((call) => call.call === 'snapshot')).toHaveLength(2);
+    expect(attemptCreates().at(-1)?.source?.snapshotId).not.toBe(kept);
+  });
+
+  it('fails the open with the end of prepare\'s output when it fails, and leaves no sandbox', async () => {
+    const connection = start();
+    await init(connection, { ...WARM, warm: { prepare: 'echo "npm ERR! 404 left-pad" >&2; exit 3', cache: ['package-lock.json'] } });
+
+    expect(await openAttempt(connection, lockedPlace(), ATTEMPT)).toMatchObject({ event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringMatching(/code 3.*npm ERR! 404 left-pad/s) } });
+    expect(sandboxNames()).toEqual([]);
+    expect(snapshotIds()).toEqual([]);
+  });
+
+  it('fails the open on timeout before it prepares a snapshot, when the lifetime ends before the attempt may', async () => {
+    const connection = start();
+    await init(connection, { ...WARM, timeout: '10m' });
+    const at = lockedPlace();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, deadline: new Date(Date.now() + 3_600_000).toISOString(), credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'failed' || message.event === 'ready'), 30_000)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'timeout' } });
+    expect(calls().filter((call) => call.call === 'create')).toEqual([]);
+  });
+
+  it('fails the open bad_option on warm.cache when a cache file links out of the checkout, and creates nothing', async () => {
+    const connection = start();
+    await init(connection, WARM);
+    const at = preparedPlace();
+    fs.writeFileSync(path.join(dir, 'secret.txt'), 'outside\n');
+    fs.symlinkSync(path.join(dir, 'secret.txt'), path.join(at.worktree, 'package-lock.json'));
+
+    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.cache' } });
+    expect(calls().filter((call) => call.call === 'create')).toEqual([]);
+  });
+
+  it('deletes at the next open the scratch sandbox of a build whose runtime was killed', async () => {
+    const block = path.join(dir, 'block');
+    fs.writeFileSync(block, '');
+    const first = start();
+    await init(first, { ...WARM, warm: { prepare: `while [ -f '${block}' ]; do sleep 0.1; done`, cache: ['package-lock.json'] } });
+    const at = lockedPlace();
+    first.send({ type: 'open', op: newOp(), run: RUN, attempt: 'a00000001', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: {} } });
+    await vi.waitFor(() => { expect(calls().some((call) => call.call === 'runCommand' && call.cmd === 'sh' && String(call.sandbox).includes('-warm-'))).toBe(true); }, { timeout: 10_000 });
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    await init(second);
+
+    expect(await openAttempt(second, at, 'a00000002')).toMatchObject({ event: 'ready' });
+    await vi.waitFor(() => { expect(sandboxNames().filter((name) => name.includes('-warm-'))).toEqual([]); }, { timeout: 10_000 });
+  });
+});

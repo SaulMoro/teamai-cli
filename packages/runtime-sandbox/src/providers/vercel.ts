@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Command, Sandbox } from '@vercel/sandbox';
@@ -8,6 +9,7 @@ import type { JournalId } from '../journal.js';
 import type { VercelOptions } from '../options.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
+import { isRunning, oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
 import { WORKSPACES } from './cli.js';
 import { applyTar, readTar } from './vercel-copy.js';
 
@@ -15,7 +17,7 @@ import { applyTar, readTar } from './vercel-copy.js';
 //
 //  The place cannot be mounted from this machine, so it is recreated at the same absolute paths inside and copied back:
 //
-//    open     Sandbox.create({ name: teamai-<journal>-<run>-<attempt>, persistent: false, timeout, runtime })
+//    open     Sandbox.create({ name: teamai-<journal>-<run>-<attempt>, persistent: false, timeout, runtime or the warm source })
 //             mkdir -p the view's paths (sudo), chown the writable ones to the sandbox's user
 //             the worktree, run directory and tool homes in, as that user; the git paths in as root, read only
 //             view.json kept on this machine last: a sandbox found without it was never fully copied in, and goes
@@ -23,6 +25,13 @@ import { applyTar, readTar } from './vercel-copy.js';
 //    collect  tar of the worktree, result and tool homes, read back and applied by vercel-copy.ts
 //    close    delete(), never stop(): nothing of an attempt is kept as a snapshot
 //    sweep    Sandbox.list({ namePrefix: teamai-<journal>- }): one whose attempt this machine no longer records goes
+//
+//  With `warm`, each attempt's sandbox starts from a snapshot (warm.ts, base vercel:<runtime>), made once per key, its id
+//  kept at <state>/warm/<key>.json and looked up with Snapshot.get; a missing or expired one is made again:
+//
+//    Sandbox.create({ name: teamai-<journal>-warm-<pid>-<random>, persistent: false, runtime })       no credential
+//    writeFiles(the cache files, under /tmp/teamai-warm); sh -c <prepare> there; rm -rf /tmp/teamai-warm
+//    snapshot({ expiration }), then delete()                               the snapshot outlives its scratch sandbox
 //
 //  The provider's own sign-in (VERCEL_TOKEN, VERCEL_TEAM_ID, VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN) stays with this
 //  runtime: it reaches the SDK only, never a sandbox's environment. Each exec's credentials go in that command's env, by
@@ -48,6 +57,14 @@ const NO_SIGN_IN = 'Vercel Sandbox needs a sign-in on this machine: set VERCEL_T
 const sdk = () => import('@vercel/sandbox');
 
 const NotFoundSchema = z.object({ response: z.object({ status: z.literal(404) }) });
+
+/** How long Vercel keeps a warm snapshot after its last use when `warm.expiration` is unset: 30 days. */
+const KEPT_MS = 30 * 24 * 3_600_000;
+
+/** Where a warm snapshot's prepare runs, on copies of the `cache` files; deleted, with what prepare left there, before the snapshot. */
+const WARM_DIR = '/tmp/teamai-warm';
+
+const WarmRecordSchema = z.object({ snapshotId: z.string().min(1) });
 
 /** The sign-in the SDK calls carry: a token and its team and project, or none when the SDK reads the OIDC token itself. */
 type Auth = { ok: true; credentials: { token: string; teamId: string; projectId: string } | undefined } | { ok: false; message: string };
@@ -129,6 +146,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
   const commandsOf = (id: string): string => path.join(dirOf(id), 'commands');
   const failed = (message: string) => ({ ok: false, failure: { code: 'sandbox_failed', message } }) satisfies { ok: false; failure: RuntimeFailure };
   const removeBy = (id: string): string => `delete sandbox ${id} in the Vercel dashboard (Sandboxes), or wait for its timeout to end it`;
+  const warmFile = (key: string): string => path.join(state, 'warm', `${key}.json`);
 
   /** The sign-in, read when a call needs it: a runtime started again to close an attempt gets no init's offer first. */
   const signedIn = (): Auth => authOf(options.provider_auth, env, home);
@@ -146,9 +164,9 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     }
   };
 
-  /** Runs a command to its end in `sandbox`: its exit code, stdout and stderr. */
-  const run = async (sandbox: Sandbox, cmd: string, args: string[], sudo = false): Promise<{ code: number; stdout: string; stderr: string }> => {
-    const command = await sandbox.runCommand({ cmd, args, sudo, detached: true });
+  /** Runs a command to its end in `sandbox`, in `cwd` when given: its exit code, stdout and stderr. */
+  const run = async (sandbox: Sandbox, cmd: string, args: string[], sudo = false, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> => {
+    const command = await sandbox.runCommand({ cmd, args, sudo, detached: true, ...(cwd !== undefined && { cwd }) });
     let stdout = '';
     let stderr = '';
 
@@ -218,6 +236,84 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     return why === undefined ? 'The sandbox was deleted.' : `${why}; ${removeBy(sandbox.name)}.`;
   };
 
+  type Credentials = Extract<Auth, { ok: true }>['credentials'];
+
+  /** The warm snapshot kept for `plan`'s key while Vercel has it ready: its id, undefined when not, or why Vercel could not say. */
+  const keptSnapshot = async (plan: WarmPlan, credentials: Credentials): Promise<{ ok: true; snapshotId: string | undefined } | { ok: false; message: string }> => {
+    let kept: z.infer<typeof WarmRecordSchema> | undefined;
+
+    try {
+      // A record that cannot be read is taken as none: the snapshot is made again, and the record written anew.
+      kept = WarmRecordSchema.parse(JSON.parse(fs.readFileSync(warmFile(plan.key), 'utf8')));
+    } catch {
+      return { ok: true, snapshotId: undefined };
+    }
+
+    try {
+      const snapshot = await (await sdk()).Snapshot.get({ snapshotId: kept.snapshotId, ...credentials });
+      const isReady = snapshot.status === 'created' && (snapshot.expiresAt === undefined || snapshot.expiresAt.getTime() > Date.now());
+
+      return { ok: true, snapshotId: isReady ? kept.snapshotId : undefined };
+    } catch (error) {
+      return NotFoundSchema.safeParse(error).success ? { ok: true, snapshotId: undefined } : { ok: false, message: (error instanceof Error ? error.message : String(error)) };
+    }
+  };
+
+  /** Makes the warm snapshot of `plan`: `prepare` run in a scratch sandbox on copies of its `cache` files, which go first. */
+  const makeWarm = async (plan: WarmPlan, warm: NonNullable<VercelOptions['warm']>, credentials: Credentials): Promise<{ ok: true; snapshotId: string } | { ok: false; failure: RuntimeFailure }> => {
+    const name = `teamai-${owner}-warm-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+    let sandbox: Sandbox;
+
+    try {
+      sandbox = await (await sdk()).Sandbox.create({ name, persistent: false, timeout: DEFAULT_MS, ...(options.runtime !== undefined && { runtime: options.runtime }), ...credentials });
+    } catch (error) {
+      return failed(`Vercel could not create a sandbox to prepare the warm snapshot ${plan.key}: ${(error instanceof Error ? error.message : String(error))}. No step ran; start again.`);
+    }
+
+    try {
+      await sandbox.writeFiles(plan.cache.map(({ file, from }) => ({ path: `${WARM_DIR}/${file}`, content: fs.readFileSync(from) })));
+      const prepared = await run(sandbox, 'sh', ['-c', warm.prepare], false, WARM_DIR);
+
+      if (prepared.code !== 0) return warmFailed(`The warm snapshot's prepare, \`${warm.prepare}\`, failed in Vercel sandbox ${name}`, { kind: 'ran', ...prepared });
+      // The copies of the cache files and the node_modules prepare made beside them never go into the snapshot.
+      const why = await must(sandbox, 'Removing the cache files and node_modules', 'rm', ['-rf', WARM_DIR], true);
+
+      if (why !== undefined) return failed(`${why}. No step ran; start again.`);
+      const { snapshotId } = await sandbox.snapshot({ expiration: warm.expiration ?? KEPT_MS });
+      fs.mkdirSync(path.dirname(warmFile(plan.key)), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(warmFile(plan.key), JSON.stringify({ snapshotId } satisfies z.infer<typeof WarmRecordSchema>), { mode: 0o600 });
+
+      return { ok: true, snapshotId };
+    } catch (error) {
+      return failed(`Vercel could not make the warm snapshot ${plan.key} in sandbox ${name}: ${(error instanceof Error ? error.message : String(error))}. No step ran; start again.`);
+    } finally {
+      // One left behind ends at its timeout, or a later open's sweep deletes it once this process is gone.
+      await discard(sandbox);
+    }
+  };
+
+  const once = oneBuildPerKey<{ ok: true; snapshotId: string } | { ok: false; failure: RuntimeFailure }>();
+
+  /** The warm snapshot an attempt in `checkout` starts from, made first when Vercel has none ready; undefined without `warm`. */
+  const snapshotFor = async (checkout: string, credentials: Credentials): Promise<{ ok: true; snapshotId: string | undefined } | { ok: false; failure: RuntimeFailure }> => {
+    const { warm } = options;
+
+    if (warm === undefined) return { ok: true, snapshotId: undefined };
+    // The default image is keyed by its name only: teamai cannot tell when Vercel changes it.
+    const planned = planWarm({ base: `vercel:${options.runtime ?? 'default'}`, recipe: { prepare: warm.prepare, cache: warm.cache }, checkout });
+
+    if (!planned.ok) return planned;
+    const { plan } = planned;
+
+    return once(plan.key, async () => {
+      const kept = await keptSnapshot(plan, credentials);
+
+      if (!kept.ok) return failed(`Vercel could not look up the warm snapshot ${plan.key}: ${kept.message}. No step ran; start again.`);
+
+      return kept.snapshotId === undefined ? makeWarm(plan, warm, credentials) : { ok: true, snapshotId: kept.snapshotId };
+    });
+  };
+
   /** The commands an exec of `id` started that may still run, by their ids. */
   const runningCommands = (id: string): string[] => (fs.existsSync(commandsOf(id)) ? fs.readdirSync(commandsOf(id)) : []);
 
@@ -268,6 +364,12 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
             return runId && attempt && more.length === 0 ? [{ id: name, run: runId, attempt }] : [];
           }),
+          // A scratch sandbox's name carries this journal, so its pid is of this machine.
+          leftWarm: listed.flatMap(({ name }) => {
+            const pid = name.startsWith(prefix) ? /^warm-(\d+)-[0-9a-f]+$/.exec(name.slice(prefix.length))?.[1] : undefined;
+
+            return pid !== undefined && !isRunning(Number(pid)) ? [name] : [];
+          }),
         };
       } catch (error) {
         return failed(`Vercel could not list the sandboxes this runtime's journal owns: ${(error instanceof Error ? error.message : String(error))}`);
@@ -290,6 +392,18 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       return failed(`Vercel could not look up sandbox ${nameOf(key)}: ${found.message}. It stays this attempt's until Vercel answers; to remove it now, ${removeBy(nameOf(key))}.`);
     },
 
+    async warm(view, _tool, deadline) {
+      const lifetime = lifetimeOf(options.timeout, deadline, Date.now());
+
+      if (!lifetime.ok) return lifetime;
+      const auth = signedIn();
+
+      if (!auth.ok) return { ok: false, failure: { code: 'sandbox_unavailable', message: auth.message } };
+      const from = await snapshotFor(view.worktree, auth.credentials);
+
+      return from.ok ? { ok: true } : from;
+    },
+
     async create(key, view, _tool, deadline) {
       const lifetime = lifetimeOf(options.timeout, deadline, Date.now());
 
@@ -297,11 +411,16 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       const auth = signedIn();
 
       if (!auth.ok) return { ok: false, failure: { code: 'sandbox_unavailable', message: auth.message } };
+      const from = await snapshotFor(view.worktree, auth.credentials);
+
+      if (!from.ok) return from;
       const id = nameOf(key);
+      // A snapshot holds its image: a sandbox from one takes no runtime.
+      const base = from.snapshotId === undefined ? { ...(options.runtime !== undefined && { runtime: options.runtime }) } : { source: { type: 'snapshot' as const, snapshotId: from.snapshotId } };
       let sandbox: Sandbox;
 
       try {
-        sandbox = await (await sdk()).Sandbox.create({ name: id, persistent: false, timeout: lifetime.ms, ...(options.runtime !== undefined && { runtime: options.runtime }), tags: { 'teamai-run': key.run, 'teamai-attempt': key.attempt }, ...auth.credentials });
+        sandbox = await (await sdk()).Sandbox.create({ name: id, persistent: false, timeout: lifetime.ms, ...base, tags: { 'teamai-run': key.run, 'teamai-attempt': key.attempt }, ...auth.credentials });
       } catch (error) {
         // Another open of the same attempt created it first: that sandbox is this attempt's.
         const raced = await sandboxOf(id);

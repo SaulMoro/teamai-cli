@@ -465,7 +465,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // The warm image comes before the sandbox's creation, which a close waits for: a close meanwhile ends at once, and its
     // place then gets no sandbox.
-    const warmed = provider.warm === undefined ? { ok: true as const } : await provider.warm(view, launched);
+    const warmed = provider.warm === undefined ? { ok: true as const } : await provider.warm(view, launched, deadline);
 
     if (!warmed.ok) {
       write({ op, event: 'failed', failure: warmed.failure });
