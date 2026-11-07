@@ -623,8 +623,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       return reply.event === 'collect_failed' ? { ok: false, failure: reply.failure } : { ok: true };
     },
 
-    async reattach(handle) {
-      const reply = await askHandle({ type: 'reattach', handle }, ['alive', 'gone']);
+    async reattach(handle, how) {
+      const reply = await askHandle({ type: 'reattach', handle, ...how }, ['alive', 'gone']);
 
       if (isFailure(reply)) return { kind: 'failed', failure: reply } satisfies Reattached;
 

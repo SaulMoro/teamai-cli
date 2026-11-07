@@ -40,6 +40,10 @@
 // With `stray`, an exec it accepts also starts a process that shares the toy's stdout and stderr and outlives it, which
 // writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
 //
+// `calls` names a file, which two toys may share, that each request after init is appended to, in the order the toy
+// reads them: the toy's state directory's name, the request's type, operation and handle, an open's `outer`, and the
+// names of the credentials it brought, never a value.
+//
 // `notice` sends a notice before it answers a request, by request type (`{"init":"…","exec":"…"}`), naming the
 // request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, or of
 // NAME in its env, so a test reads what teamai shows of a secret a runtime echoes.
@@ -50,7 +54,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -697,6 +701,11 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     send({ event: 'error', message: 'Send init first.' });
 
     return;
+  }
+
+  if (request.type !== 'init' && typeof options.calls === 'string') {
+    const call = { toy: path.basename(options.state), type: request.type, op: request.op, handle: request.handle, outer: request.outer, credentials: request.credentials && Object.keys(request.credentials).sort() };
+    fs.appendFileSync(options.calls, `${JSON.stringify(call)}\n`);
   }
 
   noticeFor(request);
