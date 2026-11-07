@@ -532,6 +532,25 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it('checks a Codex instance\'s sign-in, and finds its sessions, in the home its Paseo provider sets in its env, saying once that this is not teamai\'s home for it', async () => {
+    const providerHome = path.join(dir, 'paseo-homes', 'acme-codex');
+    const acme: InitInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme', env: 'CODEX_HOME' } };
+    behave({
+      output: { ok: true }, codex_login: 'signed_in', codex_login_home: providerHome, codex_home: providerHome,
+      custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'], env: { CODEX_HOME: providerHome, OPENAI_BASE_URL: 'https://llm.acme.example' } } },
+    });
+    const runtime = start();
+
+    expect(await ready(runtime, { instances: [acme] })).toMatchObject({ type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-codex'] } });
+    expect(runtime.lines.filter((line) => 'event' in line && line.event === 'notice')).toEqual([{
+      event: 'notice',
+      message: `Paseo provider codex-acme runs acme-codex with CODEX_HOME=${providerHome}, not teamai's home for it (${path.join(dir, 'home', '.codex-acme')}): its steps sign in and keep their sessions in ${providerHome}, where teamai reads them.`,
+    }]);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'acme-codex', model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'acme-codex', home: providerHome } });
+  });
+
   it('checks the sign-in of Codex on the custom provider the providers option names for it, through that provider\'s own command', async () => {
     behave({ codex_login: 'signed_in', custom_providers: { 'codex-wrap': { extends: 'codex', command: ['/opt/wrap/bin/codex-wrap'] } } });
 

@@ -160,12 +160,14 @@ function holdsRollout(home: string, threadId: string): boolean {
 
 /**
  * The Codex home on this machine that holds the rollout of thread `threadId`, or undefined when none it can see does.
- * Paseo reports no Codex home, so the homes the daemon's Codex likely writes are looked in: the runtime's `CODEX_HOME`,
+ * Paseo reports no Codex home, so the homes the daemon's Codex likely writes are looked in: the one its Paseo provider's
+ * env sets, then the runtime's `CODEX_HOME`,
  * then `homeDir` (`.codex`, or a team instance's) in the account's home, where a daemon the Paseo app started runs, then
  * in `$HOME`.
  */
-function codexHomeHolding(threadId: string, homeDir: string): string | undefined {
-  const homes: string[] = [];
+function codexHomeHolding(threadId: string, { providerHome, homeDir }: { providerHome: string | undefined; homeDir: string }): string | undefined {
+  // The home a Paseo provider's env sets is the one its Codex writes.
+  const homes: string[] = providerHome === undefined ? [] : [providerHome];
   // CODEX_HOME moves the Codex home, not a team instance's own.
   const moved = homeDir === '.codex' ? process.env.CODEX_HOME : undefined;
 
@@ -208,7 +210,51 @@ export interface Target {
  * A tool or instance installed on the daemon's host: one it can run, with its modes and the one a step starts in, or
  * why it cannot, for a person to read.
  */
-export type InstalledTool = (Target & { canRun: true; modes: string[]; stepMode: StepMode; home?: string }) | Unavailable;
+export type InstalledTool = (Target & { canRun: true; modes: string[]; stepMode: StepMode; home?: string; providerHome?: ProviderHome }) | Unavailable;
+
+/**
+ * The tool home a Paseo custom provider's env sets for what it runs: `variable`, the one that moves that tool's home;
+ * `dir`, the absolute directory it names; `teamaiHome`, the one teamai keeps that tool or instance's home in.
+ */
+export interface ProviderHome {
+  variable: string;
+  dir: string;
+  teamaiHome: string;
+}
+
+/** The variable that moves `tool`'s home, which a Paseo provider's env may set: OpenCode's is its data directory's. */
+function homeVariableOf(tool: PaseoTool): string {
+  switch (tool) {
+    case 'claude':
+      return 'CLAUDE_CONFIG_DIR';
+    case 'codex':
+      return 'CODEX_HOME';
+    case 'opencode':
+      return 'XDG_DATA_HOME';
+    default: {
+      const unhandled: never = tool;
+
+      return unhandled;
+    }
+  }
+}
+
+/** The directory under `$HOME` `tool`'s home is in when nothing moves it. */
+function homeDirOf(tool: PaseoTool): string {
+  switch (tool) {
+    case 'claude':
+      return '.claude';
+    case 'codex':
+      return '.codex';
+    case 'opencode':
+      return path.join('.local', 'share');
+    default: {
+      const unhandled: never = tool;
+
+      return unhandled;
+    }
+  }
+}
 
 /** A tool or instance the daemon cannot run, and why, before or after a provider is found for it. */
 type Unavailable = Pick<Target, 'name' | 'tool'> & { canRun: false; reason: string };
@@ -221,8 +267,11 @@ export interface ToolChoices {
   providers: Readonly<Record<string, string>>;
 }
 
-/** The custom providers of the daemon's `agents.providers`, as much of each as tells which tool it extends and what it runs. */
-const CustomProvidersSchema = z.record(z.string(), z.object({ extends: z.string().optional(), command: z.array(z.string()).optional() }));
+/**
+ * The custom providers of the daemon's `agents.providers`, as much of each as tells which tool it extends, what it runs,
+ * and its env, of which only the home variables are kept: the rest may hold a secret.
+ */
+const CustomProvidersSchema = z.record(z.string(), z.object({ extends: z.string().optional(), command: z.array(z.string()).optional(), env: z.record(z.string(), z.string()).optional() }));
 
 type CustomProviders = z.infer<typeof CustomProvidersSchema>;
 
@@ -281,16 +330,19 @@ type SignIn = { canRun: false; problem: string } | { canRun: true; home?: string
 /** How long `codex login status` may take, as Paseo gives `claude auth status` in Claude's diagnostic. */
 const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
 
-/** The variable and directory a team instance's tool home is set with on the daemon's host: `variable`, unless it names its own. */
-const instanceHome = (instance: InitInstance | undefined, variable: string): { variable: string; dir: string } | undefined => (instance?.home
-  ? { variable: instance.home.env ?? variable, dir: instance.home.dir }
-  : undefined);
+/**
+ * The tool home a tool or team instance runs in on the daemon's host, when it is not the tool's own: the one its Paseo
+ * provider's env sets, else a team instance's own. `shown` is how a sign-in step names it.
+ */
+interface RunsIn {
+  variable: string;
+  dir: string;
+  shown: string;
+}
 
 /** How a person signs a tool in on the daemon's host, such as `codex login`: for a team instance, its own command in its own home. */
-function signInStep(instance: InitInstance | undefined, { command, login, variable }: { command: string; login: string; variable: string }): string {
-  const home = instanceHome(instance, variable);
-
-  return `${home ? `${home.variable}=~/${home.dir} ` : ''}${instance?.command ?? command} ${login}`;
+function signInStep({ runsIn, command, login }: { runsIn: RunsIn | undefined; command: string; login: string }): string {
+  return `${runsIn ? `${runsIn.variable}=${runsIn.shown} ` : ''}${command} ${login}`;
 }
 
 /**
@@ -460,7 +512,7 @@ export interface Daemon {
    * init, Codex's found by the session's rollout on a daemon on this machine, under `homeDir` of a home there (`.codex`,
    * or a team instance's own).
    */
-  sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; homeDir: string }): string | undefined;
+  sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; providerHome: string | undefined; homeDir: string }): string | undefined;
   close(): Promise<void>;
 }
 
@@ -564,7 +616,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
    * Why the daemon cannot run `tool`, or the tool home it runs it with when Paseo reports one. Paseo calls a tool
    * available once its binary is on PATH, signed in or not, so each tool's sign-in is read from what Paseo reports of it.
    */
-  const signIn = async ({ tool, provider }: Target, instance: InitInstance | undefined): Promise<SignIn> => {
+  const signIn = async ({ tool, provider }: Target, { runsIn, command }: { runsIn: RunsIn | undefined; command: string | undefined }): Promise<SignIn> => {
     switch (tool) {
       case 'claude': {
         // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in, and,
@@ -581,7 +633,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         return {
           canRun: false,
           problem: loggedIn === 'false'
-            ? `signed out; run \`${signInStep(instance, { command: 'claude', login: 'auth login', variable: 'CLAUDE_CONFIG_DIR' })}\` on the daemon's host`
+            ? `signed out; run \`${signInStep({ runsIn, command: command ?? 'claude', login: 'auth login' })}\` on the daemon's host`
             : `Paseo does not report whether it is signed in; run \`paseo provider diagnostic ${provider}\` on the daemon's host to see its Auth line`,
         };
       }
@@ -616,9 +668,8 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         let status: Awaited<ReturnType<typeof codexLoginStatus>>;
 
         try {
-          // A team instance's Codex keeps its sign-in in the instance's own home.
-          const home = instanceHome(instance, 'CODEX_HOME');
-          status = await codexLoginStatus(resolved, home && { ...process.env, [home.variable]: path.join(getUserHome(), home.dir) });
+          // An instance's Codex, or one whose provider moves its home, keeps its sign-in in that home.
+          status = await codexLoginStatus(resolved, runsIn && { ...process.env, [runsIn.variable]: runsIn.dir });
         } catch (error) {
           return { canRun: false, problem: `\`${resolved} login status\` did not answer (${error instanceof Error ? error.message : String(error)}); run it on the daemon's host to see why` };
         }
@@ -628,7 +679,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         if (status.code === 0 && /^Logged in\b/m.test(answer)) return { canRun: true };
 
-        if (status.code === 1 && /^Not logged in\b/m.test(answer)) return { canRun: false, problem: `signed out; run \`${signInStep(instance, { command: 'codex', login: 'login', variable: 'CODEX_HOME' })}\` on the daemon's host` };
+        if (status.code === 1 && /^Not logged in\b/m.test(answer)) return { canRun: false, problem: `signed out; run \`${signInStep({ runsIn, command: command ?? 'codex', login: 'login' })}\` on the daemon's host` };
         const said = answer.trim().split('\n')[0]?.slice(0, 120) ?? '';
 
         return { canRun: false, problem: `\`${resolved} login status\` gave no sign-in answer (exit ${status.code}${said ? `: ${said}` : ''}); run it on the daemon's host to see why` };
@@ -653,7 +704,11 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       const teamInstances = instances.flatMap((instance) => (isPaseoTool(instance.tool) && !isPaseoTool(instance.name) ? [{ instance, tool: instance.tool }] : []));
       // Read only when an instance or a named provider needs it: a provider's env may hold a secret, and none is kept.
       const parsed = teamInstances.length > 0 || Object.keys(named).length > 0 ? CustomProvidersSchema.safeParse((await api.config.get()).config.providers) : undefined;
-      custom = new Map(Object.entries(parsed?.success ? parsed.data : {}));
+      // A provider's env may hold a secret: only the variables that move a tool's home are kept of it.
+      const homeVariables = new Set([...PASEO_TOOLS.map(homeVariableOf), ...instances.flatMap((instance) => (instance.home?.env === undefined ? [] : [instance.home.env]))]);
+      custom = new Map(Object.entries(parsed?.success ? parsed.data : {}).map(([id, entry]) => [id, {
+        ...entry, ...(entry.env && { env: Object.fromEntries(Object.entries(entry.env).filter(([name]) => homeVariables.has(name))) }),
+      }]));
       const customs = Object.fromEntries(custom);
 
       // Each tool on its own provider or the one the definition names, each instance on the one that runs its command.
@@ -677,8 +732,14 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const { tool, provider } = target;
 
         if (!available.has(provider)) return { ...target, canRun: false, reason: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };
+        const instance = teamInstances.find((team) => team.instance.name === target.name)?.instance;
+        const variable = instance?.home?.env ?? homeVariableOf(tool);
+        const teamaiHome = instance?.home ? path.join(getUserHome(), instance.home.dir) : process.env[variable] || path.join(getUserHome(), homeDirOf(tool));
+        const set = custom.get(provider)?.env?.[variable];
+        const providerHome = set !== undefined && path.isAbsolute(set) ? { variable, dir: set, teamaiHome } : undefined;
+        const runsIn = providerHome ? { variable, dir: providerHome.dir, shown: providerHome.dir } : instance?.home && { variable, dir: teamaiHome, shown: `~/${instance.home.dir}` };
         // A request Paseo fails for one provider leaves that tool unavailable, never the runtime's other tools.
-        const signedIn = await signIn(target, teamInstances.find(({ instance }) => instance.name === target.name)?.instance)
+        const signedIn = await signIn(target, { runsIn, command: instance?.command })
           .catch((error: unknown): SignIn => ({ canRun: false, problem: `Paseo failed its diagnostic (${paseoSaid(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` }));
 
         if (!signedIn.canRun) return { ...target, canRun: false, reason: signedIn.problem };
@@ -692,7 +753,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         const stepMode = stepModeOf(tool, { defaultMode: entries.find((entry) => entry.provider === provider)?.defaultModeId, configured: configured[tool], modes });
 
-        return 'cannot' in stepMode ? { ...target, canRun: false, reason: stepMode.cannot } : { ...target, canRun: true, modes: modes.map((mode) => mode.id), stepMode, ...(signedIn.home !== undefined && { home: signedIn.home }) };
+        return 'cannot' in stepMode ? { ...target, canRun: false, reason: stepMode.cannot } : { ...target, canRun: true, modes: modes.map((mode) => mode.id), stepMode, ...(signedIn.home !== undefined && { home: signedIn.home }), ...(providerHome && { providerHome }) };
       }));
     },
     models,
@@ -746,12 +807,12 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       if (error) throw new Error(error);
     },
     link: (agentId) => paseo.buildAgentDeepLink({ serverId, agentId }),
-    sessionHome(tool, sessionId, { claudeHome, homeDir }) {
+    sessionHome(tool, sessionId, { claudeHome, providerHome, homeDir }) {
       switch (tool) {
         case 'claude':
-          return claudeHome;
+          return claudeHome ?? providerHome;
         case 'codex':
-          return isOnThisMachine(url) ? codexHomeHolding(sessionId, homeDir) : undefined;
+          return isOnThisMachine(url) ? codexHomeHolding(sessionId, { providerHome, homeDir }) : undefined;
         // OpenCode keeps its sessions in a database under its data directory, which no file names the session in.
         case 'opencode':
           return undefined;
