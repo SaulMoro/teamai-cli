@@ -1215,6 +1215,38 @@ steps:
       expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
     });
 
+    it('reads a session of an instance from the home the runtime reports for it, for scoring, the next pass\'s resume and the session archive', async () => {
+      acmeInstance();
+      writeFlow('homedacme', `  - id: review
+    prompt: Review the repository without changing it.
+    scorers: [quality]
+    output:
+      ok: boolean
+  - id: followup
+    needs: [review]
+    session: { from: review }
+    prompt: Follow up on the review.
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      const home = path.join(sandbox, 'acme-provider-home');
+      writeDefinition('agentacmehome', [{ use: 'toy', options: { state, can: { tools: ['claude', 'acme-claude'] }, agent: { output: { ok: true }, transcript: true, home } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'homedacme', '--driver', 'agentacmehome', '--tools', 'default=acme-claude'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      const session = 'session' in (review ?? {}) ? (review as { session?: string }).session : undefined;
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ sessionHome: { tool: 'acme-claude', dir: home } });
+      expect(sends()[1]?.sent).toMatchObject({ step: 'followup', tool: 'acme-claude', resume: session });
+      expect(ran.stderr).not.toContain('could not read this session');
+
+      const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
+
+      expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
+    });
+
     it('reads a session whose runtime reports no home in the tool\'s default home, not in the one the member moved theirs to', async () => {
       writeDefinition('agentdefaulthome', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
 
