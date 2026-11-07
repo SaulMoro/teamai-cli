@@ -250,7 +250,10 @@ async function hold(dir: string, key: string): Promise<() => void> {
     if (queued.get(file) === mine) queued.delete(file);
   };
 
-  await turn;
+  // A caller that never releases is waited for no longer than one that died would be: its hold is then taken over.
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([turn, new Promise<void>((resolve) => { timer = setTimeout(resolve, HOLD_STALE_MS); })]);
+  clearTimeout(timer);
 
   try {
     const release = await holdFile(dir, file);
