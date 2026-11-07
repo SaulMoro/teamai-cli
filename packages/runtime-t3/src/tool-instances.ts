@@ -168,9 +168,19 @@ export function driverOfProvider(provider: Provider): Driver | undefined {
   return DRIVER_NAMES.find((driver) => driver === provider.driverKind);
 }
 
-/** The tool home teamai gives `instance` in `home`, the member's home: its own `home.dir`, else its base tool's. */
-export function teamaiToolHome(instance: InitInstance, driver: Driver, home: string): string {
-  return path.resolve(home, instance.home?.dir ?? DRIVERS[driver].home);
+/**
+ * The tool home teamai gives `instance`: its own `home.dir`, which teamai resolved; else its base tool's, which the
+ * tool's home variable in `env` moves (`~` as `home`, relative to `cwd`, where teamai runs), else under `home`, the
+ * member's home.
+ */
+export function teamaiToolHome({ instance, driver, home, env, cwd }: { instance: InitInstance; driver: Driver; home: string; env: Readonly<Record<string, string | undefined>>; cwd: string }): string {
+  if (instance.home) return path.resolve(home, instance.home.dir);
+  const moved = env[DRIVERS[driver].homeEnv]?.trim();
+
+  if (!moved) return path.join(home, DRIVERS[driver].home);
+
+  // As teamai reads it: `~` is the member's home, and a relative path is under where teamai runs.
+  return moved === '~' || moved.startsWith('~/') ? path.join(home, moved.slice(1)) : path.resolve(cwd, moved);
 }
 
 /** `file`, with `~` for `home` when it is under it, as the person writes it. */

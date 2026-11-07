@@ -159,6 +159,8 @@ export interface ServeOptions {
   t3UserHome: string;
   /** The member's home as teamai runs, which the tool homes teamai gives are under. */
   home: string;
+  /** The variables teamai started the runtime with, whose CLAUDE_CONFIG_DIR or CODEX_HOME moves a base tool's home. */
+  env: Readonly<Record<string, string | undefined>>;
   /** The lock file that keeps two runtimes on this machine from adding the same T3 provider instance. */
   settingsLock: string;
   /** The `t3` command, which adds and removes a project as the member does. */
@@ -755,7 +757,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const found = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
       // A PATH folder named relatively finds it relative to this folder, which T3 does not run in.
       const binaryPath = found === null ? null : path.resolve(found);
-      const toolHome = teamaiToolHome(instance, driver, options.home);
+      const toolHome = teamaiToolHome({ instance, driver, home: options.home, env: options.env, cwd: options.cwd });
       const homePath = toolHome === path.join(options.home, DRIVERS[driver].home) ? undefined : toolHome;
       const setting = `with driver ${DRIVERS[driver].label} and Binary path ${binaryPath ?? `the absolute path of ${command} (command -v ${command})`}${homePath ? `, and Home path ${tilde(homePath, options.home)}` : ''}`;
       const wanted: NewInstance | undefined = binaryPath === null ? undefined : { id: name, driver, displayName: name, command, binaryPath, ...(homePath && { homePath }) };
@@ -938,7 +940,7 @@ export function serve(options: ServeOptions): Promise<void> {
         lookup: {
           providers, binaryPathOf, homeOf,
           isUsable: (provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false,
-          homeFor: (instance, driver) => teamaiToolHome(instance, driver, options.home),
+          homeFor: (instance, driver) => teamaiToolHome({ instance, driver, home: options.home, env: options.env, cwd: options.cwd }),
           shown: (home) => tilde(home, options.home),
         },
       });
@@ -956,7 +958,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
         if (!provider || !driver) continue;
         const theirs = homeOf(provider, driver);
-        const ours = teamaiToolHome(instance, driver, options.home);
+        const ours = teamaiToolHome({ instance, driver, home: options.home, env: options.env, cwd: options.cwd });
 
         if (theirs !== ours) {
           // `~` names one home only when T3 Code's user and teamai share it; else "~/.claude" would read the same twice.
