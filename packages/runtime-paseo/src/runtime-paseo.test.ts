@@ -1640,9 +1640,12 @@ describe('teamai-runtime-paseo', () => {
   });
 
   it.each([
-    ['while Paseo creates its agent', 'create'],
-    ['while its agent waits on a permission nobody answered', 'display'],
-  ] as const)('ends a prompt cancelled, once, before its place closes %s', async (_, reached) => {
+    ['while Paseo creates its agent', 'create', 0],
+    ['while its agent waits on a permission nobody answered', 'display', 0],
+    // The archive stops the agent at once, and Paseo shows that only 2.5 s later: the prompt's own wait, which looks at the
+    // permission each second, sees the agent stop first.
+    ['while its agent waits on a permission nobody answered, though Paseo is slow to show the agent stopped', 'display', 2_500],
+  ] as const)('ends a prompt cancelled, once, before its place closes %s', async (_, reached, fetchMs) => {
     behave({ create_ms: 1_000, ask_permission: true, hold_ms: 60_000, archive_ms: 100 });
     const runtime = start();
     await ready(runtime, { mode: 'attended' });
@@ -1652,6 +1655,7 @@ describe('teamai-runtime-paseo', () => {
     if (reached === 'create') await expect.poll(() => received().map((request) => request.type)).toEqual(['agent.create.request']);
     else await runtime.next(isOp('op-0000000b', 'display'));
 
+    behave({ create_ms: 1_000, ask_permission: true, hold_ms: 60_000, archive_ms: 100, fetch_ms: fetchMs });
     runtime.send({ type: 'close', handle });
 
     expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });

@@ -332,6 +332,11 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   const waiting = new Map<OpId, Following>();
   /** The prompts whose stop this process runs, and settles; one another process stops is settled when it journals the end. */
   const stopping = new Set<OpId>();
+  /**
+   * The prompts whose place a close is stopping: the close settles them once their agents stopped, so their own wait,
+   * which may see the agent stop first, leaves the end to it, and goes on following if the close fails.
+   */
+  const closeStops = new Set<OpId>();
   /** The worktrees this process is opening as Paseo workspaces, by handle: a close waits for its open to end. */
   const opens = new Map<string, Promise<void>>();
   /** The last open this process runs on each directory, by its resolved path: the next one there waits for it. */
@@ -1158,6 +1163,11 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       // teamai went away, or a cancel took the prompt over and ended it.
       if (closing || waiting.get(op) !== following) return;
 
+      if (closeStops.has(op)) {
+        await Promise.race([delay(STOP_POLL_MS), stopped]);
+        continue;
+      }
+
       // Whoever runs the stop settles the prompt once it is confirmed or refused: this process, or another one, such as
       // a recover-mode cancel, whose outcome this one waits to read. A cancel marker alone proves nothing stopped.
       if (journal.isCancelled(op)) {
@@ -1183,7 +1193,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         continue;
       }
 
-      if (journal.isCancelled(op)) continue;
+      if (journal.isCancelled(op) || closeStops.has(op)) continue;
 
       switch (end.status) {
         case 'timeout':
@@ -1507,6 +1517,20 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
    * A place the person released (`release`) is forgotten either way, so it no longer counts on its workspace or directory.
    */
   async function closePlace(handle: string, { release }: { release: boolean }): Promise<void> {
+    // Its agents' prompts are the close's to end, once their agents stopped; a close that fails leaves them to their wait.
+    const stops = journal.promptsOf(handle).flatMap(({ op, record }) => (record.kind === 'agent' && !record.outcome && !closeStops.has(op) ? [op] : []));
+
+    for (const op of stops) closeStops.add(op);
+
+    try {
+      await stopAndForget(handle, { release });
+    } finally {
+      for (const op of stops) closeStops.delete(op);
+    }
+  }
+
+  /** `closePlace`, once the prompts whose agents it stops are its own to end. */
+  async function stopAndForget(handle: string, { release }: { release: boolean }): Promise<void> {
     const deadline = Date.now() + STOP_SETTLE_MS;
     const prompts = journal.promptsOf(handle);
 
