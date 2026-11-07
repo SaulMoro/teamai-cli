@@ -57,10 +57,13 @@ function fail(message, code = 1) {
 
 function readContainer(ref) {
   for (const id of fs.readdirSync(containers)) {
-    const file = path.join(containers, id, 'container.json');
+    let container;
 
-    if (!fs.existsSync(file)) continue;
-    const container = JSON.parse(fs.readFileSync(file, 'utf8'));
+    // A removal may take it between the listing and the read.
+    try { container = JSON.parse(fs.readFileSync(path.join(containers, id, 'container.json'), 'utf8')); } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
 
     if (id === ref || container.name === ref) return container;
   }
@@ -68,34 +71,64 @@ function readContainer(ref) {
   return undefined;
 }
 
-function writeContainer(container) {
-  const file = path.join(containers, container.id, 'container.json');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(container));
-  fs.renameSync(`${file}.tmp`, file);
+/** Records a new container, with its home and the list of its processes. */
+function createContainer(container) {
+  for (const part of ['home', 'execs']) fs.mkdirSync(path.join(containers, container.id, part), { recursive: true });
+  writeContainer(container);
 }
 
-/** Stops every process group an exec of the container started, as a container stop does. */
-function killProcesses(container) {
-  const dir = path.join(containers, container.id, 'execs');
+/** Rewrites a container's record, and answers false when a removal took the container meanwhile, never bringing it back. */
+function writeContainer(container) {
+  const file = path.join(containers, container.id, 'container.json');
 
-  for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+  try {
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(container));
+    fs.renameSync(`${file}.tmp`, file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+
+  return true;
+}
+
+/** Stops every process group an exec of the container whose directory is `dir` started, as a container stop does. */
+function killProcesses(dir) {
+  let pids;
+
+  try { pids = fs.readdirSync(path.join(dir, 'execs')); } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+
+  for (const name of pids) {
     for (const signal of ['SIGTERM', 'SIGKILL']) {
       try { process.kill(-Number(name), signal); } catch { /* gone */ }
     }
 
-    fs.rmSync(path.join(dir, name), { force: true });
+    fs.rmSync(path.join(dir, 'execs', name), { force: true });
   }
 }
 
 /**
- * Removes the container and stops its processes, as `rm --force` does. It is gone before its processes are listed, so
- * an exec that found it and starts its process meanwhile sees it gone and ends (runProcess).
+ * Removes the container and stops its processes, as `rm --force` does, and answers false when another removal took it
+ * first. Its directory leaves `containers` in one rename before anything else, so the container is gone at once and a
+ * late writer finds no path into it: an exec that found it and starts its process meanwhile ends that process
+ * (runProcess), and a process writing into its home can neither bring it back nor keep its removal from finishing.
  */
 function removeContainer(container) {
-  fs.rmSync(path.join(containers, container.id, 'container.json'), { force: true });
-  killProcesses(container);
-  fs.rmSync(path.join(containers, container.id), { recursive: true, force: true });
+  const removed = path.join(state, 'removed', `${container.id}-${crypto.randomBytes(4).toString('hex')}`);
+  fs.mkdirSync(path.dirname(removed), { recursive: true });
+
+  try { fs.renameSync(path.join(containers, container.id), removed); } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+
+  killProcesses(removed);
+  fs.rmSync(removed, { recursive: true, force: true, maxRetries: 3 });
+
+  return true;
 }
 
 /** Splits `args` into the options of a subcommand (flags with a value) and the rest, from the first positional. */
@@ -140,14 +173,12 @@ function pulled(image) {
 function runProcess(container, argv, cwd, env, stdin) {
   const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: [stdin ? 'inherit' : 'ignore', 'inherit', 'inherit'] });
   const execs = path.join(containers, container.id, 'execs');
-  fs.mkdirSync(execs, { recursive: true });
   child.on('spawn', () => {
-    // Fails only once a removal took the container's directory, and then its record is gone too.
-    try { fs.writeFileSync(path.join(execs, String(child.pid)), ''); } catch { /* removed */ }
+    // A process cannot outlive its container: one that starts as the container is removed cannot be written down, so
+    // the removal never lists it, and it ends here. One written down before is in what the removal lists.
+    try { fs.writeFileSync(path.join(execs, String(child.pid)), ''); } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
 
-    // A process cannot outlive its container: one that starts as the container is removed ends with it, killed here
-    // since the removal may have listed its processes before this one was written down.
-    if (!fs.existsSync(path.join(containers, container.id, 'container.json'))) {
       try { process.kill(-Number(child.pid), 'SIGKILL'); } catch { /* gone */ }
     }
   });
@@ -236,7 +267,7 @@ function docker() {
       const id = crypto.randomBytes(16).toString('hex');
       const hold = path.join(state, 'create-hold');
 
-      writeContainer({
+      createContainer({
         id, name, image, running: true,
         labels: Object.fromEntries(all(found, '--label').map((label) => label.split(/=(.*)/s).slice(0, 2))),
         env: Object.fromEntries(all(found, '--env').map((pair) => pair.split(/=(.*)/s).slice(0, 2))),
@@ -289,13 +320,15 @@ function docker() {
 
       if (!container.running) fail(`Error response from daemon: container ${container.id} is not running`);
       waitAsLongAs('exec-hold');
+
+      // Removed while this exec was on its way: it answers as the daemon does for a container that is not there.
+      if (!readContainer(ref)) fail(`Error response from daemon: No such container: ${ref}`);
       const cwd = one(found, '-w') ?? '/';
       // The process runs on the host, so it starts in the host directory mounted where the container's cwd is.
       const mount = container.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
 
       if (!mount) fail(`OCI runtime exec failed: chdir to cwd ("${cwd}") set in config.json failed: no such file or directory`, 126);
       const home = path.join(containers, container.id, 'home');
-      fs.mkdirSync(home, { recursive: true });
       const env = { PATH: imagePath(container.image), ...container.env, HOME: home };
 
       for (const name of all(found, '-e')) if (process.env[name] !== undefined) env[name] = process.env[name];
@@ -309,7 +342,7 @@ function docker() {
       const container = readContainer(positional[0]);
 
       if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
-      killProcesses(container);
+      killProcesses(path.join(containers, container.id));
       waitAsLongAs('stop-hold');
       process.stdout.write(`${positional[0]}\n`);
       break;
@@ -321,8 +354,7 @@ function docker() {
 
       if (fs.existsSync(path.join(state, 'rm-fails'))) fail(`Error response from daemon: cannot remove container "${positional[0]}": could not kill: tried to kill container, but did not receive an exit event`);
 
-      if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
-      removeContainer(container);
+      if (!container || !removeContainer(container)) fail(`Error response from daemon: No such container: ${positional[0]}`);
       process.stdout.write(`${positional[0]}\n`);
       break;
     }
@@ -428,7 +460,7 @@ function sbx() {
       });
 
       const id = crypto.randomBytes(16).toString('hex');
-      writeContainer({ id, name, image: agent, running: true, labels: {}, env: proxyEnv(), mounts });
+      createContainer({ id, name, image: agent, running: true, labels: {}, env: proxyEnv(), mounts });
 
       // sbx's claude template keeps Claude's sign-in in its default home as a stand-in the proxy swaps for the login.
       if (fs.existsSync(path.join(images[agent], 'claude'))) {
@@ -448,12 +480,11 @@ function sbx() {
       if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls', 125);
 
       if (!sandbox.running) {
-        writeContainer({ ...sandbox, running: true });
+        if (!writeContainer({ ...sandbox, running: true })) sbxFail(`sandbox '${name}' not found`, 'sbx ls', 125);
         process.stderr.write(`  ✓ sandbox ${name} — started\n`);
       }
 
       const home = path.join(containers, sandbox.id, 'home');
-      fs.mkdirSync(home, { recursive: true });
       // Without -w, a process starts in the primary workspace, or in the agent's home when the sandbox has none.
       const cwd = one(found, '-w') ?? sandbox.mounts[0]?.target;
       const mount = cwd === undefined ? { source: home, target: '' } : sandbox.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
@@ -474,8 +505,9 @@ function sbx() {
         const sandbox = readContainer(name);
 
         if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
-        killProcesses(sandbox);
-        writeContainer({ ...sandbox, running: false });
+        killProcesses(path.join(containers, sandbox.id));
+
+        if (!writeContainer({ ...sandbox, running: false })) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
         waitAsLongAs('stop-hold');
         process.stdout.write(`Stopped sandbox ${name}\n`);
       }
@@ -491,8 +523,7 @@ function sbx() {
       for (const name of names) {
         const sandbox = readContainer(name);
 
-        if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
-        removeContainer(sandbox);
+        if (!sandbox || !removeContainer(sandbox)) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
         process.stdout.write(`Removed sandbox ${name}\n`);
       }
 
