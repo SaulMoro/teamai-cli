@@ -184,6 +184,25 @@ function codexHomeHolding(threadId: string, { providerHome, homeDir }: { provide
   return [...new Set(homes)].find((home) => holdsRollout(home, threadId));
 }
 
+/**
+ * The data directory of the daemon's OpenCode on this machine, its `XDG_DATA_HOME`, or undefined when none it can see
+ * holds OpenCode's store. OpenCode 2 keeps every session in one database there, `opencode/opencode.db`, which names no
+ * session in a file, so the directory is the first that holds that database: the one the provider's env sets, then the
+ * runtime's `XDG_DATA_HOME`, then `.local/share` in `$HOME`, then in the account's home, where a daemon the Paseo app
+ * started runs.
+ */
+function openCodeDataHome(providerHome: string | undefined): string | undefined {
+  const homes = [providerHome, process.env.XDG_DATA_HOME, path.join(getUserHome(), '.local', 'share')];
+
+  try {
+    homes.push(path.join(os.userInfo().homedir, '.local', 'share'));
+  } catch {
+    // No account entry for this user: its home is only $HOME.
+  }
+
+  return homes.find((home): home is string => home !== undefined && path.isAbsolute(home) && fs.existsSync(path.join(home, 'opencode', 'opencode.db')));
+}
+
 export interface Model {
   id: string;
   /** The model Paseo starts the tool on when none is named. */
@@ -510,7 +529,8 @@ export interface Daemon {
   /**
    * The tool home a finished session of `tool` lives in, when the runtime can tell: Claude's from Paseo's diagnostic at
    * init, Codex's found by the session's rollout on a daemon on this machine, under `homeDir` of a home there (`.codex`,
-   * or a team instance's own).
+   * or a team instance's own), and OpenCode's data directory on a daemon on this machine, its `XDG_DATA_HOME`. The home a
+   * Paseo provider's env sets comes first.
    */
   sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; providerHome: string | undefined; homeDir: string }): string | undefined;
   close(): Promise<void>;
@@ -813,9 +833,8 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           return claudeHome ?? providerHome;
         case 'codex':
           return isOnThisMachine(url) ? codexHomeHolding(sessionId, { providerHome, homeDir }) : undefined;
-        // OpenCode keeps its sessions in a database under its data directory, which no file names the session in.
         case 'opencode':
-          return undefined;
+          return isOnThisMachine(url) ? openCodeDataHome(providerHome) : undefined;
         default: {
           const unhandled: never = tool;
 

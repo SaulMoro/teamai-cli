@@ -59,6 +59,11 @@ const BehaviourSchema = z.object({
    * `sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<session id>.jsonl` (recorded on codex-cli 0.167.0). Absent: none written.
    */
   codex_home: z.string().optional(),
+  /**
+   * The data directory of the daemon's OpenCode, its `XDG_DATA_HOME`: an OpenCode agent keeps its session in the
+   * database OpenCode 2 writes there, `opencode/opencode.db`. Absent: none written.
+   */
+  opencode_data_home: z.string().optional(),
   /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
   codex_path: z.string().optional(),
   /**
@@ -299,6 +304,11 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         const day = path.join(does.codex_home, 'sessions', String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
         fs.mkdirSync(day, { recursive: true });
         fs.writeFileSync(path.join(day, `rollout-${at.toISOString().slice(0, 19).replaceAll(':', '-')}-${agent.sessionId}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id: agent.sessionId, cwd: agent.cwd } })}\n`);
+      }
+
+      if (baseOf(agent.provider) === 'opencode' && does.opencode_data_home !== undefined && agent.sessionId) {
+        fs.mkdirSync(path.join(does.opencode_data_home, 'opencode'), { recursive: true });
+        fs.appendFileSync(path.join(does.opencode_data_home, 'opencode', 'opencode.db'), `${agent.sessionId}\n`);
       }
     }
 
