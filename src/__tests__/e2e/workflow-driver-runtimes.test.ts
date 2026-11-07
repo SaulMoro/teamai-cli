@@ -2677,6 +2677,39 @@ span('end');
       }
     });
 
+    it('keeps the place and the login, unreleased, when the restarted driver cannot reattach to the exec a killed one left running, though its runtime still closes', async () => {
+      // Both written before any run, so no read-only step sees the repository change under it.
+      loginDefinition('codexreattach', state);
+      loginDefinition('codexreattachfails', state, { answer: { reattach: 'failed' } });
+      const { run, pid, watched } = await holdingRun('codexreattach');
+      watched.kill();
+      await watched.ended;
+
+      try {
+        const resumed = await runCLI(['workflow', 'resume', run, '--driver', 'codexreattachfails'], repo, env());
+
+        expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+        const [review] = readRunState(run).steps;
+        const attempt = attemptOf(review);
+        expect(review).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('answer.reattach is set') } });
+        // What the killed driver left may still run, so neither the place nor the login it holds is let go.
+        expect(pidAlive(pid)).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        expect(runtimeRecord(run, attempt)).not.toMatchObject({ phase: 'closed' });
+        expect(resumed.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}`);
+
+        // Once the runtime reattaches again, a cancel stops it and writes the refreshed login back before releasing it.
+        loginDefinition('codexreattachfails', state);
+        const stopped = await runCLI(['workflow', 'cancel', run], repo, env());
+        expect(stopped.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+        expect(pidAlive(pid)).toBe(false);
+        expect(dedicatedTokens().refresh_token).toBe('r2');
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
     it('fails the step with the runtime\'s advice, keeping the place and the login, when the restarted driver cannot stop the exec a killed one left running', async () => {
       const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
       // Both written before any run, so no read-only step sees the repository change under it: the restart reaches the
