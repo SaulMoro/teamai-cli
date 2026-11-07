@@ -18,6 +18,7 @@
 //                               decisionRefused: T3 refuses every sign-in decision; decisionNoCode: a decision redirects with no code
 //                               decisionMs: a sign-in decision answers this long after it was posted
 //                               addedInstanceConstraints: the constraints T3 reports for a provider instance the settings add
+//                               providersFailOnceAdded: the provider list fails once, the first time the settings hold this instance
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -299,7 +300,18 @@ const TOOLS = {
 
     return ok(config().environment);
   },
-  orchestrator_capabilities: () => ok({ providers: providers() }),
+  orchestrator_capabilities: () => {
+    const failOnce = config().providersFailOnceAdded;
+    const failed = path.join(STATE, 'providers-failed');
+
+    if (failOnce && settings().providerInstances?.[failOnce] && !fs.existsSync(failed)) {
+      fs.writeFileSync(failed, '');
+
+      return fail('T3 Code is restarting its providers.');
+    }
+
+    return ok({ providers: providers() });
+  },
   t3_project_list: async () => {
     await sleep(config().projectsMs ?? 0);
 

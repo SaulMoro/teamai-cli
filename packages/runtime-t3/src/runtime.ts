@@ -803,7 +803,11 @@ export function serve(options: ServeOptions): Promise<void> {
     let listed: Provider | undefined;
 
     for (;;) {
-      listed = (await s.t3.providers()).find((provider) => provider.providerInstanceId === added.id);
+      try {
+        listed = (await s.t3.providers()).find((provider) => provider.providerInstanceId === added.id);
+      } catch (error) {
+        return { ok: false, kind: 'not-ready', id: added.id, why: `T3 Code did not say which provider instances it runs (${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')})` };
+      }
 
       if ((listed && (listed.constraints ?? []).length === 0) || Date.now() > deadline) break;
       await sleep(250);
@@ -824,7 +828,12 @@ export function serve(options: ServeOptions): Promise<void> {
     const instance = s.pending.get(name);
 
     if (!instance) return adding.get(name);
-    const going = adding.get(name) ?? addInstance(s, name, instance, about);
+
+    // A failure nobody expected still answers the open, and leaves nothing for the process to die of.
+    const going = adding.get(name) ?? addInstance(s, name, instance, about).catch((error) => ({
+      ok: false, kind: 'not-added', why: error instanceof Error ? error.message : String(error), needsApproval: false,
+    } satisfies NotAdded));
+
     adding.set(name, going);
     // A later open tries again, once the person fixed what failed.
     void going.then((done) => { if (!done.ok && adding.get(name) === going) adding.delete(name); });
