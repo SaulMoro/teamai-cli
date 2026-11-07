@@ -340,7 +340,7 @@ export function journal(root: string) {
     holdOpen: (directory: string): Promise<() => void> => hold(path.join(root, 'opening'), resolvedDir(directory)),
     /**
      * Holds the custom providers of the daemon at `url` for one runtime at a time on this journal, as `holdOpen` holds a
-     * directory: two inits that would add the same provider add it once.
+     * directory: two opens that would add the same provider add it once.
      */
     holdProviders: (url: string): Promise<() => void> => hold(path.join(root, 'providers'), url),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),

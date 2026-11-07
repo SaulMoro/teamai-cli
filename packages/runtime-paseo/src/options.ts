@@ -12,7 +12,7 @@ const OptionsSchema = z.object({
   mode: z.record(z.string().refine(isPaseoTool, 'mode maps claude, codex or opencode to a Paseo mode'), z.string().min(1)).optional(),
   /**
    * The Paseo provider id a tool or a team instance runs on, over the one the runtime finds: for an instance, the custom
-   * provider whose command is the instance's.
+   * provider that runs its command, or for one with only a home, its tool in that home.
    */
   providers: z.record(z.string().min(1), z.string().min(1)).optional(),
 }).strict();
