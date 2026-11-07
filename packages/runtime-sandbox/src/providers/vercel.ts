@@ -186,6 +186,26 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     return fs.existsSync(file) ? z.object({ view: PlaceViewSchema }).parse(JSON.parse(fs.readFileSync(file, 'utf8'))).view : undefined;
   };
 
+  /** Deletes `sandbox` and its place on this machine: undefined once gone, else why it stays. */
+  const discard = async (sandbox: Sandbox): Promise<string | undefined> => {
+    try {
+      await sandbox.delete();
+    } catch (error) {
+      if (!NotFoundSchema.safeParse(error).success) return `Vercel could not delete sandbox ${sandbox.name}: ${(error instanceof Error ? error.message : String(error))}`;
+    }
+
+    fs.rmSync(dirOf(sandbox.name), { recursive: true, force: true });
+
+    return undefined;
+  };
+
+  /** What became of a sandbox `create` could not prepare, for its failure message. */
+  const discarded = async (sandbox: Sandbox): Promise<string> => {
+    const why = await discard(sandbox);
+
+    return why === undefined ? 'The sandbox was deleted.' : `${why}; ${removeBy(sandbox.name)}.`;
+  };
+
   /** The commands an exec of `id` started that may still run, by their ids. */
   const runningCommands = (id: string): string[] => (fs.existsSync(commandsOf(id)) ? fs.readdirSync(commandsOf(id)) : []);
 
@@ -223,6 +243,14 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     async find(key) {
       const found = await sandboxOf(nameOf(key));
 
+      // A sandbox whose place was never fully copied in (its runtime stopped, or a copy failed) is not this attempt's
+      // place: collect would delete from the host every file it lacks. It goes, and the open creates a new one.
+      if (found.ok && found.sandbox !== undefined && viewOf(nameOf(key)) === undefined) {
+        const why = await discard(found.sandbox);
+
+        return why === undefined ? { ok: true, id: undefined } : failed(`Vercel sandbox ${nameOf(key)} was left half prepared, and ${why}. ${removeBy(nameOf(key))}.`);
+      }
+
       if (found.ok) return { ok: true, id: found.sandbox?.name };
 
       return failed(`Vercel could not look up sandbox ${nameOf(key)}: ${found.message}. It stays this attempt's until Vercel answers; to remove it now, ${removeBy(nameOf(key))}.`);
@@ -244,13 +272,12 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
         // Another open of the same attempt created it first: that sandbox is this attempt's.
         const raced = await sandboxOf(id);
 
-        if (!raced.ok || raced.sandbox === undefined) return failed(`Vercel could not create a sandbox for attempt ${key.attempt}: ${(error instanceof Error ? error.message : String(error))}`);
+        if (!raced.ok || raced.sandbox === undefined || viewOf(id) === undefined) return failed(`Vercel could not create a sandbox for attempt ${key.attempt}: ${(error instanceof Error ? error.message : String(error))}`);
 
         return { ok: true, id };
       }
 
       fs.mkdirSync(commandsOf(id), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view }), { mode: 0o600 });
       const writable = [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)];
 
       try {
@@ -263,10 +290,13 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
           ?? await copyIn(sandbox, view.readonly, true)
           ?? (view.readonly.length > 0 ? await must(sandbox, 'Making the git paths read-only', 'chmod', ['-R', 'a-w', ...view.readonly], true) : undefined);
 
-        if (why !== undefined) return failed(`${why}. Remove it: ${removeBy(id)}.`);
+        if (why !== undefined) return failed(`${why}. ${await discarded(sandbox)}`);
       } catch (error) {
-        return failed(`Vercel could not prepare sandbox ${id}: ${(error instanceof Error ? error.message : String(error))}. Remove it: ${removeBy(id)}.`);
+        return failed(`Vercel could not prepare sandbox ${id}: ${(error instanceof Error ? error.message : String(error))}. ${await discarded(sandbox)}`);
       }
+
+      // Written last: a place with a view is one whose copy-in ended.
+      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view }), { mode: 0o600 });
 
       return { ok: true, id };
     },
@@ -332,12 +362,9 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
       if (!found.ok) return failed(`Vercel could not reach sandbox ${id} to delete it: ${found.message}. ${removeBy(id)}.`);
 
-      try {
-        await found.sandbox?.delete();
-      } catch (error) {
-        if (!NotFoundSchema.safeParse(error).success) return failed(`Vercel could not delete sandbox ${id}: ${(error instanceof Error ? error.message : String(error))}. ${removeBy(id)}.`);
-      }
+      const why = found.sandbox === undefined ? undefined : await discard(found.sandbox);
 
+      if (why !== undefined) return failed(`${why}. ${removeBy(id)}.`);
       fs.rmSync(dirOf(id), { recursive: true, force: true });
 
       return { ok: true };

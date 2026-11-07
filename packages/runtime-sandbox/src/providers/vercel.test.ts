@@ -184,6 +184,25 @@ describe('vercel: an attempt', () => {
     expect(fs.readFileSync(path.join(at.git, 'HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
   });
 
+  it('never reuses a sandbox its place was not fully copied into: the next open of the attempt starts a new one, and collect deletes nothing', async () => {
+    const fails = path.join(dir, 'tar.fails');
+    fs.writeFileSync(path.join(imageDir, 'tar'), `#!/bin/sh\nif [ -f '${fails}' ]; then echo 'tar: connection reset' >&2; exit 1; fi\nexec /usr/bin/tar "$@"\n`, { mode: 0o755 });
+    fs.writeFileSync(fails, '');
+    const first = start();
+    await init(first);
+    const at = preparedPlace();
+
+    expect((await openPlace(first, at)).ready).toMatchObject({ event: 'failed' });
+    fs.rmSync(fails);
+    const second = start();
+    await init(second);
+
+    expect((await openPlace(second, at)).ready).toMatchObject({ event: 'ready' });
+    expect(await collect(second)).toMatchObject({ event: 'collected' });
+    expect(fs.readFileSync(path.join(at.worktree, 'README.md'), 'utf8')).toBe('add(a, b) returns a - b.\n');
+    expect(fs.readFileSync(path.join(at.worktree, 'obsolete.txt'), 'utf8')).toBe('old\n');
+  });
+
   it('brings a symlink the step planted back as a link, and writes nothing through it or outside the place', async () => {
     fs.writeFileSync(path.join(imageDir, 'plant'), `#!${process.execPath}\nconst fs = require('node:fs'); fs.mkdirSync('../outside'); fs.symlinkSync('../outside', 'escape'); fs.writeFileSync('escape/through.txt', 'x');\n`, { mode: 0o755 });
     const connection = start();
