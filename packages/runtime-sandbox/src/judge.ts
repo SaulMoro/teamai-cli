@@ -237,14 +237,22 @@ export interface Judge {
   credentials: Record<string, string>;
 }
 
-/** The judge of `tool` with these credentials, or why it is refused before anything starts. */
-export function judgeOf(tool: string, credentials: Record<string, string>): { ok: true; judge: Judge } | { ok: false; failure: RuntimeFailure } {
+/** The first of `names` the member's environment (`shell`) sets, which a hint suggests first, else the first of them. */
+function exampleOf(names: readonly string[], shell: NodeJS.ProcessEnv): string {
+  return names.find((name) => shell[name]) ?? names[0];
+}
+
+/**
+ * The judge of `tool` with these credentials, or why it is refused before anything starts, suggesting the sign-in the
+ * member's environment (`shell`) sets.
+ */
+export function judgeOf(tool: string, credentials: Record<string, string>, shell: NodeJS.ProcessEnv): { ok: true; judge: Judge } | { ok: false; failure: RuntimeFailure } {
   const launch = judgeTool(tool);
 
   if (launch === undefined) return { ok: false, failure: { code: 'tool_unavailable', message: `The sandbox runtime judges on ${Object.keys(JUDGE_TOOLS).join(' or ')}, not ${tool}.` } };
 
   if (!launch.credentials.some((name) => credentials[name] !== undefined)) {
-    return { ok: false, failure: { code: 'credential_missing', message: `A ${tool} judge in the sandbox signs in with ${launch.credentials.join(' or ')}, and the definition gives it none. Add one to the sandbox entry's credentials, for example ${launch.credentials[0]}: env:${launch.credentials[0]}. A login stays on this machine and never reaches a judge container.` } };
+    return { ok: false, failure: { code: 'credential_missing', message: `A ${tool} judge in the sandbox signs in with ${launch.credentials.join(' or ')}, and the definition gives it none. Add one to the sandbox entry's credentials, for example ${exampleOf(launch.credentials, shell)}: env:${exampleOf(launch.credentials, shell)}. A login stays on this machine and never reaches a judge container.` } };
   }
 
   const own = Object.fromEntries(Object.entries(credentials).filter(([name]) => [...launch.credentials, launch.baseUrlEnv, ...launch.settings].includes(name)));
@@ -260,11 +268,18 @@ export function judgeOf(tool: string, credentials: Record<string, string>): { ok
   return { ok: true, judge: { tool: launch, hosts: [`${url.hostname}:${url.port || (url.protocol === 'http:' ? '80' : '443')}`], credentials: launch.signIn(own) } };
 }
 
-/** Why a judge that brings no credential at all is refused when its place opens. */
-export const NO_JUDGE_CREDENTIAL: RuntimeFailure = {
-  code: 'credential_missing',
-  message: 'A judge in the sandbox signs in only with env credentials, and the definition gives the sandbox none: a codex: login stays on this machine and never reaches a judge container. Add an API key to the sandbox entry\'s credentials, for example ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY for Claude or OPENAI_API_KEY: env:OPENAI_API_KEY for Codex, and start again.',
-};
+/**
+ * Why a judge that brings no credential at all is refused when its place opens, suggesting the Claude sign-in the
+ * member's environment (`shell`) sets.
+ */
+export function noJudgeCredential(shell: NodeJS.ProcessEnv): RuntimeFailure {
+  const claude = exampleOf(SIGN_IN.claude.env, shell);
+
+  return {
+    code: 'credential_missing',
+    message: `A judge in the sandbox signs in only with env credentials, and the definition gives the sandbox none: a codex: login stays on this machine and never reaches a judge container. Add one to the sandbox entry's credentials, for example ${claude}: env:${claude} for Claude or OPENAI_API_KEY: env:OPENAI_API_KEY for Codex, and start again.`,
+  };
+}
 
 /**
  * The network filter, run with `node -e` in a container of the image on the engine's default network and the judge's
