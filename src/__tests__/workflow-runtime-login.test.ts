@@ -309,3 +309,50 @@ describe('the first login of a tool teamai keeps one for', () => {
     expect(fs.readFileSync(logins, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 });
+
+describe('the session store of an OpenCode prompt on a runtime that launches agents', () => {
+  const config = (): LocalConfig => ({ repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') });
+
+  /** A runtime whose prompt finishes an OpenCode session with `home`, or none. */
+  const finishing = (home: string | undefined): StepRuntime => ({
+    name: 'agents',
+    init: async () => ({ ok: true, can: {}, launchesAgents: true }),
+    open: async (_request, onAccepted) => {
+      await onAccepted('h1');
+
+      return { kind: 'ready', handle: 'h1' };
+    },
+    exec: () => new Promise<ExecEnd>(() => {}),
+    prompt: async (_request, events) => {
+      events.onAccepted?.({});
+
+      return { kind: 'finished', session: { tool: 'opencode', id: 'ses_1', ...(home === undefined ? {} : { home }) }, result: { output: { ok: true } } };
+    },
+    cancel: async () => {},
+    collect: async () => ({ ok: true }),
+    reattach: async () => ({ kind: 'gone' }),
+    close: async () => ({ ok: true }),
+    dispose: async () => {},
+  });
+
+  const promptOn = async (runtime: StepRuntime): Promise<void> => {
+    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    expect(await run.open(undefined, { tool: 'opencode' })).toMatchObject({ ok: true });
+    expect(await run.prompt({
+      lease: { step: 'review', tool: 'opencode', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
+    }, {})).toMatchObject({ kind: 'finished' });
+  };
+
+  it('reads an OpenCode session in the data home its runtime reported, where OpenCode keeps it under opencode/', async () => {
+    const reported = path.join(root, 'daemon-home', '.local', 'share');
+    await promptOn(finishing(reported));
+
+    expect(await attemptSessionStore(config(), RUN, FIRST)).toBe(path.join(reported, 'opencode'));
+  });
+
+  it('reads an OpenCode session whose runtime named no home in the data home under $HOME, not in its config home', async () => {
+    await promptOn(finishing(undefined));
+
+    expect(await attemptSessionStore(config(), RUN, FIRST)).toBe(path.join(root, '.local', 'share', 'opencode'));
+  });
+});
