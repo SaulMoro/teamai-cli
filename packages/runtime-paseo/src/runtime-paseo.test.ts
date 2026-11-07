@@ -1619,9 +1619,9 @@ describe('teamai-runtime-paseo', () => {
 
   // Each case waits out the runtime's real 20 s limit on a question to Paseo, then opens again.
   it.each([
-    ['whether a workspace is open on the worktree', { list_ms: 60_000 }],
-    ['the open of the worktree as a workspace', { open_ms: 60_000 }],
-  ] satisfies Array<[string, Behaviour]>)('fails an open whose question to Paseo, %s, gets no answer in 20 s, and lets the next open of the directory go on', async (_question, slow) => {
+    ['whether a workspace is open on the worktree', { list_ms: 60_000 }, ''],
+    ['the open of the worktree as a workspace', { open_ms: 60_000 }, '; if Paseo opens it later, archive that workspace in the Paseo app'],
+  ] satisfies Array<[string, Behaviour, string]>)('fails an open whose question to Paseo, %s, gets no answer in 20 s, and lets the next open of the directory go on', async (_question, slow, later) => {
     behave(slow);
     const runtime = start();
     await ready(runtime);
@@ -1630,7 +1630,7 @@ describe('teamai-runtime-paseo', () => {
 
     expect(await runtime.next((line) => isOp('op-0000000a', 'ready')(line) || isOp('op-0000000a', 'failed')(line))).toEqual({
       op: 'op-0000000a', event: 'failed',
-      failure: { code: 'workspace_failed', message: 'Paseo could not open the worktree as a workspace: no answer in 20 s; check that its daemon answers with `paseo ls`, then run the step again' },
+      failure: { code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: no answer in 20 s; check that its daemon answers with \`paseo ls\`, then run the step again${later}` },
     });
     expect(Date.now() - asked).toBeLessThan(30_000);
 
@@ -2205,7 +2205,7 @@ describe('teamai-runtime-paseo', () => {
   it.each([
     ['an option it does not take', { url: 'ws://127.0.0.1:1/ws', imgae: 'x' }, {}, { code: 'bad_option', key: 'imgae' }],
     ['a mode for a tool it does not run', { url: 'ws://127.0.0.1:1/ws', mode: { cursor: 'agent' } }, {}, { code: 'bad_option', key: 'mode' }],
-    ['a provider for neither a tool it runs nor a team instance of one', { url: 'ws://127.0.0.1:1/ws', providers: { cursor: 'x' } }, {}, { code: 'bad_option', key: 'providers' }],
+    ['a provider for neither a tool it runs nor a team instance of one', { url: 'ws://127.0.0.1:1/ws', providers: { cursor: 'x' } }, {}, { code: 'bad_option', key: 'providers', message: 'teamai-runtime-paseo runs claude, codex, opencode and the team\'s instances of them, so its providers option cannot name cursor; remove cursor from the runtime\'s providers option, or add the team instance it names' }],
     ['no daemon at the url', { url: 'ws://127.0.0.1:1/ws' }, {}, { code: 'daemon_unreachable' }],
     ['a daemon older than the client', undefined, { version: '0.13.2' }, { code: 'daemon_version', message: expect.stringContaining('runs version 0.13.2') }],
     ['a daemon without agent receipts', undefined, { missing: ['agentRequestReceipts'] }, { code: 'daemon_version', message: expect.stringContaining('lacks agentRequestReceipts') }],

@@ -96,12 +96,15 @@ const CONNECT_TIMEOUT_MS = 10_000;
  */
 const OPEN_QUESTION_TIMEOUT_MS = 20_000;
 
-/** What `asking` answers, or a failure once it gave no answer in `OPEN_QUESTION_TIMEOUT_MS`. */
-async function answeredInTime<T>(asking: Promise<T>): Promise<T> {
+/**
+ * What `asking` answers, or a failure once it gave no answer in `OPEN_QUESTION_TIMEOUT_MS`. Paseo still answers a
+ * question teamai gave up on, so `later` says what a person does about what that answer leaves.
+ */
+async function answeredInTime<T>(asking: Promise<T>, later = ''): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
 
   const timedOut = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer in ${OPEN_QUESTION_TIMEOUT_MS / 1000} s; check that its daemon answers with \`paseo ls\`, then run the step again`)), OPEN_QUESTION_TIMEOUT_MS);
+    timer = setTimeout(() => reject(new Error(`no answer in ${OPEN_QUESTION_TIMEOUT_MS / 1000} s; check that its daemon answers with \`paseo ls\`, then run the step again${later}`)), OPEN_QUESTION_TIMEOUT_MS);
   });
 
   try {
@@ -689,7 +692,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }
     },
     async workspace(cwd) {
-      const opened = await answeredInTime(api.workspaces.open({ cwd }));
+      const opened = await answeredInTime(api.workspaces.open({ cwd }), '; if Paseo opens it later, archive that workspace in the Paseo app');
       const current = opened.current();
 
       return { id: opened.id, name: current?.projectDisplayName ?? opened.name ?? opened.id, directory: opened.directory ?? cwd };

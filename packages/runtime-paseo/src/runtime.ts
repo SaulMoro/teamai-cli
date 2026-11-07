@@ -558,7 +558,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     const foreign = Object.keys(options.data.providers ?? {}).find((name) => !runsAs.has(name));
 
     if (request.mode !== 'recover' && foreign !== undefined) {
-      write({ type: 'init', ok: false, error: { code: 'bad_option', key: 'providers', message: `teamai-runtime-paseo runs claude, codex, opencode and the team's instances of them, so its providers option cannot name ${foreign}` } });
+      write({ type: 'init', ok: false, error: { code: 'bad_option', key: 'providers', message: `teamai-runtime-paseo runs claude, codex, opencode and the team's instances of them, so its providers option cannot name ${foreign}; remove ${foreign} from the runtime's providers option, or add the team instance it names` } });
 
       return;
     }
