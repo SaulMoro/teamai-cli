@@ -480,7 +480,7 @@ export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'a
  * `usage_limited`.
  */
 export function isUsageLimitText(text: string): boolean {
-  return /^(?:you(?:'|’)ve hit your (?:(?:usage|session|weekly|daily|monthly|5-hour) )?limit\b|claude ai usage limit reached\b|(?:5-hour|session|weekly|daily|monthly) limit reached\b|rate limit reached\b|api error:[^\n]*(?:\b429\b|rate_limit_error)|exceeded retry limit, last status: 429\b)/i.test(text.trim());
+  return /^(?:you(?:'|’)ve hit your (?:(?:usage|session|weekly|daily|monthly|5-hour) )?limit\b|claude ai usage limit reached\b|(?:5-hour|session|weekly|daily|monthly) limit reached\b|rate limit reached for\b|api error:[^\n]*(?:\b429\b|rate_limit_error)|exceeded retry limit, last status: 429\b)/i.test(text.trim());
 }
 
 /** What a runtime kept of a confined prompt: the level it enforced, and what the agent could do in the directory. */

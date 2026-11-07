@@ -19,6 +19,7 @@ describe('a tool\'s own text for a spent usage limit', () => {
     'Context limit reached: the conversation is too long.',
     'API Error: 401 Invalid bearer token',
     'The reply says you\'ve hit your limit, which is not the tool stopping.',
+    'Rate limit reached on the GitHub API, so I used the cached release list.',
   ])('is not a usage limit: %s', (text) => {
     expect(isUsageLimitText(text)).toBe(false);
   });
