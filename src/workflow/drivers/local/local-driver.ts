@@ -48,7 +48,7 @@ import { memberTools, type MemberTool } from '../../../tool-launch/member-tools.
 import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
 import { acceptToolCommand, instanceHomeDir } from '../../../tool-instances.js';
 import { toolHome as memberToolHome } from '../../../tool-home.js';
-import { instanceNames, isToolId, toolOf } from '../../../tool-registry.js';
+import { baseToolOf, instanceNames, isToolId } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
@@ -1136,7 +1136,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
       ...(entry.unavailable && { unavailable: entry.unavailable }),
       can: {
-        ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(toolOf(tool)?.base ?? tool)), remote: true,
+        ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
         ...(unproven(entry.can) && { isolation: 'none' as const }),
       },
     });

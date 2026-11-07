@@ -41,6 +41,15 @@ export function instanceNames(): string[] {
 /** The tool `name` names here: an instance, with the shipped tool it extends, or a shipped tool; undefined for neither. */
 export const toolOf: (name: string) => ResolvedTool<ToolId, ResolvedToolInstance> | undefined = REGISTRY.toolOf;
 
+/**
+ * The shipped tool `name` runs as: the tool an instance extends, else `name` itself. A step's `tool` on the runtime
+ * protocol and in its session may be an instance's name, while its tool home, sign-ins and logins are the shipped
+ * tool's, so code that joins the two compares them through this.
+ */
+export function baseToolOf(name: string): string {
+  return toolOf(name)?.base ?? name;
+}
+
 /** The instance whose own session platform `platform` is, and the shipped platform its sessions keep the format of. */
 export const instancePlatform: (platform: string) => { instance: ResolvedToolInstance; platform: SessionPlatform } | undefined = REGISTRY.instancePlatform;
 

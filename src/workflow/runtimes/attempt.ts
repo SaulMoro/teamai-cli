@@ -5,7 +5,7 @@ import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { defaultToolHome, homeEnvOf, realHost } from '../../tool-home.js';
-import { isToolId, toolOf } from '../../tool-registry.js';
+import { baseToolOf, isToolId } from '../../tool-registry.js';
 import { isRecord } from '../expression.js';
 import { log } from '../../utils/logger.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
@@ -112,7 +112,7 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
   const record = await readAttemptRuntime(config, runId.data, attemptId.data);
   const home = record?.toolHome ?? record?.sessionHome;
   // An instance, as a runtime that launches agents its own way records it, is read as the tool it extends.
-  const platform = home && isExecRuntimeTool(toolOf(home.tool)?.base ?? home.tool) ? AgentSession.platformForTool(home.tool) : undefined;
+  const platform = home && isExecRuntimeTool(baseToolOf(home.tool)) ? AgentSession.platformForTool(home.tool) : undefined;
   const store = home && platform ? storeDirOf(platform, { kind: 'tool-home', dir: home.dir }) : '';
 
   return store === '' ? undefined : store;
@@ -135,7 +135,8 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
     const record = attempt.success ? await readAttemptRuntime(config, runId.data, attempt.data) : undefined;
     const home = record?.toolHome ?? record?.sessionHome;
 
-    if (!attempt.success || home?.tool !== session.tool) continue;
+    // A runtime that execs the tool records the home under the tool an instance extends; its session names the instance.
+    if (!attempt.success || home === undefined || baseToolOf(home.tool) !== baseToolOf(session.tool)) continue;
     const storeDir = storeDirOf(platform, { kind: 'tool-home', dir: home.dir });
 
     if (storeDir === '') continue;

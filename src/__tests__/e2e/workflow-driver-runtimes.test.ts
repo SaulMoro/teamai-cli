@@ -572,6 +572,30 @@ steps:
     expect(opens.map((op) => op.tool)).toEqual(['acme-claude']);
   });
 
+  it('resumes the session of an instance on a runtime that execs its tool, from the earlier attempt\'s tool home', async () => {
+    acmeInstance();
+    writeFlow('acmefollow', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean
+  - id: followup
+    needs: [review]
+    session: { from: review }
+    prompt: Follow up on the review.
+    output:
+      ok: boolean`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    writeDefinition('toyacmefollow', [{ use: 'toy', options: { state, can: { tools: ['claude', 'acme-claude'] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'acmefollow', '--driver', 'toyacmefollow', '--tools', 'default=acme-claude'], repo, env());
+
+    const runId = runOf(ran);
+    const [review, followup] = readRunState(runId).steps;
+    expect(followup, ran.stderr).toMatchObject({ status: 'succeeded', session: `sess-${attemptOf(review)}` });
+    const launched = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string; resumed?: string; sessionFoundBefore: boolean });
+    expect(launched[1]).toMatchObject({ home: path.join(attemptDir(runId, attemptOf(followup)), 'tool-home', 'acme-claude'), resumed: `sess-${attemptOf(review)}`, sessionFoundBefore: true });
+  });
+
   it('names the instance a step runs on as the tool of its open and its prompt on a runtime that launches agents its own way', async () => {
     acmeInstance();
     writeDefinition('toyagentinstance', [{ use: 'toy', options: { state, can: { tools: ['claude', 'acme-claude'] }, agent: { output: { ok: true } } } }]);
