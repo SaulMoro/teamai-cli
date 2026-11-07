@@ -363,6 +363,25 @@ describe('teamai-runtime-paseo', () => {
     expect('session' in unseen && unseen.session).not.toHaveProperty('home');
   });
 
+  it('names the data directory of the daemon\'s OpenCode as an OpenCode step\'s session home, so teamai reads it there though it runs in another HOME, and none on a daemon on another host', async () => {
+    const elsewhere = path.join(dir, 'daemon-user', 'data');
+    behave({ output: { verdict: 'approve' }, opencode_data_home: elsewhere });
+    const runtime = start({ XDG_DATA_HOME: elsewhere });
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'opencode', model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode', home: elsewhere } });
+
+    // 0.0.0.0 reaches the fake on this machine, but names no loopback address, as a daemon on another host is named.
+    const remote = start({ XDG_DATA_HOME: elsewhere });
+    await ready(remote, { options: { url: daemon.url.replace('127.0.0.1', '0.0.0.0') } });
+    remote.send(promptRequest(await opened(remote, { attempt: 'a0123abce' }), 'op-0000000c', { tool: 'opencode', model: undefined }));
+    const unseen = await remote.next(isEnd('op-0000000c'));
+
+    expect(unseen).toMatchObject({ event: 'finished', session: { tool: 'opencode' } });
+    expect('session' in unseen && unseen.session).not.toHaveProperty('home');
+  });
+
   it('starts a Codex agent in the mode Paseo sets as its default, auto-review, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { verdict: 'approve' }, codex_login: 'signed_in' });
     const runtime = start();
