@@ -1565,6 +1565,7 @@ name: sandbox-only
 tool: claude
 runtimes:
   - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行
+    options: { provider: sbx }
 ```
 
 打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `local` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`，或 `host`。

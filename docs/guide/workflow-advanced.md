@@ -1571,6 +1571,7 @@ name: sandbox-only
 tool: claude
 runtimes:
   - use: sandbox          # prompts and your command steps; teamai's own steps run on the host entry
+    options: { provider: sbx }
 ```
 
 A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else, when the definition lists `local`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine. Each step's state in the run records the runtime it ran on as `runtime`: the `use` of its entry, or `host`.
