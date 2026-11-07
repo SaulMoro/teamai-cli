@@ -48,7 +48,7 @@ import { cloneBranchOf } from '../workspace.js';
 import { cloneRoleProblem, copyKnowledgePaths, launchedTools, roleCopyRefusal, roleNotDeliveredFailure, type CloneRoleGap } from './role-copy.js';
 import { commitWithout } from './team-without.js';
 import { teamClonesOf } from './team.js';
-import { AGENT_PATHS, boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type Git, type UntrustedGit } from '../worktree.js';
+import { AGENT_PATHS, boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type UntrustedGit } from '../worktree.js';
 
 /**
  * The commit a clone's install pulled for a treatment without some paths, which teamai made of `revision` without them.

@@ -248,6 +248,7 @@ async function plantedOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string
 
   const args = [...hooks].map((name) => `--config-env=hook.${name}.enabled=${HOOK_OFF}`);
   const values: Record<string, string> = {};
+
   const give = (key: string, value: string): void => {
     const name = `${TRUSTED_VALUE}${Object.keys(values).length}`;
     values[name] = value;
@@ -262,7 +263,7 @@ async function plantedOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string
 
   for (const [key, entries] of programs) {
     if (entries.every((entry) => entry.trusted)) continue;
-    const own = entries.filter((entry) => entry.trusted).at(-1);
+    const own = entries.findLast((entry) => entry.trusted);
     give(key, own?.value ?? PROGRAM_KEYS.find((known) => known.key.test(key))?.neutral(env) ?? '');
   }
 
@@ -270,9 +271,9 @@ async function plantedOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string
 }
 
 /** The subcommands that start a remote's `upload-pack` or `receive-pack`, with the option that names it. */
-const PACK_OPTIONS: Readonly<Record<string, string>> = {
-  push: '--receive-pack=git-receive-pack', fetch: '--upload-pack=git-upload-pack', pull: '--upload-pack=git-upload-pack', 'ls-remote': '--upload-pack=git-upload-pack',
-};
+const PACK_OPTIONS = new Map([
+  ['push', '--receive-pack=git-receive-pack'], ['fetch', '--upload-pack=git-upload-pack'], ['pull', '--upload-pack=git-upload-pack'], ['ls-remote', '--upload-pack=git-upload-pack'],
+]);
 
 /** `args` with git's own pack program named after its subcommand, when the copy's config names another. */
 function withPackPrograms(args: string[], packPrograms: boolean): string[] {
@@ -281,7 +282,7 @@ function withPackPrograms(args: string[], packPrograms: boolean): string[] {
 
   // Global options before the subcommand; `-c` and `-C` take the next argument.
   while (at < args.length && (args[at] ?? '').startsWith('-')) at += args[at] === '-c' || args[at] === '-C' ? 2 : 1;
-  const option = PACK_OPTIONS[args[at] ?? ''];
+  const option = PACK_OPTIONS.get(args[at] ?? '');
 
   return option === undefined ? args : [...args.slice(0, at + 1), option, ...args.slice(at + 1)];
 }

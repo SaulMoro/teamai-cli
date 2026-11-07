@@ -892,6 +892,7 @@ async function finishRole(config: LocalConfig, files: PlaceFiles, record: Placed
       const scoped = await cloneEnv(place.withhold);
 
       if (!scoped.ok) return { outcome: 'failed', message: scoped.failure.message, failure: scoped.failure };
+
       const finished = await finishTeamClone({
         config, root: place.clone, dir, step, branch: place.workspace.branch, base: place.base, start: place.start, found: place.found, env: scoped.env,
       });
