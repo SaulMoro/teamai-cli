@@ -112,24 +112,24 @@ export const UNTRUSTED_CONFIG: readonly string[] = ['-c', `core.hooksPath=${os.d
 
 /**
  * git in a checkout another process controls, such as a benchmark trial's clone after its tool ran: `UNTRUSTED_CONFIG`
- * first, then every hook its config names turned off, and `env` instead of this process's environment, for git and for
- * whatever its config still starts, such as a filter. Past `expiresAt`, each git it started is stopped, so a filter
- * that never returns holds its caller no longer than that.
+ * first, then every program its config names turned off or replaced by the member's own (`plantedOff`), and `env`
+ * instead of this process's environment, for git and for whatever the member's config starts, such as a filter. Past
+ * `expiresAt`, each git it started is stopped, so a filter that never returns holds its caller no longer than that.
  */
 export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
   return async (cwd, args, options) => {
-    const off = await commandsOff(cwd, env, expiresAt);
+    const off = await plantedOff(cwd, env, expiresAt);
 
     if ('error' in off) return off.error;
 
-    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
+    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...withPackPrograms(args, off.packPrograms)], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
   };
 }
 
 /**
  * The variables of this process that git and the member's own git setup need: where git and its config are, the
- * locale, the SSH agent and askpass a push signs in through, proxies and certificates. Nothing else, so a filter or
- * command a step planted in a copy's config, which `untrustedGit` still starts, reads no token or key of the host.
+ * locale, the SSH agent and askpass a push signs in through, proxies and certificates. Nothing else, so a program the
+ * member's own config starts in a copy, such as a filter, reads no token or key of the host.
  */
 export function hostGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([name]) => HOST_GIT_ENV.has(name) || HOST_GIT_ENV.has(name.toUpperCase()) || /^LC_[A-Z]+$/.test(name)));
@@ -159,8 +159,37 @@ const HOOK_OFF = 'TEAMAI_GIT_HOOK_ENABLED';
 /** The config scopes a step cannot write: the member's own files, and what this process sets for git. */
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 
-/** What each `--config-env` that sets a credential helper key reads: one variable per value, numbered. */
-const HELPER_VALUE = 'TEAMAI_GIT_CREDENTIAL_HELPER_';
+/** What each `--config-env` that gives a key the member's own value, or a neutral one, reads: one variable per value, numbered. */
+const TRUSTED_VALUE = 'TEAMAI_GIT_TRUSTED_VALUE_';
+
+/**
+ * The keys whose value git runs as a program, as `git config --show-scope` spells them (section and name lower case),
+ * each with what git gets in its place when only a config a step could write sets it: an empty filter is off, and an
+ * empty diff or merge driver, editor or askpass makes git fail or go on without running anything.
+ */
+const PROGRAM_KEYS: ReadonlyArray<{ key: RegExp; neutral: (env: NodeJS.ProcessEnv) => string }> = [
+  { key: /^gpg\.(?:openpgp\.)?program$/, neutral: () => 'gpg' },
+  { key: /^gpg\.x509\.program$/, neutral: () => 'gpgsm' },
+  { key: /^gpg\.ssh\.program$/, neutral: () => 'ssh-keygen' },
+  { key: /^gpg\.ssh\.defaultkeycommand$/, neutral: () => '' },
+  // GIT_SSH_COMMAND outranks the key; GIT_SSH runs only where the key is unset, so it takes the key's place.
+  { key: /^core\.sshcommand$/, neutral: (env) => (env.GIT_SSH ? `'${env.GIT_SSH.replaceAll("'", `'\\''`)}'` : 'ssh') },
+  { key: /^core\.askpass$/, neutral: () => '' },
+  { key: /^core\.editor$|^sequence\.editor$/, neutral: () => ':' },
+  { key: /^core\.pager$/, neutral: () => 'cat' },
+  { key: /^pager\..+$/, neutral: () => 'false' },
+  { key: /^filter\..+\.(?:clean|smudge|process)$/, neutral: () => '' },
+  { key: /^diff\.external$|^diff\..+\.(?:command|textconv)$/, neutral: () => '' },
+  { key: /^merge\..+\.driver$/, neutral: () => '' },
+  // `protocol.allow` lets in `ext::`, whose URL is a command, unless `protocol.ext.allow` says otherwise; never is git's default.
+  { key: /^protocol\.ext\.allow$/, neutral: () => 'never' },
+];
+
+/** A remote's `uploadpack` and `receivepack` add a value per `-c`, so only the command's own option replaces them. */
+const PACK_PROGRAM = /^remote\..+\.(uploadpack|receivepack)$/;
+
+/** The keys `plantedOff` reads, as one `git config --get-regexp` pattern. */
+const PLANTABLE = '^hook\\..*\\.|^credential\\..*helper$|^gpg\\.|^core\\.(sshcommand|askpass|editor|pager)$|^sequence\\.editor$|^pager\\.|^filter\\.|^diff\\.|^merge\\..*\\.driver$|^protocol\\.|^remote\\..*\\.(uploadpack|receivepack)$';
 
 /**
  * The options that keep what the config in `cwd` names from running, read in one `git config`:
@@ -170,20 +199,25 @@ const HELPER_VALUE = 'TEAMAI_GIT_CREDENTIAL_HELPER_';
  * - a credential helper the checkout's own config names (`credential.helper` and `credential.<url>.helper` in its local
  *   or worktree file, which a step could write), while every helper the member's system and global config name still
  *   runs, in their order: each such key is reset, then given again the member's own values. A push that needs
- *   credentials then asks the member's helpers only.
+ *   credentials then asks the member's helpers only;
+ * - each `PROGRAM_KEYS` key such a file sets, given the member's own value last, else its neutral one. `protocol.allow`
+ *   set there gives `protocol.ext.allow` the same treatment;
+ * - `packPrograms` when such a file sets a remote's `uploadpack` or `receivepack`, for `withPackPrograms`.
  */
-async function commandsOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[]; env: Record<string, string> } | { error: GitResult }> {
+async function plantedOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[]; env: Record<string, string>; packPrograms: boolean } | { error: GitResult }> {
   // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
-  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', '^hook\\..*\\.|^credential\\..*helper$'], boundedBy(undefined, expiresAt), env);
+  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', PLANTABLE], boundedBy(undefined, expiresAt), env);
 
   // git config exits 1 when no key matches.
-  if (listed.code === 1) return { args: [], env: {} };
+  if (listed.code === 1) return { args: [], env: {}, packPrograms: false };
 
   if (listed.code !== 0) return { error: listed };
   // --show-scope --null writes each entry as scope NUL key LF value NUL.
   const fields = listed.stdout.split('\0');
   const hooks = new Set<string>();
   const helpers = new Map<string, Array<{ trusted: boolean; value: string }>>();
+  const programs = new Map<string, Array<{ trusted: boolean; value: string }>>();
+  let packPrograms = false;
 
   for (let at = 0; at + 1 < fields.length; at += 2) {
     const scope = fields[at] ?? '';
@@ -191,30 +225,58 @@ async function commandsOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: strin
     const newline = entry.indexOf('\n');
     const key = newline === -1 ? entry : entry.slice(0, newline);
     const value = newline === -1 ? '' : entry.slice(newline + 1);
+    const trusted = TRUSTED_SCOPES.has(scope);
     const hook = /^hook\.(.+)\.[^.]+$/.exec(key)?.[1];
 
     if (key.startsWith('hook.')) {
       if (hook !== undefined) hooks.add(hook);
-      continue;
-    }
+    } else if (key.startsWith('credential.')) helpers.set(key, [...helpers.get(key) ?? [], { trusted, value }]);
+    else if (PACK_PROGRAM.test(key)) packPrograms ||= !trusted;
+    else {
+      const program = key === 'protocol.allow' ? 'protocol.ext.allow' : key;
 
-    helpers.set(key, [...helpers.get(key) ?? [], { trusted: TRUSTED_SCOPES.has(scope), value }]);
+      if (PROGRAM_KEYS.some((known) => known.key.test(program))) programs.set(program, [...programs.get(program) ?? [], { trusted: trusted && key === program, value }]);
+    }
   }
 
   const args = [...hooks].map((name) => `--config-env=hook.${name}.enabled=${HOOK_OFF}`);
   const values: Record<string, string> = {};
+  const give = (key: string, value: string): void => {
+    const name = `${TRUSTED_VALUE}${Object.keys(values).length}`;
+    values[name] = value;
+    args.push(`--config-env=${key}=${name}`);
+  };
 
   for (const [key, entries] of helpers) {
     if (entries.every((entry) => entry.trusted)) continue;
 
-    for (const value of ['', ...entries.filter((entry) => entry.trusted).map((entry) => entry.value)]) {
-      const name = `${HELPER_VALUE}${Object.keys(values).length}`;
-      values[name] = value;
-      args.push(`--config-env=${key}=${name}`);
-    }
+    for (const value of ['', ...entries.filter((entry) => entry.trusted).map((entry) => entry.value)]) give(key, value);
   }
 
-  return { args, env: values };
+  for (const [key, entries] of programs) {
+    if (entries.every((entry) => entry.trusted)) continue;
+    const own = entries.filter((entry) => entry.trusted).at(-1);
+    give(key, own?.value ?? PROGRAM_KEYS.find((known) => known.key.test(key))?.neutral(env) ?? '');
+  }
+
+  return { args, env: values, packPrograms };
+}
+
+/** The subcommands that start a remote's `upload-pack` or `receive-pack`, with the option that names it. */
+const PACK_OPTIONS: Readonly<Record<string, string>> = {
+  push: '--receive-pack=git-receive-pack', fetch: '--upload-pack=git-upload-pack', pull: '--upload-pack=git-upload-pack', 'ls-remote': '--upload-pack=git-upload-pack',
+};
+
+/** `args` with git's own pack program named after its subcommand, when the copy's config names another. */
+function withPackPrograms(args: string[], packPrograms: boolean): string[] {
+  if (!packPrograms) return args;
+  let at = 0;
+
+  // Global options before the subcommand; `-c` and `-C` take the next argument.
+  while (at < args.length && (args[at] ?? '').startsWith('-')) at += args[at] === '-c' || args[at] === '-C' ? 2 : 1;
+  const option = PACK_OPTIONS[args[at] ?? ''];
+
+  return option === undefined ? args : [...args.slice(0, at + 1), option, ...args.slice(at + 1)];
 }
 
 /**

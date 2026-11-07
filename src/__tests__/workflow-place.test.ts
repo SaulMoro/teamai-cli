@@ -144,7 +144,7 @@ describe('prepared places through the workflow client', () => {
     expect(await f.client.report(f.runId, { attempt: second.attempt, revision: second.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
     expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
   });
-  it('gives a clean filter a step planted in its copy none of the host\'s secrets while it commits the step\'s work', async () => {
+  it('runs no clean filter a step planted in its copy while it commits the step\'s work', async () => {
     const f = await fixture();
     vi.stubEnv('DEPLOY_TOKEN', 'host-deploy-secret');
     const lease = await next(f);
@@ -156,7 +156,7 @@ describe('prepared places through the workflow client', () => {
     fs.writeFileSync(path.join(lease.cwd, 'code.txt'), 'work\n');
     expect(await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
     expect(git(f.remote, 'show', `${lease.workspace.branch}:code.txt`)).toBe('work');
-    expect(fs.readFileSync(mark, 'utf8').split('\n').filter(Boolean)).not.toContain('set');
+    expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
   });
   it('commits every change in a place TeamAI made, even when the report lists none of them', async () => {
     const f = await fixture();

@@ -148,7 +148,7 @@ async function unresolvedConflicts(dir: string, before: Record<string, string>, 
 
 /**
  * Commits a writer's copy `dir` and pushes it, whether or not the step failed, so the commits it reports are on origin.
- * Its git runs with `untrustedGit`: a hook, fsmonitor or replacement the step planted in the copy's config never runs.
+ * Its git runs with `untrustedGit`: no hook, fsmonitor, replacement or other program the step planted in the copy's config runs.
  * A failed push fails a step that succeeded with `push_failed`. A step that already `failed` keeps its own failure and
  * gets `unpushed`, the sentence its message adds.
  */
