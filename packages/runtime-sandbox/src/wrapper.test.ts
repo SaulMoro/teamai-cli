@@ -259,6 +259,19 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(containerOf(execsIn()[0] ?? [])).toBe(attemptContainer());
   });
 
+  it('runs in a worktree teamai names through a symlink, at the path the sandbox mounts', async () => {
+    const connection = start();
+    await init(connection);
+    fs.symlinkSync(dir, path.join(dir, 'via'));
+    const at = { ...place(), worktree: path.join(dir, 'via', 'worktree') };
+    const handle = await openFor(connection, at);
+    await register(handle, null);
+    const ran = await wrapper('claude', ['-p'], { cwd: path.join(at.worktree, 'src'), stdin: 'exit 0' });
+
+    expect(ran).toMatchObject({ code: 0, stderr: '' });
+    expect(execsIn()[0]).toEqual(expect.arrayContaining(['-w', path.join(at.worktree, 'src')]));
+  });
+
   it("gives the tool the step's credentials and its home at the attempt's tool home, never the app's env, and no value in any argv or file", async () => {
     const connection = start();
     await init(connection);
