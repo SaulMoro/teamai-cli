@@ -414,6 +414,22 @@ describe('an instance through the wrapper', () => {
 });
 
 describe('after the runtime restarts', () => {
+  it('leaves the socket to the runtime that still serves it when another reattaches the place, as a stop of the run does', async () => {
+    const first = start();
+    await init(first);
+    const at = place();
+    const handle = await openFor(first, at);
+    await register(handle, null);
+    const stopping = start();
+    stopping.send({ type: 'init', protocol: 1, mode: 'recover', options: { provider: 'docker', image: IMAGE } });
+    await stopping.next((message) => message.type === 'init', 30_000);
+    stopping.send({ type: 'reattach', handle });
+    expect(await stopping.next((message) => message.handle === handle)).toMatchObject({ event: 'alive', handle });
+    const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+
+    expect(ran).toMatchObject({ code: 0, stderr: '' });
+  });
+
   it("refuses asks with credentials_pending until teamai's reattach brings the credentials back, then grants", async () => {
     const first = start();
     await init(first);

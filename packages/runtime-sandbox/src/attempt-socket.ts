@@ -93,10 +93,23 @@ export interface AttemptSocket {
   close(): Promise<void>;
 }
 
+/** Whether a live process listens on `socketPath`: a socket file a stopped runtime left accepts no connection. */
+function isServed(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.connect(socketPath);
+    probe.once('connect', () => {
+      probe.destroy();
+      resolve(true);
+    });
+    probe.once('error', () => resolve(false));
+  });
+}
+
 /**
  * Listens on `socketPath` for the inner runtime's registration and the wrapper's asks. Only the registered agent is
  * served: an ask before any registration, or from another agent (an app's helper agents in the same worktree), is
- * refused. Never keeps this process alive on its own.
+ * refused. A socket another runtime still serves (one teamai started to stop the run reattaches too) stays that
+ * runtime's. Never keeps this process alive on its own.
  */
 export async function listen(socketPath: string, answer: Answering): Promise<{ ok: true; socket: AttemptSocket } | { ok: false; failure: RuntimeFailure }> {
   if (Buffer.byteLength(socketPath) > SOCKET_PATH_MAX) {
@@ -111,10 +124,19 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
 
     if (!stat.isDirectory() || stat.uid !== process.getuid?.()) throw new Error(`${dir} is not a directory of this user's`);
     fs.chmodSync(dir, 0o700);
+  } catch (error) {
+    return { ok: false, failure: { code: 'sandbox_failed', message: `The attempt socket cannot be made in ${dir}: ${error instanceof Error ? error.message : String(error)}` } };
+  }
+
+  if (await isServed(socketPath)) {
+    return { ok: false, failure: { code: 'sandbox_failed', message: `Another sandbox runtime still serves the attempt socket ${socketPath}, so this one leaves it to that runtime` } };
+  }
+
+  try {
     // A socket a runtime of this place left when it stopped; this runtime serves the place now.
     fs.rmSync(socketPath, { force: true });
   } catch (error) {
-    return { ok: false, failure: { code: 'sandbox_failed', message: `The attempt socket cannot be made in ${dir}: ${error instanceof Error ? error.message : String(error)}` } };
+    return { ok: false, failure: { code: 'sandbox_failed', message: `The attempt socket ${socketPath} a stopped runtime left cannot be removed: ${error instanceof Error ? error.message : String(error)}` } };
   }
 
   /** The agent the inner runtime registered, once it did: a string, or null for an app that gives its tool no id. */
