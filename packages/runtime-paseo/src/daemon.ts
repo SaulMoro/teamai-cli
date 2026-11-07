@@ -92,13 +92,11 @@ function stepModeOf(tool: PaseoTool, { defaultMode, configured, modes }: { defau
 const CONNECT_TIMEOUT_MS = 10_000;
 
 /** What Paseo said of a request it failed: the daemon's own error, without the request details the client adds to it. */
-function paseoSaid(error: unknown): string {
-  const answered = z.object({ userMessage: z.string().min(1) }).safeParse(error);
-
-  if (answered.success) return answered.data.userMessage;
-
-  return error instanceof Error ? error.message : String(error);
-}
+const PaseoSaidSchema = z.union([
+  z.object({ userMessage: z.string().min(1) }).transform(({ userMessage }) => userMessage),
+  z.instanceof(Error).transform(({ message }) => message),
+  z.unknown().transform(String),
+]);
 
 /**
  * How long a question an open asks Paseo may go unanswered: an open holds its directory meanwhile, and the two it asks
@@ -792,7 +790,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
   };
 
   /** The variable that moves an instance's home, and the absolute home it sets with it when it has one of its own. */
-  const ownHome = (instance: InitInstance, tool: PaseoTool): { variable: string; home: string | undefined } => ({
+  const ownHome = (instance: InitInstance, tool: PaseoTool) => ({
     variable: instance.home?.env ?? homeVariableOf(tool),
     home: instance.home ? path.join(getUserHome(), instance.home.dir) : undefined,
   });
@@ -814,7 +812,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         parsed = teamInstances.length > 0 || Object.keys(named).length > 0 ? CustomProvidersSchema.safeParse((await api.config.get()).config.providers) : undefined;
       } catch (error) {
         // Only what needs a custom provider is left out: each tool on its own provider still runs.
-        unread = `Paseo did not answer with its providers (${paseoSaid(error)}); run \`paseo daemon config get agents.providers --json\` on the daemon's host to see why`;
+        unread = `Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); run \`paseo daemon config get agents.providers --json\` on the daemon's host to see why`;
       }
 
       const customs = keptOf(parsed?.success ? parsed.data : {}, instances.flatMap((instance) => (instance.home?.env === undefined ? [] : [instance.home.env])));
@@ -827,7 +825,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         try {
           modes = (await api.providers.listModes(provider)).modes ?? [];
         } catch (error) {
-          return { cannot: `Paseo failed to list its modes (${paseoSaid(error)}); run \`paseo provider ls\` on the daemon's host to see why` };
+          return { cannot: `Paseo failed to list its modes (${PaseoSaidSchema.parse(error)}); run \`paseo provider ls\` on the daemon's host to see why` };
         }
 
         const stepMode = stepModeOf(tool, { defaultMode: entries.find((entry) => entry.provider === provider)?.defaultModeId, configured: configured[tool], modes });
@@ -878,8 +876,13 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const providerHome = set !== undefined && path.isAbsolute(set) ? { variable, dir: set, teamaiHome } : undefined;
         const runsIn = providerHome ? { variable, dir: providerHome.dir, shown: providerHome.dir } : instance?.home && { variable, dir: teamaiHome, shown: `~/${instance.home.dir}` };
         // A request Paseo fails for one provider leaves that tool unavailable, never the runtime's other tools.
-        const signedIn = await signIn(target, { runsIn, command: instance?.command })
-          .catch((error: unknown): SignIn => ({ canRun: false, problem: `Paseo failed its diagnostic (${paseoSaid(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` }));
+        let signedIn: SignIn;
+
+        try {
+          signedIn = await signIn(target, { runsIn, command: instance?.command });
+        } catch (error) {
+          signedIn = { canRun: false, problem: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
+        }
 
         if (!signedIn.canRun) return { ...target, canRun: false, reason: signedIn.problem };
         const listed = await modesOf(tool, provider);
@@ -897,7 +900,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const parsed = CustomProvidersSchema.safeParse((await api.config.get()).config.providers);
         found = providerOf(instance, tool, { custom: parsed.success ? keptOf(parsed.data, [home.variable]) : {}, named: undefined, onThisMachine: true, ...home });
       } catch (error) {
-        return { cannot: `Paseo did not answer with its providers (${paseoSaid(error)}); check that its daemon answers with \`paseo ls\`, then run the step again` };
+        return { cannot: `Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\`, then run the step again` };
       }
 
       if ('cannot' in found) return found;
@@ -909,7 +912,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           await api.config.patch({ providers: { [id]: entry } });
           added = true;
         } catch (error) {
-          return { cannot: `Paseo refused the provider ${id} teamai added for it (${paseoSaid(error)}); add one on the daemon's host that extends ${tool} ${setUp}, or name one in the runtime's providers option` };
+          return { cannot: `Paseo refused the provider ${id} teamai added for it (${PaseoSaidSchema.parse(error)}); add one on the daemon's host that extends ${tool} ${setUp}, or name one in the runtime's providers option` };
         }
       }
 
@@ -926,7 +929,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: `~/${instance.home.dir}` }, command: instance.command });
       } catch (error) {
-        return { cannot: `Paseo failed its diagnostic (${paseoSaid(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
+        return { cannot: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
       }
 
       if (!signedIn.canRun) return { cannot: signedIn.problem };

@@ -661,6 +661,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         const file = path.join(state, 'behaviour.json');
         const raw = z.record(z.string(), z.unknown()).parse(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
         const custom = { ...behaviour().custom_providers };
+
         const refused = behaviour().refuse_config ?? Object.entries(message.config.providers ?? {}).flatMap(([id, entry]) => {
           if (!/^[a-z][a-z0-9-]*$/.test(id)) return [`[Config] Invalid config to save:\n  - agents.providers.${id}: Provider ID "${id}" must match /^[a-z][a-z0-9-]*$/.`];
 
