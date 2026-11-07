@@ -2366,6 +2366,21 @@ span('end');
       expect(dedicatedTokens().refresh_token).toBe('r3');
     });
 
+    it('releases the login of an attempt a killed driver left, once it is stopped through that driver before the run resumes on local', async () => {
+      loginDefinition('codexleft', state, { die_at: 'exec-exited' });
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexleft'], repo, env());
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const holder = /Run (r[0-9a-f]+) started/.exec(killed.stderr)?.[1] ?? '';
+      expect(fs.existsSync(lockFile())).toBe(true);
+
+      const resumed = await runCLI(['workflow', 'resume', holder, '--driver', 'local'], repo, env());
+
+      expect(resumed.stderr).toContain(`on step runtime "toy" and closed its place.`);
+      // Written back, then let go: no later step waits on a run that holds the login no longer.
+      expect(dedicatedTokens().refresh_token).toBe('r2');
+      expect(fs.existsSync(lockFile()), resumed.stderr).toBe(false);
+    });
+
     it('stops the tool and closes the place of an attempt whose driver was killed when teamai workflow cancel stops its run, then writes the login back and releases it', async () => {
       loginDefinition('codexorphan', state);
       const { run, pid, watched } = await holdingRun('codexorphan');

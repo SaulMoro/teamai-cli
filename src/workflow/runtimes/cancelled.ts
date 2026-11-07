@@ -7,7 +7,7 @@ import { existingCheckout } from '../run-location.js';
 import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
 import { attemptRun, attemptRuntimePath, maskAttemptResults, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
-import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
+import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, releaseLogin, writeLoginBack } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './step-runtime.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
@@ -118,12 +118,15 @@ const RELEASE = { release: true } as const;
 /**
  * Stops what a killed teamai left of attempt `attempt` on the step runtime its record names, through the driver recorded
  * for it, as `teamai workflow cancel` does, and closes its place there, before a driver without that runtime runs the
- * attempt's step again. Answers why the stop or the close is not confirmed, so the place is kept, or undefined once it
- * is closed, or when the attempt holds no place open there.
+ * attempt's step again, and releases the login it held once its place closed. Answers why the stop or the close is not
+ * confirmed, so the place is kept, or undefined once it is closed, or when the attempt holds no place open there.
  */
 export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, attempt: AttemptId, { checkout }: { checkout: string }): Promise<WorkflowFailure | undefined> {
   const record = await readAttemptRuntime(config, run, attempt);
   const stopped = await stopAttempt(config, run, attempt, { isReleased: false, checkout, isQuiet: true });
+
+  // Its login was written back as its place closed; the attempt runs again elsewhere, so it holds it no longer.
+  if (stopped.ended === 'closed') for (const tool of LOGIN_TOOLS) await releaseLogin(tool, { run, attempt });
 
   if (stopped.ended !== 'running' || !record) return undefined;
 
