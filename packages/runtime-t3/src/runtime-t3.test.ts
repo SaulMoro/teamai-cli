@@ -1347,8 +1347,17 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claudeAgent', model: 'claude-opus-5-5' });
     });
 
+    // Claude's installer keeps each version under a file named after the version, which a member may point at.
+    it('runs a claude step on the instance named after Claude when its Binary path is a Claude version file', async () => {
+      t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, providerInstances: { claudeAgent: { config: { binaryPath: '/Users/member/.local/share/claude/versions/2.1.3' } } } });
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], default_tool: 'claude' } });
+    });
+
     describe('a tool instance no T3 provider instance runs yet', () => {
-      const ACME = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+      const ACME ={ name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
       const AUTO = 'orchestration:read orchestration:operate';
       const FULL = 'orchestration:read orchestration:operate settings:write source-control:write';
       const FULL_PAIRING = ['auth', 'pairing', 'create', '--json', '--base-dir', '<t3 home>', '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'settings:write', '--scope', 'source-control:write', '--ttl', '2m', '--label', 'teamai workflow'];
