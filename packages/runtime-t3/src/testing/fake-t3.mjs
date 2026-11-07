@@ -195,16 +195,29 @@ function canWrite(dir) {
   }
 }
 
+const expandHome = (value) => path.resolve(value === '~' ? HOME : value.startsWith('~/') ? path.join(HOME, value.slice(2)) : value);
+
 /**
- * The tool home the thread's provider instance runs its tool in, as T3 resolves it: the instance's `homePath` (for
- * Codex, its `shadowHomePath` first), `~` being the server's home, else the tool's default home there.
+ * The tool home the thread's provider instance keeps its sessions in, as T3 resolves it: the instance's `homePath`,
+ * `~` being the server's home, else the tool's default home there. A Codex instance with a shadow home (its
+ * `shadowHomePath`, or, for a managed one not named codex, one in T3's state) signs in there, and T3 links the shadow's
+ * `sessions` to this home, as its `KNOWN_SHARED_DIRECTORIES` do.
  */
 function toolHomeOf(thread) {
   const instance = settings().providerInstances?.[thread.instanceId]?.config ?? {};
-  const own = (thread.provider === 'codex' ? instance.shadowHomePath?.trim() || instance.homePath?.trim() : instance.homePath?.trim()) ?? '';
-  const expanded = own === '~' ? HOME : own.startsWith('~/') ? path.join(HOME, own.slice(2)) : own;
+  const own = instance.homePath?.trim() ?? '';
+  const shared = own === '' ? path.join(HOME, thread.provider === 'codex' ? '.codex' : '.claude') : expandHome(own);
 
-  return own === '' ? path.join(HOME, thread.provider === 'codex' ? '.codex' : '.claude') : path.resolve(expanded);
+  const shadow = thread.provider !== 'codex' ? '' : instance.shadowHomePath?.trim()
+    || (instance.setupMode === 'managed' && thread.instanceId !== 'codex' ? path.join(T3_HOME, 'userdata', 'providers', 'codex', thread.instanceId, 'shadow') : '');
+
+  if (shadow !== '' && !fs.existsSync(path.join(expandHome(shadow), 'sessions'))) {
+    fs.mkdirSync(path.join(shared, 'sessions'), { recursive: true });
+    fs.mkdirSync(expandHome(shadow), { recursive: true });
+    fs.symlinkSync(path.join(shared, 'sessions'), path.join(expandHome(shadow), 'sessions'));
+  }
+
+  return shared;
 }
 
 /** The transcript the thread's tool keeps, in its own layout in its tool home. */
