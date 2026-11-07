@@ -686,7 +686,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         const unopened = (why: string): RuntimeFailure => ({ code: 'workspace_failed', message: `Paseo could not open the worktree as a workspace: ${why}` });
         // A close the person released while Paseo was slow to answer forgot the attempt, and nothing journals it again.
         const isReleased = (): boolean => journal.place(opened) === undefined;
-        const released: RuntimeFailure = { code: 'workspace_failed', message: `The attempt was released while Paseo opened ${place.cwd}; archive its workspace in the Paseo app if no other attempt runs there.` };
+        const releasedBefore: RuntimeFailure = { code: 'workspace_failed', message: `The attempt was released before Paseo opened ${place.cwd}, so nothing was opened there.` };
+        const releasedAfter: RuntimeFailure = { code: 'workspace_failed', message: `The attempt was released while Paseo opened ${place.cwd}; archive its workspace in the Paseo app if no other attempt runs there.` };
         let release: () => void;
         let member = place.member;
 
@@ -716,7 +717,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             }
           }
 
-          if (isReleased()) return released;
+          if (isReleased()) return releasedBefore;
 
           try {
             journal.savePlace(opened, { ...place, member });
@@ -727,7 +728,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           try {
             const workspace = await live.workspace(place.cwd);
 
-            if (isReleased()) return released;
+            if (isReleased()) return releasedAfter;
             journal.savePlace(opened, { ...place, member, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
 
             return undefined;
@@ -1703,7 +1704,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           try {
             if (request.release) forgetReleased(request.handle);
           } catch (forgetting) {
-            kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} writable, then release it again.`;
+            kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} readable and writable, then release it again.`;
           }
 
           write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${kept}` } });
