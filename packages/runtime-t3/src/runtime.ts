@@ -268,10 +268,10 @@ async function projectAt(t3: T3, dir: string): Promise<Project | undefined> {
 }
 
 /**
- * The usable instance of each tool: the one `instance` names; else, among the instances that run the provider's own
- * binary, the instance of the member's default model when it runs that tool, then the one whose id is the provider's
- * name, then the first of that provider. An instance the member turned off for the project is never used, and an
- * instance that runs a wrapper or a team tool's command never runs the base tool unless `instance` names it.
+ * The usable instance of each tool: the one `instance` names; else the instance of the member's default model when it
+ * runs that tool's own binary, then the one whose id is the provider's name, then the first of that provider that runs
+ * its own binary. An instance the member turned off for the project is never used, and another instance that runs a
+ * wrapper or a team tool's command never runs the base tool unless `instance` names it.
  */
 function instancesOf({ providers, instance, project, binaryPathOf }: { providers: Provider[]; instance: string | undefined; project: ProjectSettings; binaryPathOf(instanceId: string): string | undefined }): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
   const usable = providers.filter((provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false);
@@ -294,8 +294,9 @@ function instancesOf({ providers, instance, project, binaryPathOf }: { providers
   for (const driver of DRIVER_NAMES) {
     const own = usable.filter((provider) => provider.driverKind === driver && runsOwnBinary(binaryPathOf(provider.providerInstanceId), driver));
 
+    // The instance named after the provider runs it whatever its Binary path, such as a Claude version file.
     const found = own.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId)
-      ?? own.find((provider) => provider.providerInstanceId === driver) ?? own[0];
+      ?? usable.find((provider) => provider.driverKind === driver && provider.providerInstanceId === driver) ?? own[0];
 
     if (found) tools.set(DRIVERS[driver].tool, found);
   }
