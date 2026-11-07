@@ -140,6 +140,10 @@ export default defineRule({
             context.report({ node, message: `@teamai/tool-testing is test-only: import it from a *.test.ts file, so the conformance kit and vitest never ship in teamai-cli. ${from} -> ${specifier}.` });
           }
         }
+      }, (node) => {
+        if (own !== undefined || (inApp && !isTest)) {
+          context.report({ node, message: `${from} loads a module whose name is computed, so teamai/package-boundaries cannot check which side of the package boundary it is on. Name the module with a string literal, or disable this line saying why the module is outside the repository.` });
+        }
       }),
     };
   },

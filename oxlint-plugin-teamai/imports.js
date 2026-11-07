@@ -30,8 +30,25 @@ function mockedModule(node) {
   return stringLiteralValue(source);
 }
 
-/** Every import syntax the workflow policy owns, including dynamic imports and vi.mock. */
-export function importVisitors(/** @type {(edge: { node: ESTree.Node; specifier: string; typeOnly: boolean; names: string[] }) => void} */ visit) {
+/**
+ * The module a dynamic import or a `require` names: a string literal, or a template literal with no placeholder.
+ * @param {ESTree.Node | undefined} node
+ * @returns {string | undefined}
+ */
+function moduleName(node) {
+  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) return node.quasis[0]?.value.cooked ?? undefined;
+
+  return stringLiteralValue(node);
+}
+
+/**
+ * Every import syntax the workflow policy owns: static imports and re-exports, `import()`, `require()` and vi.mock.
+ * `computed` gets an `import()` or `require()` whose module name is computed, which `visit` cannot be given.
+ */
+export function importVisitors(
+  /** @type {(edge: { node: ESTree.Node; specifier: string; typeOnly: boolean; names: string[] }) => void} */ visit,
+  /** @type {(node: ESTree.Node) => void} */ computed = () => {},
+) {
   return {
     /** @param {ESTree.ImportDeclaration} node */
     ImportDeclaration(node) {
@@ -48,15 +65,22 @@ export function importVisitors(/** @type {(edge: { node: ESTree.Node; specifier:
     },
     /** @param {ESTree.ImportExpression} node */
     ImportExpression(node) {
-      const specifier = stringLiteralValue(node.source);
+      const specifier = moduleName(node.source);
 
-      if (specifier !== undefined) visit({ node, specifier, typeOnly: false, names: ['*'] });
+      if (specifier === undefined) computed(node);
+      else visit({ node, specifier, typeOnly: false, names: ['*'] });
     },
     /** @param {ESTree.CallExpression} node */
     CallExpression(node) {
-      const specifier = mockedModule(node);
+      const mocked = mockedModule(node);
 
-      if (specifier !== undefined) visit({ node, specifier, typeOnly: false, names: ['*'] });
+      if (mocked !== undefined) visit({ node, specifier: mocked, typeOnly: false, names: ['*'] });
+
+      if (node.callee.type !== 'Identifier' || node.callee.name !== 'require' || node.arguments.length === 0) return;
+      const required = moduleName(node.arguments[0]);
+
+      if (required === undefined) computed(node);
+      else visit({ node, specifier: required, typeOnly: false, names: ['*'] });
     },
   };
 }

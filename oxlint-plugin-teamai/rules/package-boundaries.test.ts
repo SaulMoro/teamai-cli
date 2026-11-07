@@ -123,3 +123,29 @@ rule.valid('allows src/ a dependency, a subpath of one, Node and a workspace pac
 ].join('\n'), inWorkspace('src/workflow/runtimes/sources.ts'));
 
 rule.valid('allows a src/ test a package teamai-cli does not ship', `import { WebSocket } from 'ws';`, inWorkspace('src/__tests__/paseo.test.ts'));
+
+rule.invalid('rejects src/ requiring a runtime package', `export const runtime = require('@teamai/runtime-sandbox');`, (output) => {
+  expect(output).toContain('src/ never imports a runtime package');
+}, inWorkspace('src/workflow/engine.ts'));
+
+rule.invalid('rejects a package requiring src/', `export const locate = require('../../../src/locate.js');`, (output) => {
+  expect(output).toContain('packages/tool-core/src/sessions.ts -> src/locate.js');
+}, inWorkspace('packages/tool-core/src/sessions.ts'));
+
+rule.invalid('rejects src/ loading a runtime package through a template with no placeholder', 'export const load = () => import(`@teamai/runtime-sandbox`);', (output) => {
+  expect(output).toContain('src/ never imports a runtime package');
+}, inWorkspace('src/workflow/engine.ts'));
+
+rule.invalid('rejects src/ loading a module whose name is computed, since its side cannot be checked', 'export const load = (name: string) => import(`@teamai/runtime-${name}`);', (output) => {
+  expect(output).toContain('computed');
+}, inWorkspace('src/workflow/engine.ts'));
+
+rule.invalid('rejects a package requiring a module whose name is computed', 'export const load = (name: string) => require(name);', (output) => {
+  expect(output).toContain('computed');
+}, inWorkspace('packages/tool-core/src/sessions.ts'));
+
+rule.valid('allows a package requiring a Node module', `export const fs = require('node:fs');`, inWorkspace('packages/tool-core/src/sessions.ts'));
+
+rule.valid('allows a call of a require that takes no module name', `export const resolved = require.resolve('zod');`, inWorkspace('src/workflow/engine.ts'));
+
+rule.valid('leaves a test computing what it loads alone', 'export const load = (name: string) => import(`./fixtures/${name}.js`);', inWorkspace('src/__tests__/engine.test.ts'));
