@@ -25,11 +25,11 @@ function weaker(outer: boolean | undefined, inner: boolean | undefined): boolean
 
 /**
  * The offer of `inner` through `outer`. Where the step's tool is launched decides: `tools`, `default_tool`,
- * `workspace`, `hitl`, `tokens`, `max_turns`, `end_turn`, `role`, `prompt` (`launchesAgents`) and `unavailable` are the
- * inner's; where it runs decides `isolation`, `env`, `setup`, `exec` (setup and command steps run on the outer) and
+ * `workspace`, `hitl`, `end_turn`, `role`, `prompt` (`launchesAgents`) and `unavailable` are the inner's, and so is
+ * `fullAccess`; where it runs decides `isolation`, `env`, `setup`, `exec` (setup and command steps run on the outer) and
  * `ownLogins`. `workspace` also holds the modes the outer prepares (`clone`, `team`). `unattended` is the outer's, for
- * the tools the inner runs in full access (`fullAccess`, from its `permissions`), and for none when it reports none.
- * `network` is the weaker of both. A composed entry answers no confined prompt: `confined` is dropped.
+ * the tools the inner runs in full access, and for none when it reports none. `network`, `tokens` and `max_turns` are
+ * the weaker of both. A composed entry answers no confined prompt: `confined` is dropped.
  */
 export function composedOffer(outer: Offer, inner: Offer): Offer {
   const prepared = (outer.can.workspace ?? []).filter((mode) => PREPARED_MODES.some((known) => known === mode));
@@ -41,20 +41,22 @@ export function composedOffer(outer: Offer, inner: Offer): Offer {
     ...(inner.can.default_tool !== undefined && { default_tool: inner.can.default_tool }),
     ...((inner.can.workspace !== undefined || prepared.length > 0) && { workspace }),
     ...(inner.can.hitl !== undefined && { hitl: inner.can.hitl }),
-    ...(inner.can.tokens !== undefined && { tokens: inner.can.tokens }),
-    ...(inner.can.max_turns !== undefined && { max_turns: inner.can.max_turns }),
     ...(inner.can.end_turn !== undefined && { end_turn: inner.can.end_turn }),
     ...(inner.can.role !== undefined && { role: inner.can.role }),
     ...(isolation !== undefined && { isolation }),
     ...(outer.can.env !== undefined && { env: outer.can.env }),
     ...(outer.can.setup !== undefined && { setup: outer.can.setup }),
     ...(outer.can.exec !== undefined && { exec: outer.can.exec }),
-    ...(outer.can.unattended !== undefined && { unattended: outer.can.unattended, fullAccess: inner.can.fullAccess ?? [] }),
+    ...(outer.can.unattended !== undefined && { unattended: outer.can.unattended, fullAccess: [] }),
+    // Kept whether or not the outer offers unattended prompts: a tool in full access is warned of either way.
+    ...(inner.can.fullAccess !== undefined && { fullAccess: inner.can.fullAccess }),
   };
 
-  const network = weaker(outer.can.network, inner.can.network);
+  for (const key of ['network', 'tokens', 'max_turns'] as const) {
+    const both = weaker(outer.can[key], inner.can[key]);
 
-  if (network !== undefined) can.network = network;
+    if (both !== undefined) can[key] = both;
+  }
 
   return {
     ok: true, can, launchesAgents: inner.launchesAgents,
@@ -111,7 +113,7 @@ export function composedName(inner: string, outer: string): string {
 export function composedStepRuntime({ outer, inner, innerCredentials }: { outer: StepRuntime; inner: StepRuntime; innerCredentials: Record<string, string> }): StepRuntime {
   const name = composedName(inner.name, outer.name);
   // Which runtime runs each operation, so a cancel reaches it: an exec the outer, a prompt the inner.
-  const runsOn = new Map<OpId, StepRuntime>();
+  const ranBy = new Map<OpId, StepRuntime>();
   // The prompt's credentials of the last open, in memory only, which the outer's reattach carries again.
   let opened: Record<string, string> = {};
 
@@ -149,7 +151,7 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       const handle = handleOf(request.handle);
 
       if (!handle) return { kind: 'failed', failure: unknownHandle(request.handle) };
-      runsOn.set(request.op, outer);
+      ranBy.set(request.op, outer);
 
       return outer.exec({ ...request, handle: handle.outer }, events);
     },
@@ -158,13 +160,13 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       const handle = handleOf(request.handle);
 
       if (handle?.inner === undefined) return { kind: 'failed', failure: unknownHandle(request.handle) };
-      runsOn.set(request.op, inner);
+      ranBy.set(request.op, inner);
 
       return inner.prompt({ ...request, handle: handle.inner, credentials: innerCredentials }, events);
     },
 
     async cancel(op) {
-      const runtime = runsOn.get(op);
+      const runtime = ranBy.get(op);
 
       if (runtime) return runtime.cancel(op);
       await inner.cancel(op);
@@ -200,7 +202,7 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       if (outerSeen.kind === 'gone' && innerSeen.kind === 'gone') return { kind: 'gone' };
       const seen = [outerSeen.kind === 'alive' ? { runtime: outer, ...outerSeen } : undefined, innerSeen.kind === 'alive' ? { runtime: inner, ...innerSeen } : undefined];
 
-      for (const one of seen) for (const state of one?.ops ?? []) if (one) runsOn.set(state.op, one.runtime);
+      for (const one of seen) for (const state of one?.ops ?? []) if (one) ranBy.set(state.op, one.runtime);
       const display = (innerSeen.kind === 'alive' ? innerSeen.display : undefined) ?? (outerSeen.kind === 'alive' ? outerSeen.display : undefined);
 
       return { kind: 'alive', ops: seen.flatMap((one) => one?.ops ?? []), ...(display && { display }) };
