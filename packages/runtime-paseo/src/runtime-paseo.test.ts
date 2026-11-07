@@ -2658,6 +2658,7 @@ describe('teamai-runtime-paseo', () => {
   it.each([
     ['Claude', 'claude', "You've hit your limit · resets 3pm (Europe/Madrid)"],
     ['Codex', 'codex', "You've hit your usage limit. Upgrade to Pro or try again at 3:04 PM."],
+    ['Claude, on its 5-hour limit,', 'claude', '5-hour limit reached ∙ resets 2pm'],
   ])('fails a step whose %s agent stops on its usage limit usage_limited, with the reset time the tool gave, whether Paseo reports it as an error or as its last message', async (_, tool, said) => {
     behave({ codex_login: 'signed_in' });
     const runtime = start();
