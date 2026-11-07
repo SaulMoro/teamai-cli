@@ -1,4 +1,6 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
@@ -154,6 +156,28 @@ describe('seatbelt: lifecycle', () => {
 
     expect(await second.next((message) => message.op === op && ['cancelled', 'failed'].includes(String(message.event)))).toMatchObject({ event: 'cancelled' });
     expect(() => process.kill(-Number(pgid), 0)).toThrow();
+  });
+
+  it('leaves alone a process group whose number a step held before this machine started, at close', async () => {
+    const connection = start();
+    await init(connection, { provider: 'seatbelt' });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at);
+    // The member's own process, whose number a step of an earlier boot held.
+    const theirs = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' });
+    const pidFile = path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE, 'pids', String(theirs.pid));
+    fs.writeFileSync(pidFile, '');
+    const beforeBoot = new Date(Date.now() - (os.uptime() + 3_600) * 1000);
+    fs.utimesSync(pidFile, beforeBoot, beforeBoot);
+
+    try {
+      connection.send({ type: 'close', handle: HANDLE });
+      await connection.next((message) => message.event === 'closed' && message.handle === HANDLE);
+
+      expect(() => process.kill(-Number(theirs.pid), 0)).not.toThrow();
+    } finally {
+      theirs.kill('SIGKILL');
+    }
   });
 });
 
