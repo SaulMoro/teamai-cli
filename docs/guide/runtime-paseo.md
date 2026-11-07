@@ -492,7 +492,7 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 A workspace you already had open in Paseo on that directory, as your checkout may be when a read-only step runs there, is never archived: the attempt cancels its own agents instead, and your workspace stays open. The same holds when you open that directory in Paseo while the step runs, which gives you the attempt's workspace, and start an agent there.
 
-An open whose question Paseo does not answer within 20 s, as when its daemon hangs, fails the step `workspace_failed`, and the next open of that worktree goes on.
+An open whose question Paseo does not answer within 20 s, as when its daemon hangs, fails the step `workspace_failed`, and the next open of that worktree goes on. Paseo may still open the workspace later; the failure says to archive it in the Paseo app then.
 
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 
