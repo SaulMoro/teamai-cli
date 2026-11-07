@@ -144,13 +144,14 @@ function walk(root: string): string[] {
 
 /**
  * Makes each of `roots` on the host match the archive's copy of it: what the archive holds is written, what it lacks is
- * deleted. A path under one of `kept` (the git paths) is never written or deleted, and an entry outside every root is
+ * deleted. Of `added` (the run directory, which other steps write too), what the archive holds is written and nothing
+ * is deleted. A path under one of `kept` (the git paths) is never written or deleted, and an entry outside every root is
  * left out. Everything is written before anything is deleted, and a directory takes its mode last, deepest first, so a
  * copy that stops halfway (a full disk) deletes nothing and a read-only directory still gets its files.
  */
-export function applyTar(entries: TarEntry[], { roots, kept }: { roots: string[]; kept: string[] }): void {
+export function applyTar(entries: TarEntry[], { roots, added = [], kept }: { roots: string[]; added?: string[]; kept: string[] }): void {
   const isKept = (at: string): boolean => kept.some((keep) => isWithin(at, keep));
-  const rootOf = (at: string): string | undefined => roots.find((root) => isWithin(at, root));
+  const rootOf = (at: string): string | undefined => [...roots, ...added].find((root) => isWithin(at, root));
   const listed = new Set(entries.map((entry) => entry.at));
   const files = new Map<string, Buffer>();
   const dirs: Array<{ at: string; mode: number }> = [];

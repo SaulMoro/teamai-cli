@@ -184,6 +184,21 @@ describe('vercel: an attempt', () => {
     expect(fs.readFileSync(path.join(at.git, 'HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
   });
 
+  it("copies back what the step wrote in the run directory, and deletes nothing there that another step wrote meanwhile", async () => {
+    const connection = start();
+    await init(connection);
+    const at = preparedPlace();
+    await openPlace(connection, at);
+    const [name = ''] = sandboxNames();
+    fs.writeFileSync(inSandbox(name, path.join(at.runDir, 'plan.md')), 'step 2: test\n');
+    fs.mkdirSync(at.runDir, { recursive: true });
+    fs.writeFileSync(path.join(at.runDir, 'other-attempt.md'), 'kept\n');
+
+    expect(await collect(connection)).toMatchObject({ event: 'collected' });
+    expect(fs.readFileSync(path.join(at.runDir, 'plan.md'), 'utf8')).toBe('step 2: test\n');
+    expect(fs.readFileSync(path.join(at.runDir, 'other-attempt.md'), 'utf8')).toBe('kept\n');
+  });
+
   it('copies back a read-only directory the step made with its files in it, and deletes what the step deleted', async () => {
     fs.writeFileSync(path.join(imageDir, 'lock'), `#!${process.execPath}\nconst fs = require('node:fs'); fs.mkdirSync('locked'); fs.writeFileSync('locked/child.txt', 'kept'); fs.chmodSync('locked', 0o555); fs.rmSync('obsolete.txt');\n`, { mode: 0o755 });
     const connection = start();
