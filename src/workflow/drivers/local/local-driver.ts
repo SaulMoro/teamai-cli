@@ -1220,9 +1220,29 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return slot?.kind === 'external' ? slot.use : undefined;
   };
 
+  // Each runtime before the one a step lands on that cannot run its tool now, once per drive, by runtime and tool.
+  const fellPast = new Set<string>();
+
+  /** Says once, with that runtime's reason, that a prompt step passed a runtime that lists its tool as unavailable. */
+  const sayFellPast = (lease: Lease, slot: RuntimeSlot): void => {
+    if (lease.prompt === undefined || lease.answer || lease.confined) return;
+    const choice = launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, members, slot.can.default_tool);
+    const tool = choice.ok ? choice.target.name : undefined;
+
+    for (const earlier of slots.slice(0, slots.indexOf(slot))) {
+      const reason = tool === undefined ? undefined : earlier.unavailable?.[tool];
+      const key = `${earlier.use}\u0000${tool ?? ''}`;
+
+      if (reason === undefined || fellPast.has(key)) continue;
+      fellPast.add(key);
+      log.warn(`Runtime ${earlier.use} of driver ${defined.driver} cannot run ${tool} now, so steps on ${tool} run on runtime ${slot.use}: ${earlier.use}: ${reason}`);
+    }
+  };
+
   /** Binds a lease to the runtime it was offered on. A `local` attempt's place is opened at once: it is the host's. */
   const bind = async (lease: Lease, slot: RuntimeSlot): Promise<void> => {
     slotOf.set(lease.attempt, slot);
+    sayFellPast(lease, slot);
 
     if (slot.kind !== 'local') return;
     const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };

@@ -733,6 +733,30 @@ steps:
   describe('an instance a runtime says it cannot run now', () => {
     const reason = 'acme-claude runs acme-claude, which is not in the toy image: add it to the image, or run the step with --driver local.';
 
+    it('says once, quoting the runtime\'s reason, that steps on a tool it cannot run now go to the next runtime', async () => {
+      const claudeReason = 'claude is not signed in on the toy: run claude login there, or set ANTHROPIC_API_KEY.';
+      writeFlow('twoprompts', `  - id: first
+    tool: claude
+    prompt: Review the left half.
+    output:
+      ok: boolean
+  - id: second
+    needs: [first]
+    tool: claude
+    prompt: Review the right half.
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('toyfallthrough', [{ use: 'toy', options: { state, unavailable: { claude: claudeReason } } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'twoprompts', '--driver', 'toyfallthrough'], repo, env());
+
+      expect(readRunState(runOf(ran)).steps, ran.stderr).toMatchObject([{ status: 'succeeded' }, { status: 'succeeded' }]);
+      expect(toyOpens()).toBe(0);
+      const line = `Runtime toy of driver toyfallthrough cannot run claude now, so steps on claude run on runtime local: toy: ${claudeReason}`;
+      expect(ran.stderr.split(line).length - 1, ran.stderr).toBe(1);
+    });
+
     it('fails its step with the runtime\'s reason, on a definition whose runtimes are all off this host', async () => {
       acmeInstance();
       writeDefinition('toyacmeunavailable', [{ use: 'toy', options: { state, can: { tools: ['claude'] }, unavailable: { 'acme-claude': reason } } }]);
