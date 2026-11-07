@@ -30,6 +30,11 @@ export function withRetry({ code, message }: { code: string; message: string }, 
   return RETRIED_CODES.has(code) ? `${message.replace(/\.?\s*$/, '.')} Then run: ${retryCommand(retry)}` : message;
 }
 
+/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
+export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
+}
+
 /** A new operation id. */
 export function newOpId(): OpId {
   return OpIdSchema.parse(`op-${randomBytes(6).toString('hex')}`);
