@@ -272,7 +272,7 @@ function promptFailure(failure: RuntimeFailure, retry: { run: string; step: stri
     ? { code: failure.code, message: failure.message }
     : { code: 'runtime_failed', message: `The step runtime could not run the prompt (${failure.code}): ${failure.message}` };
 
-  return { ...recorded, message: withRetry(recorded.message, failure.code, retry) };
+  return { ...recorded, message: withRetry({ code: failure.code, message: recorded.message }, retry) };
 }
 
 /**

@@ -280,7 +280,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
     case 'cancelled':
       return failed({ code: 'confined_failed', message: `The confined ${tool} prompt on step runtime "${runtime}" was stopped before it replied.` });
     case 'failed':
-      return failed({ code: 'confined_failed', message: withRetry(`Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}`, end.failure.code, retry) });
+      return failed({ code: 'confined_failed', message: withRetry({ code: end.failure.code, message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` }, retry) });
     case 'lost':
       return failed({ code: 'runtime_lost', message: `Step runtime "${runtime}" stopped answering while it ran the confined ${tool} prompt, which may still run there: ${end.failure.message}` });
     default: {

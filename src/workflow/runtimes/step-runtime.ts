@@ -23,10 +23,10 @@ export function retryCommand({ run, step }: { run: string; step: string }): stri
 const RETRIED_CODES: ReadonlySet<string> = new Set(['usage_limited', 'daemon_restarted']);
 
 /**
- * `message`, the message of a step's failure with code `code`, ending with `Then run:` and the retry command when a
- * retry fixes that code. A runtime never spells the run or the step itself.
+ * The message of a step's failure, ending with `Then run:` and the retry command when a retry fixes its code, which is
+ * the runtime's own. A runtime never spells the run or the step itself.
  */
-export function withRetry(message: string, code: string, retry: { run: string; step: string }): string {
+export function withRetry({ code, message }: { code: string; message: string }, retry: { run: string; step: string }): string {
   return RETRIED_CODES.has(code) ? `${message.replace(/\.?\s*$/, '.')} Then run: ${retryCommand(retry)}` : message;
 }
 

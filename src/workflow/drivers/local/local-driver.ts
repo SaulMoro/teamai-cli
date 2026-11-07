@@ -768,7 +768,7 @@ async function promptReport(
 
   if (end.outcome === 'failed' && result.failure) {
     // A runtime that launches agents its own way ended its prompt's failure with the retry already (runtimePrompter).
-    const failure = onRuntime?.launchesAgents ? result.failure : { ...result.failure, message: withRetry(result.failure.message, result.failure.code, { run: lock.run, step: lease.step }) };
+    const failure = onRuntime?.launchesAgents ? result.failure : { ...result.failure, message: withRetry(result.failure, { run: lock.run, step: lease.step }) };
     end.message = failure.message;
     end.failure = failure;
   }
