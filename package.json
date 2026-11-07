@@ -60,6 +60,7 @@
   "author": "jeffyxu <jeffyxu@tencent.com>",
   "license": "MIT",
   "dependencies": {
+    "@vercel/sandbox": "^3.9.1",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
