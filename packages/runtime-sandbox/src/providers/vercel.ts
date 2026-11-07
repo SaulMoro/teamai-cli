@@ -11,7 +11,7 @@ import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provi
 import { offerSignedIn } from '../sign-in.js';
 import { isRunning, oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
 import { WORKSPACES } from './cli.js';
-import { applyTar, readTar } from './vercel-copy.js';
+import { applyTar, fingerprintOf, fingerprintsOf, readTar } from './vercel-copy.js';
 
 // ─── vercel: a hosted sandbox per attempt (Vercel Sandbox), the copy family ───
 //
@@ -211,11 +211,17 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     return await must(sandbox, 'Unpacking the place', 'tar', ['-xf', file, '-C', '/', '--no-same-owner', '--no-xattrs'], asRoot) ?? await must(sandbox, 'Removing the packed place', 'rm', ['-f', file], asRoot);
   };
 
-  const viewOf = (id: string): PlaceView | undefined => {
+  /**
+   * What `create` kept of a place whose copy-in ended: its view, and the run directory's files as they went in, so
+   * collect brings back only those the step changed there and never an old copy over another step's write.
+   */
+  const keptOf = (id: string): { view: PlaceView; runFiles: Record<string, string> } | undefined => {
     const file = path.join(dirOf(id), 'view.json');
 
-    return fs.existsSync(file) ? z.object({ view: PlaceViewSchema }).parse(JSON.parse(fs.readFileSync(file, 'utf8'))).view : undefined;
+    return fs.existsSync(file) ? z.object({ view: PlaceViewSchema, runFiles: z.record(z.string(), z.string()).default({}) }).parse(JSON.parse(fs.readFileSync(file, 'utf8'))) : undefined;
   };
+
+  const viewOf = (id: string): PlaceView | undefined => keptOf(id)?.view;
 
   /** Deletes `sandbox` and its place on this machine: undefined once gone, else why it stays. */
   const discard = async (sandbox: Sandbox): Promise<string | undefined> => {
@@ -434,6 +440,8 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
       fs.mkdirSync(commandsOf(id), { recursive: true, mode: 0o700 });
       const writable = [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)];
+      // Taken before the copy-in: a file another step changes meanwhile goes in changed, and comes back as it went.
+      const runFiles = fingerprintsOf(view.runDir);
 
       try {
         const ids = await run(sandbox, 'sh', ['-c', 'id -u; id -g']);
@@ -451,7 +459,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       }
 
       // Written last: a place with a view is one whose copy-in ended.
-      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view }), { mode: 0o600 });
+      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, runFiles }), { mode: 0o600 });
 
       return { ok: true, id };
     },
@@ -526,14 +534,15 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     },
 
     async collect(id) {
-      const view = viewOf(id);
+      const kept = keptOf(id);
       const found = await sandboxOf(id);
 
-      if (view === undefined || !found.ok || found.sandbox === undefined) {
+      if (kept === undefined || !found.ok || found.sandbox === undefined) {
         return failed(`The work of Vercel sandbox ${id} cannot be copied back: ${!found.ok ? found.message : 'the sandbox or its place on this machine is gone'}.`);
       }
 
       const { sandbox } = found;
+      const { view, runFiles } = kept;
       const roots = [view.worktree, view.result, ...Object.values(view.toolHome)];
       const file = '/tmp/teamai-work.tar';
 
@@ -545,7 +554,8 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
         await run(sandbox, 'rm', ['-f', file]);
 
         if (data === null) return failed(`Vercel sandbox ${id} lost the packed work before it was read. Nothing was copied back.`);
-        applyTar(readTar(data), { roots, added: [view.runDir], kept: view.readonly });
+        const changed = readTar(data).filter((entry) => !(entry.kind === 'file' && runFiles[entry.at] === fingerprintOf(entry.data)));
+        applyTar(changed, { roots, added: [view.runDir], kept: view.readonly });
 
         return { ok: true };
       } catch (error) {

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -140,6 +141,16 @@ function walk(root: string): string[] {
 
     return [...walk(at), at];
   });
+}
+
+/** The sha256 of `data`, hex. */
+export function fingerprintOf(data: Buffer): string {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+/** Each regular file under `root`, by path, with its fingerprint: what a copy-in sends of it. */
+export function fingerprintsOf(root: string): Record<string, string> {
+  return Object.fromEntries(walk(root).flatMap((at) => (lstatOf(at)?.isFile() ? [[at, fingerprintOf(fs.readFileSync(at))]] : [])));
 }
 
 /**
