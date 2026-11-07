@@ -31,9 +31,16 @@ describe('the offer of a runtime through another', () => {
       ok: true, launchesAgents: true, ownLogins: ['codex'], unavailable: { codex: 'no provider instance' },
       can: {
         isolation: 'sandbox', env: true, setup: true, exec: true, unattended: true, fullAccess: ['claude'], network: false,
-        tools: ['claude'], default_tool: 'claude', workspace: ['new', 'continue', 'clone', 'team'], hitl: false, tokens: true, max_turns: true, end_turn: false, role: true,
+        tools: ['claude'], default_tool: 'claude', workspace: ['new', 'continue', 'clone', 'team'], hitl: false, tokens: false, max_turns: false, end_turn: false, role: true,
       },
     });
+  });
+
+  it('keeps the tools the inner runs in full access when the outer offers no unattended prompt, so the run still warns of them', () => {
+    const { unattended: _none, ...attended } = outer.can;
+
+    expect(composedOffer({ ...outer, can: attended }, inner).can).toMatchObject({ fullAccess: ['claude'] });
+    expect(composedOffer({ ...outer, can: attended }, inner).can.unattended).toBeUndefined();
   });
 
   it('offers unattended for no tool when the inner runs none in full access', () => {
