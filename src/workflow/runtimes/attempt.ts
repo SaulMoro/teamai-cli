@@ -422,6 +422,13 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     return { kind: 'lost', failure };
   };
 
+  /**
+   * Why this runtime leaves alone the place `left` names on another runtime: what ran there was not stopped
+   * (`stopOnRecordedDriver`), so neither its work nor its place is this runtime's to bring back or close.
+   */
+  const placeElsewhere = (left: AttemptRuntimeRecord): WorkflowFailure | undefined => (left.runtime === runtime.name ? undefined
+    : runtimeFailure(runtime.name, `left the place of attempt ${attempt} on step runtime "${left.runtime}" of driver "${left.driver}" open, since what ran there may still run. Resume the run with --driver ${left.driver}.`));
+
   /** The setup a teamai before this one left, which the runtime could not stop, may still run in its place. */
   const leftSetupNotStopped = (notStopped: RuntimeFailure): Lost => lostFor({ code: notStopped.code, message: `Step runtime "${runtime.name}" could not stop the setup of attempt ${attempt} that a teamai before this one left running, so it may still run there: ${notStopped.message}` });
 
@@ -624,6 +631,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       const handle = before?.open.handle;
 
       if (!before || handle === undefined) return undefined;
+      const elsewhere = placeElsewhere(before);
+
+      if (elsewhere) return elsewhere;
 
       // Nothing is brought back while what ran there may still write the place.
       if (mayRun) return runtimeFailure(runtime.name, `left the work of attempt ${attempt} in its place, since what ran there may still run (${mayRun.code}): ${masked(mayRun).message}`);
@@ -640,6 +650,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       const handle = before?.open.handle;
 
       if (!before || handle === undefined || before.phase === 'closed') return undefined;
+      const elsewhere = placeElsewhere(before);
+
+      if (elsewhere) return elsewhere;
 
       if (mayRun) {
         const failure = masked(mayRun);
