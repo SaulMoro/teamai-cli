@@ -15,7 +15,7 @@ import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
 import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand } from '../../tool-instances.js';
-import { instanceNames, toolOf } from '../../tool-registry.js';
+import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { credentialSecrets, type StepRuntime } from './step-runtime.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
@@ -280,7 +280,9 @@ function variablesOf({ signIn, alongside = [] }: SignInVariables): string[] {
  * tool it signs in, so a Claude exec never gets the member's OpenAI key. Declared credentials go to every tool.
  */
 export function credentialsForTool(credentials: Record<string, string>, found: readonly string[], tool: string): Record<string, string> {
-  const own = new Set(isExecRuntimeTool(tool) ? variablesOf(SIGN_INS[tool]) : []);
+  // An instance signs in as the tool it extends.
+  const base = baseToolOf(tool);
+  const own = new Set(isExecRuntimeTool(base) ? variablesOf(SIGN_INS[base]) : []);
 
   return Object.fromEntries(Object.entries(credentials).filter(([name]) => !found.includes(name) || own.has(name)));
 }
@@ -431,15 +433,17 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   }
 
   if (ready.ok) {
+    // A runtime may name an instance in ownLogins: its login is the tool's it extends, as its sign-in is.
+    const ownLogins = new Set((ready.ownLogins ?? []).map(baseToolOf));
     // A login the runtime's provider keeps itself is not copied into an attempt's tool home over it.
-    const engine = { ...split.engine, logins: split.engine.logins.filter((tool) => !ready.ownLogins?.includes(tool)) };
+    const engine = { ...split.engine, logins: split.engine.logins.filter((tool) => !ownLogins.has(tool)) };
 
     // A sign-in found by name reaches only a runtime that execs the tool and keeps a value to it. One that launches
     // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
     const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
     // A tool whose login the runtime's provider keeps signs in on that login, before the member's own route: the
     // credentials their config declares, then what their environment holds. The definition's own credential still goes.
-    const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, variables]) => (ready.ownLogins?.includes(tool) ? variablesOf(variables) : [])));
+    const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, variables]) => (ownLogins.has(tool) ? variablesOf(variables) : [])));
     const notOwnLogin = (given: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(given).filter(([name]) => !ownLoginVariables.has(name)));
     const foundHere = notOwnLogin(found);
     const isMemberRoute = driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use]?.credentials !== undefined;
