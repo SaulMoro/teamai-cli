@@ -277,8 +277,11 @@ function homeDirOf(tool: PaseoTool): string {
 /** A tool or instance the daemon cannot run, and why, before or after a provider is found for it. */
 type Unavailable = Pick<Target, 'name' | 'tool'> & { canRun: false; reason: string };
 
-/** How Paseo runs an instance on the provider teamai added for it, or why it cannot. */
-export type Added = { provider: string; added: boolean; home?: string; providerHome?: string } | { cannot: string };
+/**
+ * How Paseo runs an instance on the provider teamai added for it, or why it cannot; `added` says whether this call added
+ * that provider, which stays though the instance cannot run on it, as when it is signed out there.
+ */
+export type Added = { provider: string; added: boolean; home?: string; providerHome?: string } | { cannot: string; added: boolean };
 
 /** What a definition and teamai choose of the tools a runtime offers: each tool's mode, the team's instances, and providers named for either. */
 export interface ToolChoices {
@@ -900,10 +903,10 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const parsed = CustomProvidersSchema.safeParse((await api.config.get()).config.providers);
         found = providerOf(instance, tool, { custom: parsed.success ? keptOf(parsed.data, [home.variable]) : {}, named: undefined, onThisMachine: true, ...home });
       } catch (error) {
-        return { cannot: `Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\`, then run the step again` };
+        return { cannot: `Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\`, then run the step again`, added: false };
       }
 
-      if ('cannot' in found) return found;
+      if ('cannot' in found) return { ...found, added: false };
       const setUp = entry.command ? `with command ${JSON.stringify(entry.command)}` : `with env ${JSON.stringify(entry.env ?? {})}`;
       let added = false;
 
@@ -912,7 +915,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           await api.config.patch({ providers: { [id]: entry } });
           added = true;
         } catch (error) {
-          return { cannot: `Paseo refused the provider ${id} teamai added for it (${PaseoSaidSchema.parse(error)}); add one on the daemon's host that extends ${tool} ${setUp}, or name one in the runtime's providers option` };
+          return { cannot: `Paseo refused the provider ${id} teamai added for it (${PaseoSaidSchema.parse(error)}); add one on the daemon's host that extends ${tool} ${setUp}, or name one in the runtime's providers option`, added: false };
         }
       }
 
@@ -924,15 +927,15 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const { providers } = await api.providers.listAvailable();
 
         if (!providers.some((listed) => listed.provider === provider && listed.available)) {
-          return { cannot: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };
+          return { cannot: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``, added };
         }
 
         signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: `~/${instance.home.dir}` }, command: instance.command });
       } catch (error) {
-        return { cannot: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
+        return { cannot: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why`, added };
       }
 
-      if (!signedIn.canRun) return { cannot: signedIn.problem };
+      if (!signedIn.canRun) return { cannot: signedIn.problem, added };
 
       // The provider it added, or one with no command of its own that it matched, runs in the instance's own home.
       const providerHome = ('add' in found || instance.command === undefined) ? home.home : undefined;

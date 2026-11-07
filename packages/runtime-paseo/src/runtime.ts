@@ -390,6 +390,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       try {
         const added = await live.addProvider(planned, instance);
 
+        // A provider it added stays though the instance cannot run on it yet, so the person is told how to remove it.
+        if (added.added) write({ event: 'notice', op, message: addedNotice(live.url, planned, name) });
+
         if ('cannot' in added) return cannot(added.cannot);
         toAdd.delete(name);
         const target = targets.get(name);
@@ -399,8 +402,6 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         if (added.home !== undefined) sessionHomes.set(name, added.home);
 
         if (added.providerHome !== undefined) providerHomes.set(name, added.providerHome);
-
-        if (added.added) write({ event: 'notice', op, message: addedNotice(live.url, planned, name) });
 
         return undefined;
       } finally {

@@ -583,6 +583,26 @@ describe('teamai-runtime-paseo', () => {
       expect(configChanges()).toHaveLength(1);
     });
 
+    it('fails the open of an instance whose added provider is signed out, naming its sign-in step, and still says once that it added the provider and how to remove it', async () => {
+      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
+      behave({ sign_in: { 'claude-work': 'signed_out' } });
+      const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
+      await ready(runtime, { instances: [work] });
+      runtime.send(openRequest('op-0000000a', ATTEMPT, 'claude-work'));
+
+      expect(await runtime.next(isEnd('op-0000000a'))).toEqual({
+        op: 'op-0000000a', event: 'failed',
+        failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run claude-work on the Paseo daemon at ${daemon.url}: signed out; run \`CLAUDE_CONFIG_DIR=~/.claude-work claude auth login\` on the daemon's host. Then run the step again.` },
+      });
+      expect(notices(runtime)).toMatchObject([{ op: 'op-0000000a', message: expect.stringContaining('teamai added the Paseo provider claude-work') }]);
+
+      runtime.send(openRequest('op-0000000c', 'a0123abce', 'claude-work'));
+      await runtime.next(isEnd('op-0000000c'));
+
+      expect(configChanges()).toHaveLength(1);
+      expect(notices(runtime)).toHaveLength(1);
+    });
+
     it('adds no provider on a daemon on another host, whose PATH teamai cannot see, and says how to add one there', async () => {
       const { env } = installed('acme-claude');
       // 0.0.0.0 reaches the fake on this machine, but names no loopback address, as a daemon on another host is named.
