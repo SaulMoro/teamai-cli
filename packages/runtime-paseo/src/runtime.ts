@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, isUsageLimitText, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -166,20 +166,13 @@ const noSession = (tool: string): RuntimeFailure => ({
 });
 
 /**
- * How a tool says it stopped on its usage limit, with the reset time when it gives one: Claude Code's "You've hit your
- * limit · resets 3pm", Codex's "You've hit your usage limit. … try again at 3:04 PM.", Claude's older "Claude AI usage
- * limit reached|<reset>".
- */
-const USAGE_LIMIT = /^(?:you(?:'|’)ve hit your (?:(?:usage|session|weekly|daily|monthly|5-hour) )?limit\b|claude ai usage limit reached\b)/i;
-
-/**
  * The failure of an agent that stopped on its tool's usage limit, saying what the tool said, or undefined when it did
  * not: the tool's own line starts its error or last message, so a reply that only mentions a limit is not one.
  */
 function usageLimited(tool: string, said: string | null | undefined): RuntimeFailure | undefined {
   const text = said?.trim();
 
-  return text && USAGE_LIMIT.test(text) ? { code: 'usage_limited', message: `The ${tool} agent hit its usage limit in Paseo: ${text}` } : undefined;
+  return text && isUsageLimitText(text) ? { code: 'usage_limited', message: `The ${tool} agent hit its usage limit in Paseo: ${text}` } : undefined;
 }
 
 /** A confined prompt's answer: the JSON value its agent replied with. */
