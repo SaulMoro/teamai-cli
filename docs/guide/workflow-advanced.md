@@ -1825,10 +1825,10 @@ A runtime that cannot end a place answers `close` with why. teamai then treats w
 ← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
 ```
 
-Each `teamai workflow cancel <run>` tries the close again. When the runtime can never confirm it, as for a create its provider refused, check that nothing of the attempt still runs there, then let the attempt go with `teamai workflow cancel <run> --release <attempt>`. teamai tries the stop and the close once more, and sends that close, even after a stop the runtime did not confirm, as `{"type":"close","handle":"…","release":true}`: your runtime forgets the place, whether or not it can end it. What the runtime cannot confirm no longer holds the attempt. teamai writes its login back, frees it, and no longer tries the close. The runtime may still keep the place:
+Each `teamai workflow cancel <run>` tries the close again. When the runtime can never confirm it, as for a create its provider refused, check that nothing of the attempt still runs there, then let the attempt go with `teamai workflow cancel <run> --release <attempt>`. teamai tries the stop and the close once more, and sends that close, even after a stop the runtime did not confirm, as `{"type":"close","handle":"…","release":true}`: your runtime forgets the place, whether or not it can end it. What the runtime cannot confirm no longer holds the attempt. teamai writes its login back, frees it, and no longer tries the close. What ran in the place may still be there, whether or not your runtime forgot it:
 
 ```text
-ℹ Released attempt a1 of run r7 on step runtime "docker" without its confirmation, as asked. That runtime may still keep the place: Step runtime "docker" could not close the place of attempt a1, so what ran there may still run (rm_failed): docker rm teamai-r7-a1 failed: the daemon is not running
+ℹ Released attempt a1 of run r7 on step runtime "docker" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "docker" could not close the place of attempt a1, so what ran there may still run (rm_failed): docker rm teamai-r7-a1 failed: the daemon is not running
 ```
 
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.

@@ -2188,7 +2188,7 @@ span('end');
 
       // The run was cancelled already; that cancel tries the attempts again, and lets this one go.
       expect(envelope(released), released.stderr).toEqual({ data: { run: { id: run, status: 'cancelled' }, released: [attempt] } });
-      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} on step runtime "toy" without its confirmation, as asked. That runtime may still keep the place: Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set.`);
+      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${run} on step runtime "toy" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set.`);
       expect(released.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
       expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed', closeFailed: { code: 'close_failed' } });
       expect(fs.existsSync(lockFile())).toBe(false);

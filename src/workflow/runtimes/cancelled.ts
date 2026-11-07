@@ -184,7 +184,7 @@ async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptI
   await writeHeldLoginBack(run, attempt, record, { isCollected: record.phase === 'collected' });
 
   if (record.phase !== 'closed') await releaseAttemptRuntime(config, run, attempt, record);
-  log.info(`Released attempt ${attempt} of run ${run} on step runtime "${record.runtime}" without its confirmation, as asked. That runtime may still keep the place: ${why}`);
+  log.info(`Released attempt ${attempt} of run ${run} on step runtime "${record.runtime}" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: ${why}`);
 
   return 'released';
 }
