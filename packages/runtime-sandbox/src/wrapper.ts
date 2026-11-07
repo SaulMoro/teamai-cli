@@ -70,7 +70,15 @@ function refuse(line: string): WrapperEnd {
  * reaches the tool: a grant's command line runs with the grant's environment alone.
  */
 export async function toolExec({ name, args, env, cwd, journal }: { name: string; args: readonly string[]; env: NodeJS.ProcessEnv; cwd: string; journal: Journal }): Promise<WrapperEnd> {
-  const instance = journal.instances()[name];
+  let known: ReturnType<Journal['instances']>;
+
+  try {
+    known = journal.instances();
+  } catch (error) {
+    return refuse(`teamai-sandbox-${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const instance = known[name];
   const shipped = LAUNCHABLE.some((tool) => tool === name);
 
   if (instance === undefined && !shipped) return refuse(`teamai-sandbox: unknown tool ${name}`);
@@ -82,7 +90,15 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
   const agent = env.PASEO_AGENT_ID === undefined || env.PASEO_AGENT_ID === '' ? null : env.PASEO_AGENT_ID;
   const at = realOf(env.PASEO_AGENT_CWD ?? cwd);
 
-  const attempt = journal.outerPlaces().map((place) => ({ ...place, root: realOf(place.outer.worktree) })).filter(({ root }) => isWithin(at, root)).sort((a, b) => b.root.length - a.root.length)[0];
+  let outerPlaces: ReturnType<Journal['outerPlaces']>;
+
+  try {
+    outerPlaces = journal.outerPlaces();
+  } catch (error) {
+    return refuse(`teamai-sandbox-${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const attempt = outerPlaces.map((place) => ({ ...place, root: realOf(place.outer.worktree) })).filter(({ root }) => isWithin(at, root)).sort((a, b) => b.root.length - a.root.length)[0];
 
   if (attempt === undefined) {
     // Paseo lists Codex's models with no agent, outside any step: without it no Codex agent can be made there.

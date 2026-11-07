@@ -126,24 +126,21 @@ export function journal(root: string) {
     outerPlaces: (): Array<PlaceRecord & { outer: NonNullable<PlaceRecord['outer']> }> => {
       const dir = path.join(root, 'places');
 
+      // A record that cannot be read fails, never taken as absent: its attempt may be the one asked for.
       return (fs.existsSync(dir) ? fs.readdirSync(dir) : []).filter((name) => name.endsWith('.json')).flatMap((name) => {
-        const parsed = PlaceRecordSchema.safeParse((() => {
-          try {
-            return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-          } catch {
-            return undefined;
-          }
-        })());
+        const record = read(path.join(dir, name), PlaceRecordSchema);
 
-        return parsed.success && parsed.data.outer !== undefined ? [{ ...parsed.data, outer: parsed.data.outer }] : [];
+        return record?.outer !== undefined ? [{ ...record, outer: record.outer }] : [];
       });
     },
-    /** The instances every `init` so far named, by name: the latest wins. Unreadable, it is none. */
+    /** The instances every `init` so far named, by name: the latest wins. A record that cannot be read fails. */
     instances: (): KnownInstances => {
+      const file = path.join(root, 'instances.json');
+
       try {
-        return read(path.join(root, 'instances.json'), InstancesSchema) ?? {};
-      } catch {
-        return {};
+        return read(file, InstancesSchema) ?? {};
+      } catch (error) {
+        throw new Error(`The instances teamai named are kept in ${file}, which cannot be read (${error instanceof Error && error.cause instanceof Error ? error.cause.message : String(error)}). Delete it: the next teamai run names them again.`, { cause: error });
       }
     },
     saveInstances: (named: KnownInstances): void => write(path.join(root, 'instances.json'), named),
