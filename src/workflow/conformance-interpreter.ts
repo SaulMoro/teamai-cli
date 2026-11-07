@@ -5,6 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { resolveRunMode } from '../launch-context.js';
 import { isJsonObject, type JsonValue } from '../types.js';
+import { parseYaml } from '../utils/yaml.js';
 import { agentEvidence } from './attempt-marker.js';
 import { commandOutputs, type NextPrepare, type WorkflowClient } from './protocol.js';
 import type { WorkflowRunRecord } from './records.js';
@@ -128,12 +129,46 @@ export const DRIVER_PROFILES = {
   },
   /** The skill driver's identity declaring only a person and workspaces, so a run owes it no env, setup or tokens. */
   'skill-bare': { kind: 'skill', can: { hitl: true, workspace: ['read-only', 'new', 'continue'] } },
+  /**
+   * The local driver offering a step on a T3 Code runtime: each prompt a thread, no command, setup, env, budget or
+   * unattended step, and its tools judged best-effort.
+   */
+  t3: {
+    kind: 'local',
+    can: {
+      exec: false, setup: false, env: false, tokens: false, unattended: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude'],
+      confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], remote: true,
+    },
+  },
+  /** The local driver offering a step on a Paseo runtime: as T3, and a role delivered into the agent's home. */
+  paseo: {
+    kind: 'local',
+    can: {
+      exec: false, setup: false, env: false, tokens: false, unattended: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude'],
+      confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], remote: true,
+    },
+  },
+  /** The local driver offering a step on a sandbox runtime on a container engine: every step, in a sandbox. */
+  sandbox: {
+    kind: 'local',
+    can: {
+      workspace: ['read-only', 'new', 'continue', 'clone', 'team'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: ['claude'], end_turn: true, unattended: true, role: true,
+      confined: [{ level: 'verified', access: 'read', tools: ['claude'] }, { level: 'verified', access: 'full', tools: ['codex'] }], remote: true,
+    },
+  },
 } as const satisfies Record<string, { kind: string; can: DriverCan }>;
 
 export type DriverProfile = keyof typeof DRIVER_PROFILES;
 
 /** The drivers under test every protocol, place, git and limits scenario runs as. */
 export const DRIVERS_UNDER_TEST = ['local', 'skill', 'skill-bare'] as const satisfies readonly DriverProfile[];
+
+/**
+ * What every protocol, place and limits scenario runs as: the drivers under test, and the local driver offering a step
+ * on each step runtime teamai ships. The git scenarios leave the runtimes out: the local driver prepares their places,
+ * which `local` holds to them.
+ */
+export const PROFILES_UNDER_TEST = [...DRIVERS_UNDER_TEST, 't3', 'paseo', 'sandbox'] as const satisfies readonly DriverProfile[];
 
 /** The identity a scenario's `as` profile sends. */
 export function profileDriver(profile: DriverProfile): DriverIdentity {
@@ -296,6 +331,26 @@ async function readOrNull(file: string): Promise<string | null> {
 
 /** Whether an operation's `as` stands for the driver under test. */
 const standsForDriverUnderTest = (as: DriverProfile | undefined): as is 'local' | undefined => as === undefined || as === 'local';
+
+/** Whether a workflow, or any it runs, has a key `command` or `setup`: a command step, or a step that runs setup. */
+function runsCommands(yaml: string): boolean {
+  const holds = (value: JsonValue): boolean => (Array.isArray(value) ? value.some(holds) : isJsonObject(value) && Object.entries(value).some(([key, entry]) => key === 'command' || key === 'setup' || holds(entry)));
+
+  return holds(parseYaml(yaml));
+}
+
+/**
+ * Whether `profile` runs `scenario`. A profile that runs no command (`exec: false`, a runtime that launches agents
+ * its own way) runs no scenario with a command or setup step: in a driver definition, the host command slot takes
+ * those, and the `local` profile holds it to them.
+ */
+export function profileRuns(profile: DriverProfile, scenario: { yaml: string; workflows?: Record<string, string> } | BenchmarkScenario): boolean {
+  const can: DriverCan = DRIVER_PROFILES[profile].can;
+
+  if (can.exec !== false || !('yaml' in scenario)) return true;
+
+  return ![scenario.yaml, ...Object.values(scenario.workflows ?? {})].some(runsCommands);
+}
 
 /**
  * Whether the answers `scenario` gets can differ by the profile it runs under: a profile refuses it, or one of its
