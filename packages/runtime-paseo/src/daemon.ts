@@ -227,11 +227,18 @@ export interface Target {
   provider: string;
 }
 
+/** What Paseo lists for a tool or instance a step can run on: its modes, and the one a step starts in. */
+type Runnable = Target & { modes: string[]; stepMode: StepMode };
+
 /**
- * A tool or instance installed on the daemon's host: one it can run, with its modes and the one a step starts in, or
- * why it cannot, for a person to read.
+ * A tool or instance installed on the daemon's host: `runs`, on a provider the daemon has, with the home it signs in and
+ * keeps sessions in when that is not teamai's; `to-add`, a team instance offered on the provider teamai adds at its first
+ * step, whose homes are known once it is added; or `unavailable`, with why, for a person to read.
  */
-export type InstalledTool = (Target & { canRun: true; modes: string[]; stepMode: StepMode; home?: string; providerHome?: ProviderHome; toAdd?: ProviderToAdd }) | Unavailable;
+export type InstalledTool =
+  | (Runnable & { kind: 'runs'; home?: string; providerHome?: ProviderHome })
+  | (Runnable & { kind: 'to-add'; toAdd: ProviderToAdd })
+  | Unavailable;
 
 /**
  * The tool home a Paseo custom provider's env sets for what it runs: `variable`, the one that moves that tool's home;
@@ -293,7 +300,10 @@ function homeDirOf(tool: PaseoTool): string {
 }
 
 /** A tool or instance the daemon cannot run, and why, before or after a provider is found for it. */
-type Unavailable = Pick<Target, 'name' | 'tool'> & { canRun: false; reason: string };
+type Unavailable = Pick<Target, 'name' | 'tool'> & { kind: 'unavailable'; reason: string };
+
+/** How init plans to run a tool or instance before it asks Paseo about it: on a provider found, one to add, or neither. */
+type Planned = (Target & { kind: 'found' }) | (Target & { kind: 'add'; toAdd: ProviderToAdd }) | Unavailable;
 
 /**
  * How Paseo runs an instance on the provider teamai added for it, or why it cannot; `added` says whether this call added
@@ -858,42 +868,39 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       };
 
       // Each tool on its own provider or the one the definition names, each instance on the one that runs its command.
-      const builtins = PASEO_TOOLS.flatMap((tool): Array<Target | Unavailable> => {
+      const builtins = PASEO_TOOLS.flatMap((tool): Planned[] => {
         const provider = named[tool];
 
-        if (provider === undefined) return available.has(tool) ? [{ name: tool, tool, provider: tool }] : [];
+        if (provider === undefined) return available.has(tool) ? [{ kind: 'found', name: tool, tool, provider: tool }] : [];
         const problem = unread ?? namedProblem(provider, tool, customs);
 
-        return [problem === undefined ? { name: tool, tool, provider } : { name: tool, tool, canRun: false, reason: problem }];
+        return [problem === undefined ? { kind: 'found', name: tool, tool, provider } : { kind: 'unavailable', name: tool, tool, reason: problem }];
       });
 
-      const teams = teamInstances.map(({ instance, tool }): (Target & { toAdd?: ProviderToAdd }) | Unavailable => {
+      const teams = teamInstances.map(({ instance, tool }): Planned => {
         const found = unread === undefined ? providerOf(instance, tool, { custom: customs, named: named[instance.name], onThisMachine: isOnThisMachine(url), ...ownHome(instance, tool) }) : { cannot: unread };
 
-        if ('cannot' in found) return { name: instance.name, tool, canRun: false, reason: found.cannot };
+        if ('cannot' in found) return { kind: 'unavailable', name: instance.name, tool, reason: found.cannot };
 
         // One teamai adds at the first open that runs it, so the daemon gets an entry only for a team tool a step runs.
-        return 'add' in found ? { name: instance.name, tool, provider: found.add.id, toAdd: found.add } : { name: instance.name, tool, provider: found.provider };
+        return 'add' in found ? { kind: 'add', name: instance.name, tool, provider: found.add.id, toAdd: found.add } : { kind: 'found', name: instance.name, tool, provider: found.provider };
       });
 
-      const planned: Array<(Target & { toAdd?: ProviderToAdd }) | Unavailable> = [...builtins, ...teams];
-
-      return Promise.all(planned.map(async (target): Promise<InstalledTool> => {
-        if ('canRun' in target) return target;
-        const { tool, provider } = target;
+      return Promise.all([...builtins, ...teams].map(async (target): Promise<InstalledTool> => {
+        if (target.kind === 'unavailable') return target;
+        const { name, tool, provider } = target;
+        const cannotRun = (reason: string): Unavailable => ({ kind: 'unavailable', name, tool, reason });
 
         // Until it is added, it takes the modes Paseo lists for its tool, as the provider teamai adds extends it; its
         // sign-in is checked once it is added.
-        const { toAdd } = target;
-
-        if (toAdd) {
+        if (target.kind === 'add') {
           const listed = await modesOf(tool, tool);
 
-          return 'cannot' in listed ? { name: target.name, tool, canRun: false, reason: listed.cannot } : { name: target.name, tool, provider, toAdd, canRun: true, ...listed };
+          return 'cannot' in listed ? cannotRun(listed.cannot) : { kind: 'to-add', name, tool, provider, toAdd: target.toAdd, ...listed };
         }
 
-        if (!available.has(provider)) return { ...target, canRun: false, reason: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };
-        const instance = teamInstances.find((team) => team.instance.name === target.name)?.instance;
+        if (!available.has(provider)) return cannotRun(`Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``);
+        const instance = teamInstances.find((team) => team.instance.name === name)?.instance;
         const variable = instance?.home?.env ?? homeVariableOf(tool);
         const teamaiHome = instance?.home ? instanceHomeOf(instance.home) : process.env[variable] || path.join(getUserHome(), homeDirOf(tool));
         const set = custom.get(provider)?.env?.[variable];
@@ -903,15 +910,15 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         let signedIn: SignIn;
 
         try {
-          signedIn = await signIn(target, { runsIn, command: instance?.command });
+          signedIn = await signIn({ name, tool, provider }, { runsIn, command: instance?.command });
         } catch (error) {
           signedIn = { canRun: false, problem: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
         }
 
-        if (!signedIn.canRun) return { ...target, canRun: false, reason: signedIn.problem };
+        if (!signedIn.canRun) return cannotRun(signedIn.problem);
         const listed = await modesOf(tool, provider);
 
-        return 'cannot' in listed ? { ...target, canRun: false, reason: listed.cannot } : { ...target, canRun: true, ...listed, ...(signedIn.home !== undefined && { home: signedIn.home }), ...(providerHome && { providerHome }) };
+        return 'cannot' in listed ? cannotRun(listed.cannot) : { kind: 'runs', name, tool, provider, ...listed, ...(signedIn.home !== undefined && { home: signedIn.home }), ...(providerHome && { providerHome }) };
       }));
     },
     async addProvider({ id, entry }, instance) {

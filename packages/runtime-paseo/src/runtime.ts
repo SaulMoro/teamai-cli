@@ -666,14 +666,14 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
 
     const modes = Object.fromEntries(Object.entries(options.mode ?? {}).filter(([tool]) => isPaseoTool(tool)));
     const installed = await connected.installedTools({ modes, instances, providers: options.providers ?? {} });
-    const tools = installed.flatMap((entry) => (entry.canRun ? [entry] : []));
+    const tools = installed.flatMap((entry) => (entry.kind === 'unavailable' ? [] : [entry]));
 
     // It starts though it can run no tool, so the run's command steps still go to the next runtime: each tool it cannot
     // run is named with why, which teamai shows on a step on that tool.
     const unavailable = Object.fromEntries([...PASEO_TOOLS, ...installed.map(({ name }) => name).filter((name) => !isPaseoTool(name))].flatMap((name): Array<[string, string]> => {
       const entry = installed.find((candidate) => candidate.name === name);
 
-      if (entry?.canRun) return [];
+      if (entry && entry.kind !== 'unavailable') return [];
       const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${name} on the daemon's PATH and sign in to it there`;
 
       return [[name, fitReason(`The Paseo daemon at ${connected.url} cannot run ${name}: ${reason}.`)]];
@@ -700,7 +700,10 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     }
 
     // A provider that moves a tool's home away from teamai's own for it: its steps sign in and keep sessions there.
-    for (const { name, provider, providerHome } of tools) {
+    for (const entry of tools) {
+      const { name, provider } = entry;
+      const providerHome = entry.kind === 'runs' ? entry.providerHome : undefined;
+
       if (providerHome && path.resolve(providerHome.dir) !== path.resolve(providerHome.teamaiHome)) {
         write({ event: 'notice', message: `Paseo provider ${provider} runs ${name} with ${providerHome.variable}=${providerHome.dir}, not teamai's home for it (${providerHome.teamaiHome}): its steps sign in and keep their sessions in ${providerHome.dir}, where teamai reads them.` });
       }
@@ -709,15 +712,15 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     targets = new Map(tools.map(({ name, tool, provider }) => [name, { name, tool, provider }]));
     homeDirs = new Map(instances.flatMap((instance) => (instance.home ? [[instance.name, instance.home.dir]] : [])));
     modeIds = new Map(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'unset' ? [] : [[name, stepMode.id]])));
-    sessionHomes = new Map(tools.flatMap(({ name, home }) => (home === undefined ? [] : [[name, home]])));
-    providerHomes = new Map(tools.flatMap(({ name, providerHome }) => (providerHome === undefined ? [] : [[name, providerHome.dir]])));
-    toAdd = new Map(tools.flatMap(({ name, toAdd: planned }) => {
-      const instance = instances.find((candidate) => candidate.name === name);
+    sessionHomes = new Map(tools.flatMap((entry) => (entry.kind === 'runs' && entry.home !== undefined ? [[entry.name, entry.home]] : [])));
+    providerHomes = new Map(tools.flatMap((entry) => (entry.kind === 'runs' && entry.providerHome !== undefined ? [[entry.name, entry.providerHome.dir]] : [])));
+    toAdd = new Map(tools.flatMap((entry) => {
+      const instance = instances.find((candidate) => candidate.name === entry.name);
 
-      return planned && instance ? [[name, { planned, instance }]] : [];
+      return entry.kind === 'to-add' && instance ? [[entry.name, { planned: entry.toAdd, instance }]] : [];
     }));
     offers = new Map(installed.map((entry): [string, Offer] => {
-      if (!entry.canRun) return [entry.name, { runs: 'nothing', reason: entry.reason }];
+      if (entry.kind === 'unavailable') return [entry.name, { runs: 'nothing', reason: entry.reason }];
       const confinedMode = CONFINED_MODES[entry.tool];
 
       return [entry.name, entry.modes.includes(confinedMode) ? { runs: 'steps-and-judges' } : { runs: 'steps', noJudge: `has no ${confinedMode} mode, which teamai judges it in` }];
