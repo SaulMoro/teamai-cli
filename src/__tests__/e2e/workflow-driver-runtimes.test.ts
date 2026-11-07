@@ -2972,6 +2972,14 @@ span('end');
       expect(asked().filter((call) => call.type === 'exec').map((call) => call.toy)).toEqual(['outer']);
     });
 
+    it('refuses an entry whose inner runtime launches no agents, before any step runs', async () => {
+      writeDefinition('throughexec', [{ use: 'toy', through: 'sandboxtoy', options: { toy: { state: innerState }, sandboxtoy: { state: outerState } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'throughexec'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'driver_invalid', message: expect.stringContaining('runs toy through sandboxtoy, and toy launches no agents of its own') } });
+    });
+
     it('reattaches the outer, with the prompt\'s credential again, then the inner, when a killed teamai resumes', async () => {
       throughDefinition('throughdie', { die_at: 'prompt-finished' });
 

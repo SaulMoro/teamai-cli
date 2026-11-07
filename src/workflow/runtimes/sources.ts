@@ -507,6 +507,15 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
   }
 
   const [outerOpened, innerOpened] = [outer.opened, inner.opened];
+
+  // Only a runtime that launches agents its own way has tools to run through another; one that execs them would run
+  // nothing on the inner side, and its steps would run on the outer alone.
+  if (!innerOpened.launchesAgents) {
+    await Promise.all([outerOpened.runtime.dispose(), innerOpened.runtime.dispose()]);
+
+    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${names.inner} launches no agents of its own: only a runtime that launches agents, such as an app's, runs its tools through another. Use ${names.outer} on its own, or fix the file, and start again.` } };
+  }
+
   const offer = composedOffer({ ok: true, can: outerOpened.can, launchesAgents: outerOpened.launchesAgents }, { ok: true, can: innerOpened.can, launchesAgents: innerOpened.launchesAgents, ...(innerOpened.unavailable && { unavailable: innerOpened.unavailable }) });
   const caps = [outerOpened.engine.maxParallel, innerOpened.engine.maxParallel].filter((cap) => cap !== undefined);
   const engine: EngineOptions = { ...outerOpened.engine, ...(caps.length > 0 && { maxParallel: Math.min(...caps) }) };
