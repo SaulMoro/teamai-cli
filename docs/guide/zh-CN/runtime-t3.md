@@ -61,7 +61,7 @@ teamai pull
 teamai workflow start readme-review --driver t3
 ```
 
-第一次运行会让 teamai 登录 T3 Code，不打开页面，也不问你。teamai 让这台机器上的 `t3` 命令创建一个两分钟内有效的配对码，再用它以 Auto 权限批准自己的登录，即使你[收紧了 `runtime_mode`](#步骤线程会问你多少)：每个线程仍按自己的模式运行，一次登录可供所有运行使用。只有 [`runtime_mode: full-access`](#在可以丢弃的机器上运行-full-access)，或者 teamai 需要添加的[团队工具实例](#团队工具)，会让它以 Full access 登录。它运行的命令：
+第一次运行会让 teamai 登录 T3 Code，不打开页面，也不问你。teamai 让这台机器上的 `t3` 命令创建一个两分钟内有效的配对码，再用它以 Auto 权限批准自己的登录，即使你[收紧了 `runtime_mode`](#步骤线程会问你多少)：每个线程仍按自己的模式运行，一次登录可供所有运行使用。只有 [`runtime_mode: full-access`](#在可以丢弃的机器上运行-full-access) 会让它以 Full access 登录。它运行的命令：
 
 ```sh
 t3 auth pairing create --json --base-dir ~/.t3 --scope orchestration:read --scope orchestration:operate --ttl 2m --label "teamai workflow"
