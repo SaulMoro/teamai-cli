@@ -36,7 +36,7 @@ import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS,
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep } from '../../runtimes/cancelled.js';
-import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../../runtimes/login.js';
+import { ensureLogin, holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../../runtimes/login.js';
 import { credentialSecrets, credentialsForTool, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
@@ -644,6 +644,10 @@ async function promptReport(
   const login = toolHome ? execs?.logins.find((tool) => tool === launched) : undefined;
 
   if (login && toolHome) {
+    // The first attended step that needs the login creates it for the member; an unattended one says how.
+    const missing = await ensureLogin(login, { step: { run: lock.run, id: lease.step }, canAsk: mode === 'attended' && process.stdin.isTTY && process.stderr.isTTY });
+
+    if (missing) return giveUp(missing, selected);
     const waitFile = loginWaitFile(attemptDir(config, lock.run, lease.attempt));
 
     const held = await holdLogin({

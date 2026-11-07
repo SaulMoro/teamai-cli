@@ -1884,18 +1884,34 @@ span('end');
       throw new Error(`timed out waiting for ${what}`);
     };
 
-    it('fails an unattended start whose runtime needs the dedicated login and finds none credential_missing, naming the command, before any step', async () => {
+    it('fails an unattended Codex step that needs the dedicated login and finds none credential_missing, naming the command and the retry', async () => {
       loginDefinition('codexnologin', state);
       fs.rmSync(dedicated());
 
       const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexnologin'], repo, env({ TEAMAI_MODE: 'unattended' }));
 
-      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'credential_missing', message: expect.stringContaining(`CODEX_HOME=${path.dirname(dedicated())} codex login`) } });
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      const runId = runOf(ran);
+      expect(readRunState(runId).steps).toMatchObject([{
+        id: 'review', status: 'failed',
+        failure: { code: 'credential_missing', message: `Step "review" signs Codex in on the login teamai keeps apart from your daily one, and ${path.dirname(dedicated())} has no Codex login yet. An unattended run does not sign in for you. Create it once with CODEX_HOME=${path.dirname(dedicated())} codex login, then run: teamai workflow retry ${runId} review` },
+      }]);
       expect(fs.existsSync(launches)).toBe(false);
       expect(fs.existsSync(`${launches}.logins`)).toBe(false);
     });
 
-    it.skipIf(!hasPython)('runs codex login into the dedicated home for the member on an attended start that needs it and finds none, after saying why, then runs the step on it', async () => {
+    it('runs a run that launches no Codex on a runtime that brings the dedicated login, with none there', async () => {
+      loginDefinition('codexunused', state);
+      fs.rmSync(dedicated());
+
+      const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'codexunused'], repo, env({ TEAMAI_MODE: 'unattended' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(readRunState(runOf(ran)).steps).toMatchObject([{ id: 'build', status: 'succeeded' }, { id: 'review', status: 'succeeded', tool: 'claude' }]);
+      expect(fs.existsSync(`${launches}.logins`)).toBe(false);
+    });
+
+    it.skipIf(!hasPython)('runs codex login into the dedicated home for the member on the first attended step that needs it and finds none, after saying why, then runs the step on it', async () => {
       loginDefinition('codexfirstlogin', state);
       fs.rmSync(dedicated());
       fs.rmSync(`${launches}.logins`, { force: true });

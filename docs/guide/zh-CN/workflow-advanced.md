@@ -1608,14 +1608,14 @@ workflows:
 
 ### 步骤运行时的 Codex 登录
 
-Codex 拒绝重复使用的刷新令牌，所以你自己登录的副本一旦在步骤里刷新，你的其他 Codex 会话就会被登出。`credentials: { codex: login }` 改用 teamai 单独保存的登录。第一次需要它、且在终端里运行时，teamai 会替你创建：
+Codex 拒绝重复使用的刷新令牌，所以你自己登录的副本一旦在步骤里刷新，你的其他 Codex 会话就会被登出。`credentials: { codex: login }` 改用 teamai 单独保存的登录。第一个需要它、且在终端里运行的 Codex 步骤会替你创建：
 
 ```text
 $ teamai workflow start review --driver containers
-ℹ Runtime "sandbox" of driver "containers" signs Codex in on the login teamai keeps apart from your daily one, and /home/me/.teamai/logins/codex has no Codex login yet. Running CODEX_HOME=/home/me/.teamai/logins/codex codex login once to create it.
+ℹ Step "review" signs Codex in on the login teamai keeps apart from your daily one, and /home/me/.teamai/logins/codex has no Codex login yet. Running CODEX_HOME=/home/me/.teamai/logins/codex codex login once to create it.
 ```
 
-随后 Codex 自己的登录在你的终端里运行，结束后运行继续。无人值守的运行不会替你登录：它在开始时以 `credential_missing` 失败，并写明这条命令。也可以提前创建登录：
+随后 Codex 自己的登录在你的终端里运行，结束后步骤继续。没有 Codex 步骤的运行从不询问。无人值守的运行不会替你登录：这个步骤以 `credential_missing` 失败，并写明这条命令以及之后要运行的重试命令。也可以提前创建登录：
 
 ```sh
 CODEX_HOME=~/.teamai/logins/codex codex login

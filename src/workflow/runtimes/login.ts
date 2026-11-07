@@ -211,32 +211,37 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
 }
 
 /**
- * Makes sure `tool`'s dedicated home holds a login before a run that brings it starts (`who` names the runtime that
- * does). Attended at a terminal (`canAsk`), it says why in one line and runs the tool's own login command there for
- * the member, once; otherwise it fails `credential_missing`, naming that command.
+ * Makes sure `tool`'s dedicated home holds a login before the step that brings it (`step`) opens its place. Attended at
+ * a terminal (`canAsk`), it says why in one line and runs the tool's own login command there for the member, once;
+ * otherwise it fails `credential_missing`, naming that command and the retry to run after it.
  */
-export async function ensureLogin(tool: LoginTool, { who, canAsk }: { who: string; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
+export async function ensureLogin(tool: LoginTool, { step, canAsk }: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
   const file = path.join(loginHome(tool), LOGIN_FILES[tool]);
 
   if (await readRegular(file)) return undefined;
-  const why = `${who} signs ${TOOL_NAMES[tool]} in on the login teamai keeps apart from your daily one, and ${loginHome(tool)} has no ${TOOL_NAMES[tool]} login yet.`;
+  const why = `Step "${step.id}" signs ${TOOL_NAMES[tool]} in on the login teamai keeps apart from your daily one, and ${loginHome(tool)} has no ${TOOL_NAMES[tool]} login yet.`;
+  const retry = `teamai workflow retry ${step.run} ${step.id}`;
 
   if (!canAsk) {
-    return { code: 'credential_missing', message: `${why} An unattended run does not sign in for you. Create it once with ${loginCommand(tool)}, then start again.` };
+    return { code: 'credential_missing', message: `${why} An unattended run does not sign in for you. Create it once with ${loginCommand(tool)}, then run: ${retry}` };
   }
 
   log.info(`${why} Running ${loginCommand(tool)} once to create it.`);
   await fs.mkdir(loginHome(tool), { recursive: true });
 
-  const code = await new Promise<number>((resolve) => {
+  const ended = await new Promise<{ code: number } | { error: string }>((resolve) => {
     const child = crossSpawn(tool, ['login'], { env: { ...process.env, [HOME_VARIABLES[tool]]: loginHome(tool) }, stdio: 'inherit' });
-    child.on('error', () => resolve(127));
-    child.on('close', (exit) => resolve(exit ?? 1));
+    child.on('error', (error) => resolve({ error: error.message }));
+    child.on('close', (exit, signal) => resolve({ code: exit ?? (signal ? 128 : 1) }));
   });
 
-  if (code === 0 && await readRegular(file)) return undefined;
+  if ('error' in ended) {
+    return { code: 'credential_missing', message: `${loginCommand(tool)} could not start (${ended.error}), so the step did not run. Make ${tool} runnable here, run it once, then run: ${retry}` };
+  }
 
-  return { code: 'credential_missing', message: `${loginCommand(tool)} ended with status ${code} and left no login in ${file}, so the run did not start. Run it again, then start again.` };
+  if (ended.code === 0 && await readRegular(file)) return undefined;
+
+  return { code: 'credential_missing', message: `${loginCommand(tool)} ended with status ${ended.code} and left no login in ${file}, so the step did not run. Run it again, then run: ${retry}` };
 }
 
 /** Releases `tool`'s login if attempt `attempt` of run `run` holds it. */
