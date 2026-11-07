@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { CanSchema } from '@teamai/runtime-protocol';
 import { parseReportedAgent, parseReportedUsed, settleObservation, type ReportedAgent, type Used } from '../agent-observation.js';
@@ -9,7 +9,8 @@ import { DefaultWorkflows } from '../default-workflows.js';
 import { DriverSchema, sameDriver } from '../driver-identity.js';
 import { RunModeSchema, type RunMode } from '../launch-context.js';
 import { log } from '../utils/logger.js';
-import { getDefaultBranch } from '../utils/git.js';
+import { execCommand } from '../utils/exec.js';
+import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
 import { getDataHome, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias } from './cache.js';
@@ -1536,6 +1537,26 @@ export async function startRun(
 }
 
 /**
+ * The top of the work tree `dir` is in, spelled as `dir` is: a run started in a subfolder records its repository, as
+ * every later process of the run reads its places, config and runtimes from there. `dir` itself outside a work tree.
+ */
+async function workTreeTop(dir: string): Promise<string> {
+  const prefix = (await checkoutLocation(dir))?.prefix ?? await gitPrefix(dir);
+
+  return resolve(dir, ...prefix.split('/').filter(Boolean).map(() => '..'));
+}
+
+/**
+ * Where git itself places `dir` in its work tree, for a `dir` checkoutLocation cannot say, such as under GIT_DIR. None
+ * outside one, or with no git to ask: the run then records `dir`, as before git was asked.
+ */
+async function gitPrefix(dir: string): Promise<string> {
+  const shown = await execCommand('git', ['rev-parse', '--show-prefix'], { cwd: dir, timeoutMs: 10_000 }).catch(() => undefined);
+
+  return shown?.code === 0 ? shown.stdout.trim() : '';
+}
+
+/**
  * Creates a run of a definition the caller already built and checked. The run file is written only when it would keep
  * what it was given unmasked. `secrets` are what the caller resolved for the operation. `alone`: the run's only
  * driver, the local loop, with what each of its runtimes gives strict requirements; a start with a step none of them
@@ -1584,7 +1605,7 @@ export async function createRun(
     steps: input.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
     settledAttempts: [],
     base: input.base,
-    checkout: input.checkout || undefined,
+    checkout: input.checkout ? await workTreeTop(input.checkout) : undefined,
     timeout: input.timeout,
     createdAt: now,
     updatedAt: now,
