@@ -4,7 +4,7 @@ import { redact, redactJson } from '@teamai/shared/redact';
 import { CANCEL_FAILED, PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
-import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
+import { EVIDENCE_DIR, inEvidenceDir, judgeOf, noJudgeCredential, offersSignedIn } from './judge.js';
 import { maskedAsGiven, onThisMachine, rewrittenMasks, toAlias } from './loopback.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type Provider } from './provider.js';
@@ -86,6 +86,8 @@ export interface RuntimeDeps {
   warn: (line: string) => void;
   /** The provider the options choose. */
   provider: (options: SandboxOptions) => Provider;
+  /** The environment teamai started this runtime with, the member's: a hint names the sign-in it sets. */
+  env: NodeJS.ProcessEnv;
 }
 
 /** One exec as the journal keeps it, with its id. */
@@ -140,7 +142,7 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
   return 'op' in message && 'event' in message && ['exited', 'finished', 'cancelled', 'failed'].includes(message.event);
 }
 
-export function serve({ input, write: send, journal, warn, provider: providerFor }: RuntimeDeps): void {
+export function serve({ input, write: send, journal, warn, provider: providerFor, env }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
   /** The ops this process runs, each with what resolves once its end is written. */
@@ -324,7 +326,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // A judge's place: nothing of the host, and no sandbox until its prompt names the directory.
     if (view === undefined) {
       if (Object.keys(credentials).length === 0) {
-        write({ op, event: 'failed', failure: NO_JUDGE_CREDENTIAL });
+        write({ op, event: 'failed', failure: noJudgeCredential(env) });
 
         return;
       }
@@ -537,7 +539,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     const given = inSandbox(request.credentials, host);
-    const chosen = judgeOf(lease.tool, given);
+    const chosen = judgeOf(lease.tool, given, env);
 
     if (!chosen.ok) {
       write({ op, event: 'failed', failure: chosen.failure });

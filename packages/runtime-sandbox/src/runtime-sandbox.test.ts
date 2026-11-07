@@ -1822,6 +1822,23 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(engine.networks()).toEqual([]);
   });
 
+  it.each<{ shell: NodeJS.ProcessEnv; named: string }>([
+    { shell: { ANTHROPIC_API_KEY: 'shell-key' }, named: 'ANTHROPIC_API_KEY' },
+    { shell: { ANTHROPIC_AUTH_TOKEN: 'shell-token', CLAUDE_CODE_OAUTH_TOKEN: '' }, named: 'ANTHROPIC_AUTH_TOKEN' },
+    { shell: {}, named: 'CLAUDE_CODE_OAUTH_TOKEN' },
+  ])("points a Claude judge that brings no sign-in at $named, the one your shell sets first", async ({ shell, named }) => {
+    const connection = start(shell);
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const opened = await openJudge(connection, {});
+
+    expect(String((opened.failure as Message).message)).toContain(`for example ${named}: env:${named} for Claude`);
+    await openJudge(connection, { OPENAI_API_KEY: 'judge-key-1' });
+    const end = await judge(connection, { credentials: { OPENAI_API_KEY: 'judge-key-1' } });
+
+    expect(end).toMatchObject({ event: 'failed', failure: { code: 'credential_missing', message: expect.stringContaining(`for example ${named}: env:${named}.`) } });
+    expect(JSON.stringify(connection.messages)).not.toContain('shell-');
+  });
+
   it("refuses a judge whose credentials are not its tool's, before it starts anything", async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

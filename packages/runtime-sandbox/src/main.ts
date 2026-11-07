@@ -35,6 +35,7 @@ serve({
     if (stderrOpen) process.stderr.write(`${line}\n`);
   },
   provider: providerOf,
+  env: process.env,
 });
 
 function providerOf(options: SandboxOptions): Provider {
