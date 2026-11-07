@@ -372,6 +372,61 @@ podman machine start                     # macOS 和 Windows
 teamai workflow start review --driver containers-podman
 ```
 
+## seatbelt 和 bwrap
+
+`seatbelt`（macOS 14 或更高版本）和 `bwrap`（Linux，[bubblewrap](https://github.com/containers/bubblewrap)）把每个步骤作为这台机器上的一个沙箱进程运行，用的是这台机器自己的工具：不需要镜像，也不需要守护进程。它们只接受 `provider` 和 `credentials`。
+
+```yaml
+# drivers/native.yaml
+schemaVersion: v1alpha1
+name: native
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: seatbelt                 # Linux 上用 bwrap
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+```
+
+- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录。它读不到你的主目录、你的其他仓库和你的 SSH 密钥：它的 `HOME` 和 `TMPDIR` 是它自己的空目录。
+- 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
+- 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
+- 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
+- `seatbelt` 只通过 `sandbox-exec` 限制文件访问。带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
+
+当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行：
+
+```sh
+sudo apt install bubblewrap
+```
+
+## Vercel
+
+`vercel` 把每次尝试放进它自己的 [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox)，也就是 Vercel 上的一个微型虚拟机。它的镜像自带 Claude，所以它提供 Claude 步骤。
+
+```yaml
+# drivers/hosted.yaml
+schemaVersion: v1alpha1
+name: hosted
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: vercel
+      timeout: 2h                        # 可选：沙箱的存活时间，1m 到 5h
+      provider_auth:                     # 可选：teamai 从哪里读取 Vercel 登录信息
+        VERCEL_TOKEN: file:~/.config/vercel-token
+      credentials:
+        ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY
+```
+
+- teamai 用 `VERCEL_TOKEN`、`VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或者用 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）登录 Vercel。`provider_auth` 可以为其中任意一个指定另一个变量或一个文件。它们在这台机器上读取，永远不会到达步骤。
+- teamai 把工作树、git 目录（只读）、运行的文件和工具主目录按主机路径复制进去。步骤结束时，它把工作树、结果和工具主目录复制回来，修改和删除都会带回。git 目录和运行的文件不会复制回来。步骤放下的链接以链接的形式带回，这次尝试的目录之外什么都不会写。
+- 每个沙箱创建时都关闭持久化，并在尝试关闭时删除。不设置时，`timeout` 持续到步骤时间限制之后 5 分钟，最多 5 小时；步骤没有时间限制时为 45 分钟。如果 `timeout` 会在步骤时间限制之前结束，步骤会在创建任何沙箱之前以 `timeout` 上的 `bad_option` 失败。
+- Vercel 上的沙箱连不到这台机器，所以指向 `localhost` 或 `127.0.0.1` 的凭据（例如 `ANTHROPIC_BASE_URL`）会以 `bad_option` 失败。
+- 遗留下来的沙箱会以 `teamai-<home id>-<run>-<attempt>` 的名字出现在 Vercel 控制台（Sandboxes）里；它的 timeout 到了就会结束它。
+
 ## 限制和预算
 
 步骤的 `timeout`、`max_turns` 和 `budget` 在容器里和在主机上一样生效。到达限制时，teamai 停止工具：运行时重启这次尝试的容器，容器里的所有进程随之结束。
