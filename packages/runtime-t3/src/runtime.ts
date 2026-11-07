@@ -11,11 +11,12 @@ import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import type { AddedProjects } from './added-projects.js';
 import type { SignInAccess } from './auth.js';
+import { parseOptions } from './options.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider, servedInstances } from './tool-instances.js';
-import { STEP_MODES, T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
 // ─── teamai-runtime-t3 ───
@@ -46,22 +47,6 @@ type RuntimeMode = (typeof RUNTIME_MODES)[number];
 
 /** A mode the runtime runs steps in. In `recover` it only stops and closes what its journal holds. */
 type WorkMode = Exclude<RuntimeMode, 'recover'>;
-
-/** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
-
-const OptionsSchema = z.object({
-  /** The T3 environment the threads run in: `local`, the T3 Code server on this machine. */
-  environment: z.literal('local'),
-  /** A T3 provider instance to run every prompt on, by its id in T3 Settings → Providers; the tool's default one otherwise. */
-  instance: z.string().min(1).optional(),
-  /** The T3 provider instance that runs each teamai tool or tool instance, by name; a tool instance is otherwise found by its Binary path. */
-  instances: z.record(z.string().min(1), z.string().min(1)).optional(),
-  /**
-   * The mode every step thread runs in, in place of the member's T3 default. `full-access` is the member's explicit
-   * opt-in: threads run without asking, the sign-in asks for Full access, and every tool offered is reported so.
-   */
-  runtime_mode: z.enum(STEP_MODES).optional(),
-}).strict();
 
 /** The option names an effort maps to in T3's model options, by provider. */
 const EFFORT_OPTIONS = new Set(['effort', 'reasoningEffort', 'reasoning_effort', 'variant']);
@@ -726,17 +711,10 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const parsed = OptionsSchema.safeParse(request.options);
+    const parsed = parseOptions(request.options);
 
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0]?.toString();
-
-      const message = key === 'runtime_mode'
-        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four`
-        : `Runtime t3 takes { environment: local, instance?, instances?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
-
-      write({ type: 'init', ok: false, error: { code: 'bad_option', message, ...(key && { key }) } });
+    if (!parsed.ok) {
+      write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
     }
@@ -745,7 +723,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const checkout = request.checkout ?? options.cwd;
     const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
     const answerBy = Date.now() + INIT_WAIT_MS;
-    const connecting = options.connect({ mode: request.mode, access: parsed.data.runtime_mode === 'full-access' ? 'full-access' : 'auto' });
+    const connecting = options.connect({ mode: request.mode, access: parsed.options.runtime_mode === 'full-access' ? 'full-access' : 'auto' });
     const reaching = request.mode === 'attended' ? { answered: true as const, value: await connecting } : await within(connecting, INIT_WAIT_MS);
 
     if (!reaching.answered) {
@@ -775,7 +753,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const [environment, providers, here] = asking.value;
       const settings = readSettings(options.t3Home);
       const project = projectSettings(settings, here);
-      const instances = instancesOf({ providers, instance: parsed.data.instance, project });
+      const instances = instancesOf({ providers, instance: parsed.options.instance, project });
 
       if (!instances.ok) {
         write({ type: 'init', ok: false, error: instances.failure });
@@ -784,7 +762,7 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       // The tool instances teamai gave, and each tool `instances` maps to a provider instance of its own.
-      const mapped = parsed.data.instances;
+      const mapped = parsed.options.instances;
       const named = [...request.instances ?? [], ...Object.keys(mapped ?? {}).filter((name) => driverOf(name) !== undefined).map((tool) => ({ name: tool, tool }))];
 
       const served = servedInstances({
@@ -798,14 +776,14 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
       const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => served.unavailable[tool] === undefined));
-      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, runtimeMode: parsed.data.runtime_mode, signIn: connected.signIn, checkout };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout };
       const tools = [...runs.keys()];
       // A step that names no tool runs on the member's effective T3 default, when its instance is the one offered.
       const defaultTool = [...runs].find(([, provider]) => provider.providerInstanceId === project.defaultModel?.instanceId)?.[0];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         // Full access is the member's opt-in, and teamai records the isolation of these steps as none.
-        ...(parsed.data.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
+        ...(parsed.options.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
         ...(Object.keys(served.unavailable).length > 0 && { unavailable: served.unavailable }),
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
