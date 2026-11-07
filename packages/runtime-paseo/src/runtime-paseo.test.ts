@@ -430,6 +430,21 @@ describe('teamai-runtime-paseo', () => {
     expect('session' in unseen && unseen.session).not.toHaveProperty('home');
   });
 
+  it('names as an OpenCode step\'s session home the data directory whose store the step wrote, over one that only held a store from before', async () => {
+    // teamai's own OpenCode left a store in its data directory before the step; the daemon's OpenCode writes in $HOME's.
+    const stale = path.join(dir, 'teamai-data');
+    fs.mkdirSync(path.join(stale, 'opencode'), { recursive: true });
+    fs.writeFileSync(path.join(stale, 'opencode', 'opencode.db'), '');
+    fs.utimesSync(path.join(stale, 'opencode', 'opencode.db'), new Date('2026-01-01'), new Date('2026-01-01'));
+    const written = path.join(dir, 'home', '.local', 'share');
+    behave({ output: { verdict: 'approve' }, opencode_data_home: written });
+    const runtime = start({ XDG_DATA_HOME: stale });
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'opencode', model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode', home: written } });
+  });
+
   it('starts a Codex agent in the mode Paseo sets as its default, auto-review, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
     behave({ output: { verdict: 'approve' }, codex_login: 'signed_in' });
     const runtime = start();
