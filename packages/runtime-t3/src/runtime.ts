@@ -494,6 +494,8 @@ export function serve(options: ServeOptions): Promise<void> {
   const cancelledUnread = new Set<OpId>();
   /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
   const working = new Map<string, Set<Promise<unknown>>>();
+  /** The places a close forgot as the person released them: an open or a launch that ends later records nothing there. */
+  const released = new Set<string>();
 
   /** A line for the person, about the operation or the place it names: teamai shows it as it runs. */
   const notice = (message: string, about: { op?: OpId; handle?: string }): void => write({ event: 'notice', ...about, message });
@@ -823,6 +825,7 @@ export function serve(options: ServeOptions): Promise<void> {
   const open = async (request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> => {
     const handle = handleFor(request);
     handleOf.set(request.op, handle);
+    released.delete(handle);
     write({ op: request.op, event: 'accepted', handle });
 
     if (!session) {
@@ -948,6 +951,12 @@ export function serve(options: ServeOptions): Promise<void> {
       kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, binding,
       ...(settle !== undefined && { settleScript: settle }), settingsProjectId: checkout.project.id, ops: {}, threads: {}, launches: {},
     };
+
+    if (released.has(handle)) {
+      fail(request.op, { code: 'open_failed', message: `teamai released ${handle} while T3 Code was still opening it, so the runtime does not keep it.` });
+
+      return;
+    }
 
     journal.write(opened);
     write({ op: request.op, event: 'ready', display: placeDisplay(opened, s.environment) });
@@ -1263,8 +1272,9 @@ export function serve(options: ServeOptions): Promise<void> {
     // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent. One it cannot
     // journal fails the request before the op runs here, as nothing was launched.
     if (!thread) {
-      const now = place(request.handle) ?? opened;
-      journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
+      const now = place(request.handle) ?? (released.has(request.handle) ? undefined : opened);
+
+      if (now) journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
     }
 
     const state: Running = { handle: request.handle, run: opened.run, title };
@@ -1281,10 +1291,14 @@ export function serve(options: ServeOptions): Promise<void> {
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = (threadId: string, copy: string | undefined, model: string | undefined): ThreadRecord => {
         const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }) };
-        const now = place(request.handle) ?? opened;
-        const { [request.op]: _answered, ...launches } = now.launches;
-        // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
-        journal.write({ ...now, ops: { ...now.ops, [request.op]: now.ops[request.op] ?? { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
+        const now = place(request.handle) ?? (released.has(request.handle) ? undefined : opened);
+
+        if (now) {
+          const { [request.op]: _answered, ...launches } = now.launches;
+          // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
+          journal.write({ ...now, ops: { ...now.ops, [request.op]: now.ops[request.op] ?? { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
+        }
+
         state.thread = launched;
         write({ op: request.op, event: 'display', display: threadDisplay(launched, s.environment) });
 
@@ -1703,6 +1717,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /** Forgets a place the person released: its record, readable or not, and a judge's copy. */
   const forget = (handle: string): void => {
+    released.add(handle);
     removeCopies(place(handle));
     journal.remove(handle);
   };
