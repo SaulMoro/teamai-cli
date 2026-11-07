@@ -218,14 +218,14 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const PARENT_LOOKUP_MS = 5_000;
 
 /**
- * The first line of a step's agent in a run started from Paseo agent `parent`: which step and run it is, and that agent,
- * linked when the daemon holds it. An agent this daemon does not know, or does not show within 5 s, is named by its id
- * alone, never linked to a server that does not hold it.
+ * How a step's first line names Paseo agent `parent`, which the run was started from: its link when the daemon holds it.
+ * An agent this daemon does not know, or does not show within 5 s, is named by its id alone, never linked to a server
+ * that does not hold it.
  */
-async function startedFromLine(live: Daemon, { parent, step, run }: { parent: string; step: string; run: string }): Promise<string> {
+async function parentNamed(live: Daemon, parent: string): Promise<string> {
   const known = await Promise.race([live.agent(parent), delay(PARENT_LOOKUP_MS).then(() => null)]).catch(() => null);
 
-  return `This agent runs step "${step}" of teamai workflow run ${run}, started from the Paseo agent ${known ? live.link(parent) : parent}.`;
+  return known ? live.link(parent) : parent;
 }
 
 /**
@@ -986,6 +986,9 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     fail(op, failure);
   };
 
+  /** How a step's first line names the Paseo agent the run was started from, once looked up. */
+  let parent: Promise<string> | undefined;
+
   /** A workflow prompt step: an agent in the worktree, in the tool's default mode, that writes teamai's result file. */
   async function work(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, place: WorktreePlace): Promise<void> {
     const { op, lease } = request;
@@ -1009,7 +1012,11 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     const following = begin(op, request.handle);
 
     try {
-      const brief = [startedFrom && await startedFromLine(live, { parent: startedFrom, step: lease.step, run: place.run }), lease.interactive && INTERACTIVE_BRIEF, lease.prompt].filter(Boolean).join('\n\n');
+      // Looked up once per process; a stop meanwhile does not wait for it, and the launch then ends the prompt.
+      parent ??= startedFrom === undefined ? undefined : parentNamed(live, startedFrom);
+      const named = parent && await Promise.race([parent, following.stopped]);
+      const origin = named && named !== 'stopped' ? `This agent runs step "${lease.step}" of teamai workflow run ${place.run}, started from the Paseo agent ${named}.` : undefined;
+      const brief = [origin, lease.interactive && INTERACTIVE_BRIEF, lease.prompt].filter(Boolean).join('\n\n');
 
       await launch(live, request, following, target, {
         place, modeId: modeIds.get(tool), prompt: brief, env: { [RUN_DIR_ENV]: place.runDir }, ...(startedFrom && { parent: startedFrom }),
