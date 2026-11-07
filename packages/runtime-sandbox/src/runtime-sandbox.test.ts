@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2619,7 +2620,7 @@ describe('a warm image', () => {
 
       if (mount !== undefined) return mount.slice(0, -':/teamai-warm:rw'.length);
 
-      if (call[1] === 'create' && call.some((arg) => arg.startsWith('teamai-warm-'))) return call.at(-1);
+      if (call[1] === 'create' && call.some((arg) => /^teamai-[0-9a-f]{16}-warm-[0-9]+-/.test(arg))) return call.at(-1);
     }
 
     return undefined;
@@ -2710,6 +2711,39 @@ describe('a warm image', () => {
     // The image is kept for the next attempt; the scratch sandbox it was made in is gone, and the attempt never had one.
     expect(engine.savedImages()).toHaveLength(1);
     await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 5_000 });
+  }, 30_000);
+
+  it.each(PROVIDERS)('removes, at the next open on $options.provider, the scratch sandbox and directory of a warm image whose runtime was killed, and keeps those of one that runs', async ({ options }) => {
+    const tmp = path.join(dir, 'tmp');
+    fs.mkdirSync(tmp);
+    const connection = start({ TMPDIR: tmp });
+    await init(connection, options);
+    await openAttempt(connection, checkout(), ATTEMPT);
+    // A pid no process has any more, and this test's own, which runs.
+    const gone = spawnSync('true').pid;
+    const bin = path.join(engine.bin, String(options.provider));
+
+    const leave = (pid: number): void => {
+      fs.mkdirSync(path.join(tmp, `teamai-warm-${pid}-abc123`));
+
+      if (options.provider === 'sbx') {
+        const prefix = engine.containers()[0]?.replace(`${RUN}-${ATTEMPT}`, '');
+        execFileSync(bin, ['create', '--name', `${prefix}warm-${pid}-abc123`, '--no-progress', 'claude', tmp], { env: engine.env() });
+      } else {
+        const owner = engine.labelsOf(HANDLE)?.['teamai.owner'] ?? '';
+        execFileSync(bin, ['run', '-d', '--name', `teamai-warm-${pid}`, '--label', `teamai.owner=${owner}`, '--label', `teamai.warm-by=${os.hostname()}:${pid}`, '--entrypoint', '/bin/sh', IMAGE, '-c', 'sleep infinity'], { env: engine.env() });
+      }
+    };
+
+    leave(gone);
+    leave(process.pid);
+
+    expect(await openAttempt(connection, checkout(), 'a0123abce')).toMatchObject({ event: 'ready' });
+    await vi.waitFor(() => {
+      expect(engine.containers().filter((name) => name.includes('warm'))).toEqual([expect.stringContaining(`warm-${process.pid}`)]);
+      expect(fs.readdirSync(tmp).filter((name) => name.startsWith('teamai-warm-'))).toEqual([`teamai-warm-${process.pid}-abc123`]);
+    }, { timeout: 10_000 });
+    expect(connection.stderr()).toBe('');
   }, 30_000);
 
   it.each(PROVIDERS)('fails the open on $options.provider with the last lines of a prepare that fails, and leaves nothing', async ({ options }) => {

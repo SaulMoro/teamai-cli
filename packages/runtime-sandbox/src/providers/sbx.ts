@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import type { WarmOptions } from '../options.js';
-import { oneBuildPerKey, planWarm, scratchOf, tailOf, WARM_REPOSITORY, type WarmPlan } from '../warm.js';
+import { isRunning, oneBuildPerKey, planWarm, scratchOf, tailOf, WARM_REPOSITORY, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
@@ -21,9 +21,9 @@ import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ra
 //  With `warm`, each attempt's sandbox starts from the template teamai-warm:<key> (warm.ts, `create -t`), saved once per
 //  key from the attempt's template:
 //
-//    sbx create --name teamai-warm-<key>-<random> --no-progress <template> <scratch>
-//    sbx exec -w <scratch> teamai-warm-<key>-<random> /bin/sh -c <prepare>              no credential, with the network
-//    sbx stop …; sbx template save teamai-warm-<key>-<random> teamai-warm:<key>; sbx rm --force …
+//    sbx create --name teamai-<journal>-warm-<pid>-<random> --no-progress <template> <scratch>
+//    sbx exec -w <scratch> teamai-<journal>-warm-<pid>-<random> /bin/sh -c <prepare>              no credential, with the network
+//    sbx stop …; sbx template save teamai-<journal>-warm-<pid>-<random> teamai-warm:<key>; sbx rm --force …
 //
 //  The worktree is the primary workspace. sbx does not follow a linked worktree's `.git` to its common directory, so
 //  the git paths the view names are mounted read-only at their own paths: `git status` works, `git commit` cannot
@@ -193,7 +193,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
   /** Saves the warm template of `plan` from `template`, prepared in a scratch sandbox on copies of the `cache` files. */
   const makeWarm = async (plan: WarmPlan, template: string, prepare: string, checkout: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const scratch = scratchOf({ cache: plan.cache, checkout });
-    const name = `teamai-warm-${plan.key}-${crypto.randomBytes(3).toString('hex')}`;
+    const name = `${journalPrefix}warm-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
 
     const failed = (what: string, ran: Ran) => ({
       ok: false as const,
@@ -319,6 +319,12 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
           const [run, attempt, ...more] = name.startsWith(journalPrefix) ? name.slice(journalPrefix.length).split('-') : [];
 
           return run && attempt && more.length === 0 ? [{ id: name, run, attempt }] : [];
+        }),
+        // sbx runs here, so a scratch sandbox's pid is of this machine.
+        leftWarm: listed.names.filter((name) => {
+          const pid = name.startsWith(journalPrefix) ? /^warm-(\d+)-[0-9a-f]+$/.exec(name.slice(journalPrefix.length))?.[1] : undefined;
+
+          return pid !== undefined && !isRunning(Number(pid));
         }),
       };
     },
