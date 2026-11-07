@@ -186,4 +186,27 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, 
     expect(fs.readFileSync(path.join(at.worktree, 'made.txt'), 'utf8')).toBe('made');
     expect(fs.existsSync(path.join(host.dir, 'outside.txt'))).toBe(false);
   });
+
+  it("reads a tool in a bin under the member's home, never what sits beside that bin or what the step's own PATH names", async () => {
+    const local = path.join(host.home, '.local');
+    fs.mkdirSync(path.join(local, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(local, 'share', 'opencode'), { recursive: true });
+    fs.writeFileSync(path.join(local, 'share', 'opencode', 'auth.json'), '{"token":"member"}');
+    fs.mkdirSync(path.join(host.home, '.config'));
+    fs.writeFileSync(path.join(host.home, '.config', 'login'), 'member login');
+    fs.writeFileSync(path.join(local, 'bin', 'probe'), `#!${process.execPath}\nconst fs = require('node:fs');\nconsole.log(JSON.stringify(process.argv.slice(2).map((at) => { try { fs.readFileSync(at); return 'ok'; } catch (error) { return error.code; } })));\n`, { mode: 0o755 });
+    const connection = startOn(executable, host, open, { PATH: [path.join(local, 'bin'), path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir) });
+    expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at);
+
+    const { end, output } = await exec(connection, {
+      argv: ['probe', path.join(local, 'bin', 'probe'), path.join(local, 'share', 'opencode', 'auth.json'), path.join(host.home, '.config', 'login')],
+      env: { PATH: [path.join(local, 'bin'), path.join(host.home, '.config'), path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter) },
+      cwd: at.worktree,
+    });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(JSON.parse(output)).toEqual(['ok', 'EPERM', 'EPERM']);
+  });
 });
