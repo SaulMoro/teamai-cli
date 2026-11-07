@@ -1752,6 +1752,33 @@ describe('teamai-runtime-paseo', () => {
     expect(journalFiles()).toEqual([]);
   });
 
+  // It waits out the close's real 10 s wait for the create, then the create Paseo finishes at 14 s.
+  it('keeps forgetting an attempt released while Paseo still created its agent, once that create finishes', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const released = await opened(runtime);
+    const other = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    const workspace = worktreeWorkspace();
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 14_000 });
+    runtime.send(promptRequest(released, 'op-0000000b'));
+    await expect.poll(() => received().map((request) => request.type)).toEqual(['agent.create.request']);
+
+    runtime.send({ type: 'close', handle: released, release: true });
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toMatchObject({
+      event: 'close_failed', handle: released, failure: { message: expect.stringMatching(/^Paseo did not finish creating an agent of /) },
+    });
+    // The create finishes, and the runtime has seen it land.
+    await until(() => agentsOf().length === 1, 20_000);
+    await delay(500);
+    runtime.send({ type: 'reattach', handle: released });
+    expect(await runtime.next((line) => 'event' in line && ['alive', 'gone'].includes(line.event))).toEqual({ event: 'gone', handle: released });
+
+    behave({ output: { ok: true } });
+    runtime.send({ type: 'close', handle: other });
+    expect(await runtime.next((line) => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle: other });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: workspace }]);
+  }, 45_000);
+
   // It waits out the close's real 10 s wait for the open, then the open Paseo answers at 14 s.
   it('keeps forgetting an attempt released while Paseo still opened its worktree, once that open ends', async () => {
     const runtime = start();
