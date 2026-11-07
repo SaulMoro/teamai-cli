@@ -357,6 +357,11 @@ describe('teamai-runtime-t3', () => {
         { set: 'the default\'s instance cannot run now', settings: { defaultModelSelection: CODEX_DEFAULT }, providers: [CLAUDE, { ...CODEX, constraints: ['Provider is not authenticated.'] }], tool: undefined },
         { set: '`instance` names another instance than the default\'s', settings: { defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' } }, providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work' }], options: { instance: 'claude-work' }, tool: undefined },
         { set: 'the default runs a provider this runtime does not run', settings: { defaultModelSelection: { instanceId: 'opencode', model: 'big-pickle' } }, tool: undefined },
+        {
+          set: 'the default instance runs another command than Claude\'s own, a wrapper teamai has no tool for',
+          settings: { defaultModelSelection: { instanceId: 'acme-claude-t3', model: 'claude-opus-5-5' }, providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } },
+          providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3' }], tool: undefined,
+        },
       ])('reports the tool of the member\'s effective T3 default when $set', async ({ settings, providers, options, tool }) => {
         signIn(t3);
         t3.settings(settings);
@@ -1294,6 +1299,21 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-0000001f')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claude-work', model: 'claude-opus-5-5' });
+    });
+
+    // A member whose T3 default is a team tool's wrapper still runs plain claude as Claude itself, not through the wrapper.
+    it('runs a claude step on the instance named after Claude, not on the member\'s default instance when that one runs a wrapper, which serves the tool instance', async () => {
+      t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
+      t3.settings({ defaultModelSelection: { instanceId: 'acme-claude-t3', model: 'claude-opus-5-5' }, providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } });
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }], checkout });
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'], default_tool: 'acme-claude' } });
+      expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+
+      runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000020'));
+
+      expect(await ended(runtime, 'op-00000020')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+      expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claudeAgent', model: 'claude-opus-5-5' });
     });
 
     // A T3 thread always starts a session of its own, so teamai must not link it to the one the step asked to resume.

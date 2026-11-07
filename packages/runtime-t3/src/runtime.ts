@@ -15,7 +15,7 @@ import { parseOptions } from './options.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
-import { driverOfProvider, servedInstances } from './tool-instances.js';
+import { driverOfProvider, runsOwnBinary, servedInstances } from './tool-instances.js';
 import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
@@ -246,11 +246,12 @@ async function projectAt(t3: T3, dir: string): Promise<Project | undefined> {
 }
 
 /**
- * The usable instance of each tool: the one `instance` names; else the instance of the member's default model when it
- * runs that tool; else the one whose id is the provider's name; else the first of that provider. An instance the member
- * turned off for the project is never used.
+ * The usable instance of each tool: the one `instance` names; else, among the instances that run the provider's own
+ * binary, the instance of the member's default model when it runs that tool, then the one whose id is the provider's
+ * name, then the first of that provider. An instance the member turned off for the project is never used, and an
+ * instance that runs a wrapper or a team tool's command never runs the base tool unless `instance` names it.
  */
-function instancesOf({ providers, instance, project }: { providers: Provider[]; instance: string | undefined; project: ProjectSettings }): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
+function instancesOf({ providers, instance, project, binaryPathOf }: { providers: Provider[]; instance: string | undefined; project: ProjectSettings; binaryPathOf(instanceId: string): string | undefined }): { ok: true; instances: Map<ToolId, Provider> } | { ok: false; failure: RuntimeFailure } {
   const usable = providers.filter((provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false);
   const tools = new Map<ToolId, Provider>();
 
@@ -269,8 +270,9 @@ function instancesOf({ providers, instance, project }: { providers: Provider[]; 
   }
 
   for (const driver of DRIVER_NAMES) {
-    const found = usable.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId && provider.driverKind === driver)
-      ?? usable.find((provider) => provider.providerInstanceId === driver) ?? usable.find((provider) => provider.driverKind === driver);
+    const own = usable.filter((provider) => provider.driverKind === driver && runsOwnBinary(binaryPathOf(provider.providerInstanceId), driver));
+    const found = own.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId)
+      ?? own.find((provider) => provider.providerInstanceId === driver) ?? own[0];
 
     if (found) tools.set(DRIVERS[driver].tool, found);
   }
@@ -753,7 +755,8 @@ export function serve(options: ServeOptions): Promise<void> {
       const [environment, providers, here] = asking.value;
       const settings = readSettings(options.t3Home);
       const project = projectSettings(settings, here);
-      const instances = instancesOf({ providers, instance: parsed.options.instance, project });
+      const binaryPathOf = (instanceId: string): string | undefined => settings.providerInstances?.[instanceId]?.config?.binaryPath?.trim() || undefined;
+      const instances = instancesOf({ providers, instance: parsed.options.instance, project, binaryPathOf });
 
       if (!instances.ok) {
         write({ type: 'init', ok: false, error: instances.failure });
@@ -770,7 +773,7 @@ export function serve(options: ServeOptions): Promise<void> {
         lookup: {
           providers,
           isUsable: (provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false,
-          binaryPathOf: (instanceId) => settings.providerInstances?.[instanceId]?.config?.binaryPath?.trim() || undefined,
+          binaryPathOf,
         },
       });
 

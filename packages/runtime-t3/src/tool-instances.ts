@@ -15,14 +15,26 @@ import type { Provider } from './t3.js';
 //    →               acme-claude runs on acme-claude-t3
 //
 
-/** Whether `binaryPath` is an absolute path to `command`: on Windows, also `<command>.exe` or `.cmd`, in any case. */
-function runsCommand(binaryPath: string, command: string): boolean {
-  if (!path.isAbsolute(binaryPath)) return false;
+/** Whether the file name of `binaryPath` is `command`: on Windows, also `<command>.exe` or `.cmd`, in any case. */
+function namesCommand(binaryPath: string, command: string): boolean {
   const name = path.basename(binaryPath);
 
   if (process.platform !== 'win32') return name === command;
 
   return [command, `${command}.exe`, `${command}.cmd`].some((candidate) => candidate.toLowerCase() === name.toLowerCase());
+}
+
+/** Whether `binaryPath` is an absolute path to `command`. */
+function runsCommand(binaryPath: string, command: string): boolean {
+  return path.isAbsolute(binaryPath) && namesCommand(binaryPath, command);
+}
+
+/**
+ * Whether a provider instance of `driver` with `binaryPath` runs the provider's own tool, such as `claude`: none set, or
+ * a path to that command by name. Any other is a wrapper or a team tool's command, which a base tool never runs on.
+ */
+export function runsOwnBinary(binaryPath: string | undefined, driver: Driver): boolean {
+  return binaryPath === undefined || namesCommand(binaryPath, DRIVERS[driver].tool);
 }
 
 /** What finds the provider instance of each tool instance: T3's instances, which of them can run now, and each one's Binary path. */
