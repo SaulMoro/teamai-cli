@@ -194,7 +194,13 @@ workflows:
           max_parallel: 2
 ```
 
-To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) fails before T3 is called, and so does an instance T3 cannot run.
+To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A mapping to an instance T3 cannot run leaves that tool out of T3: its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`, or fail before T3 is called, saying what to set, when none has it. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) you have maps nothing. The other tools still run.
+
+A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`, `command: acme-claude`) runs on the T3 provider instance whose Binary path, in T3 Code under Settings → Providers, is the absolute path of `acme-claude`, or on the one `instances: { acme-claude: <its id> }` maps. Its session is read in that instance's home path. When no instance runs it, or two do, T3 does not offer it: on `teamai-t3` its steps run on this machine instead, and on a definition with no other runtime for it they fail before any thread starts:
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
+```
 
 A step's `model: { name, effort }` picks the model, and `effort` becomes the option that instance names it by (`effort` for Claude, `reasoningEffort` for Codex). A step with no model gets your T3 default model (the project's, else the global one) when that model is on the step's instance; T3 picks it, as for a thread you start. Otherwise it gets the first model the instance lists. Something the instance cannot run fails before any thread starts:
 
@@ -323,6 +329,5 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 - It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
 - A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
 - A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A step with a `role`, `env` or `setup` goes to `local`.
-- A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`) runs on the instance of the tool it extends: teamai does not pass a tool instance's name to a step runtime yet.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.

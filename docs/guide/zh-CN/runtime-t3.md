@@ -194,7 +194,13 @@ workflows:
           max_parallel: 2
 ```
 
-只想改一个工具的实例时，在 `instances` 下映射它，例如 `instances: { claude: claude-work }`：Claude 步骤在 `claude-work` 上运行，Codex 步骤仍用原来的实例。这里的名字既不是 `claude`、`codex`，也不是[团队工具](reference.md#团队工具tools)时，在调用 T3 之前就会失败；映射到 T3 无法运行的实例时也一样。
+只想改一个工具的实例时，在 `instances` 下映射它，例如 `instances: { claude: claude-work }`：Claude 步骤在 `claude-work` 上运行，Codex 步骤仍用原来的实例。映射到 T3 无法运行的实例时，T3 不提供这个工具：它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机），没有这样的运行时则在调用 T3 之前失败并说明要设置什么。这里的名字既不是 `claude`、`codex`，也不是你拥有的[团队工具](reference.md#团队工具tools)时，它不映射任何东西。其他工具照常运行。
+
+`acme-claude`（`extends: claude`，`command: acme-claude`）这样的[团队工具](reference.md#团队工具tools)，在 Binary path（T3 Code 的 Settings → Providers）是 `acme-claude` 绝对路径的 T3 提供方实例上运行，或者在 `instances: { acme-claude: <its id> }` 映射的实例上运行。它的会话在该实例的 home path 中读取。没有实例运行它，或者有两个实例都运行它时，T3 不提供它：在 `teamai-t3` 上，它的步骤改在本机运行；在没有其他运行时能运行它的定义上，它的步骤会在任何线程启动之前失败：
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
+```
 
 步骤的 `model: { name, effort }` 选择模型，`effort` 会变成该实例对应的选项（Claude 是 `effort`，Codex 是 `reasoningEffort`）。没有写模型的步骤，在你的 T3 默认模型（项目的，否则是全局的）位于该步骤的实例上时使用它，由 T3 选择，和你自己开的线程一样；否则使用实例列出的第一个模型。实例无法运行的内容会在任何线程启动之前失败：
 
@@ -323,6 +329,5 @@ teamai workflow cancel r70d31098c8884803
 - 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
 - 带 `session: continue` 或 `session.from` 的步骤会开始一段新的对话，和 OpenCode 一样：T3 无法在已有会话上启动线程。
 - 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。文件夹被删除后，下一个关闭的 T3 步骤会删除这个项目。带 `role`、`env` 或 `setup` 的步骤会交给 `local`。
-- `acme-claude` 这样的[团队工具](reference.md#团队工具tools)（`extends: claude`）在它所扩展的工具的实例上运行：teamai 还不会把工具实例的名字传给步骤运行时。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
 - 不提供 `permissions: unattended` 的步骤。它们需要一个工具在沙箱中运行的线程，后续版本会加入。
