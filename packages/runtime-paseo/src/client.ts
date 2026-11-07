@@ -139,6 +139,7 @@ const ExportedFunctionSchema = z.custom<object>((exported) => typeof exported ==
 
 /** Export `name` of the module `specifier` resolves to from the client's directory, once it is checked to be a function. */
 async function loadExport<TExport extends object>(from: string, specifier: string, name: string): Promise<TExport> {
+  // oxlint-disable-next-line teamai/package-boundaries -- the Paseo client resolves from the member's Paseo install, outside the repository
   const loaded: unknown = await import(pathToFileURL(createRequire(path.join(from, 'package.json')).resolve(specifier)).href);
   const parsed = z.object({ [name]: ExportedFunctionSchema }).safeParse(loaded);
 
