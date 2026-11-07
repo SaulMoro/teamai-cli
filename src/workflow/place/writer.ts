@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { WorkflowFailure } from '../types.js';
 import type { StepChanges } from '../workspace.js';
 import { commitPathsOf, mergeStagedPathsOf } from './worktree-snapshot.js';
-import { commitWork, hostGitEnv, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git } from '../worktree.js';
+import { commitWork, hostGitEnv, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git, type MemberConfig } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
 
 /**
@@ -153,6 +153,8 @@ async function unresolvedConflicts(dir: string, before: Record<string, string>, 
  * gets `unpushed`, the sentence its message adds.
  */
 export async function finishWriter(input: {
+  /** The member's own programs the copy's config names, which still run (`untrustedGit`). */
+  memberConfig: MemberConfig;
   dir: string;
   step: string;
   workspace: { branch: string; base: { commit: string }; configCommit: string };
@@ -171,8 +173,8 @@ export async function finishWriter(input: {
    */
   already?: WorkflowFailure;
 }): Promise<{ changes?: StepChanges; failure?: WorkflowFailure; unpushed?: string }> {
-  const { dir, step, workspace, rangeFrom, conflicts, saved, failed, reported, already } = input;
-  const hookSafe = untrustedGit(hostGitEnv());
+  const { memberConfig, dir, step, workspace, rangeFrom, conflicts, saved, failed, reported, already } = input;
+  const hookSafe = untrustedGit(hostGitEnv(), undefined, memberConfig);
   const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved, run: hookSafe });
 
   if (unrestored) return { failure: { code: 'workspace_base', message: `Step "${step}" ran, but nothing was committed or pushed. ${unrestoredConfig(unrestored, dir)}` } };

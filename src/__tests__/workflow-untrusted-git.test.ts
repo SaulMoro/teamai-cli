@@ -8,7 +8,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { untrustedGit } from '../workflow/worktree.js';
+import { readMemberConfig, untrustedGit } from '../workflow/worktree.js';
 
 const roots: string[] = [];
 
@@ -84,6 +84,7 @@ describe('untrustedGit in a copy a step controlled', () => {
     { program: 'core.sshCommand', plant: (at: Repo) => [['core.sshCommand', at.planted], ['remote.origin.url', 'ssh://git@127.0.0.1:9/team.git']], args: ['ls-remote', 'origin'] },
     { program: 'remote.<name>.uploadpack', plant: (at: Repo) => [['remote.origin.url', bare(at)], ['remote.origin.uploadpack', at.planted]], args: ['ls-remote', 'origin'], succeeds: true },
     { program: 'remote.<name>.receivepack', plant: (at: Repo) => [['remote.origin.url', bare(at)], ['remote.origin.receivepack', at.planted]], args: ['push', '-q', 'origin', 'HEAD:refs/heads/work'], succeeds: true },
+    { program: 'core.gitProxy', plant: (at: Repo) => [['core.gitProxy', at.planted], ['remote.origin.url', 'git://127.0.0.1:9/team.git']], args: ['ls-remote', 'origin'] },
     { program: 'an ext:: remote protocol.ext.allow lets in', plant: (at: Repo) => [['protocol.ext.allow', 'always'], ['remote.origin.url', `ext::${at.planted} %S`]], args: ['ls-remote', 'origin'] },
   ])('does not run the program $program names in the copy\'s config', async ({ plant, args, before, succeeds }) => {
     const at = repo();
@@ -120,6 +121,48 @@ describe('untrustedGit in a copy a step controlled', () => {
     const added = await untrustedGit(at.env)(at.dir, ['add', 'f']);
 
     expect(added.code, added.stderr).toBe(0);
+    expect(ran(at)).toBe('passing\n');
+  });
+
+  it('does not run the filter a submodule\'s config names when git looks into the submodule', async () => {
+    const at = repo();
+    const sub = path.join(at.root, 'sub');
+    execFileSync('git', ['init', '-q', '-b', 'main', sub], { env: at.env });
+    fs.writeFileSync(path.join(sub, 'g'), 'g\n');
+    execFileSync('git', ['add', 'g'], { cwd: sub, env: at.env });
+    execFileSync('git', ['commit', '-q', '-m', 'sub'], { cwd: sub, env: at.env });
+    at.git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 's']);
+    const inner = (args: string[]): string => execFileSync('git', args, { cwd: path.join(at.dir, 's'), env: at.env, encoding: 'utf8' });
+    inner(['config', '--local', 'filter.y.clean', at.passing]);
+    fs.writeFileSync(path.join(at.git(['-C', 's', 'rev-parse', '--absolute-git-dir']), 'info', 'attributes'), '* filter=y\n');
+    // A file whose stat changed and content did not makes git run the clean filter to compare it.
+    fs.utimesSync(path.join(at.dir, 's', 'g'), new Date(), new Date(Date.now() + 5000));
+
+    const status = await untrustedGit(at.env)(at.dir, ['status', '--porcelain', '--ignore-submodules=none']);
+
+    expect(status.code, status.stderr).toBe(0);
+    expect(ran(at)).toBe('');
+  });
+
+  it('runs the programs the member\'s checkout named before the run, and turns off one a step changed or added', async () => {
+    const at = repo();
+    at.git(['config', '--local', 'filter.x.clean', at.passing]);
+    at.git(['config', '--local', 'filter.x.required', 'true']);
+    const kept = await readMemberConfig(at.dir);
+    if ('error' in kept) throw new Error(kept.error);
+    const memberGit = untrustedGit(at.env, undefined, new Set(kept));
+
+    const added = await memberGit(at.dir, ['add', 'f']);
+
+    expect(added.code, added.stderr).toBe(0);
+    expect(ran(at)).toBe('passing\n');
+    at.git(['config', '--local', 'filter.x.clean', at.planted]);
+    at.git(['config', '--local', 'diff.external', at.planted]);
+    fs.writeFileSync(path.join(at.dir, 'f'), 'changed\n');
+
+    await memberGit(at.dir, ['add', 'f']);
+    await memberGit(at.dir, ['diff', 'HEAD']);
+
     expect(ran(at)).toBe('passing\n');
   });
 });

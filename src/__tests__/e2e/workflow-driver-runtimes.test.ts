@@ -1818,6 +1818,31 @@ steps:
     }
   });
 
+  it('runs the filter the member\'s own checkout names, such as git-crypt\'s, when it commits a step\'s work', async () => {
+    const member = path.join(sandbox, 'member-filter-ran');
+    const filter = path.join(sandbox, 'member-filter');
+    fs.writeFileSync(filter, `#!/bin/sh\ntouch '${member}'\ncat\n`, { mode: 0o755 });
+    const attributes = path.join(repo, '.git', 'info', 'attributes');
+    execFileSync('git', ['config', '--local', 'filter.crypt.clean', filter], { cwd: repo });
+    execFileSync('git', ['config', '--local', 'filter.crypt.required', 'true'], { cwd: repo });
+    fs.writeFileSync(attributes, 'secret.txt filter=crypt\n');
+    writeFlow('memberfilter', `  - id: build
+    workspace: new
+    command: echo hidden > secret.txt`);
+    const pulled = await runCLI(['pull'], repo);
+    expect(pulled.code).toBe(0);
+
+    try {
+      const ran = await runCLI(['workflow', 'start', 'memberfilter', '--driver', 'local'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(fs.existsSync(member)).toBe(true);
+    } finally {
+      execFileSync('git', ['config', '--local', '--remove-section', 'filter.crypt'], { cwd: repo });
+      fs.rmSync(attributes, { force: true });
+    }
+  });
+
   describe('with an env credential', () => {
     const VALUE = 'toy-token-value-7f3a';
     type Noted = { type: string; op: string; handle: string; names: string[] };

@@ -111,26 +111,68 @@ export function boundedGit(expiresAt: string | undefined, env: NodeJS.ProcessEnv
 
 /**
  * The settings git starts with in a checkout another process controls. `-c` outranks every config file that process can
- * edit, so no hook and no fsmonitor it names runs, and an object id means that object, never a replacement it set.
+ * edit, so no hook and no fsmonitor it names runs, an object id means that object, never a replacement it set, and no
+ * fetch or push reaches a submodule's remote, which its config names.
  */
-export const UNTRUSTED_CONFIG: readonly string[] = ['-c', `core.hooksPath=${os.devNull}`, '-c', 'core.fsmonitor=false', '-c', 'core.useReplaceRefs=false'];
+export const UNTRUSTED_CONFIG: readonly string[] = [
+  '-c', `core.hooksPath=${os.devNull}`, '-c', 'core.fsmonitor=false', '-c', 'core.useReplaceRefs=false',
+  '-c', 'submodule.recurse=false', '-c', 'fetch.recurseSubmodules=false', '-c', 'push.recurseSubmodules=no',
+];
 
 /**
  * git in a checkout another process controls, such as a benchmark trial's clone after its tool ran: `UNTRUSTED_CONFIG`
  * first, then every program its config names turned off or replaced by the member's own (`plantedOff`), and `env`
- * instead of this process's environment, for git and for whatever the member's config starts, such as a filter. Past
- * `expiresAt`, each git it started is stopped, so a filter that never returns holds its caller no longer than that.
+ * instead of this process's environment, for git and for whatever the member's config starts, such as a filter, `kept`
+ * among it. Past `expiresAt`, each git it started is stopped, so a filter that never returns holds its caller no longer
+ * than that.
  */
-export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): UntrustedGit {
+export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string, kept: MemberConfig = NO_MEMBER_CONFIG): UntrustedGit {
   const run: Git = async (cwd, args, options) => {
-    const off = await plantedOff(cwd, env, expiresAt);
+    const off = await plantedOff({ cwd, env, expiresAt, kept });
 
     if ('error' in off) return off.error;
 
-    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...withPackPrograms(args, off.packPrograms)], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
+    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...withPackPrograms(args, off.hasPackPrograms)], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
   };
 
   return Object.assign(run, { [UNTRUSTED]: true as const });
+}
+
+/**
+ * The program keys a checkout's local and worktree config named before any step of a run could write it, each as
+ * `key LF value`: the member's own setup, such as a git-crypt filter or a per-repository `core.sshCommand`, which
+ * `untrustedGit` keeps as the member's system and global config. A worktree shares its local config with the checkout
+ * it was made from, so the member's own git runs these there anyway.
+ */
+export type MemberConfig = ReadonlySet<string>;
+
+const NO_MEMBER_CONFIG: MemberConfig = new Set();
+
+/** Reads `MemberConfig` in checkout `dir`, for a run to keep before its first step. */
+export async function readMemberConfig(dir: string): Promise<string[] | { error: string }> {
+  const listed = await spawnGit(dir, ['config', '--null', '--show-scope', '--get-regexp', PLANTABLE], undefined, hostGitEnv());
+
+  if (listed.code === 1) return [];
+
+  if (listed.code !== 0) return { error: listed.stderr.trim() || `git config exited with ${listed.code}` };
+
+  return configEntries(listed.stdout).filter((entry) => !TRUSTED_SCOPES.has(entry.scope)).map((entry) => `${entry.key}\n${entry.value}`);
+}
+
+type ConfigEntry = { scope: string; key: string; value: string };
+
+/** The entries of `git config --null --show-scope`, which writes each as scope NUL key LF value NUL. */
+function configEntries(stdout: string): ConfigEntry[] {
+  const fields = stdout.split('\0');
+  const entries: ConfigEntry[] = [];
+
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const entry = fields[at + 1] ?? '';
+    const newline = entry.indexOf('\n');
+    entries.push({ scope: fields[at] ?? '', key: newline === -1 ? entry : entry.slice(0, newline), value: newline === -1 ? '' : entry.slice(newline + 1) });
+  }
+
+  return entries;
 }
 
 /**
@@ -147,7 +189,7 @@ const HOST_GIT_ENV: ReadonlySet<string> = new Set([
   'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
   'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
   'GIT_EXEC_PATH', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT',
-  'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_SSH_VARIANT', 'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH',
+  'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_SSH_VARIANT', 'GIT_PROXY_COMMAND', 'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH',
   'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
 ]);
 
@@ -196,10 +238,10 @@ const PROGRAM_KEYS: ReadonlyArray<{ key: RegExp; neutral: (env: NodeJS.ProcessEn
 const PACK_PROGRAM = /^remote\..+\.(uploadpack|receivepack)$/;
 
 /** The keys `plantedOff` reads, as one `git config --get-regexp` pattern. */
-const PLANTABLE = '^hook\\..*\\.|^credential\\..*helper$|^gpg\\.|^core\\.(sshcommand|askpass|editor|pager)$|^sequence\\.editor$|^pager\\.|^filter\\.|^diff\\.|^merge\\..*\\.driver$|^protocol\\.|^remote\\..*\\.(uploadpack|receivepack)$';
+const PLANTABLE = '^hook\\..*\\.|^credential\\..*helper$|^gpg\\.|^core\\.(sshcommand|askpass|editor|pager|gitproxy)$|^sequence\\.editor$|^pager\\.|^filter\\.|^diff\\.|^merge\\..*\\.driver$|^protocol\\.|^remote\\..*\\.(uploadpack|receivepack)$';
 
 /**
- * The options that keep what the config in `cwd` names from running, read in one `git config`:
+ * The options that keep what the config in `cwd` and its submodules names from running (`plantableIn`):
  * - each hook it names, `hook.<name>.command` (Git 2.54 and later), which runs beside the script hooks
  *   `core.hooksPath` turns off. `--config-env` reads the key up to its last `=`, which `-c` does not, so a hook whose
  *   name holds one is turned off too;
@@ -209,36 +251,32 @@ const PLANTABLE = '^hook\\..*\\.|^credential\\..*helper$|^gpg\\.|^core\\.(sshcom
  *   credentials then asks the member's helpers only;
  * - each `PROGRAM_KEYS` key such a file sets, given the member's own value last, else its neutral one. `protocol.allow`
  *   set there gives `protocol.ext.allow` the same treatment;
- * - `packPrograms` when such a file sets a remote's `uploadpack` or `receivepack`, for `withPackPrograms`.
+ * - `hasPackPrograms` when such a file sets a remote's `uploadpack` or `receivepack`, for `withPackPrograms`;
+ * - `GIT_PROXY_COMMAND`, the member's own or empty, when such a file sets `core.gitProxy`.
+ *
+ * An entry `kept` holds counts as the member's own, as one in their global config does; a hook it names is still off.
  */
-async function plantedOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[]; env: Record<string, string>; packPrograms: boolean } | { error: GitResult }> {
+async function plantedOff(input: { cwd: string; env: NodeJS.ProcessEnv; expiresAt: string | undefined; kept: MemberConfig }): Promise<{ args: string[]; env: Record<string, string>; hasPackPrograms: boolean } | { error: GitResult }> {
+  const { cwd, env, expiresAt, kept } = input;
   // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
-  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', PLANTABLE], boundedBy(undefined, expiresAt), env);
+  const listed = await plantableIn({ cwd, env, expiresAt });
 
-  // git config exits 1 when no key matches.
-  if (listed.code === 1) return { args: [], env: {}, packPrograms: false };
-
-  if (listed.code !== 0) return { error: listed };
-  // --show-scope --null writes each entry as scope NUL key LF value NUL.
-  const fields = listed.stdout.split('\0');
+  if ('error' in listed) return listed;
   const hooks = new Set<string>();
   const helpers = new Map<string, Array<{ trusted: boolean; value: string }>>();
   const programs = new Map<string, Array<{ trusted: boolean; value: string }>>();
-  let packPrograms = false;
+  let hasPackPrograms = false;
+  let gitProxy = false;
 
-  for (let at = 0; at + 1 < fields.length; at += 2) {
-    const scope = fields[at] ?? '';
-    const entry = fields[at + 1] ?? '';
-    const newline = entry.indexOf('\n');
-    const key = newline === -1 ? entry : entry.slice(0, newline);
-    const value = newline === -1 ? '' : entry.slice(newline + 1);
-    const trusted = TRUSTED_SCOPES.has(scope);
+  for (const { scope, key, value } of listed.entries) {
+    const trusted = TRUSTED_SCOPES.has(scope) || kept.has(`${key}\n${value}`);
     const hook = /^hook\.(.+)\.[^.]+$/.exec(key)?.[1];
 
-    if (key.startsWith('hook.')) {
+    if (key === 'core.gitproxy') gitProxy ||= !trusted;
+    else if (key.startsWith('hook.')) {
       if (hook !== undefined) hooks.add(hook);
     } else if (key.startsWith('credential.')) helpers.set(key, [...helpers.get(key) ?? [], { trusted, value }]);
-    else if (PACK_PROGRAM.test(key)) packPrograms ||= !trusted;
+    else if (PACK_PROGRAM.test(key)) hasPackPrograms ||= !trusted;
     else {
       const program = key === 'protocol.allow' ? 'protocol.ext.allow' : key;
 
@@ -267,7 +305,42 @@ async function plantedOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string
     give(key, own?.value ?? PROGRAM_KEYS.find((known) => known.key.test(key))?.neutral(env) ?? '');
   }
 
-  return { args, env: values, packPrograms };
+  // The first `core.gitProxy` that matches a host wins, so no `-c` replaces one; the variable outranks every one.
+  if (gitProxy) values.GIT_PROXY_COMMAND = env.GIT_PROXY_COMMAND ?? '';
+
+  return { args, env: values, hasPackPrograms };
+}
+
+/**
+ * The `PLANTABLE` entries of the config in `cwd`, then the local and worktree ones of each submodule checked out
+ * under it, at any depth: git runs in a submodule for a command such as `status`, with what `-c` gives the
+ * superproject, so the keys a submodule's config sets are turned off there too.
+ */
+async function plantableIn(input: { cwd: string; env: NodeJS.ProcessEnv; expiresAt: string | undefined; nested?: true }): Promise<{ entries: ConfigEntry[] } | { error: GitResult }> {
+  const { cwd, env, expiresAt, nested } = input;
+  // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
+  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', PLANTABLE], boundedBy(undefined, expiresAt), env);
+
+  // git config exits 1 when no key matches.
+  if (listed.code !== 0 && listed.code !== 1) return { error: listed };
+  const own = configEntries(listed.stdout).filter((entry) => !nested || !TRUSTED_SCOPES.has(entry.scope));
+  // Reading the index starts the fsmonitor its config names.
+  const staged = await spawnGit(cwd, [...UNTRUSTED_CONFIG, 'ls-files', '--stage', '-z'], boundedBy(undefined, expiresAt), env);
+
+  if (staged.code !== 0) return { error: staged };
+  const entries = [own];
+
+  for (const line of gitlinkLines(staged.stdout)) {
+    const sub = path.join(cwd, line.slice(line.indexOf('\t') + 1));
+
+    if (!(await fs.stat(path.join(sub, '.git')).then(() => true, () => false))) continue;
+    const inner = await plantableIn({ cwd: sub, env, expiresAt, nested: true });
+
+    if ('error' in inner) return inner;
+    entries.push(inner.entries);
+  }
+
+  return { entries: entries.flat() };
 }
 
 /** The subcommands that start a remote's `upload-pack` or `receive-pack`, with the option that names it. */
@@ -276,8 +349,8 @@ const PACK_OPTIONS = new Map([
 ]);
 
 /** `args` with git's own pack program named after its subcommand, when the copy's config names another. */
-function withPackPrograms(args: string[], packPrograms: boolean): string[] {
-  if (!packPrograms) return args;
+function withPackPrograms(args: string[], hasPackPrograms: boolean): string[] {
+  if (!hasPackPrograms) return args;
   let at = 0;
 
   // Global options before the subcommand; `-c` and `-C` take the next argument.
