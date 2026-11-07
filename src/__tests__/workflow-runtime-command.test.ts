@@ -49,6 +49,28 @@ describe('a command step on a step runtime', () => {
     await expect(started.exit).resolves.toMatchObject({ exitCode: 130 });
     expect(execs()).toBe(0);
   });
+  it('stops the setup it runs when the step is stopped while its place opens, so setup ends stopped and the command never runs', async () => {
+    const { run, execs } = commandRun();
+    let stopStep = (): void => {};
+    const stoppedSetup = { code: 'setup_failed', message: 'Setup "make deps" was stopped, so the step did not run.' };
+
+    const started = runtimeCommand({
+      run: { ...run, open: async () => {
+        stopStep();
+
+        return { ok: true, handle: 'h-1' };
+      } },
+      view: async () => view, command: 'node build.js', env: {}, unset: [],
+      // Setup, as teamai runs it, ends stopped once its signal aborts, and runs nothing on the runtime then.
+      setUp: async (signal) => (signal?.aborted === true ? stoppedSetup : undefined),
+    });
+    stopStep = () => {
+      void started.stop();
+    };
+
+    await expect(started.exit).resolves.toEqual(stoppedSetup);
+    expect(execs()).toBe(0);
+  });
 });
 
 describe('a prompt\'s tool exec\'d on a step runtime', () => {

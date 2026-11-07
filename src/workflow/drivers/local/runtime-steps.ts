@@ -103,15 +103,17 @@ export interface StartedCommand {
  */
 export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; env: Record<string, string>; unset: string[]; setUp: SetUp }): StartedCommand {
   const { run, command, env, unset, setUp } = input;
-  // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent.
+  // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent. Setup gets
+  // the stop as its signal, so a stop before it runs sends nothing and one while it runs ends it stopped.
   let isStopRequested = false;
+  const stopping = new AbortController();
 
   const exit = (async (): Promise<CommandExit | WorkflowFailure> => {
     const view = await input.view();
     const opened = await run.open(view);
 
     if (!opened.ok) return opened.failure;
-    const unready = await setUp();
+    const unready = await setUp(stopping.signal);
 
     if (unready) return unready;
 
@@ -151,6 +153,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
   return { exit, stop: async () => {
     isStopRequested = true;
+    stopping.abort();
     await run.cancel();
 
     return exit;
@@ -159,9 +162,9 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
 /**
  * What runs once the attempt's place is open, before the step's own exec or prompt: the workflow's setup, through
- * `runtimeSetup`, with the checks teamai keeps. A failure ends the step before it starts.
+ * `runtimeSetup`, with the checks teamai keeps, stopped when `signal` aborts. A failure ends the step before it starts.
  */
-export type SetUp = () => Promise<WorkflowFailure | undefined>;
+export type SetUp = (signal: AbortSignal | undefined) => Promise<WorkflowFailure | undefined>;
 
 /**
  * `runPlaceSetup`'s `on` for the attempt's runtime: setup's command as an exec of the attempt's open place, with setup's keys and none of the tool's credentials, then a
@@ -231,7 +234,7 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
       const opened = await run.open(view, { tool, toolHome, credentials: given });
 
       if (!opened.ok) return { failure: opened.failure };
-      const unready = await setUp();
+      const unready = await setUp(undefined);
 
       if (unready) return { failure: unready };
 
@@ -316,7 +319,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
     const opened = await run.open(view, { tool, credentials: given });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
-    const unready = await setUp();
+    const unready = await setUp(undefined);
 
     if (unready) return { started: false, exitCode: 1, failure: unready };
     const lease: PromptLease = { step, tool, prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };

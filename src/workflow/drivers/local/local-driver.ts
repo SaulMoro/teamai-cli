@@ -1643,7 +1643,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
             if (stepRun) {
               // An adopted place is checked again once setup ran there.
-              const setUp = async (): Promise<WorkflowFailure | undefined> => (await runPlaceSetup({ config, run: runId, attempt: lease.attempt, mode, env: turn, on: runtimeSetup(stepRun) }))
+              const setUp = async (signal: AbortSignal | undefined): Promise<WorkflowFailure | undefined> => (await runPlaceSetup({ config, run: runId, attempt: lease.attempt, mode, env: turn, signal, on: runtimeSetup(stepRun) }))
                 ?? refuseDirtyAdoptedCommand({ config, run: runId, attempt: lease.attempt });
 
               return runtimeCommand({
