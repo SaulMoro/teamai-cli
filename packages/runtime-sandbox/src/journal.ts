@@ -37,6 +37,12 @@ const PlaceRecordSchema = z.object({
   id: z.string().optional(),
   /** A judge's place, opened with no view: its sandbox is made when its prompt names the directory. */
   confined: z.literal(true).optional(),
+  /**
+   * A place whose tool an app's runtime launches through the sandbox wrapper: the attempt socket the wrapper asks on,
+   * the worktree a wrapper's directory must be in to ask there, and the attempt's tool home, by the variable its tool
+   * reads, which a grant aims that variable at.
+   */
+  outer: z.object({ socket: z.string(), worktree: z.string(), toolHome: z.record(z.string(), z.string()) }).optional(),
 });
 
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;
@@ -62,7 +68,12 @@ function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
   }
 }
 
-function write(file: string, value: PlaceRecord | ExecRecord): void {
+/** The tool instances an `init` named, by name: what the wrapper runs for a link named after one. */
+const InstancesSchema = z.record(z.string(), z.object({ tool: z.string(), command: z.string().optional() }));
+
+export type KnownInstances = z.infer<typeof InstancesSchema>;
+
+function write(file: string, value: PlaceRecord | ExecRecord | KnownInstances): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
@@ -111,6 +122,31 @@ export function journal(root: string) {
      */
     owner: JournalIdSchema.parse(crypto.createHash('sha256').update(path.resolve(root)).digest('hex').slice(0, 16)),
     place: (handle: string): PlaceRecord | undefined => read(placeFile(handle), PlaceRecordSchema),
+    /** Every place a wrapper may ask in: those with an attempt socket. A record that cannot be read is left out. */
+    outerPlaces: (): Array<PlaceRecord & { outer: NonNullable<PlaceRecord['outer']> }> => {
+      const dir = path.join(root, 'places');
+
+      return (fs.existsSync(dir) ? fs.readdirSync(dir) : []).filter((name) => name.endsWith('.json')).flatMap((name) => {
+        const parsed = PlaceRecordSchema.safeParse((() => {
+          try {
+            return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+          } catch {
+            return undefined;
+          }
+        })());
+
+        return parsed.success && parsed.data.outer !== undefined ? [{ ...parsed.data, outer: parsed.data.outer }] : [];
+      });
+    },
+    /** The instances every `init` so far named, by name: the latest wins. Unreadable, it is none. */
+    instances: (): KnownInstances => {
+      try {
+        return read(path.join(root, 'instances.json'), InstancesSchema) ?? {};
+      } catch {
+        return {};
+      }
+    },
+    saveInstances: (named: KnownInstances): void => write(path.join(root, 'instances.json'), named),
     savePlace: (handle: string, place: PlaceRecord): void => write(placeFile(handle), place),
     exec: (op: OpId): ExecRecord | undefined => read(opFile(op), ExecRecordSchema),
     saveExec: (op: OpId, record: ExecRecord): void => {

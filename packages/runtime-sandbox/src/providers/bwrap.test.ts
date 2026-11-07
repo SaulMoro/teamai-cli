@@ -1,6 +1,9 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
 
@@ -145,5 +148,27 @@ describe('bwrap: a step', () => {
 
     expect(end).toMatchObject({ event: 'exited', code: 0 });
     expect(output.trim()).toBe('127.0.0.1:8317');
+  });
+});
+
+describe('bwrap: the outer of an app runtime', () => {
+  it("runs the tool the wrapper asks for through bwrap, on the attempt's binds, with the step's credentials and none of the app's env", async () => {
+    host.tool('claude', "console.log(JSON.stringify({ args: process.argv.slice(2), token: process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined, app: process.env.APP_ONLY !== undefined, home: process.env.CLAUDE_CONFIG_DIR }))");
+    const connection = start();
+    await init(connection, { provider: 'bwrap' }, { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] });
+    const at = placeIn(host.dir);
+    const { accepted } = await openPlace(connection, at, { tool: 'claude', credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-bwrap-test' } });
+    const { socket } = z.object({ socket: z.string() }).parse(JSON.parse(String(accepted.handle)));
+    const inner = net.connect(socket);
+    await new Promise<void>((resolve) => inner.once('connect', resolve));
+    inner.write(`${JSON.stringify({ register: { agent: null } })}\n`);
+    const ran = spawnSync(process.execPath, [executable, 'tool-exec', 'claude', '-p'], { cwd: at.worktree, env: { ...host.env(), APP_ONLY: 'from-the-app' }, encoding: 'utf8' });
+    inner.destroy();
+
+    expect(ran.status).toBe(0);
+    expect(JSON.parse(ran.stdout)).toEqual({ args: ['-p'], token: true, app: false, home: at.toolHome });
+    expect(lastSandbox().command).toEqual(['claude', '-p']);
+    expect(lastSandbox().binds).toContainEqual(['--bind', fs.realpathSync(at.worktree)]);
+    expect(host.calls().flat().join(' ')).not.toContain('sk-ant-oat01-bwrap-test');
   });
 });

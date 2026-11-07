@@ -3,10 +3,10 @@ import type { ContainerEngine, WarmOptions } from '../options.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
-import { COMMAND_MS, handleOf, type ExecEnd, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
-import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
+import { cliOf, commandsOf, definedOnly, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
 //
@@ -90,7 +90,23 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';
 
-  const { run: cli, why } = cliOf({ name: engine, env: host.env, notInstalled });
+  const { run: cli, why, executable } = cliOf({ name: engine, env: host.env, notInstalled });
+
+  /** The engine CLI's environment for an exec: the spec's names over this runtime's own, the CLI's settings kept. */
+  const execEnv = (spec: ExecSpec): NodeJS.ProcessEnv => {
+    const env: NodeJS.ProcessEnv = { ...host.env, ...spec.env };
+
+    for (const setting of ENGINE_SETTINGS) env[setting] = host.env[setting];
+
+    return env;
+  };
+
+  /** `exec`'s arguments: each of the spec's names by name only (`-e NAME`), the withheld ones unset in the container. */
+  const execArgs = (id: string, spec: ExecSpec, { isInteractive }: { isInteractive: boolean }): string[] => {
+    const withheld = spec.unset.length > 0 ? ['env', ...spec.unset.flatMap((variable) => ['-u', variable]), '--'] : [];
+
+    return ['exec', ...(isInteractive ? ['-i'] : []), '-w', spec.cwd, ...Object.keys(spec.env).flatMap((variable) => ['-e', variable]), id, ...withheld, ...spec.argv];
+  };
 
   const lastLine = (ran: Ran): string => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : '');
 
@@ -350,12 +366,12 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     },
     },
 
-    async exec(id, spec, onOutput): Promise<ExecEnd> {
-      const env: NodeJS.ProcessEnv = { ...host.env, ...spec.env };
+    client(id, spec) {
+      return { ok: true, argv: [executable, ...execArgs(id, spec, { isInteractive: true })], env: definedOnly(execEnv(spec)) };
+    },
 
-      for (const setting of ENGINE_SETTINGS) env[setting] = host.env[setting];
-      const withheld = spec.unset.length > 0 ? ['env', ...spec.unset.flatMap((variable) => ['-u', variable]), '--'] : [];
-      const ran = await cli(['exec', '-w', spec.cwd, ...Object.keys(spec.env).flatMap((variable) => ['-e', variable]), id, ...withheld, ...spec.argv], { env, onOutput });
+    async exec(id, spec, onOutput): Promise<ExecEnd> {
+      const ran = await cli(execArgs(id, spec, { isInteractive: false }), { env: execEnv(spec), onOutput });
 
       return ran.kind === 'ran' ? { kind: 'exited', code: ran.code } : { kind: 'failed', failure: { code: 'exec_failed', message: ran.message } };
     },

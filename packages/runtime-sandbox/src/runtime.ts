@@ -1,8 +1,10 @@
+import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import { redact, redactJson } from '@teamai/shared/redact';
-import { CANCEL_FAILED, PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
+import { listen, placeOf, socketPathOf, type Answering, type AttemptSocket, type OuterHandle } from './attempt-socket.js';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, noJudgeCredential, offersSignedIn } from './judge.js';
 import { maskedAsGiven, onThisMachine, rewrittenMasks, toAlias } from './loopback.js';
@@ -10,6 +12,7 @@ import { parseOptions, type SandboxOptions } from './options.js';
 import { COMMAND_MS, handleOf, unreachable, type HostRoute, type PlaceKey, type Provider } from './provider.js';
 import type { UnusedGateways } from './sign-in.js';
 import { removeLeftScratch } from './warm.js';
+import { heldProbe, LAUNCHABLE } from './providers/cli.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -33,15 +36,15 @@ type ExecRequest = z.infer<typeof ExecRequestSchema>;
 type PromptRequest = z.infer<typeof PromptRequestSchema>;
 
 /**
- * What `init` settled: the provider, what it offered, the member's gateways a login it keeps replaces, and the tool each
- * instance teamai passed extends, by the instance's name, which teamai gives as the `tool` of an instance's open.
+ * What `init` settled: the provider, what it offered, the member's gateways a login it keeps replaces, and each instance
+ * teamai passed, by its name, which teamai gives as the `tool` of an instance's open.
  */
 interface Ready {
   provider: Provider;
   can: Can;
   host: HostRoute;
   unusedGateways: UnusedGateways;
-  instanceTools: ReadonlyMap<string, string>;
+  instances: ReadonlyMap<string, InitInstance>;
 }
 
 /** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
@@ -145,7 +148,7 @@ function isEnd(message: RuntimeMessage): message is RuntimeMessage & { op: OpId 
 
 export function serve({ input, write: send, journal, warn, provider: providerFor, env }: RuntimeDeps): void {
   // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
-  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
+  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
@@ -161,6 +164,12 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const endsWritten = new Map<OpId, number>();
   /** The tools whose unused gateway this process told the member about, so it says so once per drive. */
   const toldGateway = new Set<string>();
+  /**
+   * The attempt sockets this process serves, by place, each with the step's credentials its grants carry: those of the
+   * place's open, or of teamai's reattach, in memory only; undefined in a runtime that restarted until a reattach brings
+   * them.
+   */
+  const sockets = new Map<string, { socket: AttemptSocket; credentials: Record<string, string> | undefined }>();
 
   const write = (message: RuntimeMessage): void => {
     if (isEnd(message)) endsWritten.set(message.op, (endsWritten.get(message.op) ?? 0) + 1);
@@ -311,6 +320,93 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
   };
 
+  /**
+   * Answers a wrapper's ask on `place`'s socket: how to start the tool it was called as in the attempt's sandbox, with
+   * the step's credentials and the tool home variable at the attempt's tool home, or why not.
+   */
+  const answerOn = (place: string): Answering => async ({ tool, cwd }) => {
+    const { provider, can, host, instances } = ready;
+    const credentials = sockets.get(place)?.credentials;
+    const record = journal.place(place);
+
+    if (record?.outer === undefined || provider.client === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `No sandbox is open for this attempt any more (${place}).` } };
+
+    if (credentials === undefined) {
+      return { ok: false, failure: { code: 'credentials_pending', message: 'The sandbox runtime restarted and has not got the step\'s credentials back yet: teamai sends them again when it reattaches the attempt. The step\'s app starts the tool again once it has.' } };
+    }
+
+    const relative = path.relative(record.outer.worktree, cwd);
+
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      return { ok: false, failure: { code: 'isolation_unproven', message: `${cwd} is not in this attempt's worktree ${record.outer.worktree}, so its sandbox runs nothing for it.` } };
+    }
+
+    const instance = instances.get(tool);
+    const base = instance?.tool ?? tool;
+    const command = instance?.command ?? base;
+
+    if (instance === undefined && !LAUNCHABLE.some((launchable) => launchable === tool)) {
+      return { ok: false, failure: { code: 'tool_unsupported', message: `This sandbox runs ${LAUNCHABLE.join(', ')} and the instances teamai named at init, and not ${tool}.` } };
+    }
+
+    if (!(can.tools ?? []).includes(base)) {
+      return { ok: false, failure: { code: 'tool_unsupported', message: `This sandbox does not offer ${base}: it cannot sign ${base} in there, or does not hold it. teamai said why when the run started.` } };
+    }
+
+    const found = await sandboxOf(record, provider);
+
+    if (!found.ok) return found;
+
+    if (found.id === undefined) return { ok: false, failure: { code: 'sandbox_failed', message: `The sandbox of attempt ${record.attempt} is not made yet, so it runs nothing for the tool.` } };
+    const { id } = found;
+    let held = '';
+
+    const probed = await provider.exec(id, { argv: ['/bin/sh', ...heldProbe([command])], env: {}, unset: [], cwd: record.outer.worktree }, (stream, data) => {
+      if (stream === 'stdout') held += data;
+    });
+
+    if (probed.kind === 'failed') return { ok: false, failure: probed.failure };
+
+    if (!held.split('\n').includes(command)) {
+      const { fields = {} } = provider.display(record);
+      const where = fields.image !== undefined ? `image ${fields.image}` : fields.agent !== undefined ? `template ${fields.agent}` : provider.display(record).label;
+
+      return { ok: false, failure: { code: 'tool_unsupported', message: `${command} is not installed in this sandbox (${where}). Add it to the image or template the sandbox starts from, or run the step with --driver local.` } };
+    }
+
+    const client = provider.client(id, { argv: [command], env: { ...inSandbox(credentials, host), ...record.outer.toolHome }, unset: [], cwd });
+
+    return client.ok ? { ok: true, grant: { argv: client.argv, cwd, env: client.env } } : client;
+  };
+
+  /**
+   * Serves `place`'s socket at `socketPath` in this process, with `credentials` (undefined: not given yet), or gives it
+   * the credentials when it serves it already.
+   */
+  const serveSocket = async (place: string, socketPath: string, credentials: Record<string, string> | undefined): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const served = sockets.get(place);
+
+    if (served !== undefined) {
+      if (credentials !== undefined) served.credentials = credentials;
+
+      return { ok: true };
+    }
+
+    const listened = await listen(socketPath, answerOn(place));
+
+    if (!listened.ok) return listened;
+    sockets.set(place, { socket: listened.socket, credentials });
+
+    return { ok: true };
+  };
+
+  /** Stops serving `place`'s socket and removes it, once the place is forgotten. */
+  const unserveSocket = async (place: string): Promise<void> => {
+    const served = sockets.get(place);
+    sockets.delete(place);
+    await served?.socket.close();
+  };
+
   const open = async ({ op, run, attempt, view, tool, credentials, deadline }: OpenRequest, current: Ready): Promise<void> => {
     const { provider } = current;
 
@@ -346,12 +442,26 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    journal.savePlace(handle, key);
-    write({ op, event: 'accepted', handle });
+    // A place whose tool an app may launch through teamai's wrapper serves the attempt socket from now on; its path
+    // travels in the handle, which teamai gives that app's runtime as `outer`.
+    const outer = tool !== undefined && provider.client !== undefined ? { socket: socketPathOf(view.result, handle), worktree: view.worktree, toolHome: view.toolHome } : undefined;
+
+    if (outer !== undefined) {
+      const served = await serveSocket(handle, outer.socket, credentials);
+
+      if (!served.ok) {
+        write({ op, event: 'failed', failure: served.failure });
+
+        return;
+      }
+    }
+
+    journal.savePlace(handle, { ...key, ...(outer && { outer }) });
+    write({ op, event: 'accepted', handle: outer === undefined ? handle : JSON.stringify({ place: handle, socket: outer.socket } satisfies OuterHandle) });
     // Its own place is saved first, so the sweep keeps it.
     void sweep(provider);
     // An instance's place is its tool's: the same template, sign-in link and gateway; its command and home come in exec.
-    const launched = tool === undefined ? undefined : current.instanceTools.get(tool) ?? tool;
+    const launched = tool === undefined ? undefined : current.instances.get(tool)?.tool ?? tool;
 
     // The warm image comes before the sandbox's creation, which a close waits for: a close meanwhile ends at once, and its
     // place then gets no sandbox.
@@ -387,7 +497,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return { ok: false, failure: { code: 'sandbox_failed', message: `Attempt ${attempt} was closed while its sandbox was being made, ${removal}.` } };
       }
 
-      journal.savePlace(handle, { ...key, id: created.id });
+      journal.savePlace(handle, { ...key, ...(outer && { outer }), id: created.id });
 
       return created;
     };
@@ -475,7 +585,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   };
 
   const exec = async (request: ExecRequest, { provider, host }: Ready): Promise<void> => {
-    const { op, handle } = request;
+    const { op } = request;
+    const handle = placeOf(request.handle);
     const replayed = replay(op);
 
     if (replayed) return replayed;
@@ -545,7 +656,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
   /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
   const prompt = async (request: PromptRequest, { provider, can, host }: Ready): Promise<void> => {
-    const { op, handle, confined, lease } = request;
+    const { op, confined, lease } = request;
+    const handle = placeOf(request.handle);
 
     if (confined === undefined) {
       write({ op, event: 'failed', failure: { code: 'prompt_unsupported', message: 'The sandbox runtime runs the tool teamai builds, as an exec, and launches no agent of its own.' } });
@@ -785,13 +897,15 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * place it cannot find fails, never answered as collected.
    */
   const collect = async (handle: string, provider: Provider): Promise<void> => {
+    const placeKey = placeOf(handle);
+
     if (provider.collect === undefined) {
       write({ event: 'collected', handle });
 
       return;
     }
 
-    const place = journal.place(handle);
+    const place = journal.place(placeKey);
     const found = place === undefined ? { ok: true as const, id: undefined } : await sandboxOf(place, provider);
 
     if (!found.ok) {
@@ -814,8 +928,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * Answers from the journal alone, never the provider, so a stop is read while the engine is down: gone only when the
    * journal holds no place of that handle. A sandbox removed meanwhile is found absent by the next exec or close.
    */
-  const reattach = (handle: string, provider: Provider): void => {
-    const place = journal.place(handle);
+  const reattach = async (handle: string, provider: Provider, credentials: Record<string, string> | undefined): Promise<void> => {
+    const placeKey = placeOf(handle);
+    const place = journal.place(placeKey);
 
     if (place === undefined) {
       write({ event: 'gone', handle });
@@ -823,7 +938,14 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
-    write({ event: 'alive', handle, ops: journal.opsOf(handle).map(({ op, record }) => stateOf({ op, ...record })), display: provider.display(place) });
+    // A place whose tool an app launches through the wrapper is served again, with the credentials teamai sent again.
+    if (place.outer !== undefined) {
+      const served = await serveSocket(placeKey, place.outer.socket, credentials);
+
+      if (!served.ok) warn(`teamai-runtime-sandbox: warning: ${served.failure.message}. The step's tool cannot start in its sandbox until it can.`);
+    }
+
+    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => stateOf({ op, ...record })), display: provider.display(place) });
   };
 
   /** Removes the place's sandbox, and a judge's filter and network: ok once the provider confirmed they are gone. */
@@ -840,14 +962,19 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * end is written before `closed`. Past the bound, or when the removal fails, the journal keeps the place for a later
    * close, unless the person released the attempt (`release`): then it is forgotten all the same.
    */
-  const close = async (handle: string, provider: Provider, isReleased: boolean): Promise<void> => {
+  const close = async (given: string, provider: Provider, isReleased: boolean): Promise<void> => {
+    const handle = placeOf(given);
     const deadline = Date.now() + BOUND_MS;
     const ops = journal.opsOf(handle);
     const known = journal.place(handle);
 
     const failed = (failure: RuntimeFailure): void => {
-      if (isReleased) journal.forget(handle);
-      write({ event: 'close_failed', handle, failure });
+      if (isReleased) {
+        journal.forget(handle);
+        void unserveSocket(handle);
+      }
+
+      write({ event: 'close_failed', handle: given, failure });
     };
 
     const overdue = (what: string): void => failed({
@@ -900,7 +1027,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // its own end since this process last looked.
     for (const [op, follower] of followers) if (follower.handle === handle) follower.end(journal.exec(op)?.outcome ?? { state: 'cancelled' });
     journal.forget(handle);
-    write({ event: 'closed', handle });
+    await unserveSocket(handle);
+    write({ event: 'closed', handle: given });
   };
 
   /**
@@ -912,7 +1040,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
-      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
+      ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
@@ -921,7 +1049,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const provider = providerFor(parsed.options);
 
     if (mode === 'recover') {
-      ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
+      ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: true, can: {} });
 
       return;
@@ -930,7 +1058,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const offered = await provider.offer(credentials, instances);
 
     if (!offered.ok) {
-      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instanceTools: new Map() };
+      ready = { provider: unreachable(offered.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: false, error: offered.failure });
 
       return;
@@ -939,7 +1067,17 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const { confined: offers = [], ...rest } = offered.can;
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
-    ready = { provider, can, host: offered.host, unusedGateways: offered.unusedGateways, instanceTools: new Map(instances.map(({ name, tool }) => [name, tool])) };
+    ready = { provider, can, host: offered.host, unusedGateways: offered.unusedGateways, instances: new Map(instances.map((instance) => [instance.name, instance])) };
+
+    // The wrapper runs a link named after an instance outside any attempt too (`--version`): it reads them here.
+    if (instances.length > 0) {
+      try {
+        journal.saveInstances({ ...journal.instances(), ...Object.fromEntries(instances.map(({ name, tool, command }) => [name, { tool, ...(command !== undefined && { command }) }])) });
+      } catch (error) {
+        warn(`teamai-runtime-sandbox: warning: the instances teamai named could not be kept for teamai-sandbox-<instance> links: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }), ...(Object.keys(offered.unavailable).length > 0 && { unavailable: offered.unavailable }), ...(offered.ownLogins.length > 0 && { ownLogins: offered.ownLogins }) });
   };
 
@@ -964,7 +1102,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       case 'collect':
         return collect(request.handle, provider);
       case 'reattach':
-        return reattach(request.handle, provider);
+        return reattach(request.handle, provider, request.credentials);
       case 'close':
         return close(request.handle, provider, request.release === true);
       default: {
@@ -1013,7 +1151,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
           let unforgotten = '';
 
           try {
-            journal.forget(request.handle);
+            journal.forget(placeOf(request.handle));
           } catch (forgetting) {
             unforgotten = ` Its records could not be removed either: ${forgetting instanceof Error ? forgetting.message : String(forgetting)}`;
           }

@@ -234,3 +234,13 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, 
     expect(JSON.parse(output)).toEqual(['ok', 'EPERM', 'EPERM']);
   });
 });
+
+describe('seatbelt: never the outer of an app runtime', () => {
+  it('opens a place for a tool with no attempt socket, as it confines files only', async () => {
+    const connection = start();
+    await init(connection, { provider: 'seatbelt' }, { env: ['ANTHROPIC_API_KEY'], logins: [] });
+    const { accepted } = await openPlace(connection, placeIn(host.dir), { tool: 'claude' });
+
+    expect(accepted.handle).toBe(HANDLE);
+  });
+});

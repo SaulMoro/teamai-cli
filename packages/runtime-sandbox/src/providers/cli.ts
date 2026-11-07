@@ -36,6 +36,8 @@ export function commandsOf(instances: ReadonlyArray<Pick<InitInstance, 'command'
 export type Ran = { kind: 'ran'; code: number; stdout: string; stderr: string } | { kind: 'unstartable' | 'timed_out'; message: string };
 
 export interface Cli {
+  /** The CLI's path as teamai's PATH found it, or its bare name when none did. */
+  executable: string;
   /**
    * Runs the CLI once with `args`, on `env` (teamai's own environment unless given), streaming its output. With
    * `timeoutMs`, a CLI still running that long after it started is killed and answers `timed_out`.
@@ -61,6 +63,7 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
   }) ?? name;
 
   return {
+    executable,
     run: (args, { env: runEnv = env, onOutput, timeoutMs } = {}) => new Promise((resolve) => {
       const child = spawn(executable, args, { env: runEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -82,6 +85,11 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
     }),
     why: (ran) => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : ran.message),
   };
+}
+
+/** `env` without the names it leaves unset, as a whole environment another process is given over a socket. */
+export function definedOnly(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]])));
 }
 
 /** One path of the place view and the access the sandbox gets to it. */

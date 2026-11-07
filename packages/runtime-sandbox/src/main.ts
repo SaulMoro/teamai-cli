@@ -12,6 +12,7 @@ import { sbxProvider } from './providers/sbx.js';
 import { seatbelt } from './providers/seatbelt.js';
 import { vercelProvider } from './providers/vercel.js';
 import { serve } from './runtime.js';
+import { toolExec } from './wrapper.js';
 
 // teamai-runtime-sandbox: teamai spawns it for a driver definition that uses runtime `sandbox`, and speaks runtime
 // protocol 1 to it over stdio. Its stdout carries only protocol lines; anything for a person goes to stderr.
@@ -30,18 +31,35 @@ const gid = process.getgid?.();
 const journalRoot = path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox');
 const sandboxJournal = journal(journalRoot);
 
-serve({
-  input: process.stdin,
-  write: (message: RuntimeMessage) => {
-    if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
-  },
-  journal: sandboxJournal,
-  warn: (line) => {
-    if (stderrOpen) process.stderr.write(`${line}\n`);
-  },
-  provider: providerOf,
-  env: process.env,
-});
+// Called as `teamai-sandbox-<tool>` (a `bin` of teamai-cli, or a link named after an instance), or as
+// `teamai-runtime-sandbox tool-exec <tool> …`, it is the sandbox wrapper an app runs in place of a tool (wrapper.ts).
+const WRAPPER_PREFIX = 'teamai-sandbox-';
+const calledAs = path.basename(process.argv[1] ?? '');
+const [mode, wrapped] = process.argv.slice(2);
+
+const wrapper = calledAs.startsWith(WRAPPER_PREFIX)
+  ? { name: calledAs.slice(WRAPPER_PREFIX.length), args: process.argv.slice(2) }
+  : mode === 'tool-exec' && wrapped !== undefined ? { name: wrapped, args: process.argv.slice(4) } : undefined;
+
+if (wrapper === undefined) {
+  serve({
+    input: process.stdin,
+    write: (message: RuntimeMessage) => {
+      if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
+    },
+    journal: sandboxJournal,
+    warn: (line) => {
+      if (stderrOpen) process.stderr.write(`${line}\n`);
+    },
+    provider: providerOf,
+    env: process.env,
+  });
+} else {
+  const end = await toolExec({ ...wrapper, env: process.env, cwd: process.cwd(), journal: sandboxJournal });
+
+  if ('signal' in end) process.kill(process.pid, end.signal);
+  else process.exit(end.code);
+}
 
 function providerOf(options: SandboxOptions): Provider {
   switch (options.provider) {
