@@ -52,12 +52,18 @@ export function isLeftBehind(by: string): boolean {
   return at > 0 && by.slice(0, at) === os.hostname() && !isRunning(Number(by.slice(at + 1)));
 }
 
-/** Removes the scratch directories warm builds left whose process no longer runs (a runtime killed while it built). */
+/**
+ * Removes the scratch directories warm builds of this user left whose process no longer runs (a runtime killed while it
+ * built). Another user's, in a temporary directory they share, stays theirs.
+ */
 export function removeLeftScratch(): void {
+  const uid = process.getuid?.();
+
   for (const name of fs.readdirSync(os.tmpdir())) {
     const pid = /^teamai-warm-(\d+)-/.exec(name)?.[1];
+    const dir = path.join(os.tmpdir(), name);
 
-    if (pid !== undefined && !isRunning(Number(pid))) fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true });
+    if (pid !== undefined && !isRunning(Number(pid)) && (uid === undefined || fs.statSync(dir, { throwIfNoEntry: false })?.uid === uid)) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
