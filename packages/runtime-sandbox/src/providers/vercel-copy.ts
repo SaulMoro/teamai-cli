@@ -187,6 +187,7 @@ export function applyTar(entries: TarEntry[], { roots, kept }: { roots: string[]
         fs.chmodSync(entry.at, entry.mode || 0o644);
         break;
       }
+
       default: {
         const unhandled: never = entry;
 

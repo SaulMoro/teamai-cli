@@ -264,9 +264,9 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
         return {
           ok: true,
           sandboxes: listed.flatMap(({ name }) => {
-            const [run, attempt, ...more] = name.startsWith(prefix) ? name.slice(prefix.length).split('-') : [];
+            const [runId, attempt, ...more] = name.startsWith(prefix) ? name.slice(prefix.length).split('-') : [];
 
-            return run && attempt && more.length === 0 ? [{ id: name, run, attempt }] : [];
+            return runId && attempt && more.length === 0 ? [{ id: name, run: runId, attempt }] : [];
           }),
         };
       } catch (error) {
