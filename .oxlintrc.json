@@ -89,6 +89,8 @@
     "teamai/remove-delivered": "error",
     // An attempt's result file is written masked, through AttemptResult.write.
     "teamai/attempt-result-writes": "error",
+    // A step's work is committed with untrustedGit, so no hook it planted runs on the host.
+    "teamai/untrusted-finish-git": "error",
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
     "teamai/home-env": "error",
     "teamai/learnings-root": "error",
