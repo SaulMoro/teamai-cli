@@ -77,7 +77,8 @@ const CallSchema = z.looseObject({ call: z.string() });
 function calls(): Array<z.infer<typeof CallSchema>> {
   const file = path.join(stateDir, 'calls.log');
 
-  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => CallSchema.parse(JSON.parse(line))) : [];
+  // The log of a call another runtime process makes now may exist and be empty yet.
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter((line) => line !== '').map((line) => CallSchema.parse(JSON.parse(line))) : [];
 }
 
 /** The sandbox's own copy of host path `at`. */
