@@ -169,7 +169,7 @@ const noSession = (tool: string): RuntimeFailure => ({
 
 /**
  * The failure of an agent that stopped on its tool's usage limit, saying what the tool said, or undefined when it did
- * not: the tool's own line starts its error, so a reply that only mentions a limit is not one.
+ * not: the tool's own line starts the text, so a reply that only mentions a limit is not one.
  */
 function usageLimited(tool: string, said: string | null | undefined): RuntimeFailure | undefined {
   const text = said?.trim();
@@ -222,7 +222,7 @@ const PARENT_LOOKUP_MS = 5_000;
  * linked when the daemon holds it. An agent this daemon does not know, or does not show within 5 s, is named by its id
  * alone, never linked to a server that does not hold it.
  */
-async function startedFromLine(live: Daemon, parent: string, step: string, run: string): Promise<string> {
+async function startedFromLine(live: Daemon, { parent, step, run }: { parent: string; step: string; run: string }): Promise<string> {
   const known = await Promise.race([live.agent(parent), delay(PARENT_LOOKUP_MS).then(() => null)]).catch(() => null);
 
   return `This agent runs step "${step}" of teamai workflow run ${run}, started from the Paseo agent ${known ? live.link(parent) : parent}.`;
@@ -417,7 +417,8 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
       try {
         const added = await live.addProvider(planned, instance);
 
-        // A provider it added stays though the instance cannot run on it yet, so the person is told how to remove it.
+        // A provider it added stays, so the person is told how to remove it: one the instance runs on, or one Paseo
+        // would not remove again when the instance cannot run on it.
         if (added.added) write({ event: 'notice', op, message: addedNotice(live.url, planned, name) });
 
         if ('cannot' in added) return cannot(added.cannot);
@@ -573,7 +574,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
    * A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. `createdAt`: when
    * Paseo created its agent.
    */
-  const sessionOf = (live: Daemon, tool: string, id: string, createdAt: string | undefined): z.infer<typeof PromptSessionSchema> => {
+  const sessionOf = (live: Daemon, { tool, id, createdAt }: { tool: string; id: string; createdAt: string | undefined }): z.infer<typeof PromptSessionSchema> => {
     const target = targets.get(tool);
     const created = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
     const since = Number.isNaN(created) ? undefined : created;
@@ -1002,7 +1003,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     const following = begin(op, request.handle);
 
     try {
-      const brief = [startedFrom && await startedFromLine(live, startedFrom, lease.step, place.run), lease.interactive && INTERACTIVE_BRIEF, lease.prompt].filter(Boolean).join('\n\n');
+      const brief = [startedFrom && await startedFromLine(live, { parent: startedFrom, step: lease.step, run: place.run }), lease.interactive && INTERACTIVE_BRIEF, lease.prompt].filter(Boolean).join('\n\n');
 
       await launch(live, request, following, target, {
         place, modeId: modeIds.get(tool), prompt: brief, env: { [RUN_DIR_ENV]: place.runDir }, ...(startedFrom && { parent: startedFrom }),
@@ -1308,7 +1309,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
               return;
             }
 
-            settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session, end.final?.createdAt), result: { output }, confined: record.answer.kept }, following);
+            settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt }), result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -1344,7 +1345,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session, end.final?.createdAt), result }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt }), result }, following);
 
           return;
         }
