@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -16,9 +17,8 @@ import { runsCommand } from './tool-instances.js';
 //
 //  One runtime adds at a time on this machine (a lock file beside teamai's T3 sign-in), and each reads the settings
 //  again under the lock, so parallel runs add an instance once: a later one finds it by its Binary path, and for an
-//  instance with a home of its own, by its Home path too. A write T3
-//  makes between the read and the write is never lost: the runtime reads the file again before it replaces it, and
-//  starts over when it changed.
+//  instance with a home of its own, by its Home path too. T3 writes the file too: the runtime reads it again just
+//  before it replaces it, and starts over when it changed, so only a write T3 makes in that last instant is lost.
 //
 
 /** A provider instance to add: its id, the T3 driver, its name in T3, the command it runs and where, and its home. */
@@ -61,6 +61,13 @@ const InstancesSchema = z.record(z.string(), z.object({
 
 type Kept = z.infer<typeof InstancesSchema>[string];
 
+/** A lock file's text: the pid of the runtime that holds it, when it took it, and a token of its own. */
+const HolderSchema = z.string().regex(/^\d+ \d+ \S+$/).transform((text) => {
+  const [pid = '', takenAt = ''] = text.split(' ');
+
+  return { pid: Number(pid), takenAt: Number(takenAt) };
+});
+
 /**
  * Whether `kept`, an instance in T3's settings, is `instance` already: of its driver, running its command (one with no
  * Binary path runs the driver's own), and, for an instance with a home of its own, in that home.
@@ -90,44 +97,80 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Takes the lock at `file`, waiting for another runtime that holds it; a lock its holder left behind is taken over. */
-async function locked<TValue>(file: string, work: () => TValue): Promise<{ ok: true; value: TValue } | { ok: false }> {
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-
-  for (;;) {
-    try {
-      fs.writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 });
-      break;
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      const holder = Number.parseInt(fs.readFileSync(file, 'utf8'), 10);
-      const age = Date.now() - fs.statSync(file).mtimeMs;
-
-      if (!isAlive(holder) || age > LOCK_STALE_MS) {
-        fs.rmSync(file, { force: true });
-        continue;
-      }
-
-      if (Date.now() > deadline) return { ok: false };
-      await sleep(50);
-    }
-  }
-
-  try {
-    return { ok: true, value: work() };
-  } finally {
-    fs.rmSync(file, { force: true });
-  }
-}
-
-/** The settings file's text, or none when there is no file yet. */
+/** A file's text, or none when there is no file. */
 function readText(file: string): string | undefined {
   try {
     return fs.readFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
+  }
+}
+
+/**
+ * Removes the lock at `file` when it is still the one whose text is `text`: one another runtime took since is put back.
+ * It is moved aside first, so no lock is removed between the read and the removal.
+ */
+function release(file: string, text: string): void {
+  const aside = path.join(path.dirname(file), `.${process.pid}.${randomUUID()}.aside`);
+
+  try {
+    fs.renameSync(file, aside);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+
+  try {
+    if (fs.readFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
+  } finally {
+    fs.rmSync(aside, { force: true });
+  }
+}
+
+/**
+ * Takes the lock at `file`, waiting for another runtime that holds it; a lock its holder left behind is taken over. The
+ * lock is linked into place whole, so another runtime never reads it half written.
+ */
+async function locked<TValue>(file: string, work: () => TValue): Promise<{ ok: true; value: TValue } | { ok: false }> {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const text = `${process.pid} ${Date.now()} ${randomUUID()}`;
+  const mine = path.join(path.dirname(file), `.${process.pid}.${randomUUID()}.tmp`);
+  fs.writeFileSync(mine, text, { mode: 0o600 });
+
+  try {
+    for (;;) {
+      try {
+        fs.linkSync(mine, file);
+        break;
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      }
+
+      const held = readText(file);
+
+      // Released since the link failed: try again.
+      if (held === undefined) continue;
+      const holder = HolderSchema.safeParse(held);
+
+      if (holder.success && isAlive(holder.data.pid) && Date.now() - holder.data.takenAt < LOCK_STALE_MS) {
+        if (Date.now() > deadline) return { ok: false };
+        await sleep(50);
+        continue;
+      }
+
+      // Its runtime is gone, or held it too long.
+      release(file, held);
+    }
+  } finally {
+    fs.rmSync(mine, { force: true });
+  }
+
+  try {
+    return { ok: true, value: work() };
+  } finally {
+    release(file, text);
   }
 }
 
