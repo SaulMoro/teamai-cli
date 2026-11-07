@@ -17,12 +17,17 @@ import { checkoutCredentials, getConfiguredRemoteUrl, redactGitCredentials } fro
 import type { StepChanges } from '../workspace.js';
 import { runsDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
-import { commitWork, git } from '../worktree.js';
+import { commitWork, git, untrustedGit, type Git } from '../worktree.js';
 
 /** How long one git call that reaches origin may take. */
 const ORIGIN_TIMEOUT_MS = 120_000;
 const ORIGIN = { timeoutMs: ORIGIN_TIMEOUT_MS, env: { ...process.env, ...NON_INTERACTIVE_GIT_ENV } };
 const TEAMAI = ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost'];
+
+/** The git that runs in the clone once a step ran there: no hook, fsmonitor or credential helper the step set in its config runs. */
+function stepGit(): Git {
+  return untrustedGit({ ...process.env, ...NON_INTERACTIVE_GIT_ENV });
+}
 
 /** What the clone started from: origin's default branch and its tip, and the branch tip it found, if origin had one. */
 export type TeamStart = { root: string; dir: string; target: string; base: string; start: string; found?: string };
@@ -119,7 +124,7 @@ async function symlinksOf(root: string, to: string, modes: Map<string, string>):
   const links = [...modes].flatMap(([file, mode]) => (mode === '120000' ? [file] : []));
 
   const named = await Promise.all(links.map(async (link) => {
-    const target = await git(root, ['cat-file', 'blob', `${to}:${link}`]);
+    const target = await stepGit()(root, ['cat-file', 'blob', `${to}:${link}`]);
     const names = path.posix.normalize(path.posix.join(path.posix.dirname(link), target.stdout));
 
     return target.code === 0 && !path.posix.isAbsolute(target.stdout) && names !== '..' && !names.startsWith('../') ? [{ link, names }] : [];
@@ -137,8 +142,8 @@ async function unplacedTeamFiles(input: { root: string; dir: string; base: strin
   const { root, dir, base, to } = input;
   const relative = path.relative(root, dir).split(path.sep).join('/');
   const under = relative === '' ? '' : `${relative}/`;
-  const changed = await git(root, ['diff', '--no-renames', '--name-only', '-z', base, to, '--']);
-  const listed = await git(root, ['ls-tree', '-r', '-z', '--full-tree', to]);
+  const changed = await stepGit()(root, ['diff', '--no-renames', '--name-only', '-z', base, to, '--']);
+  const listed = await stepGit()(root, ['ls-tree', '-r', '-z', '--full-tree', to]);
   const modes = new Map<string, string>();
 
   for (const entry of listed.stdout.split('\0').filter(Boolean)) {
@@ -188,8 +193,8 @@ async function rejectedTeamFiles(input: { root: string; dir: string; base: strin
   // Inside .git, so the clone's status ignores it and removing the clone removes it.
   const before = path.join(root, '.git', 'teamai-base');
   await fs.rm(before, { recursive: true, force: true });
-  await git(root, ['worktree', 'prune']);
-  const added = await git(root, ['worktree', 'add', '-q', '--detach', '--', before, base]);
+  await stepGit()(root, ['worktree', 'prune']);
+  const added = await stepGit()(root, ['worktree', 'add', '-q', '--detach', '--', before, base]);
 
   if (added.code !== 0) return [`(base): could not check out ${base} to compare the team files against: ${said(added)}`];
 
@@ -207,7 +212,7 @@ async function rejectedTeamFiles(input: { root: string; dir: string; base: strin
       return left <= 0;
     });
   } finally {
-    await git(root, ['worktree', 'remove', '--force', '--', before]);
+    await stepGit()(root, ['worktree', 'remove', '--force', '--', before]);
     await fs.rm(before, { recursive: true, force: true });
   }
 }
@@ -228,14 +233,14 @@ async function teamFailures(dir: string): Promise<string[]> {
  */
 export async function finishTeamClone(input: { root: string; dir: string; step: string; branch: string; base: string; start: string; found?: string }): Promise<{ changes: StepChanges } | WorkflowFailure> {
   const { root, dir, step, branch, base, found } = input;
-  const committed = await commitWork(root, `teamai: ${step}`, input.start);
+  const committed = await commitWork(root, `teamai: ${step}`, input.start, stepGit());
 
   if ('error' in committed) return { code: 'push_failed', message: `Step "${step}" could not commit its work in the team repo clone ${root}: ${committed.error}` };
   const from = found ?? base;
-  const listed = committed.to === from ? { stdout: '' } : await git(root, ['rev-list', '--reverse', `${from}..${committed.to}`]);
+  const listed = committed.to === from ? { stdout: '' } : await stepGit()(root, ['rev-list', '--reverse', `${from}..${committed.to}`]);
   const changes: StepChanges = { branch, base, from, to: committed.to, commits: listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean) };
 
-  const trees = await git(root, ['rev-parse', `${committed.to}^{tree}`, `${base}^{tree}`]);
+  const trees = await stepGit()(root, ['rev-parse', `${committed.to}^{tree}`, `${base}^{tree}`]);
   const [tree, baseTree] = trees.stdout.split('\n');
 
   // The branch holds what the default branch holds, as once its proposal was squash-merged: nothing to push or propose.
@@ -252,10 +257,10 @@ export async function finishTeamClone(input: { root: string; dir: string; step: 
     };
   }
 
-  const pushed = await git(root, ['push', '-q', `--force-with-lease=refs/heads/${branch}:${found ?? ''}`, 'origin', `HEAD:refs/heads/${branch}`], ORIGIN);
+  const pushed = await stepGit()(root, ['push', '-q', `--force-with-lease=refs/heads/${branch}:${found ?? ''}`, 'origin', `HEAD:refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
 
   if (pushed.code === 0) return { changes };
-  const tip = await git(root, ['ls-remote', 'origin', `refs/heads/${branch}`], ORIGIN);
+  const tip = await stepGit()(root, ['ls-remote', 'origin', `refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
   const now = tip.code === 0 ? tip.stdout.split('\t')[0]?.trim() ?? '' : undefined;
 
   if (now !== undefined && now !== (found ?? '')) {

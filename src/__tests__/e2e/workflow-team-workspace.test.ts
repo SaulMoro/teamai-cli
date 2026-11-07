@@ -92,6 +92,21 @@ describe('a step in the team workspace, run through the real CLI', () => {
     expect(first.state.deliveries).toEqual([{ url: pullsFrom(BRANCH)[0]?.url, branch: BRANCH, base: 'main', step: 'edit', pass: 1 }]);
   }, 120_000);
 
+  it('runs no hook the step planted in the clone while it commits, checks and pushes the step\'s work', async () => {
+    const hooks = path.join(fixture.root, 'planted-hooks');
+    const mark = path.join(fixture.root, 'hook-ran');
+    fs.mkdirSync(hooks, { recursive: true });
+    for (const hook of ['pre-commit', 'commit-msg', 'post-commit', 'post-checkout', 'reference-transaction', 'pre-push']) {
+      fs.writeFileSync(path.join(hooks, hook), `#!/bin/sh\necho ${hook} >> ${JSON.stringify(mark)}\n`, { mode: 0o755 });
+    }
+
+    const planted = await run(`const { execFileSync } = require('child_process'); const fs = require('fs'); execFileSync('git', ['config', 'core.hooksPath', ${JSON.stringify(hooks)}]); fs.appendFileSync('rules/notes.md', 'hooked\\n');`, { inputs: { topic: 'hooked' } });
+
+    expect(planted.outcome, planted.said).toBe('succeeded');
+    expect(onBranch('teamai/notes/hooked', 'rules/notes.md')).toBe('# Notes\nhooked');
+    expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
+  }, 120_000);
+
   it('goes on from the branch as origin has it, with main merged in, deletes what the step deletes, and keeps the one pull request', async () => {
     const beta = 'teamai/notes/beta';
     const first = await run("require('fs').appendFileSync('rules/notes.md', 'first\\n');", { inputs: { topic: 'beta' } });
