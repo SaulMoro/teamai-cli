@@ -1866,7 +1866,7 @@ steps:
       steps:
         - id: plant
           workspace: continue
-          command: node -e "require('fs').writeFileSync('AGENTS.md','branch rules\\n')" && git config filter.boom.smudge false && git config filter.boom.clean cat && git config filter.boom.required true && echo 'AGENTS.md filter=boom' > "$(git rev-parse --git-common-dir)/info/attributes"
+          command: node -e "require('fs').writeFileSync('AGENTS.md','branch rules\\n')" && echo 'AGENTS.md filter=boom' > "$(git rev-parse --git-common-dir)/info/attributes"
         - id: check
           needs: [plant]
           workspace: continue
@@ -1875,6 +1875,9 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base rules\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
+    // The member's own filter, set before the run, so it still runs in the step's copy: once a step points AGENTS.md at
+    // it, git cannot check out the base agent configuration.
+    for (const [key, value] of [['smudge', 'false'], ['clean', 'cat'], ['required', 'true']]) execFileSync('git', ['config', `filter.boom.${key}`, value], { cwd: workspace });
     const started = await startRun(config, 'build', {}, { secrets: await knownSecrets(config) });
     if ('error' in started) throw new Error(started.error.message);
     const runId = String(started.data.run);
