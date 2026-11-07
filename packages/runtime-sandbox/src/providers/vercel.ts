@@ -18,9 +18,11 @@ import { applyTar, readTar } from './vercel-copy.js';
 //    open     Sandbox.create({ name: teamai-<journal>-<run>-<attempt>, persistent: false, timeout, runtime })
 //             mkdir -p the view's paths (sudo), chown the writable ones to the sandbox's user
 //             the worktree, run directory and tool homes in, as that user; the git paths in as root, read only
+//             view.json kept on this machine last: a sandbox found without it was never fully copied in, and goes
 //    exec     runCommand({ cmd, args, cwd, env: the exec's names, detached }), its output streamed
 //    collect  tar of the worktree, result and tool homes, read back and applied by vercel-copy.ts
 //    close    delete(), never stop(): nothing of an attempt is kept as a snapshot
+//    sweep    Sandbox.list({ namePrefix: teamai-<journal>- }): one whose attempt this machine no longer records goes
 //
 //  The provider's own sign-in (VERCEL_TOKEN, VERCEL_TEAM_ID, VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN) stays with this
 //  runtime: it reaches the SDK only, never a sandbox's environment. Each exec's credentials go in that command's env, by
@@ -238,6 +240,28 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       const can: Can = { workspace: WORKSPACES, isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true };
 
       return { ok: true, can, host: { ok: false, refusal: 'A Vercel sandbox runs on Vercel, which has no way back to this machine.' }, unavailable, ownLogins: [], unusedGateways: {} };
+    },
+
+    async owned() {
+      const auth = signedIn();
+
+      if (!auth.ok) return { ok: false, failure: { code: 'sandbox_failed', message: auth.message } };
+      const prefix = `teamai-${owner}-`;
+
+      try {
+        const listed = await (await (await sdk()).Sandbox.list({ namePrefix: prefix, ...auth.credentials })).toArray();
+
+        return {
+          ok: true,
+          sandboxes: listed.flatMap(({ name }) => {
+            const [run, attempt, ...more] = name.startsWith(prefix) ? name.slice(prefix.length).split('-') : [];
+
+            return run && attempt && more.length === 0 ? [{ id: name, run, attempt }] : [];
+          }),
+        };
+      } catch (error) {
+        return failed(`Vercel could not list the sandboxes this runtime's journal owns: ${(error instanceof Error ? error.message : String(error))}`);
+      }
     },
 
     async find(key) {
