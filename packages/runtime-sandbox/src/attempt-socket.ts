@@ -120,6 +120,8 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
   /** The agent the inner runtime registered, once it did: a string, or null for an app that gives its tool no id. */
   let registered: { agent: string | null } | undefined;
   const registrations = new Set<net.Socket>();
+  /** Every connection open now: a close ends them all, since the server closes only once none is left. */
+  const clients = new Set<net.Socket>();
   const granted = new Set<string | null>();
 
   const say = (client: net.Socket, reply: Answer): void => {
@@ -131,8 +133,12 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
   };
 
   const server = net.createServer((client) => {
+    clients.add(client);
     client.on('error', () => client.destroy());
-    client.on('close', () => registrations.delete(client));
+    client.on('close', () => {
+      clients.delete(client);
+      registrations.delete(client);
+    });
     readline.createInterface({ input: client }).on('line', (line) => {
       void (async () => {
         let parsed: z.ZodSafeParseResult<SocketRequest>;
@@ -210,7 +216,6 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
     socket: {
       path: socketPath,
       close: () => new Promise((resolve) => {
-        for (const client of registrations) client.destroy();
         server.close(() => {
           try {
             fs.rmSync(dir, { recursive: true, force: true });
@@ -220,6 +225,8 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
 
           resolve();
         });
+
+        for (const client of clients) client.destroy();
       }),
     },
   };
