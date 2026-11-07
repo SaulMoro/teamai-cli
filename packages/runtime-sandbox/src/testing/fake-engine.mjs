@@ -20,7 +20,9 @@
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
-//                       exists, before it answers, as a create still on its way; a file `owned-hold` makes a `ps`
+//                       exists, before it answers, as a create still on its way; a file `exec-hold` holding a number
+//                       of milliseconds makes docker's or podman's `exec` wait that long once it found its container, before it
+//                       starts the process, as an exec still on its way to the daemon; a file `owned-hold` makes a `ps`
 //                       filtered by `teamai.owner` wait until it is removed (60 s at most), with a file `owned-listing`
 //                       there while it waits; each list of one journal's containers it answered adds a character to
 //                       a file `owned-listed`
@@ -86,6 +88,16 @@ function killProcesses(container) {
   }
 }
 
+/**
+ * Removes the container and stops its processes, as `rm --force` does. It is gone before its processes are listed, so
+ * an exec that found it and starts its process meanwhile sees it gone and ends (runProcess).
+ */
+function removeContainer(container) {
+  fs.rmSync(path.join(containers, container.id, 'container.json'), { force: true });
+  killProcesses(container);
+  fs.rmSync(path.join(containers, container.id), { recursive: true, force: true });
+}
+
 /** Splits `args` into the options of a subcommand (flags with a value) and the rest, from the first positional. */
 function options(list, withValue, boolean = []) {
   const found = [];
@@ -129,7 +141,16 @@ function runProcess(container, argv, cwd, env, stdin) {
   const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: [stdin ? 'inherit' : 'ignore', 'inherit', 'inherit'] });
   const execs = path.join(containers, container.id, 'execs');
   fs.mkdirSync(execs, { recursive: true });
-  child.on('spawn', () => fs.writeFileSync(path.join(execs, String(child.pid)), ''));
+  child.on('spawn', () => {
+    // Fails only once a removal took the container's directory, and then its record is gone too.
+    try { fs.writeFileSync(path.join(execs, String(child.pid)), ''); } catch { /* removed */ }
+
+    // A process cannot outlive its container: one that starts as the container is removed ends with it, killed here
+    // since the removal may have listed its processes before this one was written down.
+    if (!fs.existsSync(path.join(containers, container.id, 'container.json'))) {
+      try { process.kill(-Number(child.pid), 'SIGKILL'); } catch { /* gone */ }
+    }
+  });
   child.on('error', (error) => fail(`OCI runtime exec failed: ${error.message}: executable file not found in $PATH`, 127));
   child.on('close', (code, signal) => {
     fs.rmSync(path.join(execs, String(child.pid)), { force: true });
@@ -267,6 +288,7 @@ function docker() {
       if (!container) fail(`Error response from daemon: No such container: ${ref}`);
 
       if (!container.running) fail(`Error response from daemon: container ${container.id} is not running`);
+      waitAsLongAs('exec-hold');
       const cwd = one(found, '-w') ?? '/';
       // The process runs on the host, so it starts in the host directory mounted where the container's cwd is.
       const mount = container.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
@@ -300,8 +322,7 @@ function docker() {
       if (fs.existsSync(path.join(state, 'rm-fails'))) fail(`Error response from daemon: cannot remove container "${positional[0]}": could not kill: tried to kill container, but did not receive an exit event`);
 
       if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
-      killProcesses(container);
-      fs.rmSync(path.join(containers, container.id), { recursive: true, force: true });
+      removeContainer(container);
       process.stdout.write(`${positional[0]}\n`);
       break;
     }
@@ -471,8 +492,7 @@ function sbx() {
         const sandbox = readContainer(name);
 
         if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
-        killProcesses(sandbox);
-        fs.rmSync(path.join(containers, sandbox.id), { recursive: true, force: true });
+        removeContainer(sandbox);
         process.stdout.write(`Removed sandbox ${name}\n`);
       }
 

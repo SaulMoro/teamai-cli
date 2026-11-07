@@ -1910,6 +1910,21 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(await ended).toEqual({ op, event: 'cancelled' });
   });
 
+  it('ends a judge cancelled, with nothing left running, when its cancel removes the container while its exec is still starting', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    engine.holdExec(3_000);
+    const op = newOp();
+    const ended = judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, op, lease: { model: { name: '--hang' } } });
+    await vi.waitFor(() => { expect(engine.calls().some(([, command]) => command === 'exec')).toBe(true); }, { timeout: 10_000 });
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await ended).toEqual({ op, event: 'cancelled' });
+    expect(engine.containers()).toEqual([`${HANDLE}-proxy`]);
+  });
+
   it('stops a judge on cancel', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
