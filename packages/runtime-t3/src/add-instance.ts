@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
-import { homePathOf } from './settings.js';
+import { instanceToolHome, SettingsSchema } from './settings.js';
 import { runsCommand } from './tool-instances.js';
 
 // ─── Adding a T3 provider instance to the member's T3 settings ───
@@ -52,14 +52,8 @@ const ATTEMPTS = 3;
 /** T3's provider instance ids: a letter, then letters, digits, `_` or `-`, at most 64 (`PROVIDER_SLUG_PATTERN` in T3). */
 const INSTANCE_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
-const SettingsSchema = z.record(z.string(), z.unknown());
-
-const InstancesSchema = z.record(z.string(), z.object({
-  driver: z.string().optional(),
-  config: z.object({ binaryPath: z.string().optional(), homePath: z.string().optional() }).loose().optional(),
-}).loose().catch({})).catch({});
-
-type Kept = z.infer<typeof InstancesSchema>[string];
+/** The whole settings file, every key kept as it is, which the runtime writes back. */
+const FileSchema = z.record(z.string(), z.unknown());
 
 /** A lock file's text: the pid of the runtime that holds it, when it took it, and a token of its own. */
 const HolderSchema = z.string().regex(/^\d+ \d+ \S+$/).transform((text) => {
@@ -69,18 +63,18 @@ const HolderSchema = z.string().regex(/^\d+ \d+ \S+$/).transform((text) => {
 });
 
 /**
- * Whether `kept`, an instance in T3's settings, is `instance` already: of its driver, running its command (one with no
- * Binary path runs the driver's own), and, for an instance with a home of its own, in that home.
+ * Whether the provider instance `id` in `settings` is `instance` already: of its driver, running its command (one with
+ * no Binary path runs the driver's own), and, for an instance with a home of its own, in that home as T3 resolves it.
  */
-function isSame(kept: Kept, instance: NewInstance, userHome: string): boolean {
-  const binaryPath = kept.config?.binaryPath?.trim() || undefined;
-  const homePath = kept.config?.homePath?.trim() || undefined;
+function isSame({ settings, id, instance, userHome }: { settings: z.infer<typeof SettingsSchema>; id: string; instance: NewInstance; userHome: string }): boolean {
+  const kept = settings.providerInstances?.[id];
+  const binaryPath = kept?.config?.binaryPath?.trim() || undefined;
 
-  if (kept.driver !== instance.driver) return false;
+  if (kept?.driver !== instance.driver) return false;
 
   if (!(binaryPath === undefined ? instance.command === DRIVERS[instance.driver].tool : runsCommand(binaryPath, instance.command))) return false;
 
-  return instance.homePath === undefined || (homePath !== undefined && homePathOf(homePath, userHome) === instance.homePath);
+  return instance.homePath === undefined || instanceToolHome(settings, { instanceId: id, driver: instance.driver, userHome }) === instance.homePath;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -178,15 +172,15 @@ async function locked<TValue>(file: string, work: () => TValue): Promise<{ ok: t
 function addTo(file: string, instance: NewInstance, userHome: string): AddedInstance {
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const before = readText(file);
-    const parsed = SettingsSchema.safeParse(before === undefined ? {} : JSON.parse(before));
+    const parsed = FileSchema.safeParse(before === undefined ? {} : JSON.parse(before));
 
     if (!parsed.success) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
     const settings = parsed.data;
-    const instances = InstancesSchema.parse(settings['providerInstances'] ?? {});
+    const instances = FileSchema.catch({}).parse(settings['providerInstances'] ?? {});
+    const read = SettingsSchema.catch({}).parse(settings);
+    const found = Object.keys(instances).find((id) => isSame({ settings: read, id, instance, userHome }));
 
-    const found = Object.entries(instances).find(([, kept]) => isSame(kept, instance, userHome));
-
-    if (found) return { kind: 'found', id: found[0] };
+    if (found) return { kind: 'found', id: found };
 
     if (Object.hasOwn(instances, instance.id)) return { kind: 'failed', why: `T3 Code already has a provider instance "${instance.id}" that runs another command` };
 
@@ -194,7 +188,7 @@ function addTo(file: string, instance: NewInstance, userHome: string): AddedInst
       driver: instance.driver, displayName: instance.displayName, enabled: true,
       config: { binaryPath: instance.binaryPath, ...(instance.homePath !== undefined && { homePath: instance.homePath }) },
     };
-    const next = `${JSON.stringify({ ...settings, providerInstances: { ...z.record(z.string(), z.unknown()).catch({}).parse(settings['providerInstances'] ?? {}), [instance.id]: added } }, null, 2)}\n`;
+    const next = `${JSON.stringify({ ...settings, providerInstances: { ...instances, [instance.id]: added } }, null, 2)}\n`;
     const temp = `${file}.teamai-${process.pid}.tmp`;
     const mode = before === undefined ? 0o600 : fs.statSync(file).mode & 0o777;
     fs.mkdirSync(path.dirname(file), { recursive: true });
