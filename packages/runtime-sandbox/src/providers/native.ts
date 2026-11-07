@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
@@ -156,14 +157,18 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
 
   const failed = (message: string) => ({ ok: false, failure: { code: 'sandbox_failed', message } }) satisfies { ok: false; failure: RuntimeFailure };
 
-  /** The process groups of `id`'s execs still running, by their files; a file whose group ended is removed. */
+  /**
+   * The process groups of `id`'s execs still running, by their files; a file whose group ended is removed, and so is one
+   * written before this machine started, whose number another process may hold now.
+   */
   const groupsOf = (id: string): number[] => {
     const dir = pidsOf(id);
+    const booted = Date.now() - os.uptime() * 1000;
 
     return (fs.existsSync(dir) ? fs.readdirSync(dir) : []).flatMap((name) => {
       const pgid = PidSchema.safeParse(name);
 
-      if (pgid.success && isAlive(pgid.data)) return [pgid.data];
+      if (pgid.success && isAlive(pgid.data) && (fs.statSync(path.join(dir, name), { throwIfNoEntry: false })?.mtimeMs ?? 0) >= booted) return [pgid.data];
       fs.rmSync(path.join(dir, name), { force: true });
 
       return [];
