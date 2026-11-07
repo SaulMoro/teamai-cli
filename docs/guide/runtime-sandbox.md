@@ -137,6 +137,26 @@ Only the names a step is given cross into the container: its `requires.env` keys
 docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e CLAUDE_CONFIG_DIR -e TEAMAI_WORKFLOW_RESULT -e CLAUDE_CODE_OAUTH_TOKEN teamai-r7c41d09e2b6a5f13-a3e9b0c51 claude -p …
 ```
 
+**The workflow's `setup` runs in the step's container too**, before the step, with setup's own `requires.env` keys and none of the step's: the step's keys are unset, and `credentials` go only to the tool.
+
+```yaml
+# workflows/review.yaml
+setup:
+  command: npm ci
+  requires: { env: [NPM_TOKEN] }
+```
+
+```text
+docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e NPM_TOKEN -e TEAMAI_WORKFLOW_ATTEMPT -e TEAMAI_MODE -e TEAMAI_RUN_DIR teamai-r7c41d09e2b6a5f13-a3e9b0c51 env -u SIGNING_KEY -- /bin/sh -c 'npm ci'
+```
+
+teamai then checks on the host what setup left in the worktree, as it does on `local`. A failing setup, a tracked file it changed, or a key's value it wrote to a file stops the step before the tool starts:
+
+```text
+✖ Step "review" failed with setup_failed: Setup "npm ci" exited with code 1, so the step did not run. It printed: npm error 401 Unauthorized - GET https://npm.acme.internal/@acme%2fui Fix setup, then retry the step.
+✖ Step "review" failed with setup_secret: Setup "npm ci" left the value of NPM_TOKEN in .npmrc, where the step could read it, so the step did not run. Make setup remove the files it writes NPM_TOKEN to, then retry the step.
+```
+
 ## Judging in the sandbox
 
 A scored pass is judged by its `teamai-score` run, whose judge step reads only the evidence teamai gathered. The sandbox runs that judge too, so a definition with only `sandbox` judges with no agent CLI on your machine. Each judge gets a fresh container:
@@ -427,7 +447,7 @@ sbx ls -q
 ## Not in this version
 
 - `bwrap`, `seatbelt` and hosted sandboxes. The definition fails `bad_option` on `provider` until they ship.
-- A warm image or template with dependencies installed, and the workflow's `setup` inside the sandbox. Setup still runs on the host.
+- A warm image or template with dependencies installed.
 - Codex on a login dedicated to teamai in a container. On `sbx`, Codex signs in with `sbx secret set openai --oauth`.
 - Network rules for steps. `requires.network: false` is listed in `unenforced`, and a strict one waits for a driver that declares it. Only a judge's network is filtered.
 - A judge on a tool login. A judge signs in with an env credential.
