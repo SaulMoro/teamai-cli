@@ -8,7 +8,7 @@ import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 //    runtimes:
 //      - use: sandbox
 //        options:
-//          provider: sbx                    # sbx | docker | podman | seatbelt | bwrap
+//          provider: sbx                    # sbx | docker | podman | seatbelt | bwrap | vercel
 //          agent: claude                    # sbx, optional: the agent template (claude, codex) or a kit reference;
 //                                           # unset, each attempt starts from its own tool's template
 //      - use: sandbox
@@ -18,6 +18,11 @@ import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 //      - use: sandbox
 //        options:
 //          provider: seatbelt               # seatbelt (macOS), bwrap (Linux): this machine's own tools, no other key
+//      - use: sandbox
+//        options:
+//          provider: vercel                 # a hosted sandbox per attempt
+//          timeout: 2h                      # optional: its lifetime, 1m to 5h; unset, past the attempt's deadline
+//          provider_auth: { VERCEL_TOKEN: file:~/.config/vercel-token }   # optional: where the Vercel sign-in is read
 //
 //  teamai reads `credentials` and `max_parallel` itself and never passes them here; it gives the credentials on `open`.
 //  Each provider has its own schema, and a key it does not take fails with `bad_option` naming it.
@@ -34,10 +39,7 @@ export const NATIVE_SANDBOXES = ['seatbelt', 'bwrap'] as const;
 export type NativeProvider = (typeof NATIVE_SANDBOXES)[number];
 
 /** The providers this version runs. */
-const PROVIDERS = ['sbx', ...CONTAINER_ENGINES, ...NATIVE_SANDBOXES] as const;
-
-/** Providers the sandbox runtime is designed for that this version does not run yet. */
-const LATER_PROVIDERS = ['vercel'] as const;
+const PROVIDERS = ['sbx', ...CONTAINER_ENGINES, ...NATIVE_SANDBOXES, 'vercel'] as const;
 
 const CACHE = 'List the manifests and lockfiles that key the warm image, relative to the checkout, for example cache: [package.json, package-lock.json]';
 
@@ -92,9 +94,40 @@ const SbxOptionsSchema = z.strictObject({
 /** seatbelt and bwrap take only their provider: the tools are this machine's own, on its PATH. */
 const NativeOptionsSchema = z.strictObject({ provider: z.enum(NATIVE_SANDBOXES) });
 
-const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema, seatbelt: NativeOptionsSchema, bwrap: NativeOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
+/** Where the runtime reads one value of the provider's own sign-in on the host: a variable, or a file. */
+const AuthSourceSchema = z.string().regex(/^(?:env:[A-Za-z_][A-Za-z0-9_]*|file:.+)$/, 'Read it from a variable or a file: env:<NAME> or file:<path>');
 
-export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema> | z.infer<typeof NativeOptionsSchema>;
+const LIFETIME = 'Give the sandbox\'s lifetime as a duration Vercel takes, from 1m to 5h, for example timeout: 2h';
+
+/** A duration such as `90s`, `30m` or `2h`, in milliseconds, within what Vercel gives a sandbox. */
+const UNIT_MS = { s: 1_000, m: 60_000, h: 3_600_000 } as const;
+
+const LifetimeSchema = z.string({ error: LIFETIME }).regex(/^\d+[smh]$/, LIFETIME)
+  .transform((duration) => Number(duration.slice(0, -1)) * UNIT_MS[z.enum(['s', 'm', 'h']).parse(duration.slice(-1))])
+  .refine((ms) => ms >= 60_000 && ms <= 5 * 3_600_000, LIFETIME);
+
+/**
+ * vercel: a hosted sandbox per attempt. `runtime` is Vercel's image (its default ships Claude); `timeout` the sandbox's
+ * lifetime; `provider_auth` where each value of the Vercel sign-in is read on the host, when not from the variable of its
+ * own name.
+ */
+const VercelOptionsSchema = z.strictObject({
+  provider: z.literal('vercel'),
+  runtime: z.string().min(1, 'Name the Vercel image, for example runtime: node24').optional(),
+  timeout: LifetimeSchema.optional(),
+  provider_auth: z.strictObject({
+    VERCEL_TOKEN: AuthSourceSchema.optional(),
+    VERCEL_TEAM_ID: AuthSourceSchema.optional(),
+    VERCEL_PROJECT_ID: AuthSourceSchema.optional(),
+    VERCEL_OIDC_TOKEN: AuthSourceSchema.optional(),
+  }).optional(),
+});
+
+export type VercelOptions = z.infer<typeof VercelOptionsSchema>;
+
+const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema, seatbelt: NativeOptionsSchema, bwrap: NativeOptionsSchema, vercel: VercelOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
+
+export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema> | z.infer<typeof NativeOptionsSchema> | VercelOptions;
 
 /** What a key `issue` says no option takes means, naming the keys there are; undefined for another issue. */
 function unknownKeyMessage(issue: z.core.$ZodIssue | undefined, provider: (typeof PROVIDERS)[number], topKeys: string[]): string | undefined {
@@ -102,7 +135,9 @@ function unknownKeyMessage(issue: z.core.$ZodIssue | undefined, provider: (typeo
 
   if (issue.path.length === 0) return `Provider ${provider} takes no option "${issue.keys[0]}". It takes: ${topKeys.join(', ')}`;
 
-  return `On provider ${provider}, ${issue.path.join('.')} takes no key "${issue.keys[0]}". It takes: ${(WARM_KEYS[provider] ?? []).join(', ')}`;
+  const takes = issue.path[0] === 'provider_auth' ? Object.keys(VercelOptionsSchema.shape.provider_auth.unwrap().shape) : WARM_KEYS[provider] ?? [];
+
+  return `On provider ${provider}, ${issue.path.join('.')} takes no key "${issue.keys[0]}". It takes: ${takes.join(', ')}`;
 }
 
 /** Parses a definition's options, or says which key is wrong and why. */
@@ -110,16 +145,7 @@ export function parseOptions(raw: RuntimeOptions): { ok: true; options: SandboxO
   const provider = z.enum(PROVIDERS).safeParse(raw.provider);
 
   if (!provider.success) {
-    const later = z.enum(LATER_PROVIDERS).safeParse(raw.provider);
-
-    return {
-      ok: false,
-      failure: {
-        code: 'bad_option', key: 'provider',
-        message: later.success ? `Provider "${later.data}" is not available in this version of teamai-runtime-sandbox. Use provider: sbx, docker, podman, seatbelt or bwrap`
-          : `Set provider to sbx, docker, podman, seatbelt or bwrap${raw.provider === undefined ? '' : `, not ${JSON.stringify(raw.provider)}`}`,
-      },
-    };
+    return { ok: false, failure: { code: 'bad_option', key: 'provider', message: `Set provider to sbx, docker, podman, seatbelt, bwrap or vercel${raw.provider === undefined ? '' : `, not ${JSON.stringify(raw.provider)}`}` } };
   }
 
   const schema = SCHEMAS[provider.data];

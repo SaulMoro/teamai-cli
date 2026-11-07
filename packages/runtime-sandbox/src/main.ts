@@ -10,6 +10,7 @@ import { containerProvider } from './providers/container.js';
 import { nativeProvider } from './providers/native.js';
 import { sbxProvider } from './providers/sbx.js';
 import { seatbelt } from './providers/seatbelt.js';
+import { vercelProvider } from './providers/vercel.js';
 import { serve } from './runtime.js';
 
 // teamai-runtime-sandbox: teamai spawns it for a driver definition that uses runtime `sandbox`, and speaks runtime
@@ -59,6 +60,8 @@ function providerOf(options: SandboxOptions): Provider {
       return nativeProvider({ sandbox: seatbelt, state: path.join(journalRoot, 'seatbelt'), env: process.env, home: getUserHome() });
     case 'bwrap':
       return nativeProvider({ sandbox: bwrap, state: path.join(journalRoot, 'bwrap'), env: process.env, home: getUserHome() });
+    case 'vercel':
+      return vercelProvider({ options, owner: sandboxJournal.owner, state: path.join(journalRoot, 'vercel'), env: process.env, home: getUserHome() });
     default: {
       const unhandled: never = options;
 
