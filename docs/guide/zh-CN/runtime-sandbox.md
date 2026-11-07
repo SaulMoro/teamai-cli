@@ -80,7 +80,7 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 | 键 | 示例 | 含义 |
 | --- | --- | --- |
-| `provider` | `docker` | `sbx`、`docker` 或 `podman` |
+| `provider` | `docker` | `sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 或 `vercel` |
 | `agent` | `claude` | 仅 `sbx`：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。不写时，每次尝试从它自己工具的模板启动：Claude 步骤用 `claude`，Codex 步骤用 `codex`，命令步骤用裸的 `shell`。`agent: shell` 会被拒绝，因为那个模板里没有 agent。 |
 | `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
 | `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
@@ -389,11 +389,11 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录。它读不到你的主目录、你的其他仓库和你的 SSH 密钥：它的 `HOME` 和 `TMPDIR` 是它自己的空目录。
+- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，你主目录之外的仓库（比如 `/opt` 或 `/Volumes` 下的）仍然可读。
 - 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
 - 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
-- `seatbelt` 只通过 `sandbox-exec` 限制文件访问。带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
+- `seatbelt` 只通过 `sandbox-exec` 限制文件访问。带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
 
 当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行：
 
@@ -415,6 +415,7 @@ runtimes:
     options:
       provider: vercel
       timeout: 2h                        # 可选：沙箱的存活时间，1m 到 5h
+      runtime: node24                    # 可选：Vercel 的镜像
       provider_auth:                     # 可选：teamai 从哪里读取 Vercel 登录信息
         VERCEL_TOKEN: file:~/.config/vercel-token
       credentials:
@@ -423,9 +424,9 @@ runtimes:
 
 - teamai 用 `VERCEL_TOKEN`、`VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或者用 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）登录 Vercel。`provider_auth` 可以为其中任意一个指定另一个变量或一个文件。它们在这台机器上读取，永远不会到达步骤。
 - teamai 把工作树、git 目录（只读）、运行的文件和工具主目录按主机路径复制进去。步骤结束时，它把工作树、结果和工具主目录复制回来，修改和删除都会带回。git 目录和运行的文件不会复制回来。步骤放下的链接以链接的形式带回，这次尝试的目录之外什么都不会写。
-- 每个沙箱创建时都关闭持久化，并在尝试关闭时删除。不设置时，`timeout` 持续到步骤时间限制之后 5 分钟，最多 5 小时；步骤没有时间限制时为 45 分钟。如果 `timeout` 会在步骤时间限制之前结束，步骤会在创建任何沙箱之前以 `timeout` 上的 `bad_option` 失败。
+- 每个沙箱创建时都关闭持久化，并在尝试关闭时删除。不设置时，`timeout` 持续到步骤时间限制之后 5 分钟；步骤没有时间限制时为 45 分钟。沙箱必须在时间限制之后再存活这 5 分钟，才能把步骤的工作拷回来：如果 `timeout` 更早结束，或者时间限制在 5 小时以后，步骤会在创建任何沙箱之前以 `timeout` 上的 `bad_option` 失败。
 - Vercel 上的沙箱连不到这台机器，所以指向 `localhost` 或 `127.0.0.1` 的凭据（例如 `ANTHROPIC_BASE_URL`）会以 `bad_option` 失败。
-- 遗留下来的沙箱会以 `teamai-<home id>-<run>-<attempt>` 的名字出现在 Vercel 控制台（Sandboxes）里；它的 timeout 到了就会结束它。
+- 遗留下来的沙箱会以 `teamai-<home id>-<run>-<attempt>` 的名字出现在 Vercel 控制台（Sandboxes）里。下一个打开的尝试会删除它，或者它的 timeout 到了就会结束它。
 
 ## 限制和预算
 
@@ -481,7 +482,6 @@ sbx ls -q
 
 ## 这个版本还不支持
 
-- `bwrap`、`seatbelt` 和托管沙箱。在它们发布之前，驱动定义会在 `provider` 上以 `bad_option` 失败。
 - 预装依赖的预热镜像或模板，以及在沙箱里运行工作流的 `setup`。setup 仍在主机上运行。
 - 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
 - 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。只有评判的网络会被过滤。
