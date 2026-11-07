@@ -206,6 +206,12 @@ A step's `model: { name, effort }` picks the model, and `effort` becomes the opt
 ✖ Step "review" failed with model_unavailable: T3 Code provider instance "claudeAgent" (Claude) has no model claude-opus-9. Its models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.
 ```
 
+Started from a T3 thread, such as by the thread's agent, a step that names no tool or model runs as that thread does: on its provider instance and model, in place of your T3 default. For example, from a thread on `claude-work` with `claude-sonnet-5-5`, a step with no tool runs `claude` on `claude-work` with `claude-sonnet-5-5`. T3 does not report a thread's model options, so the model runs with its own default effort. The mode is never the thread's: it comes from [How much a step thread asks you](#how-much-a-step-thread-asks-you). When the thread runs on an instance T3 cannot run steps on here, the run uses your T3 default. When T3 cannot read the thread, it does too, and says so as it starts:
+
+```text
+⚠ Step runtime "t3": teamai could not read the T3 thread thread-7f3a… this run was started from (Thread thread-7f3a… is no longer available), so a step that names no tool or model runs on your T3 Code default instead.
+```
+
 ### Team tools
 
 A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`, `command: acme-claude`) runs on the T3 provider instance whose Binary path, in T3 Code under Settings → Providers, is the absolute path of `acme-claude`, or on the one `instances: { acme-claude: <its id> }` maps. A tool with a home of its own and no command, such as `claude-work` (`extends: claude`, `home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`), runs on the instance that runs Claude's own binary with that Home path. Its session is read in that instance's Home path.
@@ -226,7 +232,7 @@ When T3 does not offer the tool (the command is not on your PATH, two instances 
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
 ```
 
-When the instance that runs a team tool has another home than teamai gives the tool, the tool signs in and keeps its sessions in the instance's home, and the run says so as it starts:
+When the instance that runs a team tool has another home than teamai gives the tool, the tool signs in and keeps its sessions in the instance's home, and the run says so as it starts. A tool with no home of its own, such as `acme-claude`, has its base tool's home, which `CLAUDE_CONFIG_DIR` or `CODEX_HOME` moves; in a run started from a T3 thread teamai leaves those out, since T3 sets them there to the thread's own instance:
 
 ```text
 ⚠ Step runtime "t3": T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ~/.acme-claude.

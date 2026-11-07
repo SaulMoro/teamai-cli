@@ -206,6 +206,12 @@ workflows:
 ✖ Step "review" failed with model_unavailable: T3 Code provider instance "claudeAgent" (Claude) has no model claude-opus-9. Its models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.
 ```
 
+从 T3 线程启动时（例如由线程的智能体启动），没有写工具和模型的步骤会像那个线程一样运行：用它的提供方实例和模型，代替你的 T3 默认值。例如，从运行在 `claude-work`、使用 `claude-sonnet-5-5` 的线程启动，没有写工具的步骤会在 `claude-work` 上用 `claude-sonnet-5-5` 运行 `claude`。T3 不报告线程的模型选项，所以模型使用它自己的默认 effort。模式从不取自线程，而是按[步骤线程会问你多少](#步骤线程会问你多少)决定。线程运行在这里不能运行步骤的实例上时，运行使用你的 T3 默认值。T3 读不到这个线程时也一样，并在开始时说明：
+
+```text
+⚠ Step runtime "t3": teamai could not read the T3 thread thread-7f3a… this run was started from (Thread thread-7f3a… is no longer available), so a step that names no tool or model runs on your T3 Code default instead.
+```
+
 ### 团队工具
 
 `acme-claude`（`extends: claude`，`command: acme-claude`）这样的[团队工具](reference.md#团队工具tools)，在 Binary path（T3 Code 的 Settings → Providers）是 `acme-claude` 绝对路径的 T3 提供方实例上运行，或者在 `instances: { acme-claude: <its id> }` 映射的实例上运行。有自己的 home 而没有命令的工具，比如 `claude-work`（`extends: claude`，`home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`），在运行 Claude 自己的二进制文件、Home path 为该 home 的实例上运行。它的会话在该实例的 Home path 中读取。
@@ -226,7 +232,7 @@ T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都�
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
 ```
 
-运行团队工具的实例的 home 与 teamai 给这个工具的 home 不同时，工具会在实例的 home 中登录并保存会话，运行开始时会说明：
+运行团队工具的实例的 home 与 teamai 给这个工具的 home 不同时，工具会在实例的 home 中登录并保存会话，运行开始时会说明。没有自己 home 的工具（例如 `acme-claude`）使用基础工具的 home，`CLAUDE_CONFIG_DIR` 或 `CODEX_HOME` 会移动它；从 T3 线程启动的运行里 teamai 不看这两个变量，因为 T3 在线程里把它们设为线程自己实例的 home：
 
 ```text
 ⚠ Step runtime "t3": T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ~/.acme-claude.
