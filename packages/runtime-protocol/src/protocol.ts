@@ -101,8 +101,13 @@ const CredentialsSchema = EnvSchema.default({});
  */
 export const CANCEL_FAILED = 'cancel_failed';
 
-/** The most characters a reason in `init`'s `unavailable` holds: cut a longer one to fit. */
+/** The most characters a reason in `init`'s `unavailable` holds: cut a longer one to fit (`fitReason`). */
 export const UNAVAILABLE_REASON_MAX = 500;
+
+/** `reason` cut to `UNAVAILABLE_REASON_MAX` characters, ending with `…` when it was cut, so `init`'s reply still parses. */
+export function fitReason(reason: string): string {
+  return reason.length > UNAVAILABLE_REASON_MAX ? `${reason.slice(0, UNAVAILABLE_REASON_MAX - 1)}…` : reason;
+}
 
 /**
  * The environment variables each tool a step runtime launches signs in with (`signIn`), and those that go with a sign-in
@@ -112,10 +117,18 @@ export const UNAVAILABLE_REASON_MAX = 500;
 export interface SignInVariables {
   signIn: readonly string[];
   alongside?: readonly string[];
+  /** The variable that points the tool at a model gateway, and the one that holds the token it signs in to it with. */
+  gateway?: GatewayVariables;
+}
+
+/** A tool's gateway variables: `url`, its base URL, and `token`, what signs the tool in to it. */
+export interface GatewayVariables {
+  url: string;
+  token: string;
 }
 
 export const SIGN_IN_VARIABLES: Readonly<Record<'claude' | 'codex' | 'codebuddy', SignInVariables>> = {
-  claude: { signIn: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'] },
+  claude: { signIn: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'], gateway: { url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' } },
   codex: { signIn: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
   codebuddy: { signIn: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'] },
 };

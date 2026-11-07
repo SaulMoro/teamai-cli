@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUsageLimitText } from './protocol.js';
+import { fitReason, isUsageLimitText, RuntimeMessageSchema, SIGN_IN_VARIABLES, UNAVAILABLE_REASON_MAX } from './protocol.js';
 
 describe('a tool\'s own text for a spent usage limit', () => {
   it.each([
@@ -17,5 +17,25 @@ describe('a tool\'s own text for a spent usage limit', () => {
     'The reply says you\'ve hit your limit, which is not the tool stopping.',
   ])('is not a usage limit: %s', (text) => {
     expect(isUsageLimitText(text)).toBe(false);
+  });
+});
+
+describe('a reason a runtime gives in init\'s unavailable', () => {
+  it('stays as it is when it fits', () => {
+    expect(fitReason('acme-claude is not in the image: add it, or run the step with --driver local.')).toBe('acme-claude is not in the image: add it, or run the step with --driver local.');
+  });
+
+  it('is cut to the most init\'s reply holds, ending with an ellipsis, so the reply still parses', () => {
+    const fitted = fitReason(`${'x'.repeat(UNAVAILABLE_REASON_MAX)}tail`);
+
+    expect(fitted).toHaveLength(UNAVAILABLE_REASON_MAX);
+    expect(fitted.endsWith('…')).toBe(true);
+    expect(RuntimeMessageSchema.safeParse({ type: 'init', ok: true, can: {}, unavailable: { claude: fitted } }).success).toBe(true);
+  });
+});
+
+describe('the sign-in variables of a tool', () => {
+  it('name the gateway Claude reads, as a base URL and the token it signs in to it with', () => {
+    expect(SIGN_IN_VARIABLES.claude.gateway).toEqual({ url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' });
   });
 });
