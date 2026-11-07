@@ -2830,7 +2830,7 @@ describe('teamai-runtime-paseo', () => {
       runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b'));
       await runtime.next(isEnd('op-0000000b'));
 
-      const [create] = received().filter((request) => request.type === 'agent.create.request');
+      const create = received().find((request) => request.type === 'agent.create.request');
       expect(create?.labels).toMatchObject({ 'teamai-parent': 'agent-the-run-started-from' });
       expect(String(create?.initialPrompt)).not.toContain('started from the Paseo agent');
     });
