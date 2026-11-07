@@ -2823,6 +2823,18 @@ describe('teamai-runtime-paseo', () => {
       });
     });
 
+    it('labels a judge\'s agent with the Paseo agent the run was started from, and briefs it as any judge', async () => {
+      behave({ reply: '{"label": "pass"}' });
+      const runtime = start({ PASEO_AGENT_ID: 'agent-the-run-started-from' });
+      await ready(runtime);
+      runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b'));
+      await runtime.next(isEnd('op-0000000b'));
+
+      const [create] = received().filter((request) => request.type === 'agent.create.request');
+      expect(create?.labels).toMatchObject({ 'teamai-parent': 'agent-the-run-started-from' });
+      expect(String(create?.initialPrompt)).not.toContain('started from the Paseo agent');
+    });
+
     it('archives the judge\'s Paseo workspace on close, and leaves the directory in place', async () => {
       behave({ reply: '{"label": "pass"}' });
       const runtime = start();

@@ -91,7 +91,7 @@ Each agent carries the labels `teamai-run` and `teamai-step`, so you can list a 
 paseo ls --all --label teamai-run=r0769801107010602
 ```
 
-A run started from inside a Paseo agent (Paseo sets `PASEO_AGENT_ID` in each agent's shell) also labels each step agent `teamai-parent=<agent>`, and the step's prompt starts with a line that links back to that agent:
+A run started from inside a Paseo agent (Paseo sets `PASEO_AGENT_ID` in each agent's shell) also labels each step and judge agent `teamai-parent=<agent>`, and a step's prompt starts with a line that links back to that agent:
 
 ```text
 This agent runs step "classify" of teamai workflow run r0769801107010602, started from the Paseo agent paseo://h/srv_vL5abcnfKUWY/agent/1f78c282-039d-452f-9621-bb6677c76eec.

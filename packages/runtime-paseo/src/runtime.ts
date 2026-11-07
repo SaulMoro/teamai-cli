@@ -895,7 +895,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
       title: `teamai ${lease.step} · ${place.run}`,
       prompt: how.prompt,
       // `paseo ls --label teamai-run=<run>` lists a run's agents, and `teamai-step` one step's.
-      // `teamai-parent` lists the agents of a run started from that agent.
+      // `teamai-parent` lists the step and judge agents of runs started from that Paseo agent.
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}`, 'teamai-run': place.run, 'teamai-step': lease.step, ...(how.parent && { 'teamai-parent': how.parent }) },
       ...(how.env && { env: how.env }),
       config: { provider: `${provider}/${model.id}`, ...(how.modeId !== undefined && { modeId: how.modeId }), ...(effort && { thinkingOptionId: effort }), ...(how.options && { options: how.options }) },
@@ -1092,7 +1092,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
 
       await launch(live, request, following, target, {
         place, modeId: CONFINED_MODES[target.tool], prompt: confinedBrief(target.tool, confined, lease.prompt), options: CONFINED_OPTIONS[target.tool],
-        answer: { kind: 'reply', kept: CONFINED_KEPT }, cwd: workspace.directory,
+        answer: { kind: 'reply', kept: CONFINED_KEPT }, cwd: workspace.directory, ...(startedFrom && { parent: startedFrom }),
       });
     } finally {
       following.landed();
