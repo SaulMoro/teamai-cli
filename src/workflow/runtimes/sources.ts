@@ -17,6 +17,7 @@ import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type Runtim
 import { acceptToolCommand } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { credentialSecrets, type StepRuntime } from './step-runtime.js';
+import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 
@@ -478,6 +479,49 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 }
 
 /**
+ * Opens runtime `names.inner` through `names.outer`, each with the options `options` nests under its name, as one
+ * runtime: each is found, accepted and started as a runtime of its own, then the engine reaches both through
+ * `composedStepRuntime` with the offer `composedOffer` merges. The prompt's credentials are the outer's, which runs the
+ * tool; the inner keeps its own.
+ */
+async function openComposed(driver: ResolvedDriver, names: { inner: string; outer: string }, options: RuntimeOptions, how: Parameters<typeof openRuntime>[3]): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+  const name = composedName(names.inner, names.outer);
+  const nested = nestedOptions(options, names);
+
+  if (!nested.ok) return { ok: false, failure: badOption(driver, name, nested.key, nested.message) };
+  const outer = await openRuntime(driver, names.outer, entryOptions(driver, names.outer, nested.outer), how);
+
+  if (!outer.ok) return outer;
+  const inner = await openRuntime(driver, names.inner, entryOptions(driver, names.inner, nested.inner), how);
+
+  if (!inner.ok) {
+    if (outer.opened.kind === 'external') await outer.opened.runtime.dispose();
+
+    return inner;
+  }
+
+  if (outer.opened.kind !== 'external' || inner.opened.kind !== 'external') {
+    await Promise.all([outer.opened, inner.opened].map((part) => (part.kind === 'external' ? part.runtime.dispose() : undefined)));
+
+    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and local runs in teamai's own process: it runs neither through another runtime nor another through it. Fix the file and start again.` } };
+  }
+
+  const [outerOpened, innerOpened] = [outer.opened, inner.opened];
+  const offer = composedOffer({ ok: true, can: outerOpened.can, launchesAgents: outerOpened.launchesAgents }, { ok: true, can: innerOpened.can, launchesAgents: innerOpened.launchesAgents, ...(innerOpened.unavailable && { unavailable: innerOpened.unavailable }) });
+  const caps = [outerOpened.engine.maxParallel, innerOpened.engine.maxParallel].filter((cap) => cap !== undefined);
+  const engine: EngineOptions = { ...outerOpened.engine, ...(caps.length > 0 && { maxParallel: Math.min(...caps) }) };
+
+  return {
+    ok: true,
+    opened: {
+      kind: 'external', use: name, runtime: composedStepRuntime({ outer: outerOpened.runtime, inner: innerOpened.runtime, innerCredentials: innerOpened.credentials }),
+      can: offer.can, launchesAgents: offer.launchesAgents, engine, credentials: outerOpened.credentials, found: outerOpened.found, masks: { ...outerOpened.masks, ...innerOpened.masks }, optionsFrom: innerOpened.optionsFrom,
+      ...(offer.unavailable && { unavailable: offer.unavailable }),
+    },
+  };
+}
+
+/**
  * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
  * then opens each of its runtimes in order, so a bad option of any fails before a step runs. Each starts in `checkout`,
  * the run's, which its `init` names too.
@@ -488,9 +532,12 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
   if (!resolved.ok) return resolved;
   const { driver } = resolved;
   const opened: OpenedRuntime[] = [];
+  const how = { mode, canAsk, purpose, checkout };
 
   for (const entry of driver.definition.runtimes) {
-    const one = await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), { mode, canAsk, purpose, checkout });
+    const one = entry.through === undefined
+      ? await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), how)
+      : await openComposed(driver, { inner: entry.use, outer: entry.through }, entry.options ?? {}, how);
 
     if (!one.ok) {
       await Promise.all(opened.map((done) => (done.kind === 'external' ? done.runtime.dispose() : undefined)));

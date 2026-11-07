@@ -28,7 +28,7 @@ describe('a driver definition with several runtimes', () => {
   const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, LAUNCHES: launches, ...extra });
 
   /** A team definition `name` whose runtimes are `runtimes`, as YAML gives them. */
-  const writeDefinition = (name: string, runtimes: Array<{ use: string; options?: Record<string, unknown> }>, { tool = 'claude', dir = path.join(repo, '.teamai', 'drivers') } = {}): void => {
+  const writeDefinition = (name: string, runtimes: Array<{ use: string; through?: string; options?: Record<string, unknown> }>, { tool = 'claude', dir = path.join(repo, '.teamai', 'drivers') } = {}): void => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${name}.yaml`), stringify({ schemaVersion: 'v1alpha1', name, tool, runtimes }));
   };
@@ -2866,6 +2866,99 @@ span('end');
       const after = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexafter'], repo, env());
       expect(envelope(after), after.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
       expect(after.stderr).not.toContain('waits for the codex login');
+    });
+  });
+
+  describe('a runtime through another', () => {
+    type Call = { toy: string; type: string; handle?: string; outer?: string; credentials?: string[] };
+
+    let calls: string;
+    let outerState: string;
+    let innerState: string;
+
+    /** What the two toys were asked, in the order each read it. */
+    const asked = (): Call[] => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Call) : []);
+
+    /** A definition whose only runtime is the toy through a sandbox toy, each with its own credential. */
+    const throughDefinition = (name: string, inner: Record<string, unknown> = {}): void => writeDefinition(name, [{
+      use: 'toy', through: 'sandboxtoy',
+      options: {
+        toy: { state: innerState, calls, agent: { output: { ok: true } }, credentials: { APP_TOKEN: 'env:MEMBER_APP_TOKEN' }, ...inner },
+        sandboxtoy: { state: outerState, calls, can: { isolation: 'sandbox' }, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:MEMBER_CLAUDE_TOKEN' } },
+      },
+    }]);
+
+    const tokens = { MEMBER_APP_TOKEN: 'app-value', MEMBER_CLAUDE_TOKEN: 'claude-value' };
+
+    beforeAll(() => {
+      const outerDir = path.join(os.homedir(), '.teamai', 'runtimes', 'sandboxtoy');
+      fs.mkdirSync(outerDir, { recursive: true });
+      fs.copyFileSync(TOY_RUNTIME, path.join(outerDir, 'runtime'));
+      fs.chmodSync(path.join(outerDir, 'runtime'), 0o755);
+    });
+
+    beforeEach(() => {
+      calls = path.join(state, 'calls.jsonl');
+      outerState = path.join(state, 'outer');
+      innerState = path.join(state, 'inner');
+    });
+
+    it('runs a command on the outer and a strict prompt on the inner, opened outer first with the outer\'s handle and closed inner first', async () => {
+      throughDefinition('throughd');
+      writeFlow('strictmixed', `  - id: build
+    workspace: new
+    command: node -e "process.stdout.write(JSON.stringify({built:true}))"
+    output:
+      built: boolean
+  - id: review
+    needs: [build]
+    tool: claude
+    prompt: Review the repository in a sandbox.
+    requires: { isolation: sandbox, strict: true }
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+
+      const ran = await runCLI(['workflow', 'start', 'strictmixed', '--driver', 'throughd'], repo, env(tokens));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [build, review] = readRunState(runId).steps;
+      expect(build).toMatchObject({ status: 'succeeded', outputs: { built: true } });
+      expect(review).toMatchObject({ status: 'succeeded', outputs: { ok: true } });
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy through sandboxtoy', driver: 'throughd', phase: 'closed' });
+      const prompted = asked().filter((call) => call.type !== 'exec' || call.toy === 'outer');
+      const reviewCalls = prompted.slice(prompted.findLastIndex((call) => call.type === 'open' && call.toy === 'outer'));
+      const outerHandle = reviewCalls.find((call) => call.toy === 'outer' && call.type === 'close')?.handle;
+      expect(outerHandle).toEqual(expect.any(String));
+      expect(reviewCalls.map(({ toy, type }) => `${toy} ${type}`)).toEqual(['outer open', 'inner open', 'inner prompt', 'inner collect', 'outer collect', 'inner close', 'outer close']);
+      // The outer gets the prompt's credential, the inner its own and the outer's handle, unchanged.
+      expect(reviewCalls.slice(0, 3)).toMatchObject([
+        { toy: 'outer', credentials: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+        { toy: 'inner', outer: outerHandle, credentials: ['APP_TOKEN'] },
+        { toy: 'inner', credentials: ['APP_TOKEN'] },
+      ]);
+      // The command ran on the outer, which runs commands: the inner runs none.
+      expect(asked().filter((call) => call.type === 'exec').map((call) => call.toy)).toEqual(['outer']);
+    });
+
+    it('reattaches the outer, with the prompt\'s credential again, then the inner, when a killed teamai resumes', async () => {
+      throughDefinition('throughdie', { die_at: 'prompt-finished' });
+
+      const runs = (): string[] => (fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []).filter((name) => name.endsWith('.json'));
+      const before = new Set(runs());
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'throughdie'], repo, env(tokens));
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const runId = runs().find((name) => !before.has(name))?.slice(0, -'.json'.length);
+      fs.writeFileSync(calls, '');
+
+      const resumed = await runCLI(['workflow', 'resume', String(runId), '--driver', 'throughdie'], repo, env(tokens));
+
+      expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const reattaches = asked().filter((call) => call.type === 'reattach');
+      expect(reattaches).toMatchObject([{ toy: 'outer', credentials: ['CLAUDE_CODE_OAUTH_TOKEN'] }, { toy: 'inner' }]);
+      expect(reattaches[1]?.credentials).toBeUndefined();
+      expect(asked().filter((call) => call.type === 'prompt')).toEqual([]);
     });
   });
 });

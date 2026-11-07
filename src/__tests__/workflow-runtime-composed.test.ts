@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JsonValue } from '../types.js';
-import { composedOffer, composedStepRuntime } from '../workflow/runtimes/composed.js';
+import { composedOffer, composedStepRuntime, nestedOptions } from '../workflow/runtimes/composed.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { newOpId, type Initialized, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
@@ -160,5 +160,15 @@ describe('a toy through a toy, over stdio', () => {
     expect(await runtime.close(opened.handle)).toMatchObject({ ok: false, failure: { code: 'close_failed' } });
     expect(asked().slice(2).map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['inner close']);
     expect(await runtime.reattach(opened.handle)).toMatchObject({ kind: 'alive' });
+  });
+});
+
+describe('the options of a runtime through another', () => {
+  it('splits them by runtime, and names a key that is neither runtime\'s or holds no options', () => {
+    const names = { outer: 'sandbox', inner: 't3' };
+
+    expect(nestedOptions({ sandbox: { provider: 'docker' }, t3: {} }, names)).toEqual({ ok: true, outer: { provider: 'docker' }, inner: {} });
+    expect(nestedOptions({ provider: 'docker' }, names)).toMatchObject({ ok: false, key: 'provider' });
+    expect(nestedOptions({ sandbox: 'docker' }, names)).toMatchObject({ ok: false, key: 'sandbox' });
   });
 });

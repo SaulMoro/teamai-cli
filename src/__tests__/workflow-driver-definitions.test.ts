@@ -42,3 +42,15 @@ describe('driver definition names', () => {
     expect(await resolveDriver(team, name, { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found', message: expect.stringContaining(`"${name}"`) } });
   });
 });
+
+describe('a runtime through another in a definition', () => {
+  const through = (use: string, by: string): string => `schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: ${use}\n    through: ${by}\n    options:\n      ${use}: {}\n`;
+
+  it('reads a runtime through another, each one\'s options under its name', () => {
+    expect(parseDriverDefinition('drivers/boxed.yaml', through('t3', 'sandbox'))).toMatchObject({ ok: true, definition: { runtimes: [{ use: 't3', through: 'sandbox', options: { t3: {} } }] } });
+  });
+
+  it('refuses a runtime through itself, naming through', () => {
+    expect(parseDriverDefinition('drivers/boxed.yaml', through('sandbox', 'sandbox'))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('runtimes.0.through: A runtime runs through another runtime, not through itself') } });
+  });
+});

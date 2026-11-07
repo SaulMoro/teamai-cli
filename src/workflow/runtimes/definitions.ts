@@ -47,11 +47,18 @@ function definitionName(name: string): { ok: true; name: DriverName } | { ok: fa
   }
 }
 
-/** One runtime of a definition: the runtime it uses and the options it passes at `init`. */
+const RuntimeNameSchema = z.string().regex(RUNTIME_NAME, 'A runtime name starts with a letter or digit and holds only letters, digits, dots, dashes and underscores');
+
+/**
+ * One runtime of a definition: the runtime it uses and the options it passes at `init`. With `through`, the runtime it
+ * uses runs its tools inside the place that other runtime makes (`use: t3, through: sandbox`), and `options` holds
+ * each one's options under its name.
+ */
 const RuntimeEntrySchema = z.object({
-  use: z.string().regex(RUNTIME_NAME, 'A runtime name starts with a letter or digit and holds only letters, digits, dots, dashes and underscores'),
+  use: RuntimeNameSchema,
+  through: RuntimeNameSchema.optional(),
   options: z.record(z.string(), JsonValueSchema).optional(),
-}).strict();
+}).strict().refine((entry) => entry.through !== entry.use, { path: ['through'], message: 'A runtime runs through another runtime, not through itself' });
 
 export const DriverDefinitionSchema = z.object({
   schemaVersion: z.literal('v1alpha1'),
