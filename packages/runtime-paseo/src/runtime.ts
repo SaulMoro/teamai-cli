@@ -308,7 +308,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
    * prompt on it names that home, so teamai reads the session there whatever HOME or tool root it runs with.
    */
   let sessionHomes = new Map<string, string>();
-  /** The home directory under `$HOME` each team instance keeps its sessions in, by its name. */
+  /** The home each team instance keeps its sessions in, as teamai resolved it, by its name. */
   let homeDirs = new Map<string, string>();
   /** The tool home each offered tool or instance runs in when its Paseo provider's env sets one, by its name. */
   let providerHomes = new Map<string, string>();

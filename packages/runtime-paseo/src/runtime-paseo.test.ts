@@ -583,6 +583,21 @@ describe('teamai-runtime-paseo', () => {
       expect(configChanges()).toHaveLength(1);
     });
 
+    // teamai resolves an instance's home once, the member's CLAUDE_CONFIG_DIR included, and the runtime uses it as given.
+    it('adds the provider of an instance with only a home of its own in the home teamai resolved for it, wherever that is', async () => {
+      const moved = path.join(dir, 'moved', 'claude-work-home');
+      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: moved, env: 'CLAUDE_CONFIG_DIR' } };
+      behave({ output: { ok: true } });
+      const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
+
+      await ready(runtime, { instances: [work] });
+      runtime.send(promptRequest(await opened(runtime, { tool: 'claude-work' }), 'op-0000000b', { tool: 'claude-work' }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'claude-work', home: moved } });
+      expect(configChanges()).toMatchObject([{ config: { providers: { 'claude-work': { extends: 'claude', env: { CLAUDE_CONFIG_DIR: moved } } } } }]);
+      expect(notices(runtime)).toMatchObject([{ message: expect.stringContaining(`with CLAUDE_CONFIG_DIR=${moved}`) }]);
+    });
+
     it('accepts a prompt on an instance no open added a provider for before it adds that provider, and runs the prompt on it', async () => {
       const { file, env } = installed('acme-claude');
       behave({ output: { ok: true }, config_ms: 500 });

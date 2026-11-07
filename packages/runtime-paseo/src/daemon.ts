@@ -160,9 +160,8 @@ function holdsRollout(home: string, threadId: string): boolean {
 /**
  * The Codex home on this machine that holds the rollout of thread `threadId`, or undefined when none it can see does.
  * Paseo reports no Codex home, so the homes the daemon's Codex likely writes are looked in: the one its Paseo provider's
- * env sets, then the runtime's `CODEX_HOME`,
- * then `homeDir` (`.codex`, or a team instance's) in the account's home, where a daemon the Paseo app started runs, then
- * in `$HOME`.
+ * env sets, then the runtime's `CODEX_HOME`, then a team instance's home as teamai resolved it (an absolute `homeDir`),
+ * or `.codex` in the account's home, where a daemon the Paseo app started runs, then in `$HOME`.
  */
 function codexHomeHolding(threadId: string, { providerHome, homeDir }: { providerHome: string | undefined; homeDir: string }): string | undefined {
   // The home a Paseo provider's env sets is the one its Codex writes.
@@ -172,13 +171,17 @@ function codexHomeHolding(threadId: string, { providerHome, homeDir }: { provide
 
   if (moved && path.isAbsolute(moved)) homes.push(moved);
 
-  try {
-    homes.push(path.join(os.userInfo().homedir, homeDir));
-  } catch {
-    // No account entry for this user: its home is only $HOME.
-  }
+  if (path.isAbsolute(homeDir)) {
+    homes.push(homeDir);
+  } else {
+    try {
+      homes.push(path.join(os.userInfo().homedir, homeDir));
+    } catch {
+      // No account entry for this user: its home is only $HOME.
+    }
 
-  homes.push(path.join(getUserHome(), homeDir));
+    homes.push(path.join(getUserHome(), homeDir));
+  }
 
   return [...new Set(homes)].find((home) => holdsRollout(home, threadId));
 }
@@ -255,6 +258,21 @@ function homeVariableOf(tool: PaseoTool): string {
       return unhandled;
     }
   }
+}
+
+/**
+ * The home teamai resolved for an instance and passed in `init.instances`: absolute, the member's value of its variable
+ * when their environment sets it, else its directory under their home. The runtime takes it as given.
+ */
+function instanceHomeOf(home: NonNullable<InitInstance['home']>): string {
+  return path.resolve(getUserHome(), home.dir);
+}
+
+/** `dir` as the member reads it: `~/…` under their home, else as it is. */
+function shownPath(dir: string): string {
+  const under = path.relative(getUserHome(), dir);
+
+  return under !== '' && !under.startsWith('..') && !path.isAbsolute(under) ? `~/${under}` : dir;
 }
 
 /** The directory under `$HOME` `tool`'s home is in when nothing moves it. */
@@ -369,7 +387,7 @@ function providerOf(instance: InitInstance, tool: PaseoTool, { custom, named, ho
     return { cannot: `the team instance names neither a command nor a home for Paseo to run ${tool} with; add a Paseo provider on the daemon's host that extends ${tool}, then name it in the runtime's providers option` };
   }
 
-  const shownHome = instance.home ? `~/${instance.home.dir}` : '';
+  const shownHome = instance.home ? shownPath(instanceHomeOf(instance.home)) : '';
   const subject = command === undefined ? `no Paseo provider runs ${tool} in its home ${shownHome}` : `no Paseo provider runs its command ${command}`;
   const setUp = command === undefined ? `with env ${JSON.stringify({ [variable]: shownHome })}` : `with command ${JSON.stringify([command])}`;
   const matches = Object.entries(custom).flatMap(([id, entry]) => (entry.extends === tool && runsOwn(entry) ? [id] : []));
@@ -610,8 +628,8 @@ export interface Daemon {
   link(agentId: string): string;
   /**
    * The tool home a finished session of `tool` lives in, when the runtime can tell: Claude's from Paseo's diagnostic at
-   * init, Codex's found by the session's rollout on a daemon on this machine, under `homeDir` of a home there (`.codex`,
-   * or a team instance's own), and OpenCode's data directory on a daemon on this machine, its `XDG_DATA_HOME`. The home a
+   * init, Codex's found by the session's rollout on a daemon on this machine, in `homeDir`: `.codex` under a home there,
+   * or a team instance's own home, absolute, and OpenCode's data directory on a daemon on this machine, its `XDG_DATA_HOME`. The home a
    * Paseo provider's env sets comes first.
    */
   sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; providerHome: string | undefined; homeDir: string }): string | undefined;
@@ -798,7 +816,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
   /** The variable that moves an instance's home, and the absolute home it sets with it when it has one of its own. */
   const ownHome = (instance: InitInstance, tool: PaseoTool) => ({
     variable: instance.home?.env ?? homeVariableOf(tool),
-    home: instance.home ? path.join(getUserHome(), instance.home.dir) : undefined,
+    home: instance.home ? instanceHomeOf(instance.home) : undefined,
   });
 
   return {
@@ -877,10 +895,10 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         if (!available.has(provider)) return { ...target, canRun: false, reason: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };
         const instance = teamInstances.find((team) => team.instance.name === target.name)?.instance;
         const variable = instance?.home?.env ?? homeVariableOf(tool);
-        const teamaiHome = instance?.home ? path.join(getUserHome(), instance.home.dir) : process.env[variable] || path.join(getUserHome(), homeDirOf(tool));
+        const teamaiHome = instance?.home ? instanceHomeOf(instance.home) : process.env[variable] || path.join(getUserHome(), homeDirOf(tool));
         const set = custom.get(provider)?.env?.[variable];
         const providerHome = set !== undefined && path.isAbsolute(set) ? { variable, dir: set, teamaiHome } : undefined;
-        const runsIn = providerHome ? { variable, dir: providerHome.dir, shown: providerHome.dir } : instance?.home && { variable, dir: teamaiHome, shown: `~/${instance.home.dir}` };
+        const runsIn = providerHome ? { variable, dir: providerHome.dir, shown: providerHome.dir } : instance?.home && { variable, dir: teamaiHome, shown: shownPath(teamaiHome) };
         // A request Paseo fails for one provider leaves that tool unavailable, never the runtime's other tools.
         let signedIn: SignIn;
 
@@ -933,7 +951,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           return { cannot: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``, added };
         }
 
-        signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: `~/${instance.home.dir}` }, command: instance.command });
+        signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: shownPath(home.home) }, command: instance.command });
       } catch (error) {
         return { cannot: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why`, added };
       }
