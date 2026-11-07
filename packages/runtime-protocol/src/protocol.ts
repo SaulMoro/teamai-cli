@@ -14,7 +14,7 @@ import { z } from 'zod';
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //                                                                    permissions: {"claude":"full-access"}, the tools it runs without prompts
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
-//    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","tool":"claude","view":{...},"credentials":{}}   tool: the prompt's, when it has one; instance: its instance, when it runs one
+//    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","tool":"claude","view":{...},"credentials":{}}   tool: the prompt's, when it has one (an instance by its name)
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
 //    < {"op":"op-7f2a…","event":"ready","display":{"label":"…","url":"…","fields":{…}}}       display optional
 //    > {"type":"exec","op":"op-8b10…","handle":"…","argv":[...],"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
@@ -204,9 +204,8 @@ export type PromptResult = z.infer<typeof PromptResultSchema>;
  */
 export const PromptLeaseSchema = z.object({
   step: z.string().min(1),
+  /** The tool to run, or its instance by the name `init.instances` gives it, as `open.tool` names it. */
   tool: z.string().min(1),
-  /** The instance of `tool` to run, by its `init.instances` name, as `open.instance` names it; absent for the shipped tool. */
-  instance: z.string().min(1).optional(),
   /** The exact model and effort to launch on; the tool's own default when absent. */
   model: z.object({ name: z.string().min(1), effort: z.string().min(1).optional() }).optional(),
   prompt: z.string(),
@@ -343,14 +342,10 @@ export const OpenRequestSchema = z.object({
   view: PlaceViewSchema.optional(),
   /**
    * The tool the attempt's prompt runs, such as `claude`, so a runtime can make the place for it (an `sbx` sandbox of
-   * that agent). Absent for a command step's place, which runs no tool.
+   * that agent). For an instance, its name as `init.instances` and `can.tools` give it, such as `acme-claude`: the
+   * runtime maps it to the tool it extends, or to its own provider. Absent for a command step's place, which runs no tool.
    */
   tool: z.string().min(1).optional(),
-  /**
-   * The instance of `tool` the attempt's prompt runs on, by the name `init.instances` and `can.tools` give it, such as
-   * `acme-claude`; absent for the shipped tool itself. `tool` stays the tool it extends.
-   */
-  instance: z.string().min(1).optional(),
   /**
    * The latest time the attempt's limits allow, as an ISO timestamp, when it has any. teamai cancels an exec or prompt
    * of the place still running then, fails the open when the place is not ready by then, and waits for a `collect` 15 s

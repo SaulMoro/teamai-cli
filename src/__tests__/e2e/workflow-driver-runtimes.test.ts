@@ -566,24 +566,24 @@ steps:
     expect(review, ran.stderr).toMatchObject({ status: 'succeeded' });
     const [launch] = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string });
     expect(launch?.home).toBe(path.join(attemptDir(runId, attemptOf(review)), 'tool-home', 'acme-claude'));
-    // Its place was opened for the tool it extends, naming the instance too.
-    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null; instance?: string | null })
+    // Its place was opened for the instance, by the name init.instances gives it.
+    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null })
       .filter((op) => op.kind === 'open');
-    expect(opens).toEqual([expect.objectContaining({ tool: 'claude', instance: 'acme-claude' })]);
+    expect(opens.map((op) => op.tool)).toEqual(['acme-claude']);
   });
 
-  it('names the instance a step runs on to a runtime that launches agents its own way, on its open and its prompt', async () => {
+  it('names the instance a step runs on as the tool of its open and its prompt on a runtime that launches agents its own way', async () => {
     acmeInstance();
     writeDefinition('toyagentinstance', [{ use: 'toy', options: { state, can: { tools: ['claude', 'acme-claude'] }, agent: { output: { ok: true } } } }]);
 
     const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentinstance', '--tools', 'default=acme-claude'], repo, env());
 
     expect(readRunState(runOf(ran)).steps, ran.stderr).toMatchObject([{ status: 'succeeded' }]);
-    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { sent?: { tool: string; instance?: string } }).find((line) => line.sent)?.sent;
-    expect(sent).toMatchObject({ tool: 'claude', instance: 'acme-claude' });
-    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null; instance?: string | null })
+    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { sent?: { tool: string } }).find((line) => line.sent)?.sent;
+    expect(sent?.tool).toBe('acme-claude');
+    const opens = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; tool?: string | null })
       .filter((op) => op.kind === 'open');
-    expect(opens).toEqual([expect.objectContaining({ tool: 'claude', instance: 'acme-claude' })]);
+    expect(opens.map((op) => op.tool)).toEqual(['acme-claude']);
     expect(fs.existsSync(launches)).toBe(false);
   });
 

@@ -218,7 +218,7 @@ function interrupted(): WorkflowFailure {
  * the tool's argv with `env` (names over the runtime's own), the runtime's `credentials`, and without `unset`, and
  * collects before the adapter reads the result file. A stop is the runtime's `cancel`.
  */
-export function runtimeLauncher(run: AttemptRun, { view, toolHome, instance, unset, credentials, setUp }: { view: PlaceView; toolHome: { tool: string; dir: string }; instance?: string; unset: string[]; credentials: Record<string, string>; setUp: SetUp }): ToolLauncher {
+export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, credentials, setUp }: { view: PlaceView; tool: string; toolHome: { tool: string; dir: string }; unset: string[]; credentials: Record<string, string>; setUp: SetUp }): ToolLauncher {
   const given = toolCredentials(credentials, unset);
 
   return ({ executable, args, cwd, env, onStdout }) => {
@@ -226,7 +226,7 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, instance, uns
     let stdout = '';
 
     const closed = (async (): Promise<ToolClosed> => {
-      const opened = await run.open(view, { tool: toolHome.tool, ...(instance !== undefined && { instance }), toolHome, credentials: given });
+      const opened = await run.open(view, { tool, toolHome, credentials: given });
 
       if (!opened.ok) return { failure: opened.failure };
       const unready = await setUp();
@@ -286,12 +286,12 @@ function promptFailure(failure: RuntimeFailure, retry: { run: string; step: stri
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, runId, step, instance, provided, unset, credentials, setUp }: {
+export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, provided, unset, credentials, setUp }: {
   view: PlaceView;
   runId: RunId;
   step: string;
-  /** The instance of the tool the step runs on, by its `init.instances` name; absent for the shipped tool. */
-  instance?: string;
+  /** The tool the step runs on, or its instance by the name `init.instances` gives it, as the runtime lists it. */
+  tool: string;
   provided: string[];
   unset: string[];
   credentials: Record<string, string>;
@@ -299,14 +299,14 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, instance, 
 }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
-  const launch = async (tool: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
-    const opened = await run.open(view, { tool, ...(instance !== undefined && { instance }), credentials: given });
+  const launch = async (input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
+    const opened = await run.open(view, { tool, credentials: given });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
     const unready = await setUp();
 
     if (unready) return { started: false, exitCode: 1, failure: unready };
-    const lease: PromptLease = { step, tool, ...(instance !== undefined && { instance }), prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
+    const lease: PromptLease = { step, tool, prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
 
     if (input.model) lease.model = input.model.effort ? { name: input.model.name, effort: input.model.effort } : { name: input.model.name };
 
@@ -395,7 +395,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, instance, 
   };
 
   return {
-    run: (tool, input, signal) => launch(tool, input, signal, false),
-    runInteractive: (tool, input, signal) => launch(tool, input, signal, true),
+    run: (_tool, input, signal) => launch(input, signal, false),
+    runInteractive: (_tool, input, signal) => launch(input, signal, true),
   };
 }
