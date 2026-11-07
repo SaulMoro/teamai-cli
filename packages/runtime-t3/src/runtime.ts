@@ -158,7 +158,7 @@ export interface ServeOptions {
    * `t3` command in any run, else, in an attended one, in T3's page. T3 grants `settings:write` only with Full access.
    * The connection runs on as it is; later connections use the wider sign-in. Says why it could not.
    */
-  widen(how: { mode: WorkMode; adding: string[] }): Promise<{ ok: true } | { ok: false; why: string }>;
+  widen(how: { mode: WorkMode; adding: string[] }): Promise<{ ok: true; signIn: string } | { ok: false; why: string }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
   /** T3 Code's data directory, where the member's settings are. */
@@ -761,7 +761,7 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /** The widening of teamai's kept sign-in under way, which every instance added at once waits for. */
-  let widening: Promise<{ ok: true } | { ok: false; why: string }> | undefined;
+  let widening: ReturnType<ServeOptions['widen']> | undefined;
 
   /** The adding of each instance under way, by name, so the opens of parallel steps add it once. */
   const adding = new Map<string, Promise<NotAdded | { ok: true }>>();
@@ -776,6 +776,8 @@ export function serve(options: ServeOptions): Promise<void> {
       const widened = await widening;
 
       if (!widened.ok) return { ok: false, kind: 'not-added', why: widened.why, approval: true };
+      // The connection sends the wider sign-in from now on, so a launch is recorded under it.
+      s.signIn = widened.signIn;
     }
 
     const added = await addProviderInstance({ t3Home: options.t3Home, lockFile: options.settingsLock, userHome: options.t3UserHome, instance });
