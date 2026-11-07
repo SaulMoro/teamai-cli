@@ -219,7 +219,7 @@ A Codex step's pass is scored the same way. Paseo reports no Codex home, so on a
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
 ```
 
-OpenCode keeps its sessions in a database the runtime cannot search for one session, so it names no OpenCode home: an OpenCode pass is scored when teamai runs with the daemon's `HOME`.
+An OpenCode step's pass is scored the same way. OpenCode keeps every session in one database under its data directory (`XDG_DATA_HOME`, `~/.local/share` by default), so on a daemon on this machine the runtime names the data directory that holds `opencode/opencode.db`: the one its Paseo provider's `env` sets, then your `XDG_DATA_HOME`, then `.local/share` of `$HOME`, then of your account's home. teamai reads the session there, also when it runs with a `HOME` of its own. On a daemon on another machine, teamai reads it in its own data directory.
 
 ## Options
 
@@ -227,7 +227,7 @@ OpenCode keeps its sessions in a database the runtime cannot search for one sess
 | --- | --- | --- |
 | `url` | the address `daemon.listen` names in `$PASEO_HOME/config.json`, else `ws://127.0.0.1:6767/ws` | The WebSocket address of the Paseo daemon: `ws://`, `wss://`, or `ws+unix://<socket path>:/ws` for a Unix socket. |
 | `mode` | each tool's Paseo default, never one that never asks | The Paseo mode each tool's agents start in, such as `{ claude: plan }`. It must be one Paseo lists for that tool. Naming a mode that never asks is your opt-in to full access (see [Tools, models and modes](#tools-models-and-modes)). |
-| `providers` | the custom provider that runs each team instance's command | The Paseo provider id a tool or a team instance runs on, such as `{ acme-claude: claude-acme }` (see [Team tool instances](#team-tool-instances)). |
+| `providers` | the custom provider that runs each team instance, else the one teamai adds | The Paseo provider id a tool or a team instance runs on, such as `{ acme-claude: claude-acme }` (see [Team tool instances](#team-tool-instances)). |
 
 `max_parallel` is teamai's own key; see [Runtime options](workflow-advanced.md#runtime-options). Paseo has no cap of its own.
 
@@ -353,23 +353,33 @@ The agent gets the step's prompt. A later pass of the step starts a new agent: i
 
 ## Team tool instances
 
-A step on a team tool instance, such as `acme-claude` (`extends: claude`, `command: acme-claude`), runs in Paseo on a Paseo custom provider whose command is the instance's. Add the provider once on the daemon's host. Paseo sets `agents.providers` as a whole, so keep every entry it already holds:
-
-```sh
-paseo daemon config get agents.providers --json
-paseo daemon config set agents.providers '{
-  "claude-acme": { "extends": "claude", "label": "Claude (acme)", "command": ["acme-claude"] }
-}'
-paseo daemon reload
-```
-
-The runtime finds the provider itself: the one that extends the instance's tool and runs its command, by name or as an absolute path to it. Its steps and judges take that tool's modes, grants and sign-in check, and their sessions name the instance. A Codex instance's sign-in is checked in the instance's own home, and a signed-out instance names its own command, such as `CODEX_HOME=~/.codex-acme acme-codex login`. With no such provider, the instance is not offered, and a step on it says how to add one:
+A step on a team tool instance runs in Paseo on a Paseo custom provider of its own. When the daemon runs on this machine, teamai adds that provider at the first step that runs the instance, attended or not. The provider is named after the instance, extends the instance's tool, runs the instance's command from your `PATH`, and sets the tool's home variable when the instance has a home of its own. It stays for later runs, and the run says once how to remove it:
 
 ```text
-✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
+⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; remove it with `paseo daemon config unset agents.providers.acme-claude`.
 ```
 
-When two providers run the command, name the one to use with the `providers` option:
+`paseo daemon config get agents.providers --json` then shows the entry it added, beside every one the daemon held:
+
+```json
+{ "acme-claude": { "extends": "claude", "label": "acme-claude", "command": ["/Users/ana/.local/bin/acme-claude"], "env": { "CLAUDE_CONFIG_DIR": "/Users/ana/.claude-acme" } } }
+```
+
+An instance with only a home of its own, such as `claude-work` (`extends: claude`, `home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`), gets a provider that runs Claude's own command in that home, so a second Claude account runs with no setup:
+
+```json
+{ "claude-work": { "extends": "claude", "label": "claude-work", "env": { "CLAUDE_CONFIG_DIR": "/Users/ana/.claude-work" } } }
+```
+
+A provider the daemon already holds is used instead: the one that extends the instance's tool and runs its command, by name or as an absolute path to it, or, for an instance with only a home, the one that runs the tool's own command with that home in its `env`. Its steps and judges take that tool's modes, grants and sign-in check, and their sessions name the instance. The instance's sign-in and sessions are looked for in the home its provider's `env` sets, else in the instance's own home, and the run says once when that provider's home is not teamai's home for the instance. A signed-out instance names its own command, such as `CODEX_HOME=~/.codex-acme acme-codex login`.
+
+teamai adds no provider on a daemon on another host, for a command not on your `PATH`, for an instance whose name is not a Paseo provider id (lowercase letters, digits and dashes), or when a provider of that name already runs something else. The instance is then not offered, and a step on it says what to do:
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://10.0.0.5:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude, and teamai adds one only on a daemon on this machine; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
+```
+
+When two providers run the instance, name the one to use with the `providers` option:
 
 ```yaml
 # drivers/paseo-acme.yaml
