@@ -161,10 +161,12 @@ function handedToPerson(runId: string, steps: readonly string[]): WorkflowEnvelo
 /**
  * Where a run that relays its gates stops once nothing it started still runs: at gate `hitl`, which the agent session
  * that started the run answers with `respond`, or hands to the person, and then continues with `resume` on `driver`.
+ * `isConfirmed`: the person agreed to the run at its start, as an `invoke: ask` workflow needs, so the session's resume
+ * carries that yes.
  */
-function relayedGate(hitl: LocalHitl, driver: string): WorkflowEnvelope {
+function relayedGate(hitl: LocalHitl, { driver, isConfirmed }: { driver: string; isConfirmed: boolean }): WorkflowEnvelope {
   const { run, step, pass, kind, message, options, required, respond } = hitl;
-  const resume = `teamai workflow resume ${run} --driver ${driver}`;
+  const resume = `teamai workflow resume ${run} --driver ${driver}${isConfirmed ? ' --confirmed' : ''}`;
   log.info(`Run ${run} waits at step "${step}" (pass ${pass}): ${message}\nOptions: ${options.join(', ')}. Required: ${required ? 'yes' : 'no'}.\nAnswer: ${respond}\nThen: ${resume}`);
 
   return { data: { hitl_waiting: { run, step, pass, kind, message, options, required, ...(hitl.default !== undefined && { default: hitl.default }), respond, resume } } };
@@ -1792,7 +1794,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       if ('lease' in next.data && room()) continue;
 
-      if (relay && hitl && busy() === 0 && held.length === 0) return relayedGate(hitl, defined.driver);
+      if (relay && hitl && busy() === 0 && held.length === 0) return relayedGate(hitl, { driver: defined.driver, isConfirmed: isStarted && started.definition.invoke === 'ask' });
 
       if (busy() === 0 && !question) {
         const wait = WaitReplySchema.parse(next.data.wait);

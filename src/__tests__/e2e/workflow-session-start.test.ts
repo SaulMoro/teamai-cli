@@ -83,6 +83,15 @@ steps:
     approve: Ship the build?
     command: node -e "process.exit(0)"
 `);
+    writeFlow('asked', `invoke: ask
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+  - id: ship
+    needs: [build]
+    approve: Ship the build?
+    command: node -e "process.exit(0)"
+`);
     const pulled = await runCLI(['pull'], repo);
     expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
     dataHome = await resolveProjectDataHome(repo);
@@ -160,6 +169,16 @@ steps:
 
     expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(readRunState(run).steps.map((step) => [step.id, step.status])).toEqual([['build', 'succeeded'], ['ship', 'succeeded']]);
+  });
+
+  it('gives the resume of a relayed gate the confirmation a workflow the person confirms was started with', async () => {
+    writeT3();
+
+    const started = await runCLI(['workflow', 'start', 'asked', '--driver', 't3', '--confirmed'], repo, thread);
+
+    const stopped = envelope(started);
+    const waiting = 'data' in stopped ? stopped.data.hitl_waiting as { run: string; resume: string } | undefined : undefined;
+    expect(waiting?.resume, started.stderr).toBe(`teamai workflow resume ${waiting?.run ?? ''} --driver t3 --confirmed`);
   });
 
   it('decides the gate as before on the local driver, which no person reaches from the session', async () => {
