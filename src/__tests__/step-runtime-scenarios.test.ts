@@ -6,7 +6,6 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
 import { log } from '../utils/logger.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -31,8 +30,6 @@ interface Subject {
   retains: boolean;
   /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
   display?: RuntimeDisplay;
-  /** The handles an open that ends with `handle` is accepted with, in order, when the place opens in more than one step. */
-  acceptedFor?: (handle: string) => string[];
 }
 
 const [docker, sbx] = await Promise.all([sandboxOnFake('docker'), sandboxOnFake('sbx')]);
@@ -53,8 +50,6 @@ const SUBJECTS: Subject[] = [
     }),
     options: (state) => ({ outertoy: { state: path.join(state, 'outer') }, innertoy: { state: path.join(state, 'inner') } }),
     retains: true,
-    // The outer's place is accepted first, so a teamai killed before the inner accepts still closes it.
-    acceptedFor: (handle) => [JSON.stringify({ outer: z.object({ outer: z.string() }).parse(JSON.parse(handle)).outer }), handle],
   },
   { name: 'local', start: () => localStepRuntime(), options: () => ({}), retains: false },
   {
@@ -146,7 +141,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
 
     expect(opened.kind).toBe('ready');
     if (opened.kind !== 'ready') return;
-    expect(accepted).toEqual(subject.acceptedFor?.(opened.handle) ?? [opened.handle]);
+    expect(accepted).toEqual([opened.handle]);
     expect(await runtime.open(request, async () => {})).toEqual(opened);
     // A new operation for the same run and attempt opens no second place.
     expect(await runtime.open(openRequest(), async () => {})).toEqual(opened);
@@ -162,8 +157,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     expect(first.kind).toBe('ready');
     expect(repeated).toEqual(first);
     if (first.kind !== 'ready') return;
-    const each = subject.acceptedFor?.(first.handle) ?? [first.handle];
-    expect([...accepted].sort()).toEqual([...each, ...each].sort());
+    expect(accepted).toEqual([first.handle, first.handle]);
   });
 
   it('fails the open with the error that kept it from persisting the handle', async () => {

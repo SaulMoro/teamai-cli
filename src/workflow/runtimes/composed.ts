@@ -7,7 +7,8 @@ import type { Initialized, Reattached, StepRuntime } from './step-runtime.js';
 //
 //  A definition entry `use: <inner>, through: <outer>` runs a step's tool, launched by the inner runtime (T3, Paseo),
 //  inside the place the outer one makes (a sandbox). The engine sees one step runtime: this one. It opens the outer on
-//  the place view, then the inner with `outer` set to the outer's handle, which it passes unchanged and never reads.
+//  the place view, then, for a place whose prompt runs a tool, the inner with `outer` set to the outer's handle, which
+//  it passes unchanged and never reads.
 //  An exec runs on the outer, a prompt on the inner. It reattaches the outer first, with the prompt's credentials
 //  again, since the outer keeps them only in memory, and collects and closes the inner first: the outer is not closed
 //  while the inner has not confirmed its stop. No runtime calls the other.
@@ -140,6 +141,9 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
 
       if (outerOpened.kind !== 'ready') return outerOpened;
       openedWith.set(outerOpened.handle, request.credentials);
+
+      // A command step's place runs no tool, so the inner, which launches tools, has no place to make for it.
+      if (request.tool === undefined) return { kind: 'ready', handle: JSON.stringify({ outer: outerOpened.handle } satisfies ComposedHandle), ...(outerOpened.display && { display: outerOpened.display }) };
       const innerOpened = await inner.open({ ...request, credentials: innerCredentials, outer: outerOpened.handle }, async (handle) => onAccepted(JSON.stringify({ outer: outerOpened.handle, inner: handle } satisfies ComposedHandle)));
 
       if (innerOpened.kind !== 'ready') return innerOpened;
