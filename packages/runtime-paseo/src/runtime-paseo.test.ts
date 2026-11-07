@@ -747,7 +747,7 @@ describe('teamai-runtime-paseo', () => {
 
       expect(await runtime.next(isEnd('op-0000000a'))).toEqual({
         op: 'op-0000000a', event: 'failed',
-        failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run claude-work on the Paseo daemon at ${daemon.url}: signed out; run \`CLAUDE_CONFIG_DIR=~/.claude-work claude auth login\` on the daemon's host. Paseo refused to remove the provider claude-work teamai added for it (Request failed: The daemon config is read-only), so it stays. Then run the step again.` },
+        failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run claude-work on the Paseo daemon at ${daemon.url}: signed out; run \`CLAUDE_CONFIG_DIR=~/.claude-work claude auth login\` on the daemon's host. teamai could not remove the provider claude-work it added for it (Request failed: The daemon config is read-only), so it may stay. Then run the step again.` },
       });
       expect(customProviders()).toHaveProperty('claude-work');
       expect(notices(runtime)).toMatchObject([{ op: 'op-0000000a', message: expect.stringContaining('teamai added the Paseo provider claude-work') }]);

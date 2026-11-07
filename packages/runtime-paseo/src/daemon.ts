@@ -993,7 +993,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
           return { cannot: why, added: false };
         } catch (error) {
-          return { cannot: `${why}. Paseo refused to remove the provider ${id} teamai added for it (${PaseoSaidSchema.parse(error)}), so it stays`, added };
+          return { cannot: `${why}. teamai could not remove the provider ${id} it added for it (${PaseoSaidSchema.parse(error)}), so it may stay`, added };
         }
       };
 
