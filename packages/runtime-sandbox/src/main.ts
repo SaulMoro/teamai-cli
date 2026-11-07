@@ -5,8 +5,11 @@ import { journal } from './journal.js';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { SandboxOptions } from './options.js';
 import type { Provider } from './provider.js';
+import { bwrap } from './providers/bwrap.js';
 import { containerProvider } from './providers/container.js';
+import { nativeProvider } from './providers/native.js';
 import { sbxProvider } from './providers/sbx.js';
+import { seatbelt } from './providers/seatbelt.js';
 import { serve } from './runtime.js';
 
 // teamai-runtime-sandbox: teamai spawns it for a driver definition that uses runtime `sandbox`, and speaks runtime
@@ -23,7 +26,8 @@ process.stderr.on('error', () => { stderrOpen = false; });
 
 const uid = process.getuid?.();
 const gid = process.getgid?.();
-const sandboxJournal = journal(path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox'));
+const journalRoot = path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox');
+const sandboxJournal = journal(journalRoot);
 
 serve({
   input: process.stdin,
@@ -49,6 +53,10 @@ function providerOf(options: SandboxOptions): Provider {
         owner: sandboxJournal.owner,
         host: { user: uid !== undefined && gid !== undefined ? { uid, gid } : undefined, selinux: fs.existsSync('/sys/fs/selinux/enforce'), env: process.env },
       });
+    case 'seatbelt':
+      return nativeProvider({ sandbox: seatbelt, state: path.join(journalRoot, 'seatbelt'), env: process.env, home: getUserHome() });
+    case 'bwrap':
+      return nativeProvider({ sandbox: bwrap, state: path.join(journalRoot, 'bwrap'), env: process.env, home: getUserHome() });
     default: {
       const unhandled: never = options;
 

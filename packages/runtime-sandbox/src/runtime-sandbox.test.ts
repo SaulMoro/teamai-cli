@@ -64,7 +64,7 @@ describe('init', () => {
   });
 
   it('fails on a provider this version does not run, naming the ones it does', async () => {
-    const reply = await init(start(), { provider: 'bwrap' });
+    const reply = await init(start(), { provider: 'firecracker' });
 
     expect(reply).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'provider' } });
     expect(JSON.stringify(reply)).toMatch(/sbx.*docker.*podman/);

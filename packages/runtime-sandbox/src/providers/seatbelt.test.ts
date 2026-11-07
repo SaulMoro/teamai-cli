@@ -1,0 +1,188 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
+import { exec, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
+
+// The seatbelt provider through the runtime's stdio entry point: on a stand-in sandbox-exec that records the profile and
+// runs the command, and, on macOS, on the real one, which alone proves what the profile hides.
+
+const CLAUDE = "if (process.argv.includes('--version')) console.log('2.1.0 (Claude Code)'); else console.log('reviewed');";
+
+let executable: string;
+let host: NativeHost;
+const open: Connection[] = [];
+
+beforeAll(async () => {
+  executable = await bundleRuntime(tempDir());
+}, 60_000);
+
+beforeEach(() => {
+  host = nativeHost(tempDir());
+  host.tool('claude', CLAUDE);
+});
+
+afterEach(async () => {
+  const connections = open.splice(0);
+  await Promise.all(connections.map((connection) => connection.end()));
+  expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
+  fs.rmSync(host.dir, { recursive: true, force: true });
+});
+
+const start = (extra: NodeJS.ProcessEnv = {}): Connection => startOn(executable, host, open, extra);
+
+/** The profile the last stand-in sandbox-exec was given, with its `-D` parameters. */
+function lastProfile(): { profile: string; params: Record<string, string>; command: string[] } {
+  const call = host.calls().findLast(([name]) => name === 'sandbox-exec') ?? [];
+  const params: Record<string, string> = {};
+  let profile = '';
+  let index = 1;
+
+  while (index < call.length) {
+    const flag = call[index];
+
+    if (flag === '-p') profile = call[index + 1] ?? '';
+    else if (flag === '-D') {
+      const [name = '', ...value] = (call[index + 1] ?? '').split('=');
+      params[name] = value.join('=');
+    } else break;
+    index += 2;
+  }
+
+  return { profile, params, command: call.slice(index) };
+}
+
+describe('seatbelt: init', () => {
+  it('offers the tools on this machine that sign in, at isolation worktree, and never unattended', async () => {
+    const reply = await init(start(), { provider: 'seatbelt' }, { env: ['ANTHROPIC_API_KEY'], logins: [] });
+
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'worktree', env: true, setup: true, tools: ['claude'], workspace: ['read-only', 'new', 'continue', 'clone', 'team'] } });
+    expect(reply.can).not.toHaveProperty('unattended');
+    expect(reply.can).not.toHaveProperty('network');
+    expect(reply.can).not.toHaveProperty('confined');
+  });
+
+  it('names CLAUDE_CODE_OAUTH_TOKEN for Claude when only a login on this machine signs it in, which the sandbox does not read', async () => {
+    const reply = await init(start(), { provider: 'seatbelt' }, { env: [], logins: [] });
+
+    expect(reply).toMatchObject({ ok: true, can: { tools: [] } });
+    expect(String((reply.unavailable as Message).claude)).toContain('CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('takes no option but provider, naming the key', async () => {
+    expect(await init(start(), { provider: 'seatbelt', image: 'x' })).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'image', message: 'Provider seatbelt takes no option "image". It takes: provider' } });
+  });
+
+  it('fails sandbox_unavailable on a macOS older than 14, and runs nothing', async () => {
+    const reply = await init(start({ FAKE_MACOS_VERSION: '13.6.1' }), { provider: 'seatbelt' });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+    expect(String((reply.error as Message).message)).toContain('macOS 14');
+  });
+
+  it('fails sandbox_unavailable off macOS, naming bwrap', async () => {
+    fs.rmSync(path.join(host.fakes, 'sw_vers'));
+    const reply = await init(start({ PATH: [host.fakes, host.tools].join(path.delimiter) }), { provider: 'seatbelt' });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+    expect(String((reply.error as Message).message)).toContain('provider: bwrap');
+  });
+});
+
+describe('seatbelt: a step', () => {
+  it('runs the step under a profile that denies the home and every write outside its place, on a home and temp directory of its own', async () => {
+    const connection = start();
+    await init(connection, { provider: 'seatbelt' }, { env: ['ANTHROPIC_API_KEY'], logins: [] });
+    const at = placeIn(host.dir);
+    const { ready } = await openPlace(connection, at, { tool: 'claude' });
+
+    expect(ready).toMatchObject({ event: 'ready', display: { label: `${HANDLE} (seatbelt)` } });
+
+    const { end, output } = await exec(connection, { argv: ['claude', '-p', 'Review it.'], credentials: { ANTHROPIC_API_KEY: 'step-key' }, env: { CLAUDE_CONFIG_DIR: at.toolHome }, cwd: at.worktree });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(output).toBe('reviewed\n');
+    const { profile, params, command } = lastProfile();
+
+    expect(command).toEqual(['claude', '-p', 'Review it.']);
+    expect(profile).toContain('(deny file-write* (subpath "/"))');
+    expect(Object.values(params)).toEqual(expect.arrayContaining([fs.realpathSync(at.worktree), fs.realpathSync(at.git), fs.realpathSync(host.home)]));
+    // No credential value ever reaches the sandbox's argv.
+    expect(JSON.stringify(host.calls())).not.toContain('step-key');
+  });
+});
+
+describe('seatbelt: lifecycle', () => {
+  /** A step that says it started, then waits until it is stopped. */
+  const WAITS = "console.log('started'); setInterval(() => {}, 1000);";
+
+  it('cancels a running step by ending its process group, then removes its place at close', async () => {
+    host.tool('waits', WAITS);
+    const connection = start();
+    await init(connection, { provider: 'seatbelt' });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at);
+    const op = 'op-0000beef';
+    connection.send({ type: 'exec', op, handle: HANDLE, argv: ['waits'], env: {}, unset: [], credentials: {}, cwd: at.worktree });
+    await connection.next((message) => message.op === op && message.event === 'output');
+    connection.send({ type: 'cancel', op });
+
+    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)))).toMatchObject({ event: 'cancelled' });
+    connection.send({ type: 'close', handle: HANDLE });
+    await connection.next((message) => message.event === 'closed' && message.handle === HANDLE);
+
+    expect(fs.existsSync(path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE))).toBe(false);
+  });
+
+  it('stops a step a killed runtime left running, from a runtime started again', async () => {
+    host.tool('waits', WAITS);
+    const first = start();
+    await init(first, { provider: 'seatbelt' });
+    const at = placeIn(host.dir);
+    await openPlace(first, at);
+    const op = 'op-0000cafe';
+    first.send({ type: 'exec', op, handle: HANDLE, argv: ['waits'], env: {}, unset: [], credentials: {}, cwd: at.worktree });
+    await first.next((message) => message.op === op && message.event === 'output');
+    first.child.kill('SIGKILL');
+    await first.end();
+    const pids = path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE, 'pids');
+    const [pgid] = fs.readdirSync(pids).map(Number);
+
+    const second = start();
+    await init(second, { provider: 'seatbelt' });
+    second.send({ type: 'cancel', op });
+
+    expect(await second.next((message) => message.op === op && ['cancelled', 'failed'].includes(String(message.event)))).toMatchObject({ event: 'cancelled' });
+    expect(() => process.kill(-Number(pgid), 0)).toThrow();
+  });
+});
+
+// Only the real sandbox-exec proves what the profile hides.
+describe.runIf(process.platform === 'darwin')('seatbelt: on this Mac', () => {
+  const PROBE = `
+const fs = require('node:fs');
+const tries = { readHome: () => fs.readFileSync(process.argv[2], 'utf8'), listHome: () => fs.readdirSync(process.argv[3]), readOther: () => fs.readFileSync(process.argv[4], 'utf8'),
+  writeOutside: () => fs.writeFileSync(process.argv[5], 'x'), writeWorktree: () => fs.writeFileSync('made.txt', 'made'), writeOwnHome: () => fs.writeFileSync(process.env.HOME + '/x', 'x'),
+  readGit: () => fs.readdirSync(process.argv[6]) };
+console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, run]) => { try { run(); return [name, 'ok']; } catch (error) { return [name, error.code]; } }))));`;
+
+  it("keeps the member's home, temp directory and other repositories out of the step's reach, and lets it write only its place", async () => {
+    host.tool('probe', PROBE);
+    fs.writeFileSync(path.join(host.home, 'secret'), 'member secret');
+    const other = path.join(host.dir, 'other-repo');
+    fs.mkdirSync(other);
+    fs.writeFileSync(path.join(other, 'file'), 'other');
+    // The real sandbox-exec and sw_vers, never the stand-ins; the member's temp directory holds the test's files.
+    const connection = startOn(executable, host, open, { PATH: [host.tools, '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir) });
+    expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at);
+
+    const { end, output } = await exec(connection, { argv: ['probe', path.join(host.home, 'secret'), host.home, path.join(other, 'file'), path.join(host.dir, 'outside.txt'), at.git], cwd: at.worktree });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(JSON.parse(output)).toEqual({ readHome: 'EPERM', listHome: 'EPERM', readOther: 'EPERM', writeOutside: 'EPERM', writeWorktree: 'ok', writeOwnHome: 'ok', readGit: 'ok' });
+    expect(fs.readFileSync(path.join(at.worktree, 'made.txt'), 'utf8')).toBe('made');
+    expect(fs.existsSync(path.join(host.dir, 'outside.txt'))).toBe(false);
+  });
+});
