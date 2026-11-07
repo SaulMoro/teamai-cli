@@ -87,6 +87,14 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     expect(ran).toMatchObject({ exitCode: 1, session: 's-1', startedFresh: true });
   });
 
+  it('takes the session of an instance step that the runtime reports under the tool the instance extends', async () => {
+    const { run } = promptOnlyRun();
+
+    const ran = await runtimePrompter(run, { view, runId: RunIdSchema.parse('r0123abcd'), step: 'review', tool: 'acme-claude', provided: [], unset: [], credentials: {}, setUp: async () => undefined }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, undefined);
+
+    expect(ran).toMatchObject({ exitCode: 0, session: 's-1' });
+  });
+
   it('masks a secret that the runtime result echoes in the result file teamai writes', async () => {
     const { run } = promptOnlyRun({ result: { output: { note: 'signed in with prompter-secret-7d2e' }, failure: { code: 'tool_failed', message: 'denied for prompter-secret-7d2e' } } });
     const resultPath = path.join(dir, 'result.json');

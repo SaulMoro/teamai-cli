@@ -311,7 +311,8 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
 }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
-  const launch = async (input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
+  // `extended` is the shipped tool `tool` is, or extends; a runtime may report the session under either name.
+  const launch = async (extended: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
     const opened = await run.open(view, { tool, credentials: given });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
@@ -362,7 +363,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
 
     switch (end.kind) {
       case 'finished': {
-        if (end.session.tool !== tool) {
+        if (end.session.tool !== tool && end.session.tool !== extended) {
           return { started: true, exitCode: 1, failure: { code: 'runtime_failed', message: `The step runtime finished the ${tool} prompt with a session of ${end.session.tool}.` } };
         }
 
@@ -407,7 +408,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
   };
 
   return {
-    run: (_tool, input, signal) => launch(input, signal, false),
-    runInteractive: (_tool, input, signal) => launch(input, signal, true),
+    run: (extended, input, signal) => launch(extended, input, signal, false),
+    runInteractive: (extended, input, signal) => launch(extended, input, signal, true),
   };
 }
