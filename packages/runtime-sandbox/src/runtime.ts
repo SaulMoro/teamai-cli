@@ -376,7 +376,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     const client = provider.client(id, { argv: [command], env: { ...inSandbox(credentials, host), ...record.outer.toolHome }, unset: [], cwd });
 
-    return client.ok ? { ok: true, grant: { argv: client.argv, cwd, env: client.env } } : client;
+    return client.ok ? { ok: true, grant: { argv: client.argv, cwd, env: client.env, ...(client.signal && { signal: client.signal }) } } : client;
   };
 
   /**

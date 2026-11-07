@@ -128,8 +128,10 @@ export interface Provider {
    * How a process outside this runtime, the sandbox wrapper, starts `spec.argv` in sandbox `id` with its stdin open:
    * the command line, and the whole environment to run it with, which holds every value; the argv names variables only.
    * A provider whose sandbox cannot be the outer of an app's runtime (#1718: the bind-mount ones only) has none.
+   * `signal`, when the exec client does not pass a signal on to the process in the sandbox (`docker exec` does not):
+   * the command line that sends one there, the signal's name last.
    */
-  client?(id: string, spec: ExecSpec): { ok: true; argv: string[]; env: Record<string, string> } | { ok: false; failure: RuntimeFailure };
+  client?(id: string, spec: ExecSpec): { ok: true; argv: string[]; env: Record<string, string>; signal?: string[] } | { ok: false; failure: RuntimeFailure };
   /** Runs one process in the sandbox, streaming its output, until it ends. */
   exec(id: string, spec: ExecSpec, onOutput: (stream: 'stdout' | 'stderr', data: string) => void): Promise<ExecEnd>;
   /**

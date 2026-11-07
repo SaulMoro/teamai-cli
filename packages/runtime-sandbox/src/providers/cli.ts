@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Can, InitInstance, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
@@ -84,6 +85,21 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
       });
     }),
     why: (ran) => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : ran.message),
+  };
+}
+
+/**
+ * How an exec client whose signals stop at the client (`docker exec`, `podman exec`, `sbx exec`) runs `argv` so a
+ * signal still reaches it: through a shell that keeps the process's pid in a file of the sandbox's own, then becomes
+ * it; and the command that signals that pid, the signal's name last. `exec` is the client's own argv up to the
+ * sandbox's id; the pid file's name is random hex, so neither line takes anything from the step.
+ */
+export function signalled(exec: readonly string[], argv: readonly string[]) {
+  const pidFile = `/tmp/teamai-tool-${crypto.randomBytes(8).toString('hex')}.pid`;
+
+  return {
+    argv: [...exec, '/bin/sh', '-c', `echo $$ > ${pidFile}; exec "$@"`, 'sh', ...argv],
+    signal: [...exec, '/bin/sh', '-c', `kill -s "$1" "$(cat ${pidFile})"`, 'sh'],
   };
 }
 

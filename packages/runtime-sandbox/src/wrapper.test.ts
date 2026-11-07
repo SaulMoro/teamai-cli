@@ -158,7 +158,7 @@ interface Ran {
 }
 
 /** Runs `teamai-sandbox-<name>` (a link to the runtime's executable) as the member's app runs a tool's binary. */
-function wrapper(name: string, args: string[], { cwd, env = {}, stdin = '' }: { cwd: string; env?: NodeJS.ProcessEnv; stdin?: string }): Promise<Ran> {
+function wrapper(name: string, args: string[], { cwd, env = {}, stdin = '', signal }: { cwd: string; env?: NodeJS.ProcessEnv; stdin?: string; signal?: { once: string; send: NodeJS.Signals } }): Promise<Ran> {
   const link = path.join(wrappers, `teamai-sandbox-${name}`);
 
   if (!fs.existsSync(link)) fs.symlinkSync(executable, link);
@@ -167,10 +167,16 @@ function wrapper(name: string, args: string[], { cwd, env = {}, stdin = '' }: { 
     const child = spawn(process.execPath, [link, ...args], { cwd, env: { PATH: `${hostBin}${path.delimiter}/usr/bin${path.delimiter}/bin`, HOME: path.join(dir, 'home'), APP_ONLY: 'from-the-app', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (data: string) => { stdout += data; });
+    child.stdout.setEncoding('utf8').on('data', (data: string) => {
+      stdout += data;
+
+      if (signal !== undefined && stdout.includes(signal.once)) child.kill(signal.send);
+    });
     child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
-    child.stdin.end(stdin);
-    child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
+
+    if (signal === undefined) child.stdin.end(stdin);
+    else child.stdin.write(stdin);
+    child.on('close', (code, ended) => resolve({ code, signal: ended, stdout, stderr }));
   });
 }
 
@@ -180,14 +186,14 @@ function reportOf(ran: Ran): z.infer<typeof ReportSchema> {
   return ReportSchema.parse(JSON.parse(ran.stdout));
 }
 
-/** The engine calls that ran a process in a container, as `[engine, 'exec', ...]`. */
+/** The engine calls that ran a process in a container, as `[engine, 'exec', ...]`, less the runtime's own probes. */
 function execsIn(): string[][] {
-  return engine.calls().filter(([, command]) => command === 'exec').filter((call) => !call.includes('/bin/sh'));
+  return engine.calls().filter(([, command]) => command === 'exec').filter((call) => !call.some((arg) => arg.includes('command -v')));
 }
 
-/** The container an exec call of `command` ran in. */
-function containerOf(call: string[], command: string): string | undefined {
-  return call[call.indexOf(command) - 1];
+/** The container an exec call ran in: the argument before what runs there. */
+function containerOf(call: string[]): string | undefined {
+  return call[call.findIndex((arg) => arg === 'env' || arg === '/bin/sh') - 1];
 }
 
 /** The container the runtime made for the attempt, as its journal keeps it. */
@@ -250,7 +256,7 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(await inner.next()).toEqual({ connected: { agent: null } });
     expect(execsIn()).toHaveLength(1);
     expect(execsIn()[0]).toEqual(expect.arrayContaining(['exec', '-i', '-w', path.join(at.worktree, 'src'), 'claude', '-p']));
-    expect(containerOf(execsIn()[0] ?? [], 'claude')).toBe(attemptContainer());
+    expect(containerOf(execsIn()[0] ?? [])).toBe(attemptContainer());
   });
 
   it("gives the tool the step's credentials and its home at the attempt's tool home, never the app's env, and no value in any argv or file", async () => {
@@ -268,6 +274,19 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(kept.filter((file) => fs.readFileSync(file, 'utf8').includes(SECRET))).toEqual([]);
   });
 
+  it('passes a signal the app sends the wrapper on to the tool in the sandbox', async () => {
+    engine.image(IMAGE, { claude: "process.on('SIGTERM', () => { require('node:fs').writeFileSync('got-term', 'term'); process.exit(143); }); console.log('started'); setInterval(() => {}, 1000);" });
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at);
+    await register(handle, null);
+    const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, signal: { once: 'started', send: 'SIGTERM' } });
+
+    expect(ran.code).toBe(143);
+    expect(fs.readFileSync(path.join(at.worktree, 'got-term'), 'utf8')).toBe('term');
+  });
+
   it('lands in the attempt named by PASEO_AGENT_CWD when the app starts it elsewhere, for the registered agent only', async () => {
     const connection = start();
     await init(connection);
@@ -282,7 +301,7 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(helper.stderr).toContain('agent-title');
     expect(reportOf(ran).cwd).toBe(at.worktree);
     expect(await inner.next()).toEqual({ connected: { agent: 'agent-1' } });
-    expect(execsIn().map((call) => containerOf(call, 'claude'))).toEqual([attemptContainer(), attemptContainer()]);
+    expect(execsIn().map((call) => containerOf(call))).toEqual([attemptContainer(), attemptContainer()]);
     expect(again.code).toBe(7);
   });
 
