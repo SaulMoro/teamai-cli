@@ -17,7 +17,7 @@ import type { LAUNCHABLE } from './providers/cli.js';
 //
 
 /** The providers a tool signs in on, which decides how to sign it in. */
-export type SignInProvider = 'sbx' | 'docker' | 'podman';
+export type SignInProvider = 'sbx' | 'docker' | 'podman' | 'seatbelt' | 'bwrap';
 
 interface SignIn {
   /** The variables the tool signs in with, as teamai finds them (`SIGN_IN_VARIABLES`). */
@@ -34,6 +34,8 @@ const CLAUDE_TOKEN = 'run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: 
 
 const CLAUDE_IN_A_CONTAINER = `a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; ${CLAUDE_TOKEN}`;
 
+const CLAUDE_ON_ITS_OWN_HOME = `a Claude login kept in the macOS Keychain or in ~/.claude is not read in this sandbox, which gives Claude a home of its own; ${CLAUDE_TOKEN}`;
+
 const CODEX_IN_A_CONTAINER = 'add codex: login to the sandbox\'s credentials, the login teamai keeps apart from your daily one (create it once with `CODEX_HOME=~/.teamai/logins/codex codex login`), or an API key, OPENAI_API_KEY: env:OPENAI_API_KEY';
 
 const CODEBUDDY = 'add CODEBUDDY_API_KEY: env:CODEBUDDY_API_KEY to the sandbox\'s credentials';
@@ -48,6 +50,8 @@ export const SIGN_IN = {
       sbx: `sign Claude in once with sbx: run \`sbx run claude <any dir>\`, then \`/login\` in Claude Code, and every new sandbox reuses that login (an API key instead: \`sbx secret set anthropic\`); or ${CLAUDE_TOKEN}`,
       docker: CLAUDE_IN_A_CONTAINER,
       podman: CLAUDE_IN_A_CONTAINER,
+      seatbelt: CLAUDE_ON_ITS_OWN_HOME,
+      bwrap: CLAUDE_ON_ITS_OWN_HOME,
     },
   },
   codex: {
@@ -57,9 +61,11 @@ export const SIGN_IN = {
       sbx: 'sign Codex in once with sbx, `sbx secret set openai --oauth` (or store an API key with `sbx secret set openai`), or add OPENAI_API_KEY: env:OPENAI_API_KEY to the sandbox\'s credentials',
       docker: CODEX_IN_A_CONTAINER,
       podman: CODEX_IN_A_CONTAINER,
+      seatbelt: CODEX_IN_A_CONTAINER,
+      bwrap: CODEX_IN_A_CONTAINER,
     },
   },
-  codebuddy: { env: SIGN_IN_VARIABLES.codebuddy.signIn, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY } },
+  codebuddy: { env: SIGN_IN_VARIABLES.codebuddy.signIn, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY, seatbelt: CODEBUDDY, bwrap: CODEBUDDY } },
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
 
 /** `reason` cut to the longest protocol 1 takes in `unavailable`, its end marked when it is cut. */

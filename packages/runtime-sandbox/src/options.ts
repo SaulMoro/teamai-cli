@@ -8,13 +8,16 @@ import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 //    runtimes:
 //      - use: sandbox
 //        options:
-//          provider: sbx                    # sbx | docker | podman
+//          provider: sbx                    # sbx | docker | podman | seatbelt | bwrap
 //          agent: claude                    # sbx, optional: the agent template (claude, codex) or a kit reference;
 //                                           # unset, each attempt starts from its own tool's template
 //      - use: sandbox
 //        options:
 //          provider: docker
 //          image: ghcr.io/acme/agent:1      # docker, podman: a prebuilt image holding the tools
+//      - use: sandbox
+//        options:
+//          provider: seatbelt               # seatbelt (macOS), bwrap (Linux): this machine's own tools, no other key
 //
 //  teamai reads `credentials` and `max_parallel` itself and never passes them here; it gives the credentials on `open`.
 //  Each provider has its own schema, and a key it does not take fails with `bad_option` naming it.
@@ -25,11 +28,16 @@ export const CONTAINER_ENGINES = ['docker', 'podman'] as const;
 
 export type ContainerEngine = (typeof CONTAINER_ENGINES)[number];
 
+/** The native sandboxes of the operating system, which run each exec on this machine's own tools. */
+export const NATIVE_SANDBOXES = ['seatbelt', 'bwrap'] as const;
+
+export type NativeProvider = (typeof NATIVE_SANDBOXES)[number];
+
 /** The providers this version runs. */
-const PROVIDERS = ['sbx', ...CONTAINER_ENGINES] as const;
+const PROVIDERS = ['sbx', ...CONTAINER_ENGINES, ...NATIVE_SANDBOXES] as const;
 
 /** Providers the sandbox runtime is designed for that this version does not run yet. */
-const LATER_PROVIDERS = ['bwrap', 'seatbelt', 'vercel'] as const;
+const LATER_PROVIDERS = ['vercel'] as const;
 
 const CACHE = 'List the manifests and lockfiles that key the warm image, relative to the checkout, for example cache: [package.json, package-lock.json]';
 
@@ -81,9 +89,12 @@ const SbxOptionsSchema = z.strictObject({
   warm: PreparedWarmSchema.optional(),
 });
 
-const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
+/** seatbelt and bwrap take only their provider: the tools are this machine's own, on its PATH. */
+const NativeOptionsSchema = z.strictObject({ provider: z.enum(NATIVE_SANDBOXES) });
 
-export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema>;
+const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema, seatbelt: NativeOptionsSchema, bwrap: NativeOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
+
+export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema> | z.infer<typeof NativeOptionsSchema>;
 
 /** What a key `issue` says no option takes means, naming the keys there are; undefined for another issue. */
 function unknownKeyMessage(issue: z.core.$ZodIssue | undefined, provider: (typeof PROVIDERS)[number], topKeys: string[]): string | undefined {
@@ -105,8 +116,8 @@ export function parseOptions(raw: RuntimeOptions): { ok: true; options: SandboxO
       ok: false,
       failure: {
         code: 'bad_option', key: 'provider',
-        message: later.success ? `Provider "${later.data}" is not available in this version of teamai-runtime-sandbox. Use provider: sbx, docker or podman`
-          : `Set provider to sbx, docker or podman${raw.provider === undefined ? '' : `, not ${JSON.stringify(raw.provider)}`}`,
+        message: later.success ? `Provider "${later.data}" is not available in this version of teamai-runtime-sandbox. Use provider: sbx, docker, podman, seatbelt or bwrap`
+          : `Set provider to sbx, docker, podman, seatbelt or bwrap${raw.provider === undefined ? '' : `, not ${JSON.stringify(raw.provider)}`}`,
       },
     };
   }
