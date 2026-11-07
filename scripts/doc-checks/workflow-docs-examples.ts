@@ -23,7 +23,9 @@ import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
 import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
 import { engineOptions } from '../../src/workflow/runtimes/sources.js';
 import { localStepRuntime } from '../../src/workflow/runtimes/local.js';
+import { parseOptions as parsePaseoOptions } from '../../packages/runtime-paseo/src/options.js';
 import { parseOptions as parseSandboxOptions } from '../../packages/runtime-sandbox/src/options.js';
+import { parseOptions as parseT3Options } from '../../packages/runtime-t3/src/options.js';
 import type { RuntimeOptions } from '@teamai/runtime-protocol';
 
 const ROOT = process.cwd();
@@ -688,6 +690,8 @@ type OptionsCheck = (options: RuntimeOptions) => Promise<{ ok: true } | { ok: fa
 const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
   ['local', (options) => localStepRuntime().init({ options, mode: 'attended' })],
   ['sandbox', async (options) => parseSandboxOptions(options)],
+  ['t3', async (options) => parseT3Options(options)],
+  ['paseo', async (options) => parsePaseoOptions(options)],
 ]);
 
 /** The runtimes teamai ships: `local`, and each `teamai-runtime-<name>` in package.json's `bin`. */
