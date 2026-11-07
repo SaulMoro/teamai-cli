@@ -723,6 +723,21 @@ describe('teamai-runtime-paseo', () => {
       expect(notices(runtime)).toEqual([]);
     });
 
+    it('fails the open of a Codex instance whose own home does not exist yet as signed out, naming the step that makes it and signs in there, and removes the provider it added', async () => {
+      const work: InitInstance = { name: 'codex-work', tool: 'codex', home: { dir: '.codex-work', env: 'CODEX_HOME' } };
+      behave({ codex_login: 'signed_out', codex_needs_home: true });
+      const runtime = start({ PASEO_HOME: path.join(dir, 'paseo'), CODEX_HOME: undefined });
+      await ready(runtime, { instances: [work] });
+      runtime.send(openRequest('op-0000000a', ATTEMPT, 'codex-work'));
+
+      expect(await runtime.next(isEnd('op-0000000a'))).toEqual({
+        op: 'op-0000000a', event: 'failed',
+        failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run codex-work on the Paseo daemon at ${daemon.url}: signed out, as its home ~/.codex-work does not exist yet; run \`mkdir -p ~/.codex-work && CODEX_HOME=~/.codex-work codex login\` on the daemon's host. Then run the step again.` },
+      });
+      expect(customProviders()).not.toHaveProperty('codex-work');
+      expect(notices(runtime)).toEqual([]);
+    });
+
     it('says once that the provider it added stays, and how to remove it, when Paseo refuses to remove it again for an instance that cannot run on it', async () => {
       const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
       behave({ sign_in: { 'claude-work': 'signed_out' }, refuse_remove: 'The daemon config is read-only' });
