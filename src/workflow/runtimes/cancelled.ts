@@ -92,6 +92,9 @@ export interface StoppedAttempts {
 /** How a stop of an attempt ended: its place closed or let go, nothing left to stop, or its work may still run. */
 type AttemptStop = 'closed' | 'released' | 'none' | 'running';
 
+/** How `stopAttempt` ended: still `running`, with why, or done; `masked` holds the values its runtime's messages are masked with. */
+type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running'; why: string }) & { masked?: Record<string, string> };
+
 /** The attempts of `run` that no lease runs, whose record says a step runtime still holds their place. */
 async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlySet<string>): Promise<AttemptId[]> {
   const names = await fs.readdir(attemptsDir(config, run)).catch(() => []);
@@ -135,13 +138,13 @@ export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, atte
  * released attempt the runtime cannot stop or close is let go instead, as the person asked. `isQuiet` leaves the warning
  * to the caller, which reports `why` itself.
  */
-async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<{ ended: AttemptStop; why?: string; masked?: Record<string, string> }> {
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<Stopped> {
   const record = await readAttemptRuntime(config, run, attempt);
 
   if (!record || record.phase === 'closed') return { ended: 'none' };
 
-  const cannot = async (why: string): Promise<{ ended: AttemptStop; why: string }> => {
-    if (isReleased) return { ended: await releaseAttempt(config, run, attempt, why, record), why };
+  const cannot = async (why: string): Promise<Stopped> => {
+    if (isReleased) return { ended: await releaseAttempt(config, run, attempt, why, record) };
 
     if (!isQuiet) log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
 
