@@ -22,6 +22,9 @@ import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
 import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
 import { engineOptions } from '../../src/workflow/runtimes/sources.js';
+import { localStepRuntime } from '../../src/workflow/runtimes/local.js';
+import { parseOptions as parseSandboxOptions } from '../../packages/runtime-sandbox/src/options.js';
+import type { RuntimeOptions } from '@teamai/runtime-protocol';
 
 const ROOT = process.cwd();
 
@@ -679,12 +682,36 @@ await check('shows the same benchmark files and CI commands in every language', 
 /** A block's first line, `# drivers/<name>.yaml` (in any language), names the definition file it shows. */
 const DEFINITION_FILE = /^#.*\bdrivers\/([A-Za-z0-9._-]+)\.yaml\b/;
 
+type OptionsCheck = (options: RuntimeOptions) => Promise<{ ok: true } | { ok: false; failure: { key?: string; message: string } }>;
+
+/** Each runtime teamai ships, checking a definition's options the way that runtime does at `init`. */
+const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
+  ['local', (options) => localStepRuntime().init({ options, mode: 'attended' })],
+  ['sandbox', async (options) => parseSandboxOptions(options)],
+]);
+
+/** The runtimes teamai ships: `local`, and each `teamai-runtime-<name>` in package.json's `bin`. */
+function shippedRuntimes(): string[] {
+  const { bin } = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')));
+
+  return ['local', ...Object.keys(bin).flatMap((name) => /^teamai-runtime-(.+)$/.exec(name)?.[1] ?? [])];
+}
+
+// Fails closed: a runtime teamai ships whose options this check cannot read fails it, so its guide examples are never
+// let through unchecked.
+await check('every runtime teamai ships has its options checked in the guide examples', () => {
+  const unchecked = shippedRuntimes().filter((use) => !RUNTIME_OPTIONS.has(use));
+
+  assert.deepEqual(unchecked.map((use) => `teamai-runtime-${use} ships, and the docs check has no options check for it: add the parseOptions of packages/runtime-${use}/src/options.ts to RUNTIME_OPTIONS`), []);
+});
+
 /**
  * Why a driver definition example would not run, or undefined. A block is one when its first line names a
  * `drivers/<name>.yaml` file, or when it lists `runtimes` and no `steps`, and it shows the whole file. Each runtime's
- * options pass what teamai reads of them (`max_parallel`, `credentials`); the rest is the runtime's own.
+ * options pass what teamai reads of them (`max_parallel`, `credentials`), and the rest passes that runtime's own check
+ * when teamai ships it; a team's own runtime reads its options itself.
  */
-function definitionProblem(example: Example): string | undefined {
+async function definitionProblem(example: Example): Promise<string | undefined> {
   const named = DEFINITION_FILE.exec(example.source.split('\n')[0] ?? '')?.[1];
   const document = parseDocument(example.source);
   const shown: JsonValue = document.errors.length > 0 ? null : document.toJS();
@@ -701,6 +728,9 @@ function definitionProblem(example: Example): string | undefined {
     const read = engineOptions(options ?? {});
 
     if (!read.ok) return `runtimes.${index} (${use}) option ${read.key}: ${read.message}`;
+    const own = await RUNTIME_OPTIONS.get(use)?.(read.runtime);
+
+    if (own?.ok === false) return `runtimes.${index} (${use}) option ${own.failure.key ?? '?'}: ${own.failure.message}`;
   }
 
   return undefined;
@@ -738,12 +768,14 @@ await check('every shipped driver definition parses, and a guide block naming it
 });
 
 // Guide pages only: a design note may show a definition with fields it proposes.
-await check('every driver definition a guide page shows passes the definition schema and teamai\'s runtime options', () => {
-  const failures = guidePages(/\.md$/).flatMap((page) => examplesOf(page).flatMap((example) => {
-    const problem = definitionProblem(example);
+await check('every driver definition a guide page shows passes the definition schema and its runtimes\' options', async () => {
+  const examples = guidePages(/\.md$/).flatMap((page) => examplesOf(page));
+
+  const failures = (await Promise.all(examples.map(async (example) => {
+    const problem = await definitionProblem(example);
 
     return problem === undefined ? [] : [`${example.label}: ${problem}`];
-  }));
+  }))).flat();
 
   assert.deepEqual(failures, []);
 });

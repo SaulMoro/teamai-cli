@@ -21,7 +21,8 @@ function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
   // The shipped driver definitions are checked against the guide blocks that show them.
-  for (const name of ['docs', 'skill-data', 'skills', 'drivers', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  // package.json's `bin` lists the runtimes teamai ships, whose options the guide examples are checked against.
+  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'package.json', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
@@ -127,6 +128,25 @@ it('check reads a driver definition on any guide page, and rejects a key a defin
   expect(checked.status).toBe(1);
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
   expect(checked.output).toContain('runtime');
+});
+it('check rejects a driver definition example whose options the runtime itself refuses', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    options:\n      provider: sbx\n      image: ghcr.io/acme/agent:1\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('Provider sbx takes no option "image"');
+});
+it('check fails for a runtime teamai ships whose options it cannot validate', () => {
+  const root = checkout();
+  const manifest = path.join(root, 'package.json');
+  const shipped = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  fs.writeFileSync(manifest, JSON.stringify({ ...shipped, bin: { ...shipped.bin, 'teamai-runtime-vm': 'dist/runtime-vm.js' } }));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('teamai-runtime-vm');
 });
 it.each([
   ['teamai codebase --no-such-flag', 'unknown flag "--no-such-flag"'],
