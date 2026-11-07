@@ -186,14 +186,28 @@ function codexHomeHolding(threadId: string, { providerHome, homeDir }: { provide
   return [...new Set(homes)].find((home) => holdsRollout(home, threadId));
 }
 
+/** When OpenCode's store in data directory `home` last changed, its write-ahead log included; undefined when it has none. */
+function storeChangedAt(home: string): number | undefined {
+  const times = ['opencode.db', 'opencode.db-wal'].flatMap((name) => {
+    try {
+      return [fs.statSync(path.join(home, 'opencode', name)).mtimeMs];
+    } catch {
+      return [];
+    }
+  });
+
+  return times.length > 0 ? Math.max(...times) : undefined;
+}
+
 /**
  * The data directory of the daemon's OpenCode on this machine, its `XDG_DATA_HOME`, or undefined when none it can see
  * holds OpenCode's store. OpenCode 2 keeps every session in one database there, `opencode/opencode.db`, which names no
- * session in a file, so the directory is the first that holds that database: the one the provider's env sets, then the
- * runtime's `XDG_DATA_HOME`, then `.local/share` in `$HOME`, then in the account's home, where a daemon the Paseo app
- * started runs.
+ * session in a file. The homes looked in are the one the provider's env sets, then the runtime's `XDG_DATA_HOME`, then
+ * `.local/share` in `$HOME`, then in the account's home, where a daemon the Paseo app started runs; the first whose
+ * store changed since the step's agent was created (`since`) is the one it wrote, else the first that holds a store. So
+ * a store teamai's own OpenCode left in its data home before the step never hides the one the daemon wrote.
  */
-function openCodeDataHome(providerHome: string | undefined): string | undefined {
+function openCodeDataHome(providerHome: string | undefined, since: number | undefined): string | undefined {
   const homes = [providerHome, process.env.XDG_DATA_HOME, path.join(getUserHome(), '.local', 'share')];
 
   try {
@@ -202,7 +216,13 @@ function openCodeDataHome(providerHome: string | undefined): string | undefined 
     // No account entry for this user: its home is only $HOME.
   }
 
-  return homes.find((home): home is string => home !== undefined && path.isAbsolute(home) && fs.existsSync(path.join(home, 'opencode', 'opencode.db')));
+  const holding = homes.flatMap((home) => {
+    const changedAt = home !== undefined && path.isAbsolute(home) ? storeChangedAt(home) : undefined;
+
+    return home !== undefined && changedAt !== undefined ? [{ home, changedAt }] : [];
+  });
+
+  return (holding.find(({ changedAt }) => since !== undefined && changedAt >= since) ?? holding[0])?.home;
 }
 
 export interface Model {
@@ -642,7 +662,8 @@ export interface Daemon {
    * or a team instance's own home, absolute, and OpenCode's data directory on a daemon on this machine, its `XDG_DATA_HOME`. The home a
    * Paseo provider's env sets comes first.
    */
-  sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; providerHome: string | undefined; homeDir: string }): string | undefined;
+  /** `where.since`: when the step's agent was created, as Paseo reports it. */
+  sessionHome(tool: PaseoTool, sessionId: string, where: { claudeHome: string | undefined; providerHome: string | undefined; homeDir: string; since: number | undefined }): string | undefined;
   close(): Promise<void>;
 }
 
@@ -1021,14 +1042,14 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       if (error) throw new Error(error);
     },
     link: (agentId) => paseo.buildAgentDeepLink({ serverId, agentId }),
-    sessionHome(tool, sessionId, { claudeHome, providerHome, homeDir }) {
+    sessionHome(tool, sessionId, { claudeHome, providerHome, homeDir, since }) {
       switch (tool) {
         case 'claude':
           return claudeHome ?? providerHome;
         case 'codex':
           return isOnThisMachine(url) ? codexHomeHolding(sessionId, { providerHome, homeDir }) : undefined;
         case 'opencode':
-          return isOnThisMachine(url) ? openCodeDataHome(providerHome) : undefined;
+          return isOnThisMachine(url) ? openCodeDataHome(providerHome, since) : undefined;
         default: {
           const unhandled: never = tool;
 

@@ -561,10 +561,15 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     };
   };
 
-  /** A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. */
-  const sessionOf = (live: Daemon, tool: string, id: string): z.infer<typeof PromptSessionSchema> => {
+  /**
+   * A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. `createdAt`: when
+   * Paseo created its agent.
+   */
+  const sessionOf = (live: Daemon, tool: string, id: string, createdAt: string | undefined): z.infer<typeof PromptSessionSchema> => {
     const target = targets.get(tool);
-    const home = target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), providerHome: providerHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex' });
+    const created = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
+    const since = Number.isNaN(created) ? undefined : created;
+    const home = target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), providerHome: providerHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex', since });
 
     return { tool, id, ...(home !== undefined && { home }) };
   };
@@ -1295,7 +1300,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
               return;
             }
 
-            settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session), result: { output }, confined: record.answer.kept }, following);
+            settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session, end.final?.createdAt), result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -1331,7 +1336,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session), result }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(live, record.tool, session, end.final?.createdAt), result }, following);
 
           return;
         }
