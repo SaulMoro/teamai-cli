@@ -260,6 +260,23 @@ describe('vercel: an attempt', () => {
     expect(calls().filter((call) => call.call === 'create')).toEqual([]);
   });
 
+  it.each([
+    ['no timeout, and an attempt that may run past the 5h a Vercel sandbox lives', {}, 6 * 3_600_000],
+    ['a timeout that ends with the attempt, leaving no time to copy its work back', { timeout: '1h' }, 3_600_000],
+  ])('fails the open on timeout with %s, and creates nothing', async (_case, timeout, ms) => {
+    const connection = start();
+    await init(connection, { provider: 'vercel', ...timeout });
+    const at = preparedPlace();
+    const op = newOp();
+    const deadline = new Date(Date.now() + ms).toISOString();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, deadline, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    const failed = await connection.next((message) => message.op === op && (message.event === 'failed' || message.event === 'ready'), 30_000);
+
+    expect(failed).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'timeout' } });
+    expect(String((failed.failure as Message).message)).toContain(deadline);
+    expect(calls().filter((call) => call.call === 'create')).toEqual([]);
+  });
+
   it('refuses a credential on this machine itself, which a hosted sandbox cannot reach, naming the variable', async () => {
     const connection = start();
     await init(connection);

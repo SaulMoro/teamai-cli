@@ -33,12 +33,13 @@ import { applyTar, readTar } from './vercel-copy.js';
 /** The variables a Vercel sign-in is read from, as `provider_auth` may name them. */
 export const VERCEL_AUTH = ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID', 'VERCEL_OIDC_TOKEN'] as const;
 
-/** The longest lifetime Vercel gives a sandbox, and the one it gets when neither `timeout` nor a deadline sets it. */
+/** The longest lifetime Vercel gives a sandbox. */
 export const LONGEST_MS = 5 * 3_600_000;
 
+/** The lifetime when neither `timeout` nor a deadline sets it. */
 const DEFAULT_MS = 45 * 60_000;
 
-/** A lifetime past the attempt's deadline, so teamai's own cancel comes first. */
+/** How long past the attempt's deadline a sandbox lives, so teamai's cancel and collect come first. */
 const MARGIN_MS = 5 * 60_000;
 
 const NO_SIGN_IN = 'Vercel Sandbox needs a sign-in on this machine: set VERCEL_TOKEN (a token from https://vercel.com/account/tokens), VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN (`vercel link`, then `vercel env pull`), or name where to read them in the definition\'s provider_auth, such as VERCEL_TOKEN: file:~/.config/vercel-token';
@@ -97,20 +98,29 @@ function authOf(providerAuth: VercelOptions['provider_auth'], env: NodeJS.Proces
 /** A path as tar names it under `-C /`. */
 const relative = (at: string): string => path.relative('/', at);
 
-/** The sandbox's lifetime for an attempt: `timeout`, else past the deadline, else DEFAULT_MS; or why it is too short. */
+/**
+ * The sandbox's lifetime for an attempt: `timeout`, else the deadline plus a margin, else DEFAULT_MS; or why it would end
+ * before the attempt's work is copied back: teamai cancels at the deadline and collects after, so a lifetime reaches
+ * MARGIN_MS past it.
+ */
 export function lifetimeOf(timeoutMs: number | undefined, deadline: string | undefined, now: number): { ok: true; ms: number } | { ok: false; failure: RuntimeFailure } {
-  const until = deadline === undefined ? undefined : Date.parse(deadline);
+  if (deadline === undefined) return { ok: true, ms: timeoutMs ?? DEFAULT_MS };
+  const needed = Date.parse(deadline) - now + MARGIN_MS;
+  const ms = timeoutMs ?? Math.max(60_000, needed);
 
-  if (timeoutMs === undefined) return { ok: true, ms: until === undefined ? DEFAULT_MS : Math.min(LONGEST_MS, Math.max(60_000, until - now + MARGIN_MS)) };
+  if (ms >= needed && ms <= LONGEST_MS) return { ok: true, ms };
+  const minutes = Math.ceil(needed / 60_000);
 
-  if (until !== undefined && now + timeoutMs < until) {
-    return {
-      ok: false,
-      failure: { code: 'bad_option', key: 'timeout', message: `The Vercel sandbox would end at ${new Date(now + timeoutMs).toISOString()}, its timeout from now, before ${deadline}, the latest time this attempt's limits allow. Raise timeout to at least ${Math.ceil((until - now) / 60_000)}m (Vercel takes up to 5h), or lower the step's limits` },
-    };
-  }
-
-  return { ok: true, ms: timeoutMs };
+  return {
+    ok: false,
+    failure: {
+      code: 'bad_option',
+      key: 'timeout',
+      message: timeoutMs === undefined
+        ? `This attempt may run until ${deadline}, and a Vercel sandbox lives at most 5h, ending at ${new Date(now + LONGEST_MS).toISOString()}, before its work is copied back. Lower the step's limits under 5h`
+        : `The Vercel sandbox would end at ${new Date(now + timeoutMs).toISOString()}, its timeout from now, before ${deadline}, the latest time this attempt's limits allow, and the ${MARGIN_MS / 60_000}m after it its work is copied back in. Raise timeout to at least ${minutes}m (Vercel takes up to 5h), or lower the step's limits`,
+    },
+  };
 }
 
 export function vercelProvider({ options, owner, state, env, home }: { options: VercelOptions; owner: JournalId; state: string; env: NodeJS.ProcessEnv; home: string }): Provider {
