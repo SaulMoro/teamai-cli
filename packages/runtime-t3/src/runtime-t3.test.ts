@@ -1523,6 +1523,17 @@ describe('teamai-runtime-t3', () => {
         expect(pairings()).toEqual([]);
       });
 
+      it('writes the absolute path of the command when the member\'s PATH names its folder relatively', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const runtime = connect(executable, t3, { PATH: ['acme-bin', t3.bin, PATH_WITHOUT_T3].join(path.delimiter) }, dir);
+        connections.push(runtime);
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' }, instances: [ACME] });
+        await runtime.next((line) => line['type'] === 'init');
+
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toMatchObject({ providerInstances: { 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+      });
+
       it('does not offer it, naming what to do, when its name is not one T3 takes for a provider instance', async () => {
         signIn(t3, undefined, undefined, FULL);
         const { reply } = await initOn({ mode: 'unattended', instances: [{ ...ACME, name: 'acme.claude' }] });
