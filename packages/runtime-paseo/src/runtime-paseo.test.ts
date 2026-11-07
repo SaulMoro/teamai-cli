@@ -624,6 +624,16 @@ describe('teamai-runtime-paseo', () => {
       expect(notices(runtime)).toMatchObject([{ op: 'op-0000000c' }]);
     });
 
+    it('still offers its tools when Paseo fails to read its config, naming each instance and named provider unavailable with Paseo\'s error', async () => {
+      behave({ refuse_config_read: 'config.json is locked', custom_providers: { 'codex-wrap': { extends: 'codex', command: ['codex-wrap'] } } });
+      const why = 'Paseo did not answer with its providers (config.json is locked); run `paseo daemon config get agents.providers --json` on the daemon\'s host to see why';
+
+      expect(await ready(start(), { options: { url: daemon.url, providers: { codex: 'codex-wrap' } }, instances: [ACME] })).toMatchObject({
+        type: 'init', ok: true, can: { tools: ['claude', 'opencode'] },
+        unavailable: { 'acme-claude': cannotRun('acme-claude', why), codex: cannotRun('codex', why) },
+      });
+    });
+
     it('still offers its tools when the providers option names an instance teamai did not pass, naming it under unavailable', async () => {
       behave({ custom_providers: { 'claude-acme': { extends: 'claude', command: ['acme-claude'] } } });
 
