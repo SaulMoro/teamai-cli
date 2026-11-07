@@ -9,7 +9,7 @@ export function processStarts(): Map<number, string> | undefined {
   let stdout: string;
 
   try {
-    stdout = execFileSync('ps', ['-A', '-o', 'pid=,lstart='], { encoding: 'utf8' });
+    stdout = execFileSync('ps', ['-A', '-o', 'pid=,lstart='], { windowsHide: true, encoding: 'utf8' });
   } catch {
     return undefined;
   }
@@ -164,8 +164,8 @@ export interface GroupedCommand {
  * `group` for `stopRecordedGroup`, so a stop reaches everything it started even after its starter died. A command that
  * cannot be spawned exits 127, the shell's status for a command it cannot run, with the error at the end of its stderr.
  */
-export function startGroupedCommand(input: { command: string; cwd: string; env: NodeJS.ProcessEnv; detached: boolean; group: string }): GroupedCommand {
-  const { command, cwd, env, detached, group } = input;
+export function startGroupedCommand(input: { command: string; cwd: string; env: NodeJS.ProcessEnv; detached: boolean; group: string; onStderr?: (chunk: string) => void }): GroupedCommand {
+  const { command, cwd, env, detached, group, onStderr } = input;
   const child = spawn(command, { ...commandShell(env), cwd, detached, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 
   if (detached) recordGroup(child, group);
@@ -175,7 +175,7 @@ export function startGroupedCommand(input: { command: string; cwd: string; env: 
     let stderr = '';
     let output = '';
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; output += chunk; });
-    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; output += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; output += chunk; onStderr?.(chunk); });
     child.on('error', (error) => resolve({ exitCode: 127, stdout, stderr: `${stderr}${error.message}`, output }));
     child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout, stderr, output }));
   });
@@ -215,7 +215,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
 
   const stop = async (initial: NodeJS.Signals): Promise<T> => {
     if (process.platform === 'win32' && child.pid !== undefined) {
-      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
 
       return exit;
     }
@@ -224,7 +224,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
       let stdout = '';
 
       try {
-        stdout = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,lstart='], { encoding: 'utf8' });
+        stdout = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,lstart='], { windowsHide: true, encoding: 'utf8' });
       } catch {
         // ps may be unavailable in minimal environments; fall back to stopping only the shell.
       }
