@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseJson, type JsonValue } from '@teamai/tool-core/json';
+import { isJsonObject, parseJson, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
 import { instanceToolHome, SettingsSchema } from './settings.js';
@@ -47,8 +47,8 @@ export type AddedInstance =
 const LOCK_WAIT_MS = 5_000;
 const LOCK_STALE_MS = 30_000;
 
-/** How many times the runtime starts over when T3 wrote the file between its read and its write. */
-const ATTEMPTS = 3;
+/** How many times the runtime writes: once, and once more when T3 wrote the file between its read and its write. */
+const ATTEMPTS = 2;
 
 /** T3's provider instance ids: a letter, then letters, digits, `_` or `-`, at most 64 (`PROVIDER_SLUG_PATTERN` in T3). */
 const INSTANCE_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
@@ -57,9 +57,6 @@ const INSTANCE_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 export function isInstanceId(id: string): boolean {
   return INSTANCE_ID.test(id);
 }
-
-/** The whole settings file, every key kept as it is, which the runtime writes back. */
-const FileSchema = z.record(z.string(), z.unknown());
 
 /** A lock file's text: the pid of the runtime that holds it, when it took it, and a token of its own. */
 const HolderSchema = z.string().regex(/^\d+ \d+ \S+$/).transform((text) => {
@@ -191,11 +188,12 @@ function addTo(file: string, instance: NewInstance, userHome: string): AddedInst
       return { kind: 'failed', why: `T3 Code's settings file ${file} is not valid JSON` };
     }
 
-    const parsed = FileSchema.safeParse(json);
-
-    if (!parsed.success) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
-    const settings = parsed.data;
-    const instances = FileSchema.catch({}).parse(settings['providerInstances'] ?? {});
+    // Read as JSON.parse built it, never through a schema copy, so every key teamai does not own is written back as
+    // it was, a `__proto__` key too.
+    if (!isJsonObject(json)) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
+    const settings = json;
+    const kept = settings['providerInstances'];
+    const instances = isJsonObject(kept) ? kept : {};
     const found = findProviderInstance({ settings: SettingsSchema.catch({}).parse(settings), instance, userHome });
 
     if (found) return { kind: 'found', id: found };
@@ -213,7 +211,7 @@ function addTo(file: string, instance: NewInstance, userHome: string): AddedInst
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(temp, next, { mode });
 
-    // T3 writes this file too: what it wrote since the read is kept, by reading it all again.
+    // T3 writes this file too: read it again just before the rename, and start over on what T3 wrote since.
     if (readText(file) !== before) {
       fs.rmSync(temp, { force: true });
       continue;
