@@ -192,8 +192,10 @@ function addTo(file: string, instance: NewInstance, userHome: string): AddedInst
     // it was, a `__proto__` key too.
     if (!isJsonObject(json)) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
     const settings = json;
-    const kept = settings['providerInstances'];
-    const instances = isJsonObject(kept) ? kept : {};
+    const kept = Object.hasOwn(settings, 'providerInstances') ? settings['providerInstances'] : {};
+
+    if (!isJsonObject(kept)) return { kind: 'failed', why: `T3 Code's settings file ${file} has a providerInstances that is not a JSON object` };
+    const instances = kept;
     const found = findProviderInstance({ settings: SettingsSchema.catch({}).parse(settings), instance, userHome });
 
     if (found) return { kind: 'found', id: found };

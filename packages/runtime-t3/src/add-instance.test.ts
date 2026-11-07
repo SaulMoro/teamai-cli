@@ -66,4 +66,12 @@ describe('addProviderInstance', () => {
     expect(written).toContain('"__proto__": {\n      "x": 1\n    }');
     expect(written).toContain('"future": {\n    "nested": [\n      1,\n      {\n        "a": null\n      }\n    ]\n  }');
   });
+
+  it.each([['null'], ['[{"driver":"cursor"}]']])('leaves the file as it is when its providerInstances is %s, not an object', async (instances) => {
+    const kept = `{"providerInstances":${instances}}`;
+    fs.writeFileSync(settingsFile, kept);
+
+    expect(await add()).toEqual({ kind: 'failed', why: `T3 Code's settings file ${settingsFile} has a providerInstances that is not a JSON object` });
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(kept);
+  });
 });
