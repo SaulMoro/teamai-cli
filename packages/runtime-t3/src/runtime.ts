@@ -219,8 +219,11 @@ type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailu
 
 type PromptRequest = Extract<RuntimeRequest, { type: 'prompt' }>;
 
-/** Why teamai could not add a tool instance's provider instance, and whether a person approving its sign-in would let it. */
-type NotAdded = { ok: false; why: string; approval: boolean };
+/**
+ * Why a tool instance's provider instance cannot run: teamai could not add it, and whether a person approving its
+ * sign-in would let it; or teamai added it, and T3 cannot run it yet, such as a tool not signed in in its home.
+ */
+type NotAdded = { ok: false; kind: 'not-added'; why: string; approval: boolean } | { ok: false; kind: 'not-ready'; id: string; why: string };
 
 /** What a prompt runs: a step on its attempt's worktree, or a judge confined to its directory. */
 type Work = { kind: 'step'; place: PlaceRecord & { kind: 'worktree' } } | { kind: 'judge'; confined: ConfinedPrompt };
@@ -768,7 +771,7 @@ export function serve(options: ServeOptions): Promise<void> {
       widening ??= options.widen({ mode: s.mode, adding: [...s.pending.keys()] }).finally(() => { widening = undefined; });
       const widened = await widening;
 
-      if (!widened.ok) return { ok: false, why: widened.why, approval: true };
+      if (!widened.ok) return { ok: false, kind: 'not-added', why: widened.why, approval: true };
     }
 
     const added = await addProviderInstance({ t3Home: options.t3Home, lockFile: options.settingsLock, userHome: options.t3UserHome, instance });
@@ -780,7 +783,7 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'found':
         break;
       case 'failed':
-        return { ok: false, why: added.why, approval: false };
+        return { ok: false, kind: 'not-added', why: added.why, approval: false };
       default: {
         const unhandled: never = added;
 
@@ -800,7 +803,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     if (!listed || (listed.constraints ?? []).length > 0) {
-      return { ok: false, why: `T3 Code has the provider instance "${added.id}" in its settings, but has not reported it ready within ${ADD_WAIT_MS / 1_000} s${listed ? `: ${(listed.constraints ?? []).join(' ')}` : ''}`, approval: false };
+      return { ok: false, kind: 'not-ready', id: added.id, why: listed ? (listed.constraints ?? []).join(' ') : `it has not listed it within ${ADD_WAIT_MS / 1_000} s` };
     }
 
     s.instances.set(name, listed);
@@ -822,12 +825,25 @@ export function serve(options: ServeOptions): Promise<void> {
     return going;
   };
 
-  /** What a step whose instance teamai could not add is told: why, and how the person adds it. */
-  const notAdded = (s: Session, name: string, instance: NewInstance | undefined, { why, approval }: NotAdded): string => {
-    const setting = instance ? `, with driver ${DRIVERS[instance.driver].label} and Binary path ${instance.binaryPath}${instance.homePath ? `, and Home path ${tilde(instance.homePath, options.home)}` : ''}` : '';
-    const retry = !approval ? 'Add' : s.mode === 'attended' ? 'Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add' : 'Start any workflow with --driver t3 from a terminal once, so teamai can ask you to approve it, or add';
+  /** What a step whose instance cannot run is told: why, and what the person does about it. */
+  const notAdded = (s: Session, name: string, instance: NewInstance | undefined, failure: NotAdded): string => {
+    const home = instance?.homePath ? tilde(instance.homePath, options.home) : undefined;
 
-    return `teamai could not add a T3 Code provider instance for ${name}: ${why.replace(/\.$/, '')}. ${retry} one in T3 Code under Settings → Providers${setting}.`;
+    switch (failure.kind) {
+      case 'not-added': {
+        const setting = instance ? `, with driver ${DRIVERS[instance.driver].label} and Binary path ${instance.binaryPath}${home ? `, and Home path ${home}` : ''}` : '';
+        const retry = !failure.approval ? 'Add' : s.mode === 'attended' ? 'Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add' : 'Start any workflow with --driver t3 from a terminal once, so teamai can ask you to approve it, or add';
+
+        return `teamai could not add a T3 Code provider instance for ${name}: ${failure.why.replace(/\.$/, '')}. ${retry} one in T3 Code under Settings → Providers${setting}.`;
+      }
+      case 'not-ready':
+        return `teamai added the T3 Code provider instance "${failure.id}" for ${name}, but T3 Code cannot run it yet: ${failure.why.replace(/\.$/, '')}.${home ? ` It runs in ${home}.` : ''} Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.`;
+      default: {
+        const unhandled: never = failure;
+
+        return unhandled;
+      }
+    }
   };
 
   // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.

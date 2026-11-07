@@ -1502,6 +1502,20 @@ describe('teamai-runtime-t3', () => {
       });
 
       // A second account of the same tool: no command of its own, a home of its own.
+      it('fails the open saying what T3 Code needs, when the instance it added cannot run, such as a tool not signed in in its home', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        t3.config({ addedInstanceConstraints: ['Claude Code is not authenticated. Run `claude auth login` and try again.'] });
+        const { runtime } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }] });
+
+        expect(await openFor(runtime, 'claude-work')).toMatchObject({
+          event: 'failed',
+          failure: {
+            code: 'open_failed',
+            message: 'teamai added the T3 Code provider instance "claude-work" for claude-work, but T3 Code cannot run it yet: Claude Code is not authenticated. Run `claude auth login` and try again. It runs in ~/.claude-work. Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.',
+          },
+        });
+      }, 40_000);
+
       // Setting Claude's own home as the Home path moves where Claude keeps its config file.
       it.each([
         { case: 'a home of its own, as its Home path', dir: '.acme-claude', homePath: () => ({ homePath: path.join(t3.home, '.acme-claude') }) },
