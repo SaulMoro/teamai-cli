@@ -108,6 +108,7 @@ await serve({
   connect,
   t3Home,
   t3UserHome: t3UserHomeOf(t3Home, getUserHome()),
+  home: getUserHome(),
   t3Cli,
   added: addedProjects(path.join(state, 'added-projects.json')),
   cwd: process.cwd(),

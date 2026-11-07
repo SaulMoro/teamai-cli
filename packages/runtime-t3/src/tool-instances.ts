@@ -146,3 +146,13 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 export function driverOfProvider(provider: Provider): Driver | undefined {
   return DRIVER_NAMES.find((driver) => driver === provider.driverKind);
 }
+
+/** The tool home teamai gives `instance` in `home`, the member's home: its own `home.dir`, else its base tool's. */
+export function teamaiToolHome(instance: InitInstance, driver: Driver, home: string): string {
+  return path.resolve(home, instance.home?.dir ?? DRIVERS[driver].home);
+}
+
+/** `file`, with `~` for `home` when it is under it, as the person writes it. */
+export function tilde(file: string, home: string): string {
+  return file === home ? '~' : file.startsWith(`${home}${path.sep}`) ? `~${file.slice(home.length)}` : file;
+}
