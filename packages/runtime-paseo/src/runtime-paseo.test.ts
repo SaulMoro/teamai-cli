@@ -477,6 +477,28 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it('checks the sign-in of a Codex instance in the instance\'s own Codex home', async () => {
+    const acme: InitInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme', env: 'CODEX_HOME' } };
+    behave({ codex_login: 'signed_in', codex_login_home: path.join(dir, 'home', '.codex-acme'), custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'] } } });
+
+    expect(await ready(start(), { instances: [acme] })).toMatchObject({
+      type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-codex'] },
+      unavailable: { codex: cannotRun('codex', 'signed out; run `codex login` on the daemon\'s host') },
+    });
+  });
+
+  it('names the instance\'s own command and home in the sign-in step of an instance that is signed out', async () => {
+    const acme: InitInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme', env: 'CODEX_HOME' } };
+    behave({ codex_login: 'signed_out', sign_in: { 'claude-acme': 'signed_out' }, custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'] }, 'claude-acme': { extends: 'claude', command: ['acme-claude'] } } });
+
+    expect(await ready(start(), { instances: [acme, { name: 'acme-claude', tool: 'claude', command: 'acme-claude' }] })).toMatchObject({
+      unavailable: {
+        'acme-codex': cannotRun('acme-codex', 'signed out; run `CODEX_HOME=~/.codex-acme acme-codex login` on the daemon\'s host'),
+        'acme-claude': cannotRun('acme-claude', 'signed out; run `acme-claude auth login` on the daemon\'s host'),
+      },
+    });
+  });
+
   it('checks the sign-in of Codex on the custom provider the providers option names for it, through that provider\'s own command', async () => {
     behave({ codex_login: 'signed_in', custom_providers: { 'codex-wrap': { extends: 'codex', command: ['/opt/wrap/bin/codex-wrap'] } } });
 

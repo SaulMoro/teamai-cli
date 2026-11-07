@@ -269,15 +269,27 @@ type SignIn = { canRun: false; problem: string } | { canRun: true; home?: string
 /** How long `codex login status` may take, as Paseo gives `claude auth status` in Claude's diagnostic. */
 const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
 
+/** The variable and directory a team instance's tool home is set with on the daemon's host: `variable`, unless it names its own. */
+const instanceHome = (instance: InitInstance | undefined, variable: string): { variable: string; dir: string } | undefined => (instance?.home
+  ? { variable: instance.home.env ?? variable, dir: instance.home.dir }
+  : undefined);
+
+/** How a person signs a tool in on the daemon's host, such as `codex login`: for a team instance, its own command in its own home. */
+function signInStep(instance: InitInstance | undefined, { command, login, variable }: { command: string; login: string; variable: string }): string {
+  const home = instanceHome(instance, variable);
+
+  return `${home ? `${home.variable}=~/${home.dir} ` : ''}${instance?.command ?? command} ${login}`;
+}
+
 /**
  * `<codex> login status`, killed whole when it does not answer in time: an npm `codex` is a shim that starts the native
  * binary, and killing the shim alone leaves that running. On POSIX it runs in a process group of its own; on Windows,
  * where cross-spawn runs a `.cmd` through cmd.exe, taskkill ends the tree under the process it started.
  */
-function codexLoginStatus(codex: string): Promise<{ code: number; answer: string }> {
+function codexLoginStatus(codex: string, env?: NodeJS.ProcessEnv): Promise<{ code: number; answer: string }> {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
-    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: !isWindows, windowsHide: true });
+    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: !isWindows, windowsHide: true, ...(env && { env }) });
     let answer = '';
 
     const timer = setTimeout(() => {
@@ -540,7 +552,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
    * Why the daemon cannot run `tool`, or the tool home it runs it with when Paseo reports one. Paseo calls a tool
    * available once its binary is on PATH, signed in or not, so each tool's sign-in is read from what Paseo reports of it.
    */
-  const signIn = async ({ tool, provider }: Target): Promise<SignIn> => {
+  const signIn = async ({ tool, provider }: Target, instance: InitInstance | undefined): Promise<SignIn> => {
     switch (tool) {
       case 'claude': {
         // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in, and,
@@ -557,7 +569,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         return {
           canRun: false,
           problem: loggedIn === 'false'
-            ? 'signed out; run `claude auth login` on the daemon\'s host'
+            ? `signed out; run \`${signInStep(instance, { command: 'claude', login: 'auth login', variable: 'CLAUDE_CONFIG_DIR' })}\` on the daemon's host`
             : `Paseo does not report whether it is signed in; run \`paseo provider diagnostic ${provider}\` on the daemon's host to see its Auth line`,
         };
       }
@@ -592,7 +604,9 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         let status: Awaited<ReturnType<typeof codexLoginStatus>>;
 
         try {
-          status = await codexLoginStatus(resolved);
+          // A team instance's Codex keeps its sign-in in the instance's own home.
+          const home = instanceHome(instance, 'CODEX_HOME');
+          status = await codexLoginStatus(resolved, home && { ...process.env, [home.variable]: path.join(getUserHome(), home.dir) });
         } catch (error) {
           return { canRun: false, problem: `\`${resolved} login status\` did not answer (${error instanceof Error ? error.message : String(error)}); run it on the daemon's host to see why` };
         }
@@ -602,7 +616,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         if (status.code === 0 && /^Logged in\b/m.test(answer)) return { canRun: true };
 
-        if (status.code === 1 && /^Not logged in\b/m.test(answer)) return { canRun: false, problem: 'signed out; run `codex login` on the daemon\'s host' };
+        if (status.code === 1 && /^Not logged in\b/m.test(answer)) return { canRun: false, problem: `signed out; run \`${signInStep(instance, { command: 'codex', login: 'login', variable: 'CODEX_HOME' })}\` on the daemon's host` };
         const said = answer.trim().split('\n')[0]?.slice(0, 120) ?? '';
 
         return { canRun: false, problem: `\`${resolved} login status\` gave no sign-in answer (exit ${status.code}${said ? `: ${said}` : ''}); run it on the daemon's host to see why` };
@@ -651,7 +665,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const { tool, provider } = target;
 
         if (!available.has(provider)) return { ...target, canRun: false, reason: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };
-        const signedIn = await signIn(target);
+        const signedIn = await signIn(target, teamInstances.find(({ instance }) => instance.name === target.name)?.instance);
 
         if (!signedIn.canRun) return { ...target, canRun: false, reason: signedIn.problem };
         const modes = (await api.providers.listModes(provider)).modes ?? [];

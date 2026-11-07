@@ -363,7 +363,7 @@ paseo daemon config set agents.providers '{
 paseo daemon reload
 ```
 
-The runtime finds the provider itself: the one that extends the instance's tool and runs its command, by name or as an absolute path to it. Its steps and judges take that tool's modes, grants and sign-in check, and their sessions name the instance. With no such provider, the instance is not offered, and a step on it says how to add one:
+The runtime finds the provider itself: the one that extends the instance's tool and runs its command, by name or as an absolute path to it. Its steps and judges take that tool's modes, grants and sign-in check, and their sessions name the instance. A Codex instance's sign-in is checked in the instance's own home, and a signed-out instance names its own command, such as `CODEX_HOME=~/.codex-acme acme-codex login`. With no such provider, the instance is not offered, and a step on it says how to add one:
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
