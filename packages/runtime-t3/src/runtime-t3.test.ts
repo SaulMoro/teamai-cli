@@ -1485,20 +1485,32 @@ describe('teamai-runtime-t3', () => {
         expect([...noticesOf(first.runtime), ...noticesOf(second.runtime)].filter((line) => String(line['message']).startsWith('Added'))).toHaveLength(1);
       });
 
-      it('fails the open, adding nothing, when T3 already has a provider instance of that name that runs another command', async () => {
+      it('does not offer it, naming what to do, when T3 already has a provider instance of that name that runs another command', async () => {
         signIn(t3, undefined, undefined, FULL);
         const taken = { ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': { driver: 'claudeAgent', config: { binaryPath: '/opt/old/claude-old' } } } };
         t3.settings(taken);
-        const { runtime } = await initOn({ mode: 'unattended' });
+        const { reply } = await initOn({ mode: 'unattended' });
 
-        expect(await openFor(runtime, 'acme-claude')).toEqual({
-          op: OPEN, event: 'failed',
-          failure: {
-            code: 'open_failed',
-            message: `teamai could not add a T3 Code provider instance for acme-claude: T3 Code already has a provider instance "acme-claude" that runs another command. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
+        expect(reply).toMatchObject({
+          ok: true, can: { tools: ['claude', 'codex'] },
+          unavailable: {
+            'acme-claude': 'No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command. Point its Binary path at acme-claude, or map another with instances: { acme-claude: <its id> } in the definition\'s t3 options.',
           },
         });
         expect(settingsNow()).toEqual(taken);
+      });
+
+      it('does not offer it, naming what to do, when its name is not one T3 takes for a provider instance', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const { reply } = await initOn({ mode: 'unattended', instances: [{ ...ACME, name: 'acme.claude' }] });
+
+        expect(reply).toMatchObject({
+          ok: true, can: { tools: ['claude', 'codex'] },
+          unavailable: {
+            'acme.claude': `No T3 Code provider instance runs acme.claude, and teamai cannot add one: T3 Code takes no provider instance named "acme.claude" (a letter, then letters, digits, _ or -). Add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}, and map it with instances: { acme.claude: <its id> } in the definition's t3 options.`,
+          },
+        });
+        expect(settingsNow()).toEqual(MEMBER_SETTINGS);
       });
 
       // A second account of the same tool: no command of its own, a home of its own.
