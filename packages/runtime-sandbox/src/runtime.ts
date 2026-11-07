@@ -311,7 +311,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
   };
 
-  const open = async ({ op, run, attempt, view, tool, credentials }: OpenRequest, current: Ready): Promise<void> => {
+  const open = async ({ op, run, attempt, view, tool, credentials, deadline }: OpenRequest, current: Ready): Promise<void> => {
     const { provider } = current;
 
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
@@ -374,7 +374,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       const found = await provider.find(key);
 
       if (!found.ok) return found;
-      const created = found.id === undefined ? await provider.create(key, view, launched) : { ok: true as const, id: found.id };
+      const created = found.id === undefined ? await provider.create(key, view, launched, deadline) : { ok: true as const, id: found.id };
 
       if (!created.ok) return created;
 
@@ -781,6 +781,36 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   };
 
   /**
+   * Answers once the place's work is at its host paths: at once on a bind mount, once copied back on a copy provider. A
+   * place it cannot find fails, never answered as collected.
+   */
+  const collect = async (handle: string, provider: Provider): Promise<void> => {
+    if (provider.collect === undefined) {
+      write({ event: 'collected', handle });
+
+      return;
+    }
+
+    const place = journal.place(handle);
+    const found = place === undefined ? { ok: true as const, id: undefined } : await sandboxOf(place, provider);
+
+    if (!found.ok) {
+      write({ event: 'failed', handle, failure: found.failure });
+
+      return;
+    }
+
+    if (found.id === undefined) {
+      write({ event: 'failed', handle, failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}, so its work cannot be copied back.` } });
+
+      return;
+    }
+
+    const copied = await provider.collect(found.id);
+    write(copied.ok ? { event: 'collected', handle } : { event: 'failed', handle, failure: copied.failure });
+  };
+
+  /**
    * Answers from the journal alone, never the provider, so a stop is read while the engine is down: gone only when the
    * journal holds no place of that handle. A sandbox removed meanwhile is found absent by the next exec or close.
    */
@@ -932,10 +962,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       case 'cancel':
         return cancel(request.op, provider);
       case 'collect':
-        // Bind mounts: the work is already at its host paths.
-        write({ event: 'collected', handle: request.handle });
-
-        return;
+        return collect(request.handle, provider);
       case 'reattach':
         return reattach(request.handle, provider);
       case 'close':

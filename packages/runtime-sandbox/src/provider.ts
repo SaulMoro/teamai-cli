@@ -104,8 +104,14 @@ export interface Provider {
   /**
    * Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. `tool` is the
    * attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set.
+   * `deadline` is the open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach.
    */
-  create(key: PlaceKey, view: PlaceView, tool: string | undefined): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  create(key: PlaceKey, view: PlaceView, tool: string | undefined, deadline?: string): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * On a copy provider: copies the sandbox's work back to the place's host paths, ok once the host matches. A bind-mount
+   * provider has none: its work is at its host paths already.
+   */
+  collect?(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider with a warm image: makes the one an attempt with `view` and `tool` starts from, when it is not there
    * yet, before `create`, which then finds it. It may take minutes, and nothing but its open waits for it.
