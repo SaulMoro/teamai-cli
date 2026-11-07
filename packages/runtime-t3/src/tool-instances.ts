@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { UNAVAILABLE_REASON_MAX, type InitInstance } from '@teamai/runtime-protocol';
+import { fitReason, type InitInstance } from '@teamai/runtime-protocol';
 import { DRIVER_NAMES, DRIVERS, driverOf, type Driver } from './sessions.js';
 import type { Provider } from './t3.js';
 
@@ -71,14 +71,12 @@ export interface ServedInstances {
 export function servedInstances({ instances, mapped, lookup }: { instances: InitInstance[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
   const served = new Map<string, Provider>();
   const unavailable: Record<string, string> = {};
-  const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
-
   const notices: string[] = [];
   const missing: ServedInstances['missing'] = [];
   // A misspelt name maps nothing, so it is named; it may also be a team tool this machine has not accepted.
 
   for (const stray of Object.keys(mapped ?? {}).filter((name) => !instances.some((instance) => instance.name === name))) {
-    const message = reason(`instances names ${stray}, which is neither claude, codex nor a tool instance teamai has here. Remove instances.${stray}, or name the instance as its tool definition does.`);
+    const message = fitReason(`instances names ${stray}, which is neither claude, codex nor a tool instance teamai has here. Remove instances.${stray}, or name the instance as its tool definition does.`);
     unavailable[stray] = message;
     notices.push(message);
   }
@@ -96,24 +94,24 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
       const provider = lookup.providers.find((one) => one.providerInstanceId === id);
 
       if (!provider) {
-        unavailable[name] = reason(`T3 Code has no provider instance "${id}", which instances maps ${name} to. Add or enable it in T3 Code under Settings → Providers, or remove instances.${name}`);
+        unavailable[name] = fitReason(`T3 Code has no provider instance "${id}", which instances maps ${name} to. Add or enable it in T3 Code under Settings → Providers, or remove instances.${name}`);
         continue;
       }
 
       if (provider.driverKind !== driver) {
-        unavailable[name] = reason(`T3 Code provider instance "${id}" runs ${provider.driverKind}, and ${name} extends ${instance.tool}. Map ${name} to a ${label} instance in instances.${name}`);
+        unavailable[name] = fitReason(`T3 Code provider instance "${id}" runs ${provider.driverKind}, and ${name} extends ${instance.tool}. Map ${name} to a ${label} instance in instances.${name}`);
         continue;
       }
 
       if (!lookup.isUsable(provider)) {
-        unavailable[name] = reason(`T3 Code provider instance "${id}", which instances maps ${name} to, cannot run now: ${(provider.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or change instances.${name}`);
+        unavailable[name] = fitReason(`T3 Code provider instance "${id}", which instances maps ${name} to, cannot run now: ${(provider.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or change instances.${name}`);
         continue;
       }
 
       const binaryPath = lookup.binaryPathOf(id);
 
       if (command !== undefined && binaryPath !== undefined && !runsCommand(binaryPath, command)) {
-        unavailable[name] = reason(`T3 Code provider instance "${id}" has the Binary path ${binaryPath}, which is not ${command}, the command ${name} runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of ${command} (command -v ${command}), or change instances.${name}`);
+        unavailable[name] = fitReason(`T3 Code provider instance "${id}" has the Binary path ${binaryPath}, which is not ${command}, the command ${name} runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of ${command} (command -v ${command}), or change instances.${name}`);
         continue;
       }
 
@@ -140,7 +138,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 
     if (usable.length > 1) {
       const names = usable.map((provider) => `"${provider.providerInstanceId}"`);
-      unavailable[name] = reason(`T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${what}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`);
+      unavailable[name] = fitReason(`T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${what}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`);
       continue;
     }
 
@@ -155,7 +153,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
     const [off] = found;
 
     if (off) {
-      unavailable[name] = reason(`T3 Code provider instance "${off.providerInstanceId}" runs ${what}, but cannot run now: ${(off.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
+      unavailable[name] = fitReason(`T3 Code provider instance "${off.providerInstanceId}" runs ${what}, but cannot run now: ${(off.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
       continue;
     }
 

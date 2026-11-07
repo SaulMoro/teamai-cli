@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
-  CANCEL_FAILED, OpIdSchema, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type RUNTIME_MODES,
+  CANCEL_FAILED, fitReason, OpIdSchema, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type RUNTIME_MODES,
   type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
@@ -729,7 +729,6 @@ export function serve(options: ServeOptions): Promise<void> {
   const toBeAdded = ({ missing, settings }: { missing: ServedInstances['missing']; settings: ReturnType<typeof readSettings> }) => {
     const pending = new Map<string, NewInstance>();
     const reasons: Record<string, string> = {};
-    const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
 
     for (const { instance: { name }, instance, driver, command } of missing) {
       const found = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
@@ -743,11 +742,11 @@ export function serve(options: ServeOptions): Promise<void> {
       const present = wanted && findProviderInstance({ settings, instance: wanted, userHome: options.t3UserHome });
 
       if (wanted === undefined) {
-        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: ${command} is not on PATH here. Install ${command}, or add one in T3 Code under Settings → Providers, ${setting}, or map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
+        reasons[name] = fitReason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: ${command} is not on PATH here. Install ${command}, or add one in T3 Code under Settings → Providers, ${setting}, or map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
       } else if (!isInstanceId(name)) {
-        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code takes no provider instance named "${name}" (a letter, then letters, digits, _ or -). Add one in T3 Code under Settings → Providers, ${setting}, and map it with instances: { ${name}: <its id> } in the definition's t3 options.`);
+        reasons[name] = fitReason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code takes no provider instance named "${name}" (a letter, then letters, digits, _ or -). Add one in T3 Code under Settings → Providers, ${setting}, and map it with instances: { ${name}: <its id> } in the definition's t3 options.`);
       } else if (present === undefined && settings.providerInstances?.[name] !== undefined) {
-        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code already has a provider instance "${name}" that runs another command. Point its Binary path at ${command}, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
+        reasons[name] = fitReason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code already has a provider instance "${name}" that runs another command. Point its Binary path at ${command}, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
       } else {
         pending.set(name, wanted);
       }

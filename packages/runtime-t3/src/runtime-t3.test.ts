@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
+import { RuntimeMessageSchema, UNAVAILABLE_REASON_MAX } from '@teamai/runtime-protocol';
 import { sessionSince } from './sessions.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -436,6 +436,18 @@ describe('teamai-runtime-t3', () => {
           ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] },
           unavailable: { 'acme-cluade': 'instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.' },
         });
+      });
+
+      it('cuts a reason longer than protocol 1 takes, marking where it was cut', async () => {
+        const reply = await initWith({
+          binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude' },
+          options: { instances: { 'acme-claude': 'acme-claude-t3' } },
+          providers: [CLAUDE, CODEX, { ...ACME, constraints: ['Provider is not ready. '.repeat(30)] }],
+        });
+        const reason = z.record(z.string(), z.string()).parse(reply['unavailable'])['acme-claude'] ?? '';
+
+        expect(reason).toHaveLength(UNAVAILABLE_REASON_MAX);
+        expect(reason.endsWith('…')).toBe(true);
       });
 
       // A step that never names the misspelt key would not show its reason, so the member hears of it at the start.
