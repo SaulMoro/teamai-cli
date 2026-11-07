@@ -1502,6 +1502,21 @@ describe('teamai-runtime-t3', () => {
       });
 
       // A second account of the same tool: no command of its own, a home of its own.
+      // Setting Claude's own home as the Home path moves where Claude keeps its config file.
+      it.each([
+        { case: 'a home of its own, as its Home path', dir: '.acme-claude', homePath: () => ({ homePath: path.join(t3.home, '.acme-claude') }) },
+        { case: 'Claude\'s own home, with no Home path', dir: '.claude', homePath: () => ({}) },
+      ])('adds a team tool that names $case', async ({ dir: homeDir, homePath }) => {
+        signIn(t3, undefined, undefined, FULL);
+        const { runtime } = await initOn({ mode: 'unattended', instances: [{ ...ACME, home: { dir: homeDir, env: 'CLAUDE_CONFIG_DIR' } }] });
+
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toEqual({
+          ...MEMBER_SETTINGS,
+          providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': { ...ADDED(path.join(bin, 'acme-claude')), config: { binaryPath: path.join(bin, 'acme-claude'), ...homePath() } } },
+        });
+      });
+
       it('adds an instance with a home of its own and no command on its tool\'s own binary in that home, rather than running it on the member\'s Claude', async () => {
         signIn(t3, undefined, undefined, FULL);
         const { runtime, reply } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }] });

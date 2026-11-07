@@ -216,7 +216,7 @@ When no instance runs it, teamai adds one the first time a step runs on it, and 
 ⚠ Step runtime "t3", operation op-5781c58b81a1: Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path /opt/acme/bin/acme-claude), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
 ```
 
-The instance is named after the tool. Its Binary path is the tool's command as your PATH finds it (Claude's own binary for `claude-work`), and its Home path the tool's own home, when it has one. teamai writes it into T3's settings and keeps every other setting; T3 Code picks it up at once. Two runs add it once, and later runs use it with no change. A run that never runs the tool adds nothing.
+The instance is named after the tool. Its Binary path is the tool's command as your PATH finds it (Claude's own binary for `claude-work`), and its Home path the tool's own home, when that is not its base tool's (`~/.claude`, `~/.codex`), which teamai leaves unset. teamai writes it into T3's settings and keeps every other setting; T3 Code picks it up at once. Two runs add it once, and later runs use it with no change. A run that never runs the tool adds nothing.
 
 T3 lets a sign-in change its settings (`settings:write`) only with Full access, so the first time teamai adds an instance it signs in again with Full access: through the `t3` command, in any run, or, without one, in T3's page, where you pick **Full access**. It keeps that sign-in for later runs. Each thread still starts in the mode it would. An unattended run with no `t3` command and no such sign-in adds nothing, and does not offer the tool:
 

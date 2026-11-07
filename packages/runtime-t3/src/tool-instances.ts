@@ -57,11 +57,8 @@ export interface ServedInstances {
   unavailable: Record<string, string>;
   /** What the person hears at the start: a misspelt `instances` key, which no step may ever name to show its reason. */
   notices: string[];
-  /**
-   * The instances no provider instance runs, and `instances` does not map, which teamai may add: the command each runs,
-   * and for one with a home of its own and no command, that home, which tells its provider instance apart.
-   */
-  missing: Array<{ instance: InitInstance; driver: Driver; command: string; home?: string }>;
+  /** The instances no provider instance runs, and `instances` does not map, which teamai may add, with the command each runs. */
+  missing: Array<{ instance: InitInstance; driver: Driver; command: string }>;
 }
 
 /**
@@ -162,7 +159,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
       continue;
     }
 
-    missing.push({ instance, driver, command: runs, ...(home !== undefined && { home }) });
+    missing.push({ instance, driver, command: runs });
   }
 
   return { served, unavailable, notices, missing };

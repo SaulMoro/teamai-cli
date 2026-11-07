@@ -216,7 +216,7 @@ workflows:
 ⚠ Step runtime "t3", operation op-5781c58b81a1: Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path /opt/acme/bin/acme-claude), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
 ```
 
-实例以工具命名。它的 Binary path 是你的 PATH 找到的工具命令（`claude-work` 则是 Claude 自己的二进制文件），工具有自己的 home 时，Home path 就是那个 home。teamai 把它写进 T3 的设置，其他设置保持不变，T3 Code 会立即读取。两个运行只会添加一次，之后的运行直接使用它，不再改动。从不用到这个工具的运行不会添加任何东西。
+实例以工具命名。它的 Binary path 是你的 PATH 找到的工具命令（`claude-work` 则是 Claude 自己的二进制文件），工具有自己的 home 且不是基础工具的 home（`~/.claude`、`~/.codex`）时，Home path 就是那个 home，否则 teamai 不设置它。teamai 把它写进 T3 的设置，其他设置保持不变，T3 Code 会立即读取。两个运行只会添加一次，之后的运行直接使用它，不再改动。从不用到这个工具的运行不会添加任何东西。
 
 T3 只允许以 Full access 批准的登录修改它的设置（`settings:write`），所以 teamai 第一次添加实例时会以 Full access 重新登录：任何运行都通过 `t3` 命令；没有该命令时，在 T3 的页面上进行，你在那里选择 **Full access**。之后的运行沿用这次登录。每个线程仍按原来的模式启动。没有 `t3` 命令、也没有这样的登录的无人值守运行不会添加任何东西，也不提供这个工具：
 
