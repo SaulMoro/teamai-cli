@@ -1611,21 +1611,23 @@ workflows:
 带 `through` 的条目让一个运行时的工具在另一个运行时准备的位置里运行，例如让你的应用里的代理在沙箱里运行。每个运行时的选项写在它自己的名字下：
 
 ```yaml
-# drivers/t3-sandboxed.yaml
+# drivers/app-sandboxed.yaml
 schemaVersion: v1alpha1
-name: t3-sandboxed
+name: app-sandboxed
 runtimes:
-  - use: t3
-    through: sandbox
+  - use: my-app
+    through: my-sandbox
     options:
-      t3: { runtime_mode: full-access }
-      sandbox: { provider: docker }
+      my-app: { mode: full-access }
+      my-sandbox: { image: acme/agent:1 }
   - use: local
 ```
 
-对运行来说，这个条目是一个运行时，消息里叫 `t3 through sandbox`。工具在哪里运行由外层运行时（`sandbox`）决定：隔离、env 凭据、setup 和命令步骤。工具怎样启动由内层运行时（`t3`）决定：它的工具、工作区、HITL、预算和轮数限制。条目还提供外层准备的 `clone` 和 `team` 工作区。只有内层以完全访问运行的工具才提供 `permissions: unattended`，并且不运行受限步骤。步骤的登录交给外层，由外层交给工具；内层只得到它自己的凭据。
+对运行来说，这个条目是一个运行时，消息里叫 `my-app through my-sandbox`。工具在哪里运行由外层运行时（`my-sandbox`）决定：隔离、env 凭据、setup 和命令步骤。工具怎样启动由内层运行时（`my-app`）决定：它的工具、工作区、HITL 和结束轮次的方式。条目还提供外层准备的 `clone` 和 `team` 工作区。只有内层以完全访问运行的工具才提供 `permissions: unattended`，并且不运行受限步骤。步骤的登录交给外层，由外层交给工具；内层只得到它自己的凭据。
 
-teamai 先打开外层，再打开内层。它先停止并关闭内层；内层无法确认已停止时，外层的位置保留。每个运行时自己的页面说明它能否作为这种条目的一侧。
+teamai 先打开外层，再打开内层。它先停止并关闭内层；内层无法确认已停止时，外层的位置保留。
+
+只有支持这种方式的运行时才能参与，teamai 自带的运行时目前还不支持：在它们的页面说明之前，这种条目用于你自己编写的运行时。内层的 `open` 带有 `outer`，即同一次尝试中外层的句柄，原样传递，让内层能连到外层；重启之后，外层的 `reattach` 会再次带上提示的 `credentials`，因为外层只把它们保存在内存里。
 
 ### 步骤运行时的 Codex 登录
 

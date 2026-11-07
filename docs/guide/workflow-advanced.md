@@ -1617,21 +1617,23 @@ workflows:
 An entry with `through` runs one runtime's tools inside the place another runtime makes, such as the agents of your app inside a sandbox. Each runtime's options go under its own name:
 
 ```yaml
-# drivers/t3-sandboxed.yaml
+# drivers/app-sandboxed.yaml
 schemaVersion: v1alpha1
-name: t3-sandboxed
+name: app-sandboxed
 runtimes:
-  - use: t3
-    through: sandbox
+  - use: my-app
+    through: my-sandbox
     options:
-      t3: { runtime_mode: full-access }
-      sandbox: { provider: docker }
+      my-app: { mode: full-access }
+      my-sandbox: { image: acme/agent:1 }
   - use: local
 ```
 
-The entry is one runtime to the run, named `t3 through sandbox` in its messages. Where the tool runs comes from the outer runtime (`sandbox`): the isolation, env credentials, setup and command steps. How the tool is launched comes from the inner one (`t3`): its tools, workspaces, HITL, budgets and turn limits. The entry also takes the `clone` and `team` workspaces the outer prepares. It offers `permissions: unattended` only for a tool the inner runs in full access, and runs no confined step. The step's sign-in goes to the outer, which hands it to the tool; the inner gets only its own credentials.
+The entry is one runtime to the run, named `my-app through my-sandbox` in its messages. Where the tool runs comes from the outer runtime (`my-sandbox`): the isolation, env credentials, setup and command steps. How the tool is launched comes from the inner one (`my-app`): its tools, workspaces, HITL and turn ending. The entry also takes the `clone` and `team` workspaces the outer prepares. It offers `permissions: unattended` only for a tool the inner runs in full access, and runs no confined step. The step's sign-in goes to the outer, which hands it to the tool; the inner gets only its own credentials.
 
-teamai opens the outer, then the inner. It stops and closes the inner first, and keeps the outer's place while the inner cannot confirm its stop. Each runtime's own page says whether it can be one side of such an entry.
+teamai opens the outer, then the inner. It stops and closes the inner first, and keeps the outer's place while the inner cannot confirm its stop.
+
+A runtime takes part only when it supports it, and the runtimes teamai ships do not yet: until their pages say so, such an entry is for runtimes you write. The inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer; after a restart, the outer's `reattach` carries the prompt's `credentials` again, since it keeps them only in memory.
 
 ### A Codex login for step runtimes
 
