@@ -16,7 +16,7 @@ import { redact } from '@teamai/shared/redact';
 import { AgentSession, type AgentSessionRef } from '../../../session-flow/agent-session.js';
 import { openSessionArchive, type SessionArchive } from '../../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../../skill-use.js';
-import { attemptEnv } from '../../attempt-marker.js';
+import { agentEvidence, attemptEnv } from '../../attempt-marker.js';
 import { leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { LeaseWireSchema, type LeaseWire } from '../../lease-wire.js';
@@ -156,6 +156,18 @@ function handedToPerson(runId: string, steps: readonly string[]): WorkflowEnvelo
   log.info(offeredToPerson(runId, steps, resume));
 
   return { data: { handoff: { run: runId, steps: [...steps], resume } } };
+}
+
+/**
+ * Where a run that relays its gates stops once nothing it started still runs: at gate `hitl`, which the agent session
+ * that started the run answers with `respond`, or hands to the person, and then continues with `resume` on `driver`.
+ */
+function relayedGate(hitl: LocalHitl, driver: string): WorkflowEnvelope {
+  const { run, step, pass, kind, message, options, required, respond } = hitl;
+  const resume = `teamai workflow resume ${run} --driver ${driver}`;
+  log.info(`Run ${run} waits at step "${step}" (pass ${pass}): ${message}\nOptions: ${options.join(', ')}. Required: ${required ? 'yes' : 'no'}.\nAnswer: ${respond}\nThen: ${resume}`);
+
+  return { data: { hitl_waiting: { run, step, pass, kind, message, options, required, ...(hitl.default !== undefined && { default: hitl.default }), respond, resume } } };
 }
 
 /** Whether every step `next` held from this driver waits for a confined tool here that reaches its level or resolves its model. */
@@ -1179,6 +1191,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
   const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.unavailable && { unavailable: slot.unavailable }) });
   const sole: SoleDriver = { driver: defined.driver, offers: [offerOf(slots[0]), ...otherSlots.map(offerOf)] };
+  // Started or resumed from an agent session, with no terminal here, on a runtime a person reaches through its app: a
+  // gate is relayed to that session rather than decided, and the loop stops at it once nothing it started still runs.
+  const relay = !canHitl && mode === 'attended' && agentEvidence(process.env).kind !== 'none' && slots.some((slot) => slot.can.hitl === true);
   const driver = driverIdentity('local', cwd);
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
   const slotOf = new Map<string, RuntimeSlot>();
@@ -1493,7 +1508,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       for (const entry of defined.runtimes) if (entry.kind === 'external') rememberSecrets(entry.masks, turn.secrets);
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
-        running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
+        running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, relay, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
       });
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
@@ -1776,6 +1791,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       }
 
       if ('lease' in next.data && room()) continue;
+
+      if (relay && hitl && busy() === 0 && held.length === 0) return relayedGate(hitl, defined.driver);
 
       if (busy() === 0 && !question) {
         const wait = WaitReplySchema.parse(next.data.wait);

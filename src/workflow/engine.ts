@@ -2049,6 +2049,13 @@ export interface NextOptions {
    * driver does when nobody answers at its terminal. Absent, such a step fails `hitl_required`.
    */
   handoff?: PersonHandoff;
+  /**
+   * Process-only: the driver relays gates to the agent session that started or resumed the run, which asks the person in
+   * the app, as the local driver does with no terminal on a runtime a person reaches through the app. A gate is then
+   * never decided for want of HITL: `autoApprove`, else `workflows.auto_approve`, answers the optional ones it would,
+   * and `next` answers the first that waits as `hitl`, whatever the `can` of the call.
+   */
+  relay?: boolean;
   /** Process-only: the team env the caller resolved for this operation, so `next` does not resolve it again. */
   env?: WorkflowEnv;
   /**
@@ -2330,13 +2337,13 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       run.driver = driver;
 
       // A driver with HITL answers optional gates itself unless the person chose auto-approve for this run; it never
-      // follows workflows.auto_approve.
-      if (can.hitl && options.autoApprove === true && answerOptionalGates(run, now)) continue;
+      // follows workflows.auto_approve. One that relays them follows it, as a driver without HITL would.
+      if ((options.relay === true ? isAutoApproved : can.hitl && options.autoApprove === true) && answerOptionalGates(run, now)) continue;
 
       // A gate waits for another runtime of the run's only driver that can ask, as the local driver offers each in turn.
       const asksElsewhere = options.alone?.offers.some((offer) => offer.can.hitl === true) === true;
 
-      if (options.canTakeLease !== false && !can.hitl && !asksElsewhere && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
+      if (options.canTakeLease !== false && !can.hitl && !asksElsewhere && options.relay !== true && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
 
       if (options.canTakeLease !== false && byAgent && handoff?.kind === 'unoffered' && failForPerson(run, handoff.reason)) continue;
       // An open lease the driver does not list is handed back before another lease is issued, as a restarted driver expects.
@@ -2344,7 +2351,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
       if (!leased) {
         if (options.canTakeLease === false || 'inProgress' in result) {
-          const hitl = can.hitl ? waitingHitl(run, { byAgent }) : undefined;
+          const hitl = can.hitl || options.relay === true ? waitingHitl(run, { byAgent }) : undefined;
 
           return hitl ? answer({ hitl }) : wait(undefined, personHolds());
         }
