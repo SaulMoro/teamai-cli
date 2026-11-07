@@ -104,7 +104,7 @@ function preparedPlace(): Place {
 async function collect(connection: Connection): Promise<Message> {
   connection.send({ type: 'collect', handle: HANDLE });
 
-  return connection.next((message) => message.handle === HANDLE && (message.event === 'collected' || message.event === 'failed'), 30_000);
+  return connection.next((message) => message.handle === HANDLE && (message.event === 'collected' || message.event === 'collect_failed' || message.event === 'failed'), 30_000);
 }
 
 describe('vercel: init', () => {
@@ -230,6 +230,19 @@ describe('vercel: an attempt', () => {
     expect((await openPlace(second, at)).ready).toMatchObject({ event: 'ready' });
     expect(await collect(second)).toMatchObject({ event: 'collected' });
     expect(fs.readFileSync(path.join(at.worktree, 'README.md'), 'utf8')).toBe('add(a, b) returns a - b.\n');
+    expect(fs.readFileSync(path.join(at.worktree, 'obsolete.txt'), 'utf8')).toBe('old\n');
+  });
+
+  it('answers collect_failed, naming the sandbox, when Vercel no longer has it, and changes nothing on the host', async () => {
+    const connection = start();
+    await init(connection);
+    const at = preparedPlace();
+    await openPlace(connection, at);
+    const [name = ''] = sandboxNames();
+    execFileSync('chmod', ['-R', 'u+w', path.join(stateDir, 'sandboxes', name)]);
+    fs.rmSync(path.join(stateDir, 'sandboxes', name), { recursive: true, force: true });
+
+    expect(await collect(connection)).toMatchObject({ event: 'collect_failed', failure: { message: expect.stringContaining(name) } });
     expect(fs.readFileSync(path.join(at.worktree, 'obsolete.txt'), 'utf8')).toBe('old\n');
   });
 

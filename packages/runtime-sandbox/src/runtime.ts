@@ -739,19 +739,19 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const found = place === undefined ? { ok: true as const, id: undefined } : await sandboxOf(place, provider);
 
     if (!found.ok) {
-      write({ event: 'failed', handle, failure: found.failure });
+      write({ event: 'collect_failed', handle, failure: found.failure });
 
       return;
     }
 
     if (found.id === undefined) {
-      write({ event: 'failed', handle, failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}, so its work cannot be copied back.` } });
+      write({ event: 'collect_failed', handle, failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}, so its work cannot be copied back.` } });
 
       return;
     }
 
     const copied = await provider.collect(found.id);
-    write(copied.ok ? { event: 'collected', handle } : { event: 'failed', handle, failure: copied.failure });
+    write(copied.ok ? { event: 'collected', handle } : { event: 'collect_failed', handle, failure: copied.failure });
   };
 
   /**
