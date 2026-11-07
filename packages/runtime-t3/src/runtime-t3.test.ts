@@ -438,6 +438,21 @@ describe('teamai-runtime-t3', () => {
         });
       });
 
+      // A step that never names the misspelt key would not show its reason, so the member hears of it at the start.
+      it('says once, before it answers init, that `instances` names a key that is neither a tool T3 runs nor an instance teamai passed', async () => {
+        signIn(t3);
+        t3.config({ providers: [CLAUDE, CODEX, ACME] });
+        t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } });
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', instances: { 'acme-cluade': 'acme-claude-t3', clade: 'claudeAgent' } }, instances: [INSTANCE] });
+        await runtime.next((line) => line['type'] === 'init');
+
+        expect(runtime.lines.slice(0, -1)).toEqual([
+          { event: 'notice', message: 'instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.' },
+          { event: 'notice', message: 'instances names clade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.clade, or name the instance as its tool definition does.' },
+        ]);
+      });
+
       it('runs it on the instance `instances` maps it to', async () => {
         const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude', 'acme-claude-2': '/usr/local/bin/acme-claude' }, providers: [CLAUDE, ACME, { ...ACME, providerInstanceId: 'acme-claude-2' }], options: { instances: { 'acme-claude': 'acme-claude-2' } } });
 

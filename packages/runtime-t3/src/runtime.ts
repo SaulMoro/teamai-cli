@@ -777,6 +777,9 @@ export function serve(options: ServeOptions): Promise<void> {
         },
       });
 
+      // A step that never names a misspelt key would never show its reason.
+      for (const message of served.notices) notice(message, {});
+
       // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
       const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => served.unavailable[tool] === undefined));
       session = { t3: connected.t3, mode: request.mode, environment, instances: runs, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout };
