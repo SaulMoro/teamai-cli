@@ -69,3 +69,27 @@ describe('a key inside an option', () => {
     expect(reply).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'warm.expiration', message: 'On provider sbx, warm takes no key "expiration". It takes: prepare, cache' } });
   });
 });
+
+describe('warm on vercel', () => {
+  it('takes a prepare command, the files that key the snapshot, and how long Vercel keeps it', async () => {
+    expect(await init({ provider: 'vercel', warm: { prepare: 'npm ci --ignore-scripts', cache: ['package-lock.json'], expiration: '14d' } })).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+  });
+
+  it('names the key inside warm that is wrong, with the keys warm takes there', async () => {
+    const reply = await init({ provider: 'vercel', warm: { prepare: 'npm ci', cache: ['package-lock.json'], containerfile: 'ci/Containerfile' } });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'warm.containerfile', message: 'On provider vercel, warm takes no key "containerfile". It takes: prepare, cache, expiration' } });
+  });
+
+  it('refuses an expiration Vercel does not take', async () => {
+    expect(await init({ provider: 'vercel', warm: { prepare: 'npm ci', cache: ['package-lock.json'], expiration: 'forever' } })).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'warm.expiration' } });
+  });
+});
+
+describe('a key inside provider_auth', () => {
+  it('is named with the keys provider_auth takes', async () => {
+    const reply = await init({ provider: 'vercel', provider_auth: { VERCEL_TOKN: 'env:X' } });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'provider_auth.VERCEL_TOKN', message: 'On provider vercel, provider_auth takes no key "VERCEL_TOKN". It takes: VERCEL_TOKEN, VERCEL_TEAM_ID, VERCEL_PROJECT_ID, VERCEL_OIDC_TOKEN' } });
+  });
+});

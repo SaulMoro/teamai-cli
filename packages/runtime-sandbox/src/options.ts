@@ -23,6 +23,7 @@ import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 //          provider: vercel                 # a hosted sandbox per attempt
 //          timeout: 2h                      # optional: its lifetime, 1m to 5h; unset, past the attempt's deadline
 //          provider_auth: { VERCEL_TOKEN: file:~/.config/vercel-token }   # optional: where the Vercel sign-in is read
+//          warm: { prepare: npm ci --ignore-scripts, cache: [package-lock.json], expiration: 30d }   # optional
 //
 //  teamai reads `credentials` and `max_parallel` itself and never passes them here; it gives the credentials on `open`.
 //  Each provider has its own schema, and a key it does not take fails with `bad_option` naming it.
@@ -67,13 +68,6 @@ const ContainerWarmSchema = z.strictObject({
   return z.NEVER;
 });
 
-/** The keys `warm` takes on each provider that takes it. */
-const WARM_KEYS: Partial<Record<(typeof PROVIDERS)[number], readonly string[]>> = {
-  sbx: Object.keys(PreparedWarmSchema.shape),
-  docker: Object.keys(ContainerWarmSchema.in.shape),
-  podman: Object.keys(ContainerWarmSchema.in.shape),
-};
-
 /** How a warm image is made: by a prepare command, or by a Containerfile (docker and podman only). */
 export type WarmOptions = z.infer<typeof ContainerWarmSchema>;
 
@@ -106,6 +100,18 @@ const LifetimeSchema = z.string({ error: LIFETIME }).regex(/^\d+[smh]$/, LIFETIM
   .transform((duration) => Number(duration.slice(0, -1)) * UNIT_MS[z.enum(['s', 'm', 'h']).parse(duration.slice(-1))])
   .refine((ms) => ms >= 60_000 && ms <= 5 * 3_600_000, LIFETIME);
 
+const KEPT_FOR = 'Give how long Vercel keeps the warm snapshot after its last use, in days or hours, for example expiration: 30d';
+
+/** How long Vercel keeps a warm snapshot after its last use, such as `30d` or `12h`, in milliseconds: an hour at least. */
+const ExpirationSchema = z.string({ error: KEPT_FOR }).regex(/^\d+[dh]$/, KEPT_FOR)
+  .transform((duration) => Number(duration.slice(0, -1)) * (duration.endsWith('d') ? 24 : 1) * UNIT_MS.h)
+  .refine((ms) => ms >= UNIT_MS.h, KEPT_FOR);
+
+/** A warm snapshot on vercel: `prepare` run in a scratch sandbox on the `cache` files, kept `expiration` (30d unset). */
+const VercelWarmSchema = z.strictObject({ prepare: PrepareSchema, cache: CacheSchema, expiration: ExpirationSchema.optional() });
+
+export type VercelWarmOptions = z.infer<typeof VercelWarmSchema>;
+
 /**
  * vercel: a hosted sandbox per attempt. `runtime` is Vercel's image (its default ships Claude); `timeout` the sandbox's
  * lifetime; `provider_auth` where each value of the Vercel sign-in is read on the host, when not from the variable of its
@@ -115,6 +121,7 @@ const VercelOptionsSchema = z.strictObject({
   provider: z.literal('vercel'),
   runtime: z.string().min(1, 'Name the Vercel image, for example runtime: node24').optional(),
   timeout: LifetimeSchema.optional(),
+  warm: VercelWarmSchema.optional(),
   provider_auth: z.strictObject({
     VERCEL_TOKEN: AuthSourceSchema.optional(),
     VERCEL_TEAM_ID: AuthSourceSchema.optional(),
@@ -129,15 +136,33 @@ const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman:
 
 export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema> | z.infer<typeof NativeOptionsSchema> | VercelOptions;
 
+/** `schema` without what wraps an object: optional, and a transform's input. */
+function bare(schema: z.core.$ZodType): z.core.$ZodType {
+  if (schema instanceof z.ZodOptional) return bare(schema.unwrap());
+
+  return schema instanceof z.ZodPipe ? bare(schema.in) : schema;
+}
+
+/** The keys the object at `at` in `schema` takes, found in the schema itself, so a new nested option needs no list. */
+function keysAt(schema: z.core.$ZodType, at: readonly PropertyKey[]): string[] {
+  const [first, ...rest] = at;
+  const node = bare(schema);
+
+  if (!(node instanceof z.ZodObject)) return [];
+
+  if (first === undefined) return Object.keys(node.shape);
+  const next = node.shape[String(first)];
+
+  return next === undefined ? [] : keysAt(next, rest);
+}
+
 /** What a key `issue` says no option takes means, naming the keys there are; undefined for another issue. */
-function unknownKeyMessage(issue: z.core.$ZodIssue | undefined, provider: (typeof PROVIDERS)[number], topKeys: string[]): string | undefined {
+function unknownKeyMessage(issue: z.core.$ZodIssue | undefined, provider: (typeof PROVIDERS)[number], schema: z.ZodObject): string | undefined {
   if (issue?.code !== 'unrecognized_keys') return undefined;
 
-  if (issue.path.length === 0) return `Provider ${provider} takes no option "${issue.keys[0]}". It takes: ${topKeys.join(', ')}`;
+  if (issue.path.length === 0) return `Provider ${provider} takes no option "${issue.keys[0]}". It takes: ${keysAt(schema, []).join(', ')}`;
 
-  const takes = issue.path[0] === 'provider_auth' ? Object.keys(VercelOptionsSchema.shape.provider_auth.unwrap().shape) : WARM_KEYS[provider] ?? [];
-
-  return `On provider ${provider}, ${issue.path.join('.')} takes no key "${issue.keys[0]}". It takes: ${takes.join(', ')}`;
+  return `On provider ${provider}, ${issue.path.join('.')} takes no key "${issue.keys[0]}". It takes: ${keysAt(schema, issue.path).join(', ')}`;
 }
 
 /** Parses a definition's options, or says which key is wrong and why. */
@@ -156,7 +181,7 @@ export function parseOptions(raw: RuntimeOptions): { ok: true; options: SandboxO
     const { issues } = parsed.error;
     const issue = issues.find((candidate) => candidate.code === 'unrecognized_keys') ?? issues[0];
     const key = issue?.code === 'unrecognized_keys' ? [...issue.path, ...issue.keys.slice(0, 1)].join('.') : issue?.path.join('.');
-    const message = unknownKeyMessage(issue, provider.data, Object.keys(schema.shape)) ?? issue?.message ?? 'Invalid option';
+    const message = unknownKeyMessage(issue, provider.data, schema) ?? issue?.message ?? 'Invalid option';
 
     return { ok: false, failure: { code: 'bad_option', key: key || 'options', message } };
   }
