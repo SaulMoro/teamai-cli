@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // oxlint-disable-next-line teamai/workflow-boundaries -- places a stop after setup and before the exec, which no CLI run can time
-import { runtimeCommand } from '../workflow/drivers/local/runtime-steps.js';
+import { runtimeCommand, runtimeLauncher } from '../workflow/drivers/local/runtime-steps.js';
 import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 
 /** An attempt on a step runtime whose `cancel`, like the real one, stops only an exec it has sent. */
@@ -46,6 +46,32 @@ describe('a command step on a step runtime', () => {
     };
 
     await expect(started.exit).resolves.toMatchObject({ exitCode: 130 });
+    expect(execs()).toBe(0);
+  });
+});
+
+describe('a prompt\'s tool exec\'d on a step runtime', () => {
+  const view = { worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} };
+
+  it('does not exec the tool when the step is stopped once setup ended and before its exec is sent', async () => {
+    const { run, execs } = commandRun();
+    let stopStep = (): void => {};
+
+    const launcher = runtimeLauncher(run, {
+      view, tool: 'claude', toolHome: { tool: 'claude', dir: '/work/home' }, unset: [], credentials: {},
+      setUp: async () => {
+        // The timeout passes while teamai checks what setup left: no operation of the attempt runs on the runtime.
+        stopStep();
+
+        return undefined;
+      },
+    });
+    const started = launcher({ executable: 'claude', args: ['-p'], cwd: '/work', env: {}, interactive: false, onStdout: () => {} });
+    stopStep = () => {
+      void started.stop();
+    };
+
+    await expect(started.closed).resolves.toMatchObject({ exitCode: 143 });
     expect(execs()).toBe(0);
   });
 });

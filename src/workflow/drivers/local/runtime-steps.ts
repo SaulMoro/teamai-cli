@@ -224,6 +224,8 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
   return ({ executable, args, cwd, env, onStdout }) => {
     let accepted = false;
     let stdout = '';
+    // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent.
+    let isStopRequested = false;
 
     const closed = (async (): Promise<ToolClosed> => {
       const opened = await run.open(view, { tool, toolHome, credentials: given });
@@ -232,6 +234,8 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
       const unready = await setUp();
 
       if (unready) return { failure: unready };
+
+      if (isStopRequested) return { exitCode: 143, stdout };
 
       const end = await run.exec({ argv: [executable, ...args], env: stringEnv(env), unset, credentials: given, cwd }, {
         onAccepted: () => { accepted = true; },
@@ -264,7 +268,15 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
       }
     })();
 
-    return { closed, started: () => accepted, stop: () => run.cancel() };
+    return {
+      closed,
+      started: () => accepted,
+      stop: () => {
+        isStopRequested = true;
+
+        return run.cancel();
+      },
+    };
   };
 }
 
