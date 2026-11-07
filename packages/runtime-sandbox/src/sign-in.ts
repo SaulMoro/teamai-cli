@@ -1,4 +1,4 @@
-import { SIGN_IN_VARIABLES, UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
+import { fitReason, SIGN_IN_VARIABLES, type GatewayVariables, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
 import type { Unavailable } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
 
@@ -27,7 +27,7 @@ interface SignIn {
   /** How to sign it in, as the rest of a sentence that starts with the tool's name, per provider. */
   hint: Record<SignInProvider, string>;
   /** The variable that points the tool at a gateway, and the token it signs in to that gateway with, when it reads one. */
-  gateway?: { url: string; token: string };
+  gateway?: GatewayVariables;
 }
 
 const CLAUDE_TOKEN = 'run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox\'s credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY)';
@@ -47,7 +47,7 @@ export const SIGN_IN = {
   claude: {
     env: SIGN_IN_VARIABLES.claude.signIn,
     sbx: 'anthropic',
-    gateway: { url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' },
+    gateway: SIGN_IN_VARIABLES.claude.gateway,
     hint: {
       sbx: `sign Claude in once with sbx: run \`sbx run claude <any dir>\`, then \`/login\` in Claude Code, and every new sandbox reuses that login (an API key instead: \`sbx secret set anthropic\`); or ${CLAUDE_TOKEN}`,
       docker: CLAUDE_IN_A_CONTAINER,
@@ -71,11 +71,6 @@ export const SIGN_IN = {
   },
   codebuddy: { env: SIGN_IN_VARIABLES.codebuddy.signIn, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY, seatbelt: CODEBUDDY, bwrap: CODEBUDDY, vercel: CODEBUDDY } },
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
-
-/** `reason` cut to the longest protocol 1 takes in `unavailable`, its end marked when it is cut. */
-function cutToFit(reason: string): string {
-  return reason.length > UNAVAILABLE_REASON_MAX ? `${reason.slice(0, UNAVAILABLE_REASON_MAX - 1)}…` : reason;
-}
 
 /** How `tool` signs in inside a sandbox, when this runtime knows. */
 function signInOf(tool: string): SignIn | undefined {
@@ -180,8 +175,8 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
     kept,
     unusedGateways,
     unavailable: Object.fromEntries([
-      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, cutToFit(cannotSignIn(tool))]),
-      ...verdicts.flatMap(({ name, why }) => (why === undefined ? [] : [[name, cutToFit(why)]])),
+      ...tools.filter((tool) => !isSignedIn(tool)).map((tool) => [tool, fitReason(cannotSignIn(tool))]),
+      ...verdicts.flatMap(({ name, why }) => (why === undefined ? [] : [[name, fitReason(why)]])),
     ]),
   };
 }
