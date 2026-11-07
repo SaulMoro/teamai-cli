@@ -808,12 +808,18 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
 
         try {
           release = await journal.holdOpen(place.cwd);
-          member ??= journal.memberOn(place.cwd, handle);
         } catch (error) {
           return unjournaled(error instanceof Error ? error.message : String(error));
         }
 
         try {
+          // Read under the hold, which every way out of this block releases.
+          try {
+            member ??= journal.memberOn(place.cwd, handle);
+          } catch (error) {
+            return unjournaled(error instanceof Error ? error.message : String(error));
+          }
+
           if (member === undefined) {
             let isOpenThere: boolean;
 
