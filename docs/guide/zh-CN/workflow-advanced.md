@@ -1764,6 +1764,12 @@ teamai 严格读取每个回复，包括 `init` 的回复：它不认识的键�
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
 ```
 
+定义中后面的运行时（例如 `local`）能运行这个工具时，步骤改在那里运行，运行会提示一次，并带上你的原因：
+
+```text
+⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime local: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
+```
+
 驱动某个应用、而该应用有自己默认工具的运行时，用 `can.default_tool` 报告它，取值是它的 `can.tools` 之一。没有指定工具的提示词步骤依次取第一个已设置的：步骤的 `tool:`、`--tools <agent>=`、`workflows.tools.<agent>`、`--tools default=`、定义的 `tool`、运行时的 `can.default_tool`，然后是你自己的默认值：`TEAMAI_AI_TOOL`、`workflows.tools.default`、`ai.tool`。因此不指定工具的 `--driver t3` 会像你的 T3 一样运行，而 `local` 上仍由 `ai.tool` 选择工具。这些都没有设置时，步骤以 `tool_unconfigured` 失败；teamai 从不退回到它找到的第一个已安装工具：
 
 ```text

@@ -1770,6 +1770,12 @@ A tool you cannot run now, such as one that is not signed in, stays out of `can.
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
 ```
 
+When a later runtime of the definition can run the tool, such as `local`, the step runs there instead, and the run says so once, with your reason:
+
+```text
+⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime local: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
+```
+
 A runtime that drives an app with a default tool of its own reports it as `can.default_tool`, one of its `can.tools`. A prompt step that names no tool runs on the first of: the step's `tool:`, `--tools <agent>=`, `workflows.tools.<agent>`, `--tools default=`, the definition's `tool`, the runtime's `can.default_tool`, then your own default: `TEAMAI_AI_TOOL`, `workflows.tools.default`, `ai.tool`. So `--driver t3` with no tool named runs as your T3 does, and `ai.tool` still picks the tool on `local`. With none of them set, the step fails `tool_unconfigured`; teamai never falls back to the first tool it finds installed:
 
 ```text
