@@ -41,7 +41,7 @@ import { stepDefinitions } from '../scope.js';
 import { removeStagedEvidence, stageEvidence } from '../../scorers/engine-hooks.js';
 import { settled } from '../step-state.js';
 import { findAttemptRun } from '../run-location.js';
-import { readRun, runsDir, type RunId } from '../store.js';
+import { readRun, RunIdSchema, runsDir, type RunId } from '../store.js';
 import type { Executor } from '../requirements.js';
 import type { RunState, WorkflowFailure } from '../types.js';
 import { cloneBranchOf } from '../workspace.js';
@@ -358,7 +358,7 @@ export function cloneEnv(withhold: readonly string[]): ReturnType<typeof stepEnv
  * ran in go once it is not running, as a step that failed there kept its own. `runId` limits it to one run. A receipt this teamai cannot read is kept.
  * Answers the runs whose clone or team folder it removed.
  */
-export async function sweepClones(config: LocalConfig, runId?: string): Promise<string[]> {
+export async function sweepClones(config: LocalConfig, runId?: string): Promise<RunId[]> {
   const root = runsDir(config);
   const swept = new Set<string>();
 
@@ -400,7 +400,11 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
     }
   }
 
-  return [...swept];
+  return [...swept].flatMap((id) => {
+    const parsed = RunIdSchema.safeParse(id);
+
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 /**

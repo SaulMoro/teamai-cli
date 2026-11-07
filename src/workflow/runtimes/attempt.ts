@@ -74,13 +74,14 @@ export const AttemptRuntimeRecordSchema = z.object({
 
 export type AttemptRuntimeRecord = z.infer<typeof AttemptRuntimeRecordSchema>;
 
-function recordPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
+/** Where attempt `attempt` of run `run` records its runtime (`AttemptRuntimeRecord`). */
+export function attemptRuntimePath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
   return path.join(attemptDir(config, run, attempt), 'runtime.json');
 }
 
 export async function readAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptRuntimeRecord | undefined> {
   try {
-    return AttemptRuntimeRecordSchema.parse(JSON.parse(await fs.readFile(recordPath(config, run, attempt), 'utf8')));
+    return AttemptRuntimeRecordSchema.parse(JSON.parse(await fs.readFile(attemptRuntimePath(config, run, attempt), 'utf8')));
   } catch {
     return undefined;
   }
@@ -91,7 +92,7 @@ export async function readAttemptRuntime(config: LocalConfig, run: RunId, attemp
  * checked that nothing of it still runs. Why the runtime could not close it stays in the record.
  */
 export async function releaseAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId, record: AttemptRuntimeRecord): Promise<void> {
-  await writeJsonAtomic(recordPath(config, run, attempt), { ...record, phase: 'closed' });
+  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...record, phase: 'closed' });
 }
 
 /** The tool home of `tool` for attempt `attempt`: under the attempt directory, beside its record. */
@@ -295,7 +296,7 @@ function isStopRefused(failure: RuntimeFailure): boolean {
  * it left.
  */
 export function attemptRun({ config, run, attempt, runtime, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string; deadline?: string }): AttemptRun {
-  const file = recordPath(config, run, attempt);
+  const file = attemptRuntimePath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   let running: { op: OpId } | undefined;
   // Why an exec or prompt of this attempt may still run, once one ended `lost`: its place is not closed under it.

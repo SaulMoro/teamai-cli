@@ -4,8 +4,8 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import type { RunStatus } from '../types.js';
 import { existingCheckout } from '../run-location.js';
-import { AttemptIdSchema, attemptsDir, readRun, RunIdSchema, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { attemptRun, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptRun, attemptRuntimePath, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './step-runtime.js';
@@ -195,21 +195,22 @@ async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptI
  * the verb it cleans up at (T3 removes a project it added there). A close of a handle already closed answers `closed`.
  * Each definition is opened in `recover` mode, as a cancel opens it; what fails is only logged.
  */
-export async function closeAfterSweep(config: LocalConfig, runs: readonly string[]): Promise<void> {
-  for (const id of runs) {
-    const run = RunIdSchema.safeParse(id);
+export async function closeAfterSweep(config: LocalConfig, runs: readonly RunId[]): Promise<void> {
+  for (const run of runs) {
+    const state = await readRun(config, run);
+    // The place each runtime of each definition closed last, by definition: the record written last.
+    const closed = new Map<string, Map<string, { handle: string; at: number }>>();
 
-    if (!run.success) continue;
-    const state = await readRun(config, run.data);
-    // The last place each runtime of each definition closed, by definition.
-    const closed = new Map<string, Map<string, string>>();
-
-    for (const name of (await fs.readdir(attemptsDir(config, run.data)).catch((): string[] => [])).sort()) {
+    for (const name of await fs.readdir(attemptsDir(config, run)).catch((): string[] => [])) {
       const attempt = AttemptIdSchema.safeParse(name);
-      const record = attempt.success ? await readAttemptRuntime(config, run.data, attempt.data) : undefined;
+      const record = attempt.success ? await readAttemptRuntime(config, run, attempt.data) : undefined;
 
-      if (record?.phase !== 'closed' || record.open.handle === undefined) continue;
-      closed.set(record.driver, (closed.get(record.driver) ?? new Map<string, string>()).set(record.runtime, record.open.handle));
+      if (!attempt.success || record?.phase !== 'closed' || record.open.handle === undefined) continue;
+      const at = (await fs.stat(attemptRuntimePath(config, run, attempt.data))).mtimeMs;
+      const byRuntime = closed.get(record.driver) ?? new Map<string, { handle: string; at: number }>();
+
+      if ((byRuntime.get(record.runtime)?.at ?? -1) < at) byRuntime.set(record.runtime, { handle: record.open.handle, at });
+      closed.set(record.driver, byRuntime);
     }
 
     const checkout = (state === 'missing' ? undefined : await existingCheckout(state)) ?? process.cwd();
@@ -218,16 +219,16 @@ export async function closeAfterSweep(config: LocalConfig, runs: readonly string
       const opened = await openDriver(config, driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout });
 
       if (!opened.ok) {
-        log.debug(`Driver "${driver}" did not open to close again the places of run ${run.data} after teamai removed its clone: ${opened.failure.message}`);
+        log.debug(`Driver "${driver}" did not open to close again the places of run ${run} after teamai removed its clone: ${opened.failure.message}`);
         continue;
       }
 
       try {
         for (const entry of opened.opened.runtimes) {
-          const handle = entry.kind === 'external' ? handles.get(entry.use) : undefined;
+          const handle = entry.kind === 'external' ? handles.get(entry.use)?.handle : undefined;
           const again = entry.kind === 'external' && handle !== undefined ? await entry.runtime.close(handle) : undefined;
 
-          if (again && !again.ok) log.debug(`Runtime ${entry.use} did not close ${handle} again after teamai removed a clone of run ${run.data}: ${again.failure.message}`);
+          if (again && !again.ok) log.debug(`Runtime ${entry.use} did not close ${handle} again after teamai removed a clone of run ${run}: ${again.failure.message}`);
         }
       } finally {
         await disposeDriver(opened.opened);
