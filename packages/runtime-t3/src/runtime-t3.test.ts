@@ -1604,6 +1604,43 @@ describe('teamai-runtime-t3', () => {
       expect(Date.now() - cancelledAt).toBeLessThan(12_000);
     }, 20_000);
 
+    // `workflow cancel --release` let the attempt go: a launch T3 answers later finds no place to record its thread in.
+    it('does not record a released place again when T3 answers its launch after the close gave up on it', async () => {
+      t3.config({ agent: { hold: true, output: {} }, launchMs: 12_000 });
+      const { runtime, handle } = await opened();
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(handle)}.json`);
+      runtime.send(prompt(handle, 'op-000000b0'));
+      await runtime.next((line) => line['op'] === 'op-000000b0' && line['event'] === 'accepted');
+
+      runtime.send({ type: 'close', handle, release: true });
+
+      expect(await runtime.next((line) => line['handle'] === handle, 15_000)).toMatchObject({ event: 'close_failed', handle, failure: { code: 't3_unavailable' } });
+      expect(fs.existsSync(record)).toBe(false);
+      await runtime.next((line) => line['op'] === 'op-000000b0' && line['event'] === 'display', 10_000);
+      expect(fs.existsSync(record)).toBe(false);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'gone', handle });
+    }, 40_000);
+
+    it('does not record a released place when its open ends after the close gave up on it', async () => {
+      const runtime = await initialized();
+      t3.config({ projectsMs: 12_000 });
+      const handle = `t3-${RUN}-a1b2c3d4`;
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(handle)}.json`);
+      runtime.send({ type: 'open', op: 'op-000000b1', run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+      await runtime.next((line) => line['op'] === 'op-000000b1' && line['event'] === 'accepted');
+
+      runtime.send({ type: 'close', handle, release: true });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted' && !isNotice(line), 15_000)).toMatchObject({ event: 'close_failed', handle, failure: { code: 't3_unavailable' } });
+      expect(await runtime.next((line) => line['op'] === 'op-000000b1' && line['event'] !== 'accepted' && !isNotice(line), 10_000)).toEqual({
+        op: 'op-000000b1', event: 'failed', failure: { code: 'open_failed', message: `teamai released ${handle} while T3 Code was still opening it, so the runtime does not keep it.` },
+      });
+      expect(fs.existsSync(record)).toBe(false);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted' && !isNotice(line))).toEqual({ event: 'gone', handle });
+    }, 40_000);
+
     // The 10 s run from the moment the cancel is read, a launch still pending included, so the answer beats teamai's 15 s.
     it('answers a cancel that comes while T3 launches the thread within the stop bound, when T3 then does not answer the stop', async () => {
       t3.config({ agent: { hold: true, output: {} }, launchMs: 7_000, interruptMs: 30_000 });
