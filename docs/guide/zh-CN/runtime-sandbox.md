@@ -84,12 +84,39 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 | `agent` | `claude` | 仅 `sbx`：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。不写时，每次尝试从它自己工具的模板启动：Claude 步骤用 `claude`，Codex 步骤用 `codex`，命令步骤用裸的 `shell`。`agent: shell` 会被拒绝，因为那个模板里没有 agent。 |
 | `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
 | `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
+| `warm` | `prepare: npm ci --ignore-scripts` | 包管理器缓存已填好的镜像，只做一次，每次尝试都用它。见[预热镜像](#预热镜像)。 |
 
 不支持的键会在任何步骤运行之前失败：
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"sandbox\" of driver definition /home/me/acme/app/.teamai/drivers/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Runtime \"sandbox\" of driver definition /home/me/acme/app/.teamai/drivers/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image, warm. Fix the option and start again."}}
 ```
+
+## 预热镜像
+
+写了 `warm` 后，每次尝试都从包管理器缓存已经填好的镜像启动，工作流的 setup 从缓存安装，不必在每个步骤里重新下载所有包：
+
+```yaml
+# drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+description: Run each step in a container from the team image, with the package store filled once.
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+      warm:
+        prepare: npm ci --ignore-scripts
+        cache: [package.json, package-lock.json]
+```
+
+第一个打开的步骤会制作它：teamai 把 `cache` 里的文件复制到检出目录之外的临时目录，在一个不带任何凭据的 `image` 容器里于该目录运行 `prepare`，再把结果保存为 `teamai-warm:<key>`。key 由镜像、配方和 `cache` 文件的内容算出，所以 lockfile 一变就会做新镜像，不变就复用，本次运行和以后的运行都是如此。同时打开的步骤只等一次构建。镜像只保留 `prepare` 在该目录之外留下的东西，比如主目录里的缓存（`~/.npm`）或它安装的工具：该目录本身，连同在其中生成的 `node_modules`，都不在镜像里，检出目录的任何文件也不在。setup 照常安装（`npm ci --prefer-offline`），会从缓存取包。用 `docker image ls teamai-warm` 列出，用 `docker image rm` 删除。
+
+在 `docker` 和 `podman` 上，`containerfile: ci/deps.Containerfile` 会构建这个文件而不是运行 `prepare`，构建上下文里只有 `cache` 文件。在 `sbx` 上，`warm` 只接受 `prepare`，并保存为模板（`sbx template ls`）。`prepare` 失败时，步骤以 `sandbox_failed` 失败并给出最后几行输出；修好之前不会运行任何步骤。
 
 ## 步骤能看到什么
 
@@ -447,7 +474,6 @@ sbx ls -q
 ## 这个版本还不支持
 
 - `bwrap`、`seatbelt` 和托管沙箱。在它们发布之前，驱动定义会在 `provider` 上以 `bad_option` 失败。
-- 预装依赖的预热镜像或模板。
 - 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
 - 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。只有评判的网络会被过滤。
 - 用工具登录的评判。评判用环境变量凭据登录。

@@ -84,12 +84,39 @@ When the attempt ends, teamai removes its container. A `teamai workflow cancel` 
 | `agent` | `claude` | `sbx` only: the agent template each sandbox starts from, `claude` or `codex`, or a kit reference that brings the tools. Leave it out to start each attempt from its own tool's template: a Claude step from `claude`, a Codex step from `codex`, a command step from the bare `shell`. `agent: shell` is refused, since that template holds no agent. |
 | `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. |
 | `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | Read by teamai from your environment when the run starts, and given only to the step's tool, never to a command step. See [Credentials from your environment](workflow-advanced.md#credentials-from-your-environment). |
+| `warm` | `prepare: npm ci --ignore-scripts` | An image with your package manager's store filled, made once and used by every attempt. See [A warm image](#a-warm-image). |
 
 A key it does not take fails before any step runs:
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"sandbox\" of driver definition /home/me/acme/app/.teamai/drivers/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Runtime \"sandbox\" of driver definition /home/me/acme/app/.teamai/drivers/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image, warm. Fix the option and start again."}}
 ```
+
+## A warm image
+
+With `warm`, each attempt starts from an image whose package manager's store is already filled, so the workflow's setup installs from it instead of downloading every package in every step:
+
+```yaml
+# drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+description: Run each step in a container from the team image, with the package store filled once.
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+      warm:
+        prepare: npm ci --ignore-scripts
+        cache: [package.json, package-lock.json]
+```
+
+The first step that opens makes it: teamai copies the `cache` files to a scratch directory outside the checkout, runs `prepare` there in a container of `image` with no credential, and saves the result as `teamai-warm:<key>`. The key comes from the image, the recipe and the bytes of the `cache` files, so a change to the lockfile makes a new image and an unchanged one reuses it, in this run and later runs. Steps that open at the same time wait for one build. The image keeps only what `prepare` leaves outside that directory, such as the store in its home (`~/.npm`) or tools it installs: the directory, with any `node_modules` made there, is not in it, and neither is any file of the checkout. Install in the workflow's setup as usual (`npm ci --prefer-offline`), which takes the packages from the store. List and remove the images with `docker image ls teamai-warm` and `docker image rm`.
+
+On `docker` and `podman`, `containerfile: ci/deps.Containerfile` builds that file instead of running `prepare`, with only the `cache` files in its context. On `sbx`, `warm` takes `prepare` only and saves a template (`sbx template ls`). A `prepare` that fails stops the step with `sandbox_failed` and its last lines; no step runs until you fix it.
 
 ## What the step sees
 
@@ -447,7 +474,6 @@ sbx ls -q
 ## Not in this version
 
 - `bwrap`, `seatbelt` and hosted sandboxes. The definition fails `bad_option` on `provider` until they ship.
-- A warm image or template with dependencies installed.
 - Codex on a login dedicated to teamai in a container. On `sbx`, Codex signs in with `sbx secret set openai --oauth`.
 - Network rules for steps. `requires.network: false` is listed in `unenforced`, and a strict one waits for a driver that declares it. Only a judge's network is filtered.
 - A judge on a tool login. A judge signs in with an env credential.
