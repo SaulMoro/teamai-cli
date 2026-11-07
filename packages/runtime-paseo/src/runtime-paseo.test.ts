@@ -335,6 +335,54 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
+  it('labels a step\'s agent with the Paseo agent the run was started from, and opens its prompt with a link to that agent', async () => {
+    behave({ output: { verdict: 'approve' } });
+    // The agent the member started the run from: one the same daemon runs.
+    const first = start();
+    await ready(first);
+    first.send(promptRequest(await opened(first), 'op-0000000b'));
+    await first.next(isEnd('op-0000000b'));
+    const parent = agentIdOf(OpIdSchema.parse('op-0000000b'));
+
+    const runtime = start({ PASEO_AGENT_ID: parent });
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' }), 'op-0000000d'));
+    await runtime.next(isEnd('op-0000000d'));
+
+    const create = received().find((request) => request.type === 'agent.create.request' && request.idempotencyKey === 'op-0000000d');
+    // `paseo ls --label teamai-parent=<agent>` lists the agents a run started from that agent made.
+    expect(create?.labels).toEqual({ 'teamai-attempt': `${RUN}/a0123abce`, 'teamai-run': RUN, 'teamai-step': 'review', 'teamai-parent': parent });
+    expect(String(create?.initialPrompt).split('\n\n')).toEqual([
+      `This agent runs step "review" of teamai workflow run ${RUN}, started from the Paseo agent paseo://h/srv_fake0001/agent/${parent}.`,
+      'Review the change.',
+      `Write the workflow result as JSON to ${path.join(dir, 'out', 'result.json')}. Write {"output": …}.`,
+    ]);
+  });
+
+  it('names a parent agent its daemon does not know by its id alone, with no link to a server that does not hold it', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const runtime = start({ PASEO_AGENT_ID: 'agent-on-another-daemon' });
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+
+    const [create] = received();
+    expect(create?.labels).toMatchObject({ 'teamai-parent': 'agent-on-another-daemon' });
+    expect(String(create?.initialPrompt).split('\n\n')[0]).toBe(`This agent runs step "review" of teamai workflow run ${RUN}, started from the Paseo agent agent-on-another-daemon.`);
+  });
+
+  it('opens a step\'s prompt with teamai\'s prompt alone, and no parent label, when the run was not started from a Paseo agent', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const runtime = start({ PASEO_AGENT_ID: undefined });
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+
+    const [create] = received();
+    expect(create?.labels).not.toHaveProperty('teamai-parent');
+    expect(String(create?.initialPrompt)).toMatch(/^Review the change\./);
+  });
+
   it('names the Claude home the daemon keeps a step\'s session in, so teamai reads it there though it runs in another HOME', async () => {
     const elsewhere = path.join(dir, 'daemon-user', '.claude');
     behave({ output: { verdict: 'approve' }, claude_home: elsewhere });
