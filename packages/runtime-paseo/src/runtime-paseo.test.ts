@@ -2288,6 +2288,27 @@ describe('teamai-runtime-paseo', () => {
       fs.writeFileSync(path.join(evidence, 'diff.patch'), '+fix\n');
     });
 
+    it('fails a judge whose daemon restarts before it replies daemon_restarted, leaving the retry to teamai', async () => {
+      // An agent cut short by the restart has said nothing yet that parses as a reply.
+      behave({ hold_ms: 60_000, reply: 'Reading the diff…' });
+      const runtime = start();
+      await ready(runtime, { mode: 'attended' });
+      const handle = await openedConfined(runtime);
+      await runtime.next(isOp('op-0000000a', 'ready'));
+      runtime.send(confinedRequest(handle, 'op-0000000b'));
+      await runtime.next(isOp('op-0000000b', 'accepted'));
+      await expect.poll(() => received().length).toBe(1);
+
+      const port = Number(new URL(daemon.url).port);
+      await daemon.close();
+      daemon = await startFakeDaemon({ state: daemonState, port });
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+        op: 'op-0000000b', event: 'failed',
+        failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${daemon.url} stopped while the claude agent answered the confined prompt, before it replied.` },
+      });
+    });
+
     it('answers with a fresh agent whose cwd is the directory, briefed to read only it, and reports the reply at best-effort, read', async () => {
       behave({ reply: '```json\n{"label": "pass", "reasoning": "tests added"}\n```' });
       const runtime = start();

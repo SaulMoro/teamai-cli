@@ -1160,7 +1160,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
             if (end.final?.status === 'closed' && output === undefined) {
               settle(op, {
                 op, state: 'failed',
-                failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent answered the confined prompt, before it replied. Run \`teamai workflow retry\` to ask again.` },
+                failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent answered the confined prompt, before it replied.` },
               }, following);
 
               return;
