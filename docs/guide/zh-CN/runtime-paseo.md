@@ -363,7 +363,7 @@ paseo daemon config set agents.providers '{
 paseo daemon reload
 ```
 
-运行时自己找到这个提供方：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径）的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。没有这样的提供方时，不提供该实例，该实例上的步骤会说明如何添加：
+运行时自己找到这个提供方：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径）的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。Codex 实例的登录在实例自己的主目录中检查，未登录的实例会给出它自己的命令，例如 `CODEX_HOME=~/.codex-acme acme-codex login`。没有这样的提供方时，不提供该实例，该实例上的步骤会说明如何添加：
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: paseo: The Paseo daemon at ws://127.0.0.1:6767/ws cannot run acme-claude: no Paseo provider runs its command acme-claude; add one on the daemon's host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime's providers option. Or remove tool from the step.
