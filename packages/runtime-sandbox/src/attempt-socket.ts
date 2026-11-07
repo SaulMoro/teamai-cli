@@ -163,9 +163,9 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
         }
 
         if (registered.agent !== ask.agent) {
-          const asked = ask.agent === null ? 'no agent id' : `agent ${ask.agent}`;
-          const step = registered.agent === null ? 'a tool with no agent id' : `agent ${registered.agent}`;
-          say(client, { refused: { code: 'isolation_unproven', message: `This attempt's sandbox runs the tool of ${step} only, and this one was started for ${asked}.` } });
+          const asked = ask.agent === null ? 'with no agent id' : `for agent ${ask.agent}`;
+          const step = registered.agent === null ? "the step's own tool, which has no agent id" : `the tool of agent ${registered.agent}`;
+          say(client, { refused: { code: 'isolation_unproven', message: `This attempt's sandbox runs only ${step}, and this one was started ${asked}.` } });
 
           return;
         }
