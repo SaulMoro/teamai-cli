@@ -184,6 +184,20 @@ describe('vercel: an attempt', () => {
     expect(fs.readFileSync(path.join(at.git, 'HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
   });
 
+  it('copies back a read-only directory the step made with its files in it, and deletes what the step deleted', async () => {
+    fs.writeFileSync(path.join(imageDir, 'lock'), `#!${process.execPath}\nconst fs = require('node:fs'); fs.mkdirSync('locked'); fs.writeFileSync('locked/child.txt', 'kept'); fs.chmodSync('locked', 0o555); fs.rmSync('obsolete.txt');\n`, { mode: 0o755 });
+    const connection = start();
+    await init(connection);
+    const at = preparedPlace();
+    await openPlace(connection, at);
+
+    expect((await exec(connection, { argv: ['lock'], cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0 });
+    expect(await collect(connection)).toMatchObject({ event: 'collected' });
+    expect(fs.readFileSync(path.join(at.worktree, 'locked', 'child.txt'), 'utf8')).toBe('kept');
+    expect(fs.statSync(path.join(at.worktree, 'locked')).mode & 0o777).toBe(0o555);
+    expect(fs.existsSync(path.join(at.worktree, 'obsolete.txt'))).toBe(false);
+  });
+
   it('never reuses a sandbox its place was not fully copied into: the next open of the attempt starts a new one, and collect deletes nothing', async () => {
     const fails = path.join(dir, 'tar.fails');
     fs.writeFileSync(path.join(imageDir, 'tar'), `#!/bin/sh\nif [ -f '${fails}' ]; then echo 'tar: connection reset' >&2; exit 1; fi\nexec /usr/bin/tar "$@"\n`, { mode: 0o755 });

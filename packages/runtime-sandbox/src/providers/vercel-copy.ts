@@ -145,21 +145,15 @@ function walk(root: string): string[] {
 /**
  * Makes each of `roots` on the host match the archive's copy of it: what the archive holds is written, what it lacks is
  * deleted. A path under one of `kept` (the git paths) is never written or deleted, and an entry outside every root is
- * left out.
+ * left out. Everything is written before anything is deleted, and a directory takes its mode last, deepest first, so a
+ * copy that stops halfway (a full disk) deletes nothing and a read-only directory still gets its files.
  */
 export function applyTar(entries: TarEntry[], { roots, kept }: { roots: string[]; kept: string[] }): void {
   const isKept = (at: string): boolean => kept.some((keep) => isWithin(at, keep));
   const rootOf = (at: string): string | undefined => roots.find((root) => isWithin(at, root));
   const listed = new Set(entries.map((entry) => entry.at));
   const files = new Map<string, Buffer>();
-
-  // What the step deleted, first, so a path that changed kind is written fresh. A root the archive does not hold is not
-  // taken as emptied: nothing of it is deleted.
-  for (const root of roots) {
-    if (!listed.has(root)) continue;
-
-    for (const at of walk(root)) if (!listed.has(at) && !isKept(at)) fs.rmSync(at, { recursive: true, force: true });
-  }
+  const dirs: Array<{ at: string; mode: number }> = [];
 
   for (const entry of entries) {
     const root = rootOf(entry.at);
@@ -172,23 +166,41 @@ export function applyTar(entries: TarEntry[], { roots, kept }: { roots: string[]
       if (existing && !existing.isDirectory()) fs.rmSync(entry.at, { force: true });
 
       if (!existing?.isDirectory()) fs.mkdirSync(entry.at);
-      fs.chmodSync(entry.at, entry.mode || 0o755);
+      fs.chmodSync(entry.at, 0o700);
+      dirs.push({ at: entry.at, mode: entry.mode || 0o755 });
       continue;
     }
 
     if (existing) fs.rmSync(entry.at, { recursive: true, force: true });
 
-    if (entry.kind === 'link') {
-      fs.symlinkSync(entry.target, entry.at);
-      continue;
+    switch (entry.kind) {
+      case 'link':
+        fs.symlinkSync(entry.target, entry.at);
+        break;
+      case 'file':
+      case 'hardlink': {
+        const data = entry.kind === 'file' ? entry.data : files.get(entry.target);
+
+        if (data === undefined) break;
+        files.set(entry.at, data);
+        fs.writeFileSync(entry.at, data, { mode: entry.mode || 0o644 });
+        fs.chmodSync(entry.at, entry.mode || 0o644);
+        break;
+      }
+      default: {
+        const unhandled: never = entry;
+
+        return unhandled;
+      }
     }
-
-    const data = entry.kind === 'file' ? entry.data : files.get(entry.target);
-
-    if (data === undefined) continue;
-
-    files.set(entry.at, data);
-    fs.writeFileSync(entry.at, data, { mode: entry.mode || 0o644 });
-    fs.chmodSync(entry.at, entry.mode || 0o644);
   }
+
+  // What the step deleted. A root the archive does not hold is not taken as emptied: nothing of it is deleted.
+  for (const root of roots) {
+    if (!listed.has(root)) continue;
+
+    for (const at of walk(root)) if (!listed.has(at) && !isKept(at)) fs.rmSync(at, { recursive: true, force: true });
+  }
+
+  for (const { at, mode } of dirs.sort((a, b) => b.at.length - a.at.length)) fs.chmodSync(at, mode);
 }
