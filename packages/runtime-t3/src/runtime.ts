@@ -801,7 +801,11 @@ export function serve(options: ServeOptions): Promise<void> {
       session = { t3: connected.t3, mode: request.mode, environment, instances: runs, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout };
       const tools = [...runs.keys()];
       // A step that names no tool runs on the member's effective T3 default, when its instance is the one offered.
-      const defaultTool = [...runs].find(([, provider]) => provider.providerInstanceId === project.defaultModel?.instanceId)?.[0];
+      // When that instance runs a wrapper no tool instance here runs, its provider's own tool, which runs on its own instance.
+      const defaultProvider = providers.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId && (provider.constraints ?? []).length === 0);
+      const defaultDriver = defaultProvider && driverOfProvider(defaultProvider);
+      const onWrapper = defaultProvider !== undefined && defaultDriver !== undefined && !runsOwnBinary(binaryPathOf(defaultProvider.providerInstanceId), defaultDriver);
+      const defaultTool = [...runs].find(([, provider]) => provider === defaultProvider)?.[0] ?? (onWrapper && runs.has(DRIVERS[defaultDriver].tool) ? DRIVERS[defaultDriver].tool : undefined);
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
         // Full access is the member's opt-in, and teamai records the isolation of these steps as none.
