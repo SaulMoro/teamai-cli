@@ -32,7 +32,7 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
-import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
@@ -41,7 +41,7 @@ import { credentialsForTool, type EngineOptions, type OpenedDriver } from '../..
 import { credentialSecrets, newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, cloneRoleProblem, refuseDirtyAdoptedCommand, roleNotDeliveredFailure, runPlaceSetup, sweepClones, worktreeRoleProblem, type StepEnd } from '../../place/place.js';
 import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/member-tools.js';
@@ -246,19 +246,6 @@ interface Lease extends LeaseWire {
   processEnv?: NodeJS.ProcessEnv;
   /** Set once the step has a directory to run in. */
   cwd?: string;
-}
-
-/** Masks the result file of every attempt of the run, so one that ended without a report, on a signal too, keeps no secret. */
-async function maskAttemptFiles(config: LocalConfig, run: RunId, secrets: Record<string, string>): Promise<void> {
-  const listed = await fs.readdir(attemptsDir(config, run)).catch(() => []);
-
-  const attempts = listed.flatMap((name) => {
-    const attempt = AttemptIdSchema.safeParse(name);
-
-    return attempt.success ? [attempt.data] : [];
-  });
-
-  await Promise.all(attempts.map((attempt) => AttemptResult.mask(attemptResultPath(config, run, attempt), secrets)));
 }
 
 /**
@@ -1935,7 +1922,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         await abandon(lease.attempt);
       }));
     } finally {
-      await maskAttemptFiles(config, runId, await maskedValues());
+      await maskAttemptResults(config, runId, await maskedValues());
     }
 
     await archive.close();

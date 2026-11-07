@@ -5,7 +5,8 @@ import { log } from '../../utils/logger.js';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { attemptRun, attemptRuntimePath, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { knownSecrets } from '../../env-resolution.js';
+import { attemptRun, attemptRuntimePath, maskAttemptResults, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, writeLoginBack } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './step-runtime.js';
@@ -51,14 +52,20 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   // Each runtime starts in the run's checkout, or, once that folder is gone, where this cancel runs.
   const checkout = await existingCheckout(state) ?? process.cwd();
 
+  // What an agent wrote itself into an attempt's result file was never masked by a driver killed before it read it.
+  const masks: Record<string, string> = {};
+
   for (const attempt of left) {
     // A step that failed because its stop was not confirmed can run again once it is.
     const lost = state.steps.find((step) => step.status === 'failed' && step.attempt === attempt && (step.failure?.code === 'runtime_lost' || step.failure?.code === CANCEL_FAILED));
-    const { ended } = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout, ...(lost && { retry: { run, step: lost.id } }) });
+    const { ended, masked } = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout, ...(lost && { retry: { run, step: lost.id } }) });
+    Object.assign(masks, masked);
 
     if (ended === 'running') stillRunning.add(attempt);
     else if (ended !== 'none') stopped[ended].push(attempt);
   }
+
+  await maskAttemptResults(config, run, { ...await knownSecrets(config), ...masks });
 
   const open = new Set([...stillRunning, ...leased]);
 
@@ -128,7 +135,7 @@ export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, atte
  * released attempt the runtime cannot stop or close is let go instead, as the person asked. `isQuiet` leaves the warning
  * to the caller, which reports `why` itself.
  */
-async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<{ ended: AttemptStop; why?: string }> {
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<{ ended: AttemptStop; why?: string; masked?: Record<string, string> }> {
   const record = await readAttemptRuntime(config, run, attempt);
 
   if (!record || record.phase === 'closed') return { ended: 'none' };
@@ -149,6 +156,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
     const entry = opened.opened.runtimes.find((one) => one.kind === 'external' && one.use === record.runtime);
 
     if (entry?.kind !== 'external') return cannot(`driver "${record.driver}" no longer uses that runtime.`);
+    const masked = entry.masks;
     const placed = attemptRun({ config, run, attempt, runtime: entry.runtime, driver: record.driver });
 
     const notStopped = await placed.stopLeftOperation();
@@ -171,10 +179,10 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
       if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.${then}`);
       else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.${then}`);
 
-      return { ended: 'closed' };
+      return { ended: 'closed', masked };
     }
 
-    return isReleased ? { ended: await releaseAttempt(config, run, attempt, notClosed.message, record) } : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
+    return isReleased ? { ended: await releaseAttempt(config, run, attempt, notClosed.message, record), masked } : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
   } catch (error) {
     return cannot(error instanceof Error ? error.message : String(error));
   } finally {
