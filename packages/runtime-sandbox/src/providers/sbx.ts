@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import type { WarmOptions } from '../options.js';
-import { isRunning, oneBuildPerKey, planWarm, scratchOf, tailOf, WARM_REPOSITORY, type WarmPlan } from '../warm.js';
+import { isRunning, oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
@@ -195,24 +195,20 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
     const scratch = scratchOf({ cache: plan.cache, checkout });
     const name = `${journalPrefix}warm-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
 
-    const failed = (what: string, ran: Ran) => ({
-      ok: false as const,
-      failure: { code: 'sandbox_failed', message: `${what}${ran.kind === 'ran' ? `, exiting with code ${ran.code}. It printed: ${tailOf(`${ran.stdout}\n${ran.stderr}`) || 'nothing'}` : `: ${ran.message}`}. No step ran; fix warm, and start again.` },
-    });
 
     try {
       const created = await cli(['create', '--name', name, '--no-progress', template, scratch.dir]);
 
-      if (!(created.kind === 'ran' && created.code === 0)) return failed(`sbx could not create a sandbox from ${template} to prepare the warm template ${plan.tag}`, created);
+      if (!(created.kind === 'ran' && created.code === 0)) return warmFailed(`sbx could not create a sandbox from ${template} to prepare the warm template ${plan.tag}`, created);
       const prepared = await cli(['exec', '-w', scratch.dir, name, '/bin/sh', '-c', prepare]);
 
-      if (!(prepared.kind === 'ran' && prepared.code === 0)) return failed(`The warm template's prepare, \`${prepare}\`, failed in a sandbox from ${template}`, prepared);
+      if (!(prepared.kind === 'ran' && prepared.code === 0)) return warmFailed(`The warm template's prepare, \`${prepare}\`, failed in a sandbox from ${template}`, prepared);
       const stopped = await cli(['stop', name], { timeoutMs: COMMAND_MS });
 
-      if (!(stopped.kind === 'ran' && stopped.code === 0)) return failed(`sbx could not stop sandbox ${name} to save the warm template ${plan.tag}`, stopped);
+      if (!(stopped.kind === 'ran' && stopped.code === 0)) return warmFailed(`sbx could not stop sandbox ${name} to save the warm template ${plan.tag}`, stopped);
       const saved = await cli(['template', 'save', name, plan.tag]);
 
-      return saved.kind === 'ran' && saved.code === 0 ? { ok: true } : failed(`sbx could not save the warm template ${plan.tag}`, saved);
+      return saved.kind === 'ran' && saved.code === 0 ? { ok: true } : warmFailed(`sbx could not save the warm template ${plan.tag}`, saved);
     } finally {
       await remove(name);
       scratch.remove();
