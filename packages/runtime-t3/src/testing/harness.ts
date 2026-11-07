@@ -120,6 +120,8 @@ export interface FakeT3Config {
   projectAddRaced?: boolean;
   /** `t3 project add` never finishes. */
   projectAddHangs?: boolean;
+  /** The constraints T3 reports for each provider instance the member's settings add, such as one it has not checked yet. */
+  addedInstanceConstraints?: string[];
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

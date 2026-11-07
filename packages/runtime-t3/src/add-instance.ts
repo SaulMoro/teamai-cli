@@ -1,0 +1,196 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { z } from 'zod';
+import { DRIVERS, type Driver } from './sessions.js';
+import { homePathOf } from './settings.js';
+import { runsCommand } from './tool-instances.js';
+
+// ─── Adding a T3 provider instance to the member's T3 settings ───
+//
+//  The `t3` command cannot add a provider instance, so the runtime writes it into T3's own settings file, which T3 Code
+//  watches and reloads, as its Settings → Providers page would:
+//
+//    <T3 home>/userdata/settings.json
+//    { …every other setting, kept…, "providerInstances": { …, "acme-claude": { "driver": "claudeAgent", "displayName":
+//      "acme-claude", "enabled": true, "config": { "binaryPath": "/opt/acme/bin/acme-claude" } } } }
+//
+//  One runtime adds at a time on this machine (a lock file beside teamai's T3 sign-in), and each reads the settings
+//  again under the lock, so parallel runs add an instance once: a later one finds it by its Binary path, and for an
+//  instance with a home of its own, by its Home path too. A write T3
+//  makes between the read and the write is never lost: the runtime reads the file again before it replaces it, and
+//  starts over when it changed.
+//
+
+/** A provider instance to add: its id, the T3 driver, its name in T3, the command it runs and where, and its home. */
+export interface NewInstance {
+  id: string;
+  driver: Driver;
+  displayName: string;
+  /** The command the instance runs, which an instance already there is found by. */
+  command: string;
+  /** The absolute path of `command`. */
+  binaryPath: string;
+  /** The tool home T3 runs it in, an absolute path, for an instance with a home of its own; none: the tool's own. */
+  homePath?: string;
+}
+
+export type AddedInstance =
+  /** The runtime added it. */
+  | { kind: 'added'; id: string }
+  /** An instance of that driver already runs the command, such as one a parallel run added. */
+  | { kind: 'found'; id: string }
+  /** Nothing was added; `why` says why, in a few words. */
+  | { kind: 'failed'; why: string };
+
+/** How long a runtime waits for another to finish adding, and how old a lock may be before it counts as left behind. */
+const LOCK_WAIT_MS = 5_000;
+const LOCK_STALE_MS = 30_000;
+
+/** How many times the runtime starts over when T3 wrote the file between its read and its write. */
+const ATTEMPTS = 3;
+
+/** T3's provider instance ids: a letter, then letters, digits, `_` or `-`, at most 64 (`PROVIDER_SLUG_PATTERN` in T3). */
+const INSTANCE_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+
+const SettingsSchema = z.record(z.string(), z.unknown());
+
+const InstancesSchema = z.record(z.string(), z.object({
+  driver: z.string().optional(),
+  config: z.object({ binaryPath: z.string().optional(), homePath: z.string().optional() }).loose().optional(),
+}).loose().catch({})).catch({});
+
+type Kept = z.infer<typeof InstancesSchema>[string];
+
+/**
+ * Whether `kept`, an instance in T3's settings, is `instance` already: of its driver, running its command (one with no
+ * Binary path runs the driver's own), and, for an instance with a home of its own, in that home.
+ */
+function isSame(kept: Kept, instance: NewInstance, userHome: string): boolean {
+  const binaryPath = kept.config?.binaryPath?.trim() || undefined;
+  const homePath = kept.config?.homePath?.trim() || undefined;
+
+  if (kept.driver !== instance.driver) return false;
+
+  if (!(binaryPath === undefined ? instance.command === DRIVERS[instance.driver].tool : runsCommand(binaryPath, instance.command))) return false;
+
+  return instance.homePath === undefined || (homePath !== undefined && homePathOf(homePath, userHome) === instance.homePath);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
+}
+
+/** Takes the lock at `file`, waiting for another runtime that holds it; a lock its holder left behind is taken over. */
+async function locked<TValue>(file: string, work: () => TValue): Promise<{ ok: true; value: TValue } | { ok: false }> {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+
+  for (;;) {
+    try {
+      fs.writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 });
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      const holder = Number.parseInt(fs.readFileSync(file, 'utf8'), 10);
+      const age = Date.now() - fs.statSync(file).mtimeMs;
+
+      if (!isAlive(holder) || age > LOCK_STALE_MS) {
+        fs.rmSync(file, { force: true });
+        continue;
+      }
+
+      if (Date.now() > deadline) return { ok: false };
+      await sleep(50);
+    }
+  }
+
+  try {
+    return { ok: true, value: work() };
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
+
+/** The settings file's text, or none when there is no file yet. */
+function readText(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+/** Adds `instance` to the settings at `file` once, unless an instance of its driver already runs its command. */
+function addTo(file: string, instance: NewInstance, userHome: string): AddedInstance {
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    const before = readText(file);
+    const parsed = SettingsSchema.safeParse(before === undefined ? {} : JSON.parse(before));
+
+    if (!parsed.success) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
+    const settings = parsed.data;
+    const instances = InstancesSchema.parse(settings['providerInstances'] ?? {});
+
+    const found = Object.entries(instances).find(([, kept]) => isSame(kept, instance, userHome));
+
+    if (found) return { kind: 'found', id: found[0] };
+
+    if (Object.hasOwn(instances, instance.id)) return { kind: 'failed', why: `T3 Code already has a provider instance "${instance.id}" that runs another command` };
+
+    const added = {
+      driver: instance.driver, displayName: instance.displayName, enabled: true,
+      config: { binaryPath: instance.binaryPath, ...(instance.homePath !== undefined && { homePath: instance.homePath }) },
+    };
+    const next = `${JSON.stringify({ ...settings, providerInstances: { ...z.record(z.string(), z.unknown()).catch({}).parse(settings['providerInstances'] ?? {}), [instance.id]: added } }, null, 2)}\n`;
+    const temp = `${file}.teamai-${process.pid}.tmp`;
+    const mode = before === undefined ? 0o600 : fs.statSync(file).mode & 0o777;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(temp, next, { mode });
+
+    // T3 writes this file too: what it wrote since the read is kept, by reading it all again.
+    if (readText(file) !== before) {
+      fs.rmSync(temp, { force: true });
+      continue;
+    }
+
+    fs.renameSync(temp, file);
+
+    return { kind: 'added', id: instance.id };
+  }
+
+  return { kind: 'failed', why: `T3 Code kept changing its settings file ${file}` };
+}
+
+/**
+ * Adds `instance` to the member's T3 settings in `t3Home`, keeping every other setting, unless an instance of its
+ * driver already runs its command. `lockFile` keeps two runtimes on this machine from adding it twice.
+ */
+export async function addProviderInstance({ t3Home, lockFile, userHome, instance }: {
+  t3Home: string; lockFile: string;
+  /** The home of the user T3 Code runs as, which `~` in a kept instance's home stands for. */
+  userHome: string;
+  instance: NewInstance;
+}): Promise<AddedInstance> {
+  if (!INSTANCE_ID.test(instance.id)) return { kind: 'failed', why: `"${instance.id}" is not a name T3 Code takes for a provider instance (a letter, then letters, digits, _ or -)` };
+  const settingsFile = path.join(t3Home, 'userdata', 'settings.json');
+  // T3 follows a settings file that is a link to its target, and so does this write.
+  const file = fs.existsSync(settingsFile) ? fs.realpathSync(settingsFile) : settingsFile;
+
+  try {
+    const done = await locked(lockFile, () => addTo(file, instance, userHome));
+
+    return done.ok ? done.value : { kind: 'failed', why: `another teamai run held ${lockFile} for over ${LOCK_WAIT_MS / 1_000} s` };
+  } catch (error) {
+    return { kind: 'failed', why: error instanceof Error ? error.message : String(error) };
+  }
+}

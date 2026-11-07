@@ -17,6 +17,7 @@
 //                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
 //                               decisionRefused: T3 refuses every sign-in decision; decisionNoCode: a decision redirects with no code
 //                               decisionMs: a sign-in decision answers this long after it was posted
+//                               addedInstanceConstraints: the constraints T3 reports for a provider instance the settings add
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -25,7 +26,8 @@
 //   FAKE_T3_HOME                the member's home, as T3 Code's server has it, where the agent's tool keeps its transcripts:
 //                               in the tool's home there, or in the home the provider instance's settings name
 //   T3CODE_HOME/userdata/settings.json   the member's T3 settings, read on every launch and settle as T3 reads them:
-//                               the default model and the project scripts, the project's override first
+//                               the default model and the project scripts, the project's override first; a Claude or Codex
+//                               provider instance it adds is listed as T3 lists one once it reloaded them
 
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -68,6 +70,24 @@ const settings = () => {
 
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 };
+
+/**
+ * The provider instances T3 runs: the test's, and each Claude or Codex instance the member's settings add, as T3 lists
+ * one once it reloaded them and checked it; it runs the models the test's first instance of that driver runs.
+ * `addedInstanceConstraints`: the constraints T3 reports for each instance the settings add.
+ */
+function providers() {
+  const { providers: listed, addedInstanceConstraints = [] } = config();
+  const added = Object.entries(settings().providerInstances ?? {}).flatMap(([id, instance]) => {
+    const like = listed.find((one) => one.driverKind === instance.driver);
+
+    if (listed.some((one) => one.providerInstanceId === id) || !like) return [];
+
+    return [{ ...like, providerInstanceId: id, displayName: instance.displayName ?? id, constraints: instance.enabled === false ? ['Provider instance is disabled.'] : addedInstanceConstraints }];
+  });
+
+  return [...listed, ...added];
+}
 
 /** The scripts of a project, as T3 resolves them: the project's override, then the global ones once folded, then its own. */
 function scriptsOf(projectId) {
@@ -247,7 +267,7 @@ function launch(args) {
   const modelSelection = args.modelSelection ?? (projectDefault !== undefined ? projectDefault : all.defaultModelSelection);
 
   if (!modelSelection) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'invalid_request', message: 'Pass modelSelection: the project has no default model.' }));
-  const provider = config().providers.find((one) => one.providerInstanceId === modelSelection.instanceId);
+  const provider = providers().find((one) => one.providerInstanceId === modelSelection.instanceId);
 
   if (!provider) return fail(`No provider instance ${modelSelection.instanceId}.`);
 
@@ -278,7 +298,7 @@ const TOOLS = {
 
     return ok(config().environment);
   },
-  orchestrator_capabilities: () => ok({ providers: config().providers }),
+  orchestrator_capabilities: () => ok({ providers: providers() }),
   t3_project_list: async () => {
     await sleep(config().projectsMs ?? 0);
 

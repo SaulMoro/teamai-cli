@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { findOnPath } from '@teamai/tool-core/lookpath';
 
 // ─── T3 Code on this machine: its data directory and its `t3` command ───
 //
@@ -39,6 +40,8 @@ export interface T3Command {
    * `name` is the subcommand, as the reason says it.
    */
   run(input: { name: string; args: string[]; signal?: AbortSignal }): Promise<string>;
+  /** Whether a `t3` command is there to run, in one of the places `run` looks. */
+  isInstalled(): boolean;
 }
 
 /** The `t3` command: `$T3CODE_CLI_PATH`, then `t3` on PATH, then `<T3 home>/bin/t3`, the first one there is. */
@@ -62,6 +65,7 @@ export function t3Command(env: NodeJS.ProcessEnv, t3Home: string): T3Command {
   });
 
   return {
+    isInstalled: () => candidates.some((command) => (path.isAbsolute(command) ? fs.existsSync(command) : findOnPath(command) !== null)),
     async run({ name, args, signal }) {
       for (const command of candidates) {
         const ran = await runOne({ command, name, args, signal });

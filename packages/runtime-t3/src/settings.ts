@@ -90,7 +90,12 @@ export function instanceToolHome(settings: Read, { instanceId, driver, userHome 
 
   if (own === '') return path.join(userHome, DRIVERS[driver].home);
 
-  return path.resolve(own === '~' ? userHome : own.startsWith('~/') ? path.join(userHome, own.slice(2)) : own);
+  return homePathOf(own, userHome);
+}
+
+/** A provider instance's `homePath` as T3 resolves it, with `~` as `userHome`, the home of the user T3 Code runs as. */
+export function homePathOf(homePath: string, userHome: string): string {
+  return path.resolve(homePath === '~' ? userHome : homePath.startsWith('~/') ? path.join(userHome, homePath.slice(2)) : homePath);
 }
 
 /** The settings of `project` as T3 resolves them: the project's override first, then the global setting. */
