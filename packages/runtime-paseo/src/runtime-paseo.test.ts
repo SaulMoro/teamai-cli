@@ -639,6 +639,24 @@ describe('teamai-runtime-paseo', () => {
       });
     });
 
+    it('fails the open of an instance whose providers it cannot hold, naming the directory to make writable, and adds the provider at a later open once it can', async () => {
+      const { file, env } = installed('acme-claude');
+      const holds = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'providers');
+      fs.mkdirSync(path.dirname(holds), { recursive: true });
+      fs.writeFileSync(holds, 'not a directory');
+      const runtime = start(env);
+      await ready(runtime, { instances: [ACME] });
+      runtime.send(openRequest('op-0000000a', ATTEMPT, 'acme-claude'));
+
+      expect(await runtime.next(isEnd('op-0000000a'))).toMatchObject({ event: 'failed', failure: { code: 'tool_unavailable', message: expect.stringContaining('make that directory writable') } });
+
+      fs.rmSync(holds);
+      runtime.send(openRequest('op-0000000c', 'a0123abce', 'acme-claude'));
+
+      expect(await runtime.next(isOp('op-0000000c', 'ready'))).toMatchObject({ event: 'ready' });
+      expect(configChanges()).toMatchObject([{ config: { providers: { 'acme-claude': { command: [file] } } } }]);
+    });
+
     it('fails the open of an instance whose provider Paseo refuses to add, naming Paseo\'s error and how to add one, and adds it at a later open once Paseo takes it', async () => {
       const { file, env } = installed('acme-claude');
       behave({ refuse_config: 'The daemon config is read-only' });
