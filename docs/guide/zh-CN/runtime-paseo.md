@@ -513,4 +513,4 @@ No Paseo daemon answered at ws://127.0.0.1:6767/ws within 10 s. Start it with `p
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
 | `paseo_config` | 没有 `url` 时，无法从 Paseo 的配置读出守护进程地址：`$PASEO_HOME/config.json` 不是 JSON，它的 `daemon` 部分不是 Paseo 写出的样子，或 `daemon.listen` 指向 Windows 命名管道。修好该文件，或设置 `url`。 |
-| `bad_option` | `url`、`mode` 和 `providers` 以外的选项；`mode` 指定了 `claude`、`codex`、`opencode` 以外的工具；或 `providers` 中的一项既不是这些工具，也不是它们的团队实例。 |
+| `bad_option` | `url`、`mode` 和 `providers` 以外的选项；或 `mode` 指定了 `claude`、`codex`、`opencode` 以外的工具。`providers` 中的一项既不是这些工具，也不是 teamai 传入的团队实例时，改为在 `unavailable` 中列出，其他工具照常运行。 |

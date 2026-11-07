@@ -555,13 +555,9 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     const instances = request.instances ?? [];
     const runsAs = new Set<string>([...PASEO_TOOLS, ...instances.flatMap((instance) => (isPaseoTool(instance.tool) ? [instance.name] : []))]);
-    const foreign = Object.keys(options.data.providers ?? {}).find((name) => !runsAs.has(name));
-
-    if (request.mode !== 'recover' && foreign !== undefined) {
-      write({ type: 'init', ok: false, error: { code: 'bad_option', key: 'providers', message: `teamai-runtime-paseo runs claude, codex, opencode and the team's instances of them, so its providers option cannot name ${foreign}; remove ${foreign} from the runtime's providers option, or add the team instance it names` } });
-
-      return;
-    }
+    // teamai passes every instance the member may run, so a provider for one it did not pass, such as a team tool this
+    // machine has not accepted, leaves that name unavailable rather than failing the other tools.
+    const foreign = Object.keys(options.data.providers ?? {}).filter((name) => !runsAs.has(name));
 
     // The daemon the definition names, else the one the member's Paseo config names.
     const address = options.data.url === undefined ? daemonUrl(process.env) : { url: options.data.url };
@@ -612,7 +608,15 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       const reason = entry ? entry.reason : `it is not installed where the daemon finds its tools; install ${name} on the daemon's PATH and sign in to it there`;
 
       return [[name, clip(`The Paseo daemon at ${connected.url} cannot run ${name}: ${reason}.`, UNAVAILABLE_REASON_MAX)]];
-    }));
+    }).concat(foreign.map((name): [string, string] => {
+      const passed = instances.find((instance) => instance.name === name);
+
+      const why = passed
+        ? `it extends ${passed.tool}, which Paseo does not run. Remove ${name} from the providers option.`
+        : `the runtime's providers option names it, and teamai passed no tool instance ${name} here; a team tool runs here once its command is accepted on this machine. If it is no team tool, remove ${name} from the providers option.`;
+
+      return [name, clip(`The Paseo daemon at ${connected.url} cannot run ${name}: ${why}`, UNAVAILABLE_REASON_MAX)];
+    })));
 
     daemon = connected;
     mode = request.mode;

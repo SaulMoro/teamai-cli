@@ -513,4 +513,4 @@ Start the daemon, then run `teamai workflow cancel` again.
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
 | `paseo_config` | With no `url`, the daemon's address cannot be read from Paseo's config: `$PASEO_HOME/config.json` is not JSON, its `daemon` section is not what Paseo writes, or `daemon.listen` names a Windows named pipe. Fix the file, or set `url`. |
-| `bad_option` | An option other than `url`, `mode` and `providers`, a `mode` for a tool other than `claude`, `codex` and `opencode`, or a `providers` entry for neither one of them nor a team instance of one. |
+| `bad_option` | An option other than `url`, `mode` and `providers`, or a `mode` for a tool other than `claude`, `codex` and `opencode`. A `providers` entry for neither one of them nor a team instance teamai passed is named under `unavailable` instead, and the other tools still run. |

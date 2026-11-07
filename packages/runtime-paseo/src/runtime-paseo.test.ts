@@ -465,6 +465,27 @@ describe('teamai-runtime-paseo', () => {
       });
     });
 
+    it('still offers its tools when the providers option names an instance teamai did not pass, naming it under unavailable', async () => {
+      behave({ custom_providers: { 'claude-acme': { extends: 'claude', command: ['acme-claude'] } } });
+
+      expect(await ready(start(), { options: { url: daemon.url, providers: { 'acme-claude': 'claude-acme', cursor: 'x' } } })).toMatchObject({
+        type: 'init', ok: true, can: { tools: ['claude', 'opencode'] },
+        unavailable: {
+          'acme-claude': cannotRun('acme-claude', 'the runtime\'s providers option names it, and teamai passed no tool instance acme-claude here; a team tool runs here once its command is accepted on this machine. If it is no team tool, remove acme-claude from the providers option'),
+          cursor: cannotRun('cursor', 'the runtime\'s providers option names it, and teamai passed no tool instance cursor here; a team tool runs here once its command is accepted on this machine. If it is no team tool, remove cursor from the providers option'),
+        },
+      });
+    });
+
+    it('names an instance teamai passed whose tool Paseo does not run under unavailable, when the providers option names it', async () => {
+      const codebuddy = { name: 'acme-codebuddy', tool: 'codebuddy', command: 'acme-codebuddy' };
+
+      expect(await ready(start(), { options: { url: daemon.url, providers: { 'acme-codebuddy': 'x' } }, instances: [codebuddy] })).toMatchObject({
+        type: 'init', ok: true, can: { tools: ['claude', 'opencode'] },
+        unavailable: { 'acme-codebuddy': cannotRun('acme-codebuddy', 'it extends codebuddy, which Paseo does not run. Remove acme-codebuddy from the providers option') },
+      });
+    });
+
     it('runs an instance on the provider the providers option names, when two run its command', async () => {
       behave({ output: { ok: true }, custom_providers: { a: { extends: 'claude', command: ['acme-claude'] }, b: { extends: 'claude', command: ['acme-claude'] } } });
       const runtime = start();
@@ -2232,7 +2253,6 @@ describe('teamai-runtime-paseo', () => {
   it.each([
     ['an option it does not take', { url: 'ws://127.0.0.1:1/ws', imgae: 'x' }, {}, { code: 'bad_option', key: 'imgae' }],
     ['a mode for a tool it does not run', { url: 'ws://127.0.0.1:1/ws', mode: { cursor: 'agent' } }, {}, { code: 'bad_option', key: 'mode' }],
-    ['a provider for neither a tool it runs nor a team instance of one', { url: 'ws://127.0.0.1:1/ws', providers: { cursor: 'x' } }, {}, { code: 'bad_option', key: 'providers', message: 'teamai-runtime-paseo runs claude, codex, opencode and the team\'s instances of them, so its providers option cannot name cursor; remove cursor from the runtime\'s providers option, or add the team instance it names' }],
     ['no daemon at the url', { url: 'ws://127.0.0.1:1/ws' }, {}, { code: 'daemon_unreachable' }],
     ['a daemon older than the client', undefined, { version: '0.13.2' }, { code: 'daemon_version', message: expect.stringContaining('runs version 0.13.2') }],
     ['a daemon without agent receipts', undefined, { missing: ['agentRequestReceipts'] }, { code: 'daemon_version', message: expect.stringContaining('lacks agentRequestReceipts') }],
