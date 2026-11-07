@@ -134,13 +134,16 @@ describe('bwrap: a step', () => {
   });
 
   it('passes a URL on this machine to the step at its loopback, as the step shares its network', async () => {
-    host.tool('base-url', 'console.log(process.env.ANTHROPIC_BASE_URL)');
+    host.tool('base-url', 'console.log(new URL(process.env.ANTHROPIC_BASE_URL).host)');
     const connection = start();
     await init(connection, { provider: 'bwrap' });
     const at = placeIn(host.dir);
     const { ready } = await openPlace(connection, at, { credentials: { ANTHROPIC_BASE_URL: 'http://localhost:8317/anthropic' } });
 
     expect(ready).toMatchObject({ event: 'ready' });
-    expect((await exec(connection, { argv: ['base-url'], credentials: { ANTHROPIC_BASE_URL: 'http://localhost:8317/anthropic' }, cwd: at.worktree })).end).toMatchObject({ event: 'exited', code: 0 });
+    const { end, output } = await exec(connection, { argv: ['base-url'], credentials: { ANTHROPIC_BASE_URL: 'http://localhost:8317/anthropic' }, cwd: at.worktree });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(output.trim()).toBe('127.0.0.1:8317');
   });
 });
