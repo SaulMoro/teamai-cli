@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { connect, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { ATTEMPT, exec, HANDLE, newOp, openPlace, placeIn, RUN, type Place } from '../testing/native-harness.js';
@@ -196,6 +196,22 @@ describe('vercel: an attempt', () => {
     expect(fs.readFileSync(path.join(at.worktree, 'locked', 'child.txt'), 'utf8')).toBe('kept');
     expect(fs.statSync(path.join(at.worktree, 'locked')).mode & 0o777).toBe(0o555);
     expect(fs.existsSync(path.join(at.worktree, 'obsolete.txt'))).toBe(false);
+  });
+
+  it('deletes at the next open a sandbox an earlier run left that no attempt here records, and keeps that open\'s own', async () => {
+    const first = start();
+    await init(first);
+    const at = preparedPlace();
+    expect((await openPlace(first, at)).ready).toMatchObject({ event: 'ready' });
+    await first.end();
+    const [left = ''] = sandboxNames();
+    fs.rmSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox', 'places'), { recursive: true, force: true });
+    const second = start();
+    await init(second);
+    second.send({ type: 'open', op: newOp(), run: RUN, attempt: 'a00000002', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: {} } });
+    await second.next((message) => message.event === 'ready' || message.event === 'failed', 30_000);
+
+    await vi.waitFor(() => { expect(sandboxNames()).toEqual([left.replace(ATTEMPT, 'a00000002')]); }, { timeout: 10_000 });
   });
 
   it('never reuses a sandbox its place was not fully copied into: the next open of the attempt starts a new one, and collect deletes nothing', async () => {

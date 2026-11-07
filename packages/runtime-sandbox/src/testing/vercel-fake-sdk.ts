@@ -8,7 +8,7 @@ import { z } from 'zod';
 //
 //  The tests bundle the runtime with `@vercel/sandbox` aliased to this module (vercel.test.ts), so the runtime runs as it
 //  ships against a hosted sandbox that is a directory on this machine. It has the subset of the SDK the vercel provider
-//  calls: Sandbox.create, Sandbox.get, runCommand (detached), getCommand, writeFiles, readFileToBuffer, delete, and a
+//  calls: Sandbox.create, Sandbox.get, Sandbox.list, runCommand (detached), getCommand, writeFiles, readFileToBuffer, delete, and a
 //  Command's logs, wait and kill.
 //
 //  A sandbox's filesystem is `<state>/sandboxes/<name>/root`: every absolute path a call names lands under it, so a
@@ -124,6 +124,14 @@ export class Sandbox {
     if (!fs.existsSync(sandboxDir(params.name))) throw new NotFound(`Sandbox ${params.name} not found`);
 
     return new Sandbox(params.name);
+  }
+
+  static async list(params: { namePrefix?: string }): Promise<{ toArray(): Promise<Array<{ name: string }>> }> {
+    log('list', { namePrefix: params.namePrefix });
+    const root = path.join(state, 'sandboxes');
+    const names = (fs.existsSync(root) ? fs.readdirSync(root) : []).filter((name) => name.startsWith(params.namePrefix ?? ''));
+
+    return { toArray: async () => names.map((name) => ({ name })) };
   }
 
   async writeFiles(files: Array<{ path: string; content: string | Uint8Array; mode?: number }>): Promise<void> {
