@@ -19,6 +19,7 @@
 //                               decisionMs: a sign-in decision answers this long after it was posted
 //                               addedInstanceConstraints: the constraints T3 reports for a provider instance the settings add
 //                               providersFailOnceAdded: the provider list fails once, the first time the settings hold this instance
+//                               unlistedOnce: provider instance ids the first provider list leaves out, as T3 before it reloads its settings
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -310,7 +311,11 @@ const TOOLS = {
       return fail('T3 Code is restarting its providers.');
     }
 
-    return ok({ providers: providers() });
+    const unlisted = path.join(STATE, 'unlisted-once');
+    const hidden = fs.existsSync(unlisted) ? [] : config().unlistedOnce ?? [];
+    fs.writeFileSync(unlisted, '');
+
+    return ok({ providers: providers().filter((provider) => !hidden.includes(provider.providerInstanceId)) });
   },
   t3_project_list: async () => {
     await sleep(config().projectsMs ?? 0);

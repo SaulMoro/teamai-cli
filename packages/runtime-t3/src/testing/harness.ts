@@ -124,6 +124,8 @@ export interface FakeT3Config {
   addedInstanceConstraints?: string[];
   /** The provider list fails once, the first time the member's settings hold this provider instance. */
   providersFailOnceAdded?: string;
+  /** Provider instance ids the first provider list leaves out, as T3 does before it reloads its settings. */
+  unlistedOnce?: string[];
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
