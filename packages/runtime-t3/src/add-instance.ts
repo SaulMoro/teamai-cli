@@ -193,6 +193,7 @@ function addTo(file: string, instance: NewInstance, userHome: string): AddedInst
       driver: instance.driver, displayName: instance.displayName, enabled: true,
       config: { binaryPath: instance.binaryPath, ...(instance.homePath !== undefined && { homePath: instance.homePath }) },
     };
+
     const next = `${JSON.stringify({ ...settings, providerInstances: { ...instances, [instance.id]: added } }, null, 2)}\n`;
     const temp = `${file}.teamai-${process.pid}.tmp`;
     const mode = before === undefined ? 0o600 : fs.statSync(file).mode & 0o777;

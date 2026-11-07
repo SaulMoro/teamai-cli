@@ -293,6 +293,7 @@ function instancesOf({ providers, instance, project, binaryPathOf }: { providers
 
   for (const driver of DRIVER_NAMES) {
     const own = usable.filter((provider) => provider.driverKind === driver && runsOwnBinary(binaryPathOf(provider.providerInstanceId), driver));
+
     const found = own.find((provider) => provider.providerInstanceId === project.defaultModel?.instanceId)
       ?? own.find((provider) => provider.providerInstanceId === driver) ?? own[0];
 
@@ -992,10 +993,10 @@ export function serve(options: ServeOptions): Promise<void> {
 
     // The provider instance of a tool instance teamai offered to add, on the first open that runs it.
     const instance = request.tool === undefined ? undefined : session.pending.get(request.tool);
-    const added = request.tool === undefined ? undefined : instanceFor(session, request.tool, { op: request.op });
+    const ready = request.tool === undefined ? undefined : instanceFor(session, request.tool, { op: request.op });
 
-    if (request.tool !== undefined && added) {
-      const done = await added;
+    if (request.tool !== undefined && ready) {
+      const done = await ready;
 
       if (!done.ok) {
         fail(request.op, { code: 'open_failed', message: notAdded(session, request.tool, instance, done) });
