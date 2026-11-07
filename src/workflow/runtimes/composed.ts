@@ -114,8 +114,9 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
   const name = composedName(inner.name, outer.name);
   // Which runtime runs each operation, so a cancel reaches it: an exec the outer, a prompt the inner.
   const ranBy = new Map<OpId, StepRuntime>();
-  // The prompt's credentials of the last open, in memory only, which the outer's reattach carries again.
-  let opened: Record<string, string> = {};
+  // The prompt's credentials each place was opened with, by the outer's handle, in memory only, which the outer's
+  // reattach of that place carries again. One composed runtime serves every attempt of its entry.
+  const openedWith = new Map<string, Record<string, string>>();
 
   const unknownHandle = (handle: string): RuntimeFailure => ({ code: 'runtime_protocol', message: `Step runtime "${name}" was given handle ${handle}, which is not one it made.` });
 
@@ -135,10 +136,10 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
     },
 
     async open(request, onAccepted) {
-      opened = request.credentials;
       const outerOpened = await outer.open(request, async (handle) => onAccepted(JSON.stringify({ outer: handle } satisfies ComposedHandle)));
 
       if (outerOpened.kind !== 'ready') return outerOpened;
+      openedWith.set(outerOpened.handle, request.credentials);
       const innerOpened = await inner.open({ ...request, credentials: innerCredentials, outer: outerOpened.handle }, async (handle) => onAccepted(JSON.stringify({ outer: outerOpened.handle, inner: handle } satisfies ComposedHandle)));
 
       if (innerOpened.kind !== 'ready') return innerOpened;
@@ -192,7 +193,8 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
 
       // A handle it never made has no place, as a runtime's journal without it says.
       if (!parsed) return { kind: 'gone' };
-      const outerSeen = await outer.reattach(parsed.outer, Object.keys(opened).length > 0 ? { credentials: opened } : undefined);
+      const credentials = openedWith.get(parsed.outer);
+      const outerSeen = await outer.reattach(parsed.outer, credentials && Object.keys(credentials).length > 0 ? { credentials } : undefined);
 
       if (outerSeen.kind === 'failed') return outerSeen;
       const innerSeen: Reattached = parsed.inner === undefined ? { kind: 'gone' } : await inner.reattach(parsed.inner);
@@ -218,7 +220,7 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       if (!innerClosed.ok && how?.release !== true) return innerClosed;
       const outerClosed = await outer.close(parsed.outer, how);
 
-      if (outerClosed.ok) opened = {};
+      if (outerClosed.ok) openedWith.delete(parsed.outer);
 
       return innerClosed.ok ? outerClosed : innerClosed;
     },
