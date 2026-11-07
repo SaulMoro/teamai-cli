@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
-import { runConfinedStep, type ConfinedStepLease } from '../workflow/confined-step.js';
+import { runConfinedStep, runConfinedStepOnRuntime, type ConfinedStepLease } from '../workflow/confined-step.js';
+import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 import { attemptResultPath, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 
 let root = '';
@@ -129,5 +130,46 @@ console.log(JSON.stringify({ type: 'result', structured_output: { verdict: 'pass
       outcome: 'success', tool: 'claude', outputs: { verdict: 'pass' }, model: 'claude-fixture', tokens: { input: 12, output: 3 }, durationMs: expect.toSatisfy((ms: number) => ms >= 0 && ms < 60_000),
       confined: { tool: 'claude', model: { reported: 'claude-fixture' }, isolation: 'verified', access: 'read', usage: { inputTokens: 12, outputTokens: 3 } },
     } });
+  });
+});
+
+describe('runConfinedStepOnRuntime', () => {
+  /** An attempt on a runtime that answers confined prompts: `duringOpen` runs while its place opens; prompts are counted. */
+  function judgeRun(duringOpen: () => void): { attemptRun: AttemptRun; prompts: () => number } {
+    let prompts = 0;
+
+    const attemptRun: AttemptRun = {
+      open: async () => {
+        duringOpen();
+
+        return { ok: true, handle: 'h-1' };
+      },
+      exec: async () => ({ kind: 'failed', failure: { code: 'exec_unsupported', message: 'judge only' } }),
+      setup: async () => ({ kind: 'failed', failure: { code: 'exec_unsupported', message: 'judge only' } }),
+      prompt: async () => {
+        prompts += 1;
+
+        return { kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { label: 'good' } }, confined: { level: 'best-effort', access: 'read' } };
+      },
+      cancel: async () => {},
+      collect: async () => undefined,
+      close: async () => undefined,
+      stopLeftSetup: async () => undefined,
+      stopLeftOperation: async () => undefined,
+    };
+
+    return { attemptRun, prompts: () => prompts };
+  }
+
+  it('sends no prompt when the run is stopped while the place of the confined prompt opens, and ends the step stopped', async () => {
+    const dir = await dirWith(root, 'evidence', { 'diff.txt': '+ a line\n' });
+    const controller = new AbortController();
+    const { attemptRun, prompts } = judgeRun(() => controller.abort());
+    const lease = { ...leaseIn(dir), confined: { dir, level: 'best-effort' as const, tools: ['claude'] } };
+
+    const ended = await runConfinedStepOnRuntime({ config, run, secrets: {}, lease, signal: controller.signal, runtime: 'toy', attemptRun, offers: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], credentials: {} });
+
+    expect(ended).toMatchObject({ kind: 'ran', report: { outcome: 'failed', failure: { code: 'confined_failed', message: 'The confined claude prompt on step runtime "toy" was stopped before it replied.' } } });
+    expect(prompts()).toBe(0);
   });
 });
