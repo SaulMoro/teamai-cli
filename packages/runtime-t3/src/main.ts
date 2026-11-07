@@ -105,11 +105,21 @@ const widen: ServeOptions['widen'] = async ({ mode, adding }) => {
 
   if (!resource) return { ok: false, why: 'T3 Code is not running on this machine' };
 
-  if (mayWriteSettings(state, resource.href)) return { ok: true };
+  // The kept sign-in, once it may change T3's settings.
+  const widened = (): { ok: true; signIn: string } | undefined => {
+    const signIn = mayWriteSettings(state, resource.href) ? signInOf(state, resource.href) : undefined;
+
+    return signIn === undefined ? undefined : { ok: true, signIn };
+  };
+
+  const kept = widened();
+
+  if (kept) return kept;
   // The t3 command mints the grant as the member, as it adds a project; only without it does a person approve it.
   const silent = await signInSilently({ stateDir: state, resource, t3Home, t3Cli, access: 'full-access' });
+  const minted = widened();
 
-  if (mayWriteSettings(state, resource.href)) return { ok: true };
+  if (minted) return minted;
   const silentFailure = silent.ok ? 'T3 Code granted no settings access' : silent.reason;
 
   if (mode !== 'attended') return { ok: false, why: `teamai could not get a T3 Code sign-in that may change T3's settings through the t3 command (${silentFailure}), and an unattended run cannot ask for one` };
@@ -124,7 +134,7 @@ const widen: ServeOptions['widen'] = async ({ mode, adding }) => {
     signIn.close();
   }
 
-  return mayWriteSettings(state, resource.href) ? { ok: true } : { ok: false, why: 'teamai\'s T3 Code sign-in was approved without Full access, which T3 Code requires to change its settings' };
+  return widened() ?? { ok: false, why: 'teamai\'s T3 Code sign-in was approved without Full access, which T3 Code requires to change its settings' };
 };
 
 const startedFrom = process.env['T3CODE_THREAD_ID'];
