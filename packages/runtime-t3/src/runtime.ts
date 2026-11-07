@@ -223,7 +223,7 @@ type PromptRequest = Extract<RuntimeRequest, { type: 'prompt' }>;
  * Why a tool instance's provider instance cannot run: teamai could not add it, and whether a person approving its
  * sign-in would let it; or teamai added it, and T3 cannot run it yet, such as a tool not signed in in its home.
  */
-type NotAdded = { ok: false; kind: 'not-added'; why: string; approval: boolean } | { ok: false; kind: 'not-ready'; id: string; why: string };
+type NotAdded = { ok: false; kind: 'not-added'; why: string; needsApproval: boolean } | { ok: false; kind: 'not-ready'; id: string; why: string };
 
 /** What a prompt runs: a step on its attempt's worktree, or a judge confined to its directory. */
 type Work = { kind: 'step'; place: PlaceRecord & { kind: 'worktree' } } | { kind: 'judge'; confined: ConfinedPrompt };
@@ -775,7 +775,7 @@ export function serve(options: ServeOptions): Promise<void> {
       widening ??= options.widen({ mode: s.mode, adding: [...s.pending.keys()] }).finally(() => { widening = undefined; });
       const widened = await widening;
 
-      if (!widened.ok) return { ok: false, kind: 'not-added', why: widened.why, approval: true };
+      if (!widened.ok) return { ok: false, kind: 'not-added', why: widened.why, needsApproval: true };
       // The connection sends the wider sign-in from now on, so a launch is recorded under it.
       s.signIn = widened.signIn;
     }
@@ -789,7 +789,7 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'found':
         break;
       case 'failed':
-        return { ok: false, kind: 'not-added', why: added.why, approval: false };
+        return { ok: false, kind: 'not-added', why: added.why, needsApproval: false };
       default: {
         const unhandled: never = added;
 
@@ -834,16 +834,18 @@ export function serve(options: ServeOptions): Promise<void> {
   /** What a step whose instance cannot run is told: why, and what the person does about it. */
   const notAdded = (s: Session, name: string, instance: NewInstance | undefined, failure: NotAdded): string => {
     const home = instance?.homePath ? tilde(instance.homePath, options.home) : undefined;
+    const setting = instance ? `, with driver ${DRIVERS[instance.driver].label} and Binary path ${instance.binaryPath}${home ? `, and Home path ${home}` : ''}` : '';
+    const why = failure.why.replace(/\.$/, '');
 
     switch (failure.kind) {
-      case 'not-added': {
-        const setting = instance ? `, with driver ${DRIVERS[instance.driver].label} and Binary path ${instance.binaryPath}${home ? `, and Home path ${home}` : ''}` : '';
-        const retry = !failure.approval ? 'Add' : s.mode === 'attended' ? 'Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add' : `Run a step on ${name} once from a terminal, so teamai can ask you to approve its sign-in, or add`;
+      case 'not-added':
+        if (!failure.needsApproval) return `teamai could not add a T3 Code provider instance for ${name}: ${why}. Add one in T3 Code under Settings → Providers${setting}.`;
 
-        return `teamai could not add a T3 Code provider instance for ${name}: ${failure.why.replace(/\.$/, '')}. ${retry} one in T3 Code under Settings → Providers${setting}.`;
-      }
+        return s.mode === 'attended'
+          ? `teamai could not add a T3 Code provider instance for ${name}: ${why}. Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add one in T3 Code under Settings → Providers${setting}.`
+          : `teamai could not add a T3 Code provider instance for ${name}: ${why}. Run a step on ${name} once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers${setting}.`;
       case 'not-ready':
-        return `teamai added the T3 Code provider instance "${failure.id}" for ${name}, but T3 Code cannot run it yet: ${failure.why.replace(/\.$/, '')}.${home ? ` It runs in ${home}.` : ''} Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.`;
+        return `T3 Code cannot run the provider instance "${failure.id}" for ${name} yet: ${why}.${home ? ` It runs in ${home}.` : ''} Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.`;
       default: {
         const unhandled: never = failure;
 

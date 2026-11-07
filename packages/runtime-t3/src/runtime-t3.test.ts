@@ -1523,7 +1523,7 @@ describe('teamai-runtime-t3', () => {
           event: 'failed',
           failure: {
             code: 'open_failed',
-            message: 'teamai added the T3 Code provider instance "claude-work" for claude-work, but T3 Code cannot run it yet: Claude Code is not authenticated. Run `claude auth login` and try again. It runs in ~/.claude-work. Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.',
+            message: 'T3 Code cannot run the provider instance "claude-work" for claude-work yet: Claude Code is not authenticated. Run `claude auth login` and try again. It runs in ~/.claude-work. Fix that, then retry the step; the instance is in T3 Code under Settings → Providers.',
           },
         });
       }, 40_000);
