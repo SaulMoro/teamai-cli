@@ -798,14 +798,21 @@ steps:
     expect(inits.at(-1)).toMatchObject({ checkout: repo, cwd: repo });
   });
 
-  it('gives a runtime the instances the member may run at init, with their command and home', async () => {
+  it('gives a runtime the instances the member may run at init, with their command and their home resolved as teamai resolves it', async () => {
     acmeInstance();
     writeDefinition('toyagentacme', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+    const moved = path.join(os.tmpdir(), 'acme-claude-moved');
+    const initsOf = () => fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { instances?: unknown[] });
 
     await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env());
+    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: path.join(os.homedir(), '.acme-claude'), env: 'ACME_CLAUDE_CONFIG_DIR' } }));
 
-    const inits = fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { instances?: unknown[] });
-    expect(inits.at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } }));
+    await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env({ ACME_CLAUDE_CONFIG_DIR: moved }));
+    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: moved, env: 'ACME_CLAUDE_CONFIG_DIR' } }));
+
+    // A relative value, as teamai itself reads it from where it runs.
+    await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env({ ACME_CLAUDE_CONFIG_DIR: 'acme-claude-here' }));
+    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: path.join(fs.realpathSync(repo), 'acme-claude-here'), env: 'ACME_CLAUDE_CONFIG_DIR' } }));
   });
 
   it('runs a step whose default tool is an instance on the next runtime when the first offers only the tool it extends', async () => {

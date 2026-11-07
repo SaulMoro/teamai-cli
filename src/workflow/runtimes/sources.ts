@@ -14,7 +14,7 @@ import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './def
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
 import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
-import { acceptToolCommand } from '../../tool-instances.js';
+import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { credentialSecrets, type StepRuntime } from './step-runtime.js';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
@@ -362,7 +362,8 @@ async function runnableInstances(): Promise<InitInstance[]> {
   return instances.filter((_, index) => accepted[index]).map((instance) => ({
     name: instance.name, tool: instance.extends,
     ...(instance.command !== undefined && { command: instance.command }),
-    ...(instance.home && { home: { dir: instance.home.dir, ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
+    // Resolved once, here, and absolute, a relative value from where teamai runs: a runtime uses this home and never resolves one of its own.
+    ...(instance.home && { home: { dir: path.resolve(instanceHomeDir(instance.home)), ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
     ...(instance.paths && { paths: instance.paths }),
   }));
 }
