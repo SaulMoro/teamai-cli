@@ -751,7 +751,7 @@ export function serve(options: ServeOptions): Promise<void> {
       } else if (taken(name)) {
         reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code already has a provider instance "${name}" that runs another command. Point its Binary path at ${command}, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
       } else if (!mayAdd) {
-        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, ${setting}.`);
+        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on ${name} once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, ${setting}.`);
       } else {
         pending.set(name, { id: name, driver, displayName: name, command, binaryPath, ...(homePath && { homePath }) });
       }
@@ -836,7 +836,7 @@ export function serve(options: ServeOptions): Promise<void> {
     switch (failure.kind) {
       case 'not-added': {
         const setting = instance ? `, with driver ${DRIVERS[instance.driver].label} and Binary path ${instance.binaryPath}${home ? `, and Home path ${home}` : ''}` : '';
-        const retry = !failure.approval ? 'Add' : s.mode === 'attended' ? 'Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add' : 'Start any workflow with --driver t3 from a terminal once, so teamai can ask you to approve it, or add';
+        const retry = !failure.approval ? 'Add' : s.mode === 'attended' ? 'Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add' : `Run a step on ${name} once from a terminal, so teamai can ask you to approve its sign-in, or add`;
 
         return `teamai could not add a T3 Code provider instance for ${name}: ${failure.why.replace(/\.$/, '')}. ${retry} one in T3 Code under Settings → Providers${setting}.`;
       }
