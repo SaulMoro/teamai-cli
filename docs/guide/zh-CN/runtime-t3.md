@@ -61,7 +61,7 @@ teamai pull
 teamai workflow start readme-review --driver t3
 ```
 
-第一次运行会让 teamai 登录 T3 Code，不打开页面，也不问你。teamai 让这台机器上的 `t3` 命令创建一个两分钟内有效的配对码，再用它以 Auto 权限批准自己的登录，即使你[收紧了 `runtime_mode`](#步骤线程会问你多少)：每个线程仍按自己的模式运行，一次登录可供所有运行使用。只有 [`runtime_mode: full-access`](#在可以丢弃的机器上运行-full-access) 会让它以 Full access 登录。它运行的命令：
+第一次运行会让 teamai 登录 T3 Code，不打开页面，也不问你。teamai 让这台机器上的 `t3` 命令创建一个两分钟内有效的配对码，再用它以 Auto 权限批准自己的登录，即使你[收紧了 `runtime_mode`](#步骤线程会问你多少)：每个线程仍按自己的模式运行，一次登录可供所有运行使用。只有 [`runtime_mode: full-access`](#在可以丢弃的机器上运行-full-access)，或者 teamai 需要添加的[团队工具实例](#团队工具)，会让它以 Full access 登录。它运行的命令：
 
 ```sh
 t3 auth pairing create --json --base-dir ~/.t3 --scope orchestration:read --scope orchestration:operate --ttl 2m --label "teamai workflow"
@@ -181,7 +181,7 @@ teamai 会重新登录，这次以 Full access 登录（配对码还会申请 `s
 
 ## 选择提供方实例和模型
 
-可用的工具是此刻能运行的 T3 提供方实例，不包括你为这个项目关掉的实例。没有指定工具的步骤，在同样没有指定工具的定义里，会在你的 T3 默认模型（项目的，否则是全局的）所属的工具上运行。一个提供方有多个实例时，工具在你的 T3 默认模型所在的实例上运行，否则在以提供方命名的实例上（Claude 是 `claudeAgent`，Codex 是 `codex`）。要让所有提示词都在某一个实例上运行，比如第二个 Claude 账号，在你机器的配置里写上它：
+可用的工具是此刻能运行的 T3 提供方实例，不包括你为这个项目关掉的实例。没有指定工具的步骤，在同样没有指定工具的定义里，会在你的 T3 默认模型（项目的，否则是全局的）所属的工具上运行。一个提供方有多个实例时，`claude` 和 `codex` 只在运行提供方自己二进制文件的实例上运行（没有 Binary path，或者 Binary path 名为 `claude` 或 `codex`）：你的 T3 默认模型所在的实例，否则是以提供方命名的实例（Claude 是 `claudeAgent`，Codex 是 `codex`），再否则是第一个。Binary path 是包装命令（比如团队工具的命令）的实例只运行那个团队工具，即使它是你的 T3 默认实例；这时没有指定工具的步骤以 `claude` 在 `claudeAgent` 上运行。要让所有提示词都在某一个实例上运行，比如第二个 Claude 账号，在你机器的配置里写上它：
 
 ```yaml
 # ~/.teamai/config.yaml
@@ -194,18 +194,46 @@ workflows:
           max_parallel: 2
 ```
 
-只想改一个工具的实例时，在 `instances` 下映射它，例如 `instances: { claude: claude-work }`：Claude 步骤在 `claude-work` 上运行，Codex 步骤仍用原来的实例。映射到 T3 无法运行的实例时，T3 不提供这个工具：它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机），没有这样的运行时则在调用 T3 之前失败并说明要设置什么。这里的名字既不是 `claude`、`codex`，也不是你拥有的[团队工具](reference.md#团队工具tools)时，它不映射任何东西。其他工具照常运行。
-
-`acme-claude`（`extends: claude`，`command: acme-claude`）这样的[团队工具](reference.md#团队工具tools)，在 Binary path（T3 Code 的 Settings → Providers）是 `acme-claude` 绝对路径的 T3 提供方实例上运行，或者在 `instances: { acme-claude: <its id> }` 映射的实例上运行。它的会话在该实例的 home path 中读取。没有实例运行它，或者有两个实例都运行它时，T3 不提供它：在 `teamai-t3` 上，它的步骤改在本机运行；在没有其他运行时能运行它的定义上，它的步骤会在任何线程启动之前失败：
+只想改一个工具的实例时，在 `instances` 下映射它，例如 `instances: { claude: claude-work }`：Claude 步骤在 `claude-work` 上运行，Codex 步骤仍用原来的实例。映射到 T3 无法运行的实例时，T3 不提供这个工具：它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机），没有这样的运行时则在调用 T3 之前失败并说明要设置什么。这里的名字既不是 `claude`、`codex`，也不是你拥有的[团队工具](reference.md#团队工具tools)时，它不映射任何东西，运行开始时会说明。其他工具照常运行：
 
 ```text
-✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
+⚠ Step runtime "t3": instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.
 ```
 
 步骤的 `model: { name, effort }` 选择模型，`effort` 会变成该实例对应的选项（Claude 是 `effort`，Codex 是 `reasoningEffort`）。没有写模型的步骤，在你的 T3 默认模型（项目的，否则是全局的）位于该步骤的实例上时使用它，由 T3 选择，和你自己开的线程一样；否则使用实例列出的第一个模型。实例无法运行的内容会在任何线程启动之前失败：
 
 ```text
 ✖ Step "review" failed with model_unavailable: T3 Code provider instance "claudeAgent" (Claude) has no model claude-opus-9. Its models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.
+```
+
+### 团队工具
+
+`acme-claude`（`extends: claude`，`command: acme-claude`）这样的[团队工具](reference.md#团队工具tools)，在 Binary path（T3 Code 的 Settings → Providers）是 `acme-claude` 绝对路径的 T3 提供方实例上运行，或者在 `instances: { acme-claude: <its id> }` 映射的实例上运行。有自己的 home 而没有命令的工具，比如 `claude-work`（`extends: claude`，`home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`），在运行 Claude 自己的二进制文件、Home path 为该 home 的实例上运行。它的会话在该实例的 Home path 中读取。
+
+没有实例运行它时，teamai 会在第一次有步骤用它时添加一个，并说明：
+
+```text
+⚠ Step runtime "t3", operation op-5781c58b81a1: Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path /opt/acme/bin/acme-claude), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
+```
+
+实例以工具命名。它的 Binary path 是你的 PATH 找到的工具命令（`claude-work` 则是 Claude 自己的二进制文件），工具有自己的 home 时，Home path 就是那个 home。teamai 把它写进 T3 的设置，其他设置保持不变，T3 Code 会立即读取。两个运行只会添加一次，之后的运行直接使用它，不再改动。从不用到这个工具的运行不会添加任何东西。
+
+T3 只允许以 Full access 批准的登录修改它的设置（`settings:write`），所以 teamai 第一次添加实例时会以 Full access 重新登录：任何运行都通过 `t3` 命令；没有该命令时，在 T3 的页面上进行，你在那里选择 **Full access**。之后的运行沿用这次登录。每个线程仍按原来的模式启动。没有 `t3` 命令、也没有这样的登录的无人值守运行不会添加任何东西，也不提供这个工具：
+
+```text
+No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
+```
+
+T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它，或者运行它的实例被关掉了），它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机）；在没有其他运行时能运行它的定义上，会在任何线程启动之前失败，并给出原因：
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
+```
+
+运行团队工具的实例的 home 与 teamai 给这个工具的 home 不同时，工具会在实例的 home 中登录并保存会话，运行开始时会说明：
+
+```text
+⚠ Step runtime "t3": T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ~/.acme-claude.
 ```
 
 ## 项目脚本
@@ -313,6 +341,8 @@ teamai workflow cancel r70d31098c8884803
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | 有人在 T3 的登录页面里选了比 Full access 窄的权限。 | 重新启动工作流并选 Full access，或者删掉 `runtime_mode: full-access`。 |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | 这个检出不是 T3 项目，`t3 project add` 也失败了。括号里的文字说明原因。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
+| `… teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access …` | teamai 需要添加团队工具的实例，而登录页面上批准的是 Auto。 | 重新启动工作流并选择 **Full access**，或者按消息所说自己添加实例。 |
+| `… teamai could not add a T3 Code provider instance for acme-claude: T3 Code already has a provider instance "acme-claude" that runs another command …` | 你已有一个同名实例，运行的是别的命令。teamai 不会改动它。 | 把它的 Binary path 指向工具的命令，或者用 `instances` 映射另一个实例。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
 | `… (cancel_failed): The T3 thread t3code://threads/… ("review · teamai r70d…") still runs, and T3 Code did not stop it …` | teamai 取消了这个步骤，但 T3 没有在 10 秒内确认线程已停止。 | 从链接打开线程，用 Stop 按钮停止它，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… (cancel_failed): teamai launched the T3 thread "review · teamai r70d…", and T3 Code did not confirm the launch …`，或 `… could not be followed, so it may still run …` | 步骤失败了，但它的线程可能仍在 T3 中运行：T3 Code 没有回复启动请求，或在步骤运行期间断开了。teamai 会保留位置，不提交任何内容。 | 打开 T3 Code，然后运行 `teamai workflow cancel <run>`：它会找到线程并停止它。 |

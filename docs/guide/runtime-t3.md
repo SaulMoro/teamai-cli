@@ -61,7 +61,7 @@ teamai pull
 teamai workflow start readme-review --driver t3
 ```
 
-The first run signs teamai in to T3 Code with no page and no question. teamai asks the `t3` command on this machine for a pairing code that lasts two minutes, and uses it to approve its own sign-in with Auto access, even when you [tighten `runtime_mode`](#how-much-a-step-thread-asks-you): each thread still runs in its own mode, and one sign-in serves every run. Only [`runtime_mode: full-access`](#full-access-on-a-machine-you-can-lose) makes it sign in with Full access. The command it runs:
+The first run signs teamai in to T3 Code with no page and no question. teamai asks the `t3` command on this machine for a pairing code that lasts two minutes, and uses it to approve its own sign-in with Auto access, even when you [tighten `runtime_mode`](#how-much-a-step-thread-asks-you): each thread still runs in its own mode, and one sign-in serves every run. Only [`runtime_mode: full-access`](#full-access-on-a-machine-you-can-lose), or a [team tool's instance](#team-tools) teamai must add, makes it sign in with Full access. The command it runs:
 
 ```sh
 t3 auth pairing create --json --base-dir ~/.t3 --scope orchestration:read --scope orchestration:operate --ttl 2m --label "teamai workflow"
@@ -181,7 +181,7 @@ teamai signs in again, this time with Full access (the pairing code also asks fo
 
 ## Pick the provider instance and the model
 
-The tools are the T3 provider instances that can run now, leaving out any you turned off for the project. A step that names no tool, in a definition that names none, runs on the tool of your T3 default model (the project's, else the global one). When a provider has several, a tool runs on the instance of your T3 default model, else the one named after the provider (`claudeAgent` for Claude, `codex` for Codex). To run every prompt on one instance, for example a second Claude account, name it in your machine's config:
+The tools are the T3 provider instances that can run now, leaving out any you turned off for the project. A step that names no tool, in a definition that names none, runs on the tool of your T3 default model (the project's, else the global one). When a provider has several instances, `claude` and `codex` run only on one that runs the provider's own binary (no Binary path, or one named `claude` or `codex`): the instance of your T3 default model, else the one named after the provider (`claudeAgent` for Claude, `codex` for Codex), else the first. An instance whose Binary path is a wrapper, such as a team tool's command, runs only that team tool, even when it is your T3 default; a step with no tool then runs as `claude` on `claudeAgent`. To run every prompt on one instance, for example a second Claude account, name it in your machine's config:
 
 ```yaml
 # ~/.teamai/config.yaml
@@ -194,18 +194,46 @@ workflows:
           max_parallel: 2
 ```
 
-To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A mapping to an instance T3 cannot run leaves that tool out of T3: its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`, or fail before T3 is called, saying what to set, when none has it. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) you have maps nothing. The other tools still run.
-
-A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`, `command: acme-claude`) runs on the T3 provider instance whose Binary path, in T3 Code under Settings → Providers, is the absolute path of `acme-claude`, or on the one `instances: { acme-claude: <its id> }` maps. Its session is read in that instance's home path. When no instance runs it, or two do, T3 does not offer it: on `teamai-t3` its steps run on this machine instead, and on a definition with no other runtime for it they fail before any thread starts:
+To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A mapping to an instance T3 cannot run leaves that tool out of T3: its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`, or fail before T3 is called, saying what to set, when none has it. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) you have maps nothing, and the run says so as it starts. The other tools still run:
 
 ```text
-✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
+⚠ Step runtime "t3": instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.
 ```
 
 A step's `model: { name, effort }` picks the model, and `effort` becomes the option that instance names it by (`effort` for Claude, `reasoningEffort` for Codex). A step with no model gets your T3 default model (the project's, else the global one) when that model is on the step's instance; T3 picks it, as for a thread you start. Otherwise it gets the first model the instance lists. Something the instance cannot run fails before any thread starts:
 
 ```text
 ✖ Step "review" failed with model_unavailable: T3 Code provider instance "claudeAgent" (Claude) has no model claude-opus-9. Its models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.
+```
+
+### Team tools
+
+A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`, `command: acme-claude`) runs on the T3 provider instance whose Binary path, in T3 Code under Settings → Providers, is the absolute path of `acme-claude`, or on the one `instances: { acme-claude: <its id> }` maps. A tool with a home of its own and no command, such as `claude-work` (`extends: claude`, `home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`), runs on the instance that runs Claude's own binary with that Home path. Its session is read in that instance's Home path.
+
+When no instance runs it, teamai adds one the first time a step runs on it, and says so:
+
+```text
+⚠ Step runtime "t3", operation op-5781c58b81a1: Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path /opt/acme/bin/acme-claude), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
+```
+
+The instance is named after the tool. Its Binary path is the tool's command as your PATH finds it (Claude's own binary for `claude-work`), and its Home path the tool's own home, when it has one. teamai writes it into T3's settings and keeps every other setting; T3 Code picks it up at once. Two runs add it once, and later runs use it with no change. A run that never runs the tool adds nothing.
+
+T3 lets a sign-in change its settings (`settings:write`) only with Full access, so the first time teamai adds an instance it signs in again with Full access: through the `t3` command, in any run, or, without one, in T3's page, where you pick **Full access**. It keeps that sign-in for later runs. Each thread still starts in the mode it would. An unattended run with no `t3` command and no such sign-in adds nothing, and does not offer the tool:
+
+```text
+No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
+```
+
+When T3 does not offer the tool (the command is not on your PATH, two instances run it, or one that runs it is turned off), its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`; on a definition with no other runtime for it they fail before any thread starts, with that reason:
+
+```text
+✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
+```
+
+When the instance that runs a team tool has another home than teamai gives the tool, the tool signs in and keeps its sessions in the instance's home, and the run says so as it starts:
+
+```text
+⚠ Step runtime "t3": T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ~/.acme-claude.
 ```
 
 ## Project scripts
@@ -313,6 +341,8 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | Someone picked a narrower access than Full access in T3's sign-in page. | Start the workflow again and pick Full access, or remove `runtime_mode: full-access`. |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | The checkout is not a T3 project, and `t3 project add` failed. The text in brackets says why. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
+| `… teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access …` | teamai had to add the team tool's instance, and the sign-in page was approved with Auto. | Start the workflow again and pick **Full access**, or add the instance yourself as the message says. |
+| `… teamai could not add a T3 Code provider instance for acme-claude: T3 Code already has a provider instance "acme-claude" that runs another command …` | An instance of that name, yours, runs something else. teamai never changes it. | Point its Binary path at the tool's command, or map another instance with `instances`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
 | `… (cancel_failed): The T3 thread t3code://threads/… ("review · teamai r70d…") still runs, and T3 Code did not stop it …` | teamai cancelled the step, and T3 did not confirm its thread stopped within 10 s. | Open the thread from the link, stop it with its Stop button, then `teamai workflow cancel <run>` again. |
 | `… (cancel_failed): teamai launched the T3 thread "review · teamai r70d…", and T3 Code did not confirm the launch …`, or `… could not be followed, so it may still run …` | The step failed while its thread may still run in T3: T3 Code did not answer its launch, or went away during the step. teamai keeps the place and commits nothing. | Open T3 Code, then `teamai workflow cancel <run>`: it finds the thread and stops it. |
