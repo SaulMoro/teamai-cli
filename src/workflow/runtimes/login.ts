@@ -210,12 +210,23 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
   }
 }
 
+/** The check of each tool's dedicated login this process runs last, so steps that start together check it in turn. */
+const ensuring = new Map<LoginTool, Promise<unknown>>();
+
 /**
  * Makes sure `tool`'s dedicated home holds a login before the step that brings it (`step`) opens its place. Attended at
  * a terminal (`canAsk`), it says why in one line and runs the tool's own login command there for the member, once;
- * otherwise it fails `credential_missing`, naming that command and the retry to run after it.
+ * otherwise it fails `credential_missing`, naming that command and the retry to run after it. Steps of this process
+ * check in turn, so one that starts while another signs in finds that login.
  */
-export async function ensureLogin(tool: LoginTool, { step, canAsk }: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
+export function ensureLogin(tool: LoginTool, input: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
+  const checked = (ensuring.get(tool) ?? Promise.resolve()).then(() => signInOnce(tool, input));
+  ensuring.set(tool, checked.catch(() => undefined));
+
+  return checked;
+}
+
+async function signInOnce(tool: LoginTool, { step, canAsk }: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
   const file = path.join(loginHome(tool), LOGIN_FILES[tool]);
 
   if (await readRegular(file)) return undefined;

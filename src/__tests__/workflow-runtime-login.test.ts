@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
-import { holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
+import { ensureLogin, holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
 import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
@@ -287,5 +287,25 @@ describe('the session store of an attempt whose runtime reported where it kept t
     fs.writeFileSync(path.join(attemptDir(config, RUN, FIRST), 'runtime.json'), JSON.stringify({ runtime: 'paseo', driver: 'd', phase: 'closed', open: { op: newOpId(), handle: 'h1' }, sessionHome: { tool: 'codex', dir: reported } }));
 
     expect(await attemptSessionStore(config, RUN, FIRST)).toBe(path.join(reported, 'sessions'));
+  });
+});
+
+describe('the first login of a tool teamai keeps one for', () => {
+  it('runs the tool\'s login once for steps that ask for it at the same time', async () => {
+    const bin = path.join(root, 'bin');
+    const logins = path.join(root, 'logins.txt');
+    fs.mkdirSync(bin);
+    // A codex whose login takes a moment, writes the login file, and counts how often it ran.
+    fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\necho login >> "${logins}"\nsleep 0.2\nmkdir -p "$CODEX_HOME"\necho '{}' > "$CODEX_HOME/auth.json"\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const ended = await Promise.all([
+      ensureLogin('codex', { step: { run: RUN, id: 'left' }, canAsk: true }),
+      ensureLogin('codex', { step: { run: RUN, id: 'right' }, canAsk: true }),
+    ]);
+
+    expect(ended).toEqual([undefined, undefined]);
+    expect(fs.readFileSync(logins, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 });
