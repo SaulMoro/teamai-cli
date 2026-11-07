@@ -230,8 +230,8 @@ async function startedFromLine(live: Daemon, parent: string, step: string, run: 
 
 /**
  * What the person reads once teamai added a Paseo provider for instance `name`: what it holds, that it stays, and how to
- * remove it from the config of the Paseo home the member's Paseo uses. Paseo's CLI cannot unset one provider (0.14
- * refuses `config unset` on a dynamic key), so the person edits that file and reloads the daemon.
+ * remove it: in the Paseo app, or, as Paseo's CLI cannot unset one provider (0.14 refuses `config unset` on a dynamic
+ * key), by editing the config of the Paseo home the member's Paseo uses and reloading the daemon.
  */
 function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): string {
   const runs = entry.command ? entry.command[0] : `${entry.extends}'s own command`;
@@ -239,7 +239,7 @@ function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): s
   const paseoDir = paseoHome(process.env);
   const homeFlag = process.env.PASEO_HOME ? ` --home ${paseoDir}` : '';
 
-  return `teamai added the Paseo provider ${id} to the daemon at ${url} for its ${name} steps: it extends ${entry.extends} and runs ${runs}${home}. It stays for later runs; to remove it, delete agents.providers.${id} from ${path.join(paseoDir, 'config.json')}, then run \`paseo daemon reload${homeFlag}\`.`;
+  return `teamai added the Paseo provider ${id} to the daemon at ${url} for its ${name} steps: it extends ${entry.extends} and runs ${runs}${home}. It stays for later runs; to remove it, choose Remove provider on ${id} in the Paseo app's provider settings, or delete agents.providers.${id} from ${path.join(paseoDir, 'config.json')}, then run \`paseo daemon reload${homeFlag}\`. Paseo cannot show its agents' logs once it is gone, so read them first.`;
 }
 
 export interface Serving {
