@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { isBuiltin } from 'node:module';
 import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
 
@@ -41,6 +42,37 @@ const DEFINITIONS = 'tool-definitions';
 /** The conformance kit families test with. */
 const TEST_KIT = 'tool-testing';
 
+/** The runtime protocol, which teamai and every runtime parse with: the one runtime package src/ imports. */
+const RUNTIME_PROTOCOL = 'runtime-protocol';
+
+/**
+ * The package a bare specifier names: `@scope/name` or `name`, without a subpath.
+ * @param {string} specifier
+ */
+function packageOf(specifier) {
+  const parts = specifier.split('/');
+
+  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0] ?? specifier;
+}
+
+/**
+ * Whether src/ may load `specifier` at run time: one of Node's modules, a workspace package, or a dependency of
+ * teamai-cli. tsup bundles whatever src/ loads, so anything else would ship inside dist/, as a runtime's provider SDK
+ * that the member installs would. Every new package fails until teamai-cli depends on it.
+ * @param {string} root
+ * @param {string} specifier
+ */
+function shipsWithTeamai(root, specifier) {
+  const name = packageOf(specifier);
+
+  if (isBuiltin(specifier)) return true;
+
+  if (packagesByName(root).has(name)) return true;
+  const dependencies = manifest(root)?.dependencies;
+
+  return dependencies !== undefined && Object.hasOwn(dependencies, name);
+}
+
 /**
  * The `packages/<folder>` a path relative to the workspace root sits in, if any.
  * @param {string} relative
@@ -72,7 +104,11 @@ export default defineRule({
           context.report({ node, message: `A workspace package is private: set "private": true in packages/${own}/package.json, so it ships only inside teamai-cli.` });
         }
       },
-      ...importVisitors(({ node, specifier }) => {
+      ...importVisitors(({ node, specifier, typeOnly }) => {
+        if (inApp && !isTest && !typeOnly && !specifier.startsWith('.') && !shipsWithTeamai(root, specifier)) {
+          context.report({ node, message: `src/ imports values only from Node, the workspace packages and the dependencies in package.json, since tsup bundles whatever src/ loads into dist/: ${from} -> ${specifier}. Import only its types (import type), or add it to dependencies if teamai-cli ships it.` });
+        }
+
         if (specifier.startsWith('.')) {
           const to = path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier));
           const target = packageFolder(to);
@@ -92,8 +128,8 @@ export default defineRule({
         for (const [name, folder] of packagesByName(root)) {
           if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
 
-          if (inApp && folder.startsWith('runtime-')) {
-            context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio. ${from} -> ${specifier}.` });
+          if (inApp && folder.startsWith('runtime-') && folder !== RUNTIME_PROTOCOL) {
+            context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio, and reads its lines with @teamai/runtime-protocol. ${from} -> ${specifier}.` });
           }
 
           if (FAMILY.test(folder) && own !== DEFINITIONS && own !== folder) {

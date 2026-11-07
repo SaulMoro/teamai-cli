@@ -41,7 +41,7 @@ function packageRoot(dir) {
   return root;
 }
 
-const ManifestSchema = z.object({ name: z.string().optional(), private: z.boolean().optional(), workspaces: z.unknown().optional() });
+const ManifestSchema = z.object({ name: z.string().optional(), private: z.boolean().optional(), workspaces: z.unknown().optional(), dependencies: z.record(z.string(), z.string()).optional() });
 
 /**
  * The package.json at `dir`, or undefined when it is missing or unreadable.

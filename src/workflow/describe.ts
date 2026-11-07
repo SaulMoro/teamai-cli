@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sameEnvName } from '../resources/env-key.js';
-import { mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type InEffect, type Missing, type Setup } from './requirements.js';
+import { DefaultWorkflows } from '../default-workflows.js';
+import { isPinnedToHost, mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type InEffect, type Missing, type Setup } from './requirements.js';
 import { stepWorkflow, workflowRunBy, type Invoke, type OutputSchema, type WorkflowDefinition, type WorkflowSource, type WorkflowStep } from './types.js';
 import { confinedOf, copyOf, isRunLevel, levelsInside, opensCopy, roleLevelOf, runLevels, runsInCheckout, writesBranch, writtenRole, type RoleLevel } from './workspace.js';
 
@@ -111,6 +112,8 @@ type Gate = Facts['gates'][number];
 /** What the steps of one workflow in the tree run under, as the engine's scopes give it. */
 interface Scope {
   prefix: string;
+  /** The workflow its steps belong to, as the engine's scope names it: an inline workflow's is the one around it. */
+  workflow: string;
   requires: InEffect;
   budgeted: boolean;
   setup?: Setup;
@@ -193,6 +196,8 @@ export function describeWorkflow(input: {
       maxTurns: step.maxTurns, setup: hasContract ? scope.setup : undefined,
       tool: step.tool,
       unattended: step.permissions === 'unattended',
+      answer: step.answer !== undefined,
+      pinned: isPinnedToHost({ executor, answer: step.answer !== undefined, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, publishes: step.deliver === 'publish' }),
     }, can, allow, env);
 
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
@@ -286,6 +291,7 @@ export function describeWorkflow(input: {
         const placed = around.at(-1)?.step;
         own = visit(child.steps, {
           prefix: `${path}.`,
+          workflow: named?.name ?? scope.workflow,
           requires: mergeRequirements(scope.requires, step.requires, named?.defaults?.requires),
           budgeted: scope.budgeted || step.budget !== undefined || named?.budget !== undefined,
           setup,
@@ -321,7 +327,7 @@ export function describeWorkflow(input: {
   };
 
   const top: Scope = {
-    prefix: '', requires: mergeRequirements(definition.defaults?.requires), budgeted: definition.budget !== undefined,
+    prefix: '', workflow: definition.name, requires: mergeRequirements(definition.defaults?.requires), budgeted: definition.budget !== undefined,
     setup: definition.setup,
     defaultModel: definition.defaults?.model,
     around: runLevels(definition).map((step) => roleLevelOf(step, definition.defaults?.role)),

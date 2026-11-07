@@ -8,6 +8,11 @@ export const ACCESS_LEVELS = ['answer', 'read', 'full'] as const;
 
 export type ConfinedAccess = (typeof ACCESS_LEVELS)[number];
 
+/** The level a confined run reaches. `verified`: the tool's confined profile is known to keep it to its directory on this machine. */
+export const CONFINED_LEVELS = ['best-effort', 'verified'] as const;
+
+export type ConfinedLevel = (typeof CONFINED_LEVELS)[number];
+
 /** What a headless call printed: its answer, or the error the tool reported, when it reported one. */
 export type CallReading = { ok: true; text: string; tokens?: TokenUsage } | { ok: false; message?: string };
 

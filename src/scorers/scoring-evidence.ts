@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { sameHarness } from '../agent-observation.js';
 import { agreedRunMode } from '../launch-context.js';
-import { AgentSession } from '../session-flow/agent-session.js';
+import { AgentSession, type AgentSessionRef } from '../session-flow/agent-session.js';
 import { judgedTranscript } from '../session-flow/session-work.js';
 import { knownSecrets } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
@@ -18,6 +18,7 @@ import {
 } from './evidence.js';
 import type { RunSubject, ScoreLabel } from './label.js';
 import { firstSettled, isUnder, passRange, passesWithin, runPasses, type RunPass } from '../workflow/loop.js';
+import { attemptSessionStore } from '../workflow/runtimes/attempt.js';
 import { stepDefinitions } from '../workflow/scope.js';
 import { agentPassOf, type StepPass } from '../workflow/step-state.js';
 import type { RunState } from '../workflow/types.js';
@@ -116,7 +117,7 @@ export function judgedFacts(run: RunState, subject: RunSubject): JudgedFacts {
  * spans, or a session one of its passes recorded. Empty when everything is there, or when the step ran in a clone, whose
  * evidence was copied when it settled.
  */
-export async function missingEvidence(run: RunState, subject: RunSubject): Promise<string[]> {
+export async function missingEvidence(config: LocalConfig, run: RunState, subject: RunSubject): Promise<string[]> {
   if (cloneBranchOf(run, subject.step) !== undefined) return [];
   const plan = evidencePlan(run, subject);
   const ranges = plan.diff ? [plan.diff] : plan.ranges;
@@ -131,12 +132,19 @@ export async function missingEvidence(run: RunState, subject: RunSubject): Promi
     const platform = pass.tool && AgentSession.platformForTool(pass.tool);
 
     if (!pass.session || !platform) continue;
-    const found = await AgentSession.find({ platform, sessionId: pass.session, cwd: ranIn(run, pass) });
+    const found = await AgentSession.find(await passSession(config, run, pass, { platform, sessionId: pass.session, cwd: ranIn(run, pass) }));
 
     if (found.status !== 'done') missing.push(`${platform} session ${pass.session} of ${pass.step}#${pass.pass}`);
   }
 
   return missing;
+}
+
+/** `ref` to the session of `pass`, in the tool home of its attempt when the attempt ran on a step runtime. */
+async function passSession(config: LocalConfig, run: RunState, pass: RunPass, ref: AgentSessionRef): Promise<AgentSessionRef> {
+  const storeDir = await attemptSessionStore(config, run.id, pass.attempt);
+
+  return storeDir === undefined ? ref : { ...ref, storeDir };
 }
 
 /**
@@ -289,7 +297,7 @@ export async function collectEvidence(
 
       if (!pass.session || !platform) { gaps.add('transcript_not_found'); continue; }
 
-      const found = await AgentSession.find({ platform, sessionId: pass.session, cwd: source?.sessionCwd ?? ranIn(run, pass) }, { subagents: true });
+      const found = await AgentSession.find(await passSession(config, run, pass, { platform, sessionId: pass.session, cwd: source?.sessionCwd ?? ranIn(run, pass) }), { subagents: true });
 
       if (found.status !== 'done') { gaps.add('transcript_not_found'); continue; }
 

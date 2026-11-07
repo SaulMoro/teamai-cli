@@ -265,6 +265,24 @@ describe('local tool adapter', () => {
     expect(spawnTool).toHaveBeenCalledWith('claude', expect.arrayContaining(['-p', '--max-turns', '3']), expect.anything());
   });
 
+  // Claude's default mode asks before every write, so an attended step asked for this one and an unattended one failed.
+  it.each([['headless', false], ['interactive', true]] as const)('lets %s Claude write the result file, and only it, without asking', async (_, interactive) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-grant-${String(interactive)}-${Date.now()}.json`);
+    files.push(resultPath);
+    const spawnTool = vi.fn(() => child(interactive ? '' : claudeStream('claude-sonnet', { result: JSON.stringify({ ok: true }) }))) as unknown as ToolSpawn;
+    const adapter = createLocalToolAdapter(spawnTool, () => 'claude');
+    const input = { prompt: 'Plan.', cwd: os.tmpdir(), resultPath, secrets: {} };
+
+    await (interactive ? adapter.runInteractive('claude', input) : adapter.run('claude', input));
+
+    const args = vi.mocked(spawnTool).mock.calls[0]?.[1] ?? [];
+    // One argument: the flag is variadic, so a separate value would take the interactive prompt after it as a rule too.
+    expect(args).toContain(`--allowedTools=Edit(/${resultPath})`);
+    expect(interactive ? args.at(-1) : args[args.indexOf('-p') + 1]).toContain('Plan.');
+    expect(args).not.toContain('--permission-mode');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+  });
+
   it.each([
     ['stopped at its --max-turns cap', 'error_max_turns', 1, true],
     ['ran to the end', 'success', 0, undefined],
@@ -332,6 +350,21 @@ describe('local tool adapter', () => {
 
     expect(result).toMatchObject({ started: true, stoppedBy: 'timeout', model: 'claude-sonnet', session: 'session-1' });
     expect(result.started && result.tokens).toBeUndefined();
+  });
+
+  it('keeps the error a failed tool printed out of the result file it falls back to, since it may echo a credential', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-tool-error-${Date.now()}.json`);
+    files.push(resultPath);
+    const token = 'adapter-test-token-3c1d';
+    const refused = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: `Failed to authenticate. API Error: 401 Invalid bearer token ${token}`, session_id: 'session-1' });
+    const adapter = createLocalToolAdapter(() => child(`${refused}\n`, 1) as unknown as ReturnType<ToolSpawn>, () => 'claude');
+
+    const result = await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, env: { TOY_TEAM: token }, secrets: {} });
+
+    // The driver masks the reason it reports; the file the adapter wrote holds only the status.
+    expect(result).toMatchObject({ exitCode: 1, failure: { code: 'tool_failed', message: `claude exited with status 1: Failed to authenticate. API Error: 401 Invalid bearer token ${token}` } });
+    expect(await fs.readFile(resultPath, 'utf8')).not.toContain(token);
+    expect(JSON.parse(await fs.readFile(resultPath, 'utf8'))).toEqual({ failure: { code: 'tool_failed', message: 'claude exited with status 1' } });
   });
 
   it('fails a Claude that exits 0 after its init event with no final result, as one that wrote no result', async () => {

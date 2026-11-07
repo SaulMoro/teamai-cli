@@ -100,7 +100,7 @@ describe('benchmark run --fail-on-regression', () => {
     const waited = await fixture.teamai(['workflow', 'next', run, '--driver', 'skill', '--wait']);
     const resumed = await fixture.teamai(['workflow', 'resume', run, '--driver', 'local', '--sandbox']);
 
-    expect(envelope(waited).data?.turn).toMatchObject({ waiting: { held: [{ step: 'trials.baselines.fix', missing: ['workspace.clone'] }] } });
+    expect(envelope(waited).data?.turn).toMatchObject({ waiting: { held: [{ step: 'trials.baselines.fix', missing: ['workspace.clone', 'isolation', 'prepare', 'env'] }] } });
     expect(doneOf(resumed)).toMatchObject({ run, outcome: 'succeeded', finally: [{ id: 'regression', outcome: 'failed' }] });
     expect(gateOf(fixture, run)).toEqual({ regression: 'failed', report: 'dropped' });
   }, 240_000);

@@ -15,7 +15,7 @@ import { loadCachedWorkflow, loadWorkflowTree } from './cache.js';
 import { describeWorkflow, type WorkflowDescription } from './describe.js';
 import { ConfinedLeaseSchema, LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
 import { carriedRun, claimOffered, offerToPerson, reconcileTakenCopies, resumeRun, settledSteps } from './handoff.js';
-import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput } from './engine.js';
+import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput, type SoleDriver } from './engine.js';
 import {
   abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparedCopyTeam, preparePlace, refuseDirtyAdoptedCommand, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
   type PlacePrepared,
@@ -100,13 +100,14 @@ export interface WorkflowClient {
   /**
    * Starts `name` with `inputs`, from `checkout` when given: the run's workspaces start from its HEAD. A `caller`
    * inside a workflow attempt starts none, `nested_workflow`, and an agent one only a workflow whose `invoke` lets it:
-   * `invoke_denied` for `deny`, and `confirm_needed` for `ask` without `confirmed`. `alone`: what the local driver,
-   * the run's only driver, gives strict requirements; a step it could never take refuses the start, `requirement_unmet`.
-   * The run records an agent as its starter when `caller` has agent evidence, else `startedBy`: `cli` for one of the
-   * CLI's own automatic starts, `person` for a start a person asked for. `driver`: the driver the run is recorded for
-   * from its start. `awaits`: the driver `workflows.driver` names, which this machine does not run.
+   * `invoke_denied` for `deny`, and `confirm_needed` for `ask` without `confirmed`. `alone`: the local loop, the
+   * run's only driver, with what each of its runtimes gives strict requirements; a step none of them could ever take
+   * refuses the start, `requirement_unmet`. The run records an agent as its starter when `caller` has agent evidence,
+   * else `startedBy`: `cli` for one of the CLI's own automatic starts, `person` for a start a person asked for.
+   * `driver`: the driver the run is recorded for from its start. `awaits`: the driver `workflows.driver` names, which
+   * this machine does not run.
    */
-  start(name: string, options: { inputs?: unknown; checkout?: string; caller: InvokeCaller; timeout?: number; alone?: DriverCan; startedBy: 'person' | 'cli'; driver?: DriverIdentity; awaits?: RunState['awaits']; instead?: string }): Promise<WorkflowEnvelope>;
+  start(name: string, options: { inputs?: unknown; checkout?: string; caller: InvokeCaller; timeout?: number; alone?: SoleDriver; startedBy: 'person' | 'cli'; driver?: DriverIdentity; awaits?: RunState['awaits']; instead?: string }): Promise<WorkflowEnvelope>;
   /**
    * Asks the run what to do. With `prepare`, a lease comes with `cwd`, its place in the checkout the run started from,
    * made under the run's lock, and a prepare that fails settles the attempt `failed` with its own code.

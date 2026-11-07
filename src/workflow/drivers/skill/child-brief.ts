@@ -28,7 +28,7 @@ const ChildChangedSchema = z.array(z.string()).optional().transform((paths) => (
   return reported === undefined ? [] : [reported];
 }));
 
-/** `attempts/<a>/result.json`, as the child writes it: what the step produced, or why it could not, and the paths it changed. */
+/** `attempts/<a>/out/result.json`, as the child writes it: what the step produced, or why it could not, and the paths it changed. */
 const ChildResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('output'), output: z.unknown().optional(), changed: ChildChangedSchema }),
   z.object({ kind: z.literal('failure'), failure: z.object({ code: z.string().min(1), message: z.string() }), changed: ChildChangedSchema }),
@@ -116,6 +116,8 @@ export async function writeChildBrief(input: {
 
   const file = path.join(attemptDir(config, run, attempt), 'brief.md');
   await fs.mkdir(path.dirname(file), { recursive: true });
+  // The child writes its result there and may not create a directory first.
+  await fs.mkdir(path.dirname(attemptResultPath(config, run, attempt)), { recursive: true });
   await writeFileAtomic(file, redact(brief, { envSecrets: secrets, patterns: false }));
 
   return file;

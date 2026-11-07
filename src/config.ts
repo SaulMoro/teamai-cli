@@ -20,6 +20,8 @@ import {
   getDataHome,
   MemberSettingsSchema,
   MemberWorkflowSettingsSchema,
+  DriverTuningSchema,
+  type DriverTuning,
   WorkflowToolSchema,
   type MemberSettings,
   type MemberWorkflowSettings,
@@ -410,6 +412,23 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
     warnOnce(`Ignoring workflows.tools in ${configPath}: expected an object.`);
   }
 
+  const drivers = OptionalMappingSchema.parse(workflow.drivers);
+
+  if (drivers) {
+    const accepted: Record<string, DriverTuning> = {};
+
+    for (const [name, value] of Object.entries(drivers)) {
+      const parsed = DriverTuningSchema.safeParse(value);
+
+      if (parsed.success) accepted[name] = parsed.data;
+      else warnOnce(`Ignoring workflows.drivers.${name} in ${configPath}: ${describeConfigError(parsed.error)}.`);
+    }
+
+    if (Object.keys(accepted).length > 0) settings.drivers = accepted;
+  } else if (Object.prototype.hasOwnProperty.call(workflow, 'drivers')) {
+    warnOnce(`Ignoring workflows.drivers in ${configPath}: expected an object.`);
+  }
+
   const allow = OptionalMappingSchema.parse(workflow.allow);
 
   if (allow) {
@@ -431,6 +450,26 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
   }
 
   return Object.keys(settings).length > 0 ? MemberWorkflowSettingsSchema.parse(settings) : undefined;
+}
+
+/**
+ * `workflows.drivers` of the machine file under the workspace's, merged by driver, then by runtime, then by option key,
+ * so a member who tunes one option of one runtime keeps every other option the machine file sets.
+ */
+function mergeDriverTuning(machine: Record<string, DriverTuning> | undefined, local: Record<string, DriverTuning> | undefined): Record<string, DriverTuning> | undefined {
+  if (!machine && !local) return undefined;
+  const merged: Record<string, DriverTuning> = {};
+
+  for (const name of new Set([...Object.keys(machine ?? {}), ...Object.keys(local ?? {})])) {
+    const below = machine?.[name]?.runtimes ?? {};
+    const above = local?.[name]?.runtimes ?? {};
+    const runtimes: DriverTuning['runtimes'] = {};
+
+    for (const use of new Set([...Object.keys(below), ...Object.keys(above)])) runtimes[use] = { ...below[use], ...above[use] };
+    merged[name] = { runtimes };
+  }
+
+  return merged;
 }
 
 /** Read valid member settings from a machine file, whether or not it is a user-scope install. */
@@ -518,6 +557,7 @@ function applyMachineSettings(config: LocalConfig, machine: MemberSettings): Loc
         ...local.workflows,
         tools: { ...machine.workflows?.tools, ...local.workflows?.tools },
         allow: { ...machine.workflows?.allow, ...local.workflows?.allow },
+        drivers: mergeDriverTuning(machine.workflows?.drivers, local.workflows?.drivers),
       }
     : undefined;
 
@@ -739,6 +779,11 @@ export class NotInitializedError extends Error {
   readonly name = 'NotInitializedError';
 }
 
+/** The local config names a team repo that has no teamai.yaml: the config loads, its team does not. */
+export class TeamConfigNotFoundError extends Error {
+  readonly name = 'TeamConfigNotFoundError';
+}
+
 /** The local config and the team config it points at, as the init checks return them. */
 export type TeamaiInit = { localConfig: LocalConfig; teamConfig: TeamaiConfig };
 
@@ -820,7 +865,7 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
   const teamConfigPath = path.join(repoPath, 'teamai.yaml');
 
   if (!(await pathExists(teamConfigPath))) {
-    throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
+    throw new TeamConfigNotFoundError('Team config (teamai.yaml) not found. Check your repo path.');
   }
 
   const content = await readFileSafe(teamConfigPath);
@@ -830,6 +875,15 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
     : 'it is not a valid team config (the error is printed above)';
 
   throw new Error(`The team config at ${teamConfigPath} could not be read: ${why}. Fix it in the team repo, or ask a team admin to.`);
+}
+
+/** The team config (teamai.yaml) in `repoPath`, or null when the team has none; one that cannot be used throws, naming it. */
+export async function loadTeamConfigIfPresent(repoPath: string): Promise<TeamaiConfig | null> {
+  const teamConfig = await loadTeamConfig(repoPath);
+
+  if (teamConfig || !(await pathExists(path.join(repoPath, 'teamai.yaml')))) return teamConfig;
+
+  return throwTeamConfigMissingOrInvalid(repoPath);
 }
 
 // ─── Scope-aware config loading ─────────────────────────

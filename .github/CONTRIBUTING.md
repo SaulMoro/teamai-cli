@@ -83,7 +83,7 @@ packages/            # private npm workspace packages, bundled into teamai-cli b
     src/             # source, with each test beside its file (index.ts, index.test.ts)
 ```
 
-`src/` imports a package by its name (`import { ... } from '@teamai/<name>'`), never by a relative path, and never imports a `runtime-*` package; a package never imports `src/`. `teamai/package-boundaries` checks this. A package is not listed in the root `dependencies`: npm links it through `workspaces`, and tsup bundles it.
+`src/` imports a package by its name (`import { ... } from '@teamai/<name>'`), never by a relative path, and never imports a `runtime-*` package except `@teamai/runtime-protocol`, which holds the protocol both sides speak; a package never imports `src/`. `teamai/package-boundaries` checks this. A package is not listed in the root `dependencies`: npm links it through `workspaces`, and tsup bundles it.
 
 See [docs/dev/adding-a-provider.md](../docs/dev/adding-a-provider.md) for how to add a new git provider.
 

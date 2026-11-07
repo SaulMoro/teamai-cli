@@ -4,6 +4,10 @@
 
 工作流是团队仓库里的 `workflows/<name>.yaml`。它运行命令步骤和提示词步骤，每个步骤在它依赖的步骤之后运行。没有 workspace 的命令是只读的；[工作区](#工作区)说明步骤如何在自己的分支上改代码。[高级工作流](workflow-advanced.md) 介绍并行步骤、循环、`for_each`、到达结局时仍在运行的步骤会怎样，以及完整的表达式语言。
 
+要让每个步骤在团队镜像的容器里运行，见 [Sandbox 运行时](runtime-sandbox.md)。
+想让每个提示词步骤作为一个可以旁观的 T3 Code 线程运行，见 [T3 运行时](runtime-t3.md)。
+要把提示词步骤作为 Paseo 守护进程的智能体运行，见 [Paseo 运行时](runtime-paseo.md)。
+
 ```yaml
 schemaVersion: v1alpha1
 name: build
@@ -258,6 +262,30 @@ $ teamai workflow start nightly-small --driver local --tools default=claude
 
 步骤看到的是运行开始时那个提交上的 agent 文件：`AGENTS.md`、`CLAUDE.md`、`.agents`、`.githooks`，每个工具的项目目录（如 `.claude` 或 `.tclaude`），项目级 MCP 文件 `.mcp.json` 和 `opencode.json`，以及 Copilot 在 `.github` 下的 agent 路径。前一个步骤提交的 hook 不会在后面的步骤里运行。团队的 skills、rules、agents 和 MCP 随后会交付到这个 worktree，和这个检出目录的其他新 worktree 一样。这些交付的文件不属于该步骤的提交。步骤自己改过的文件会被提交。
 
+teamai 自己提交并推送每个步骤的改动，并关闭 git hook。所有驱动都是如此，包括 `--driver local`。步骤无法埋下一个之后在你机器上运行的 hook，你自己的 `pre-commit` 和 `pre-push` hook 也不会在这些提交上运行。原本放在 hook 里的检查会被跳过：
+
+```text
+$ teamai workflow start fix-date --driver local
+ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it with: teamai workflow resume r7c1d2e3f4a5b6c7d --driver local
+{"data":{"done":{"run":"r7c1d2e3f4a5b6c7d","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+输出里没有 `husky - pre-commit` 这一行；即使 `npm run lint` 会失败，分支也照样推送。把检查写成一个步骤，让运行在 hook 本该拦下提交的地方失败，或者把它留在 CI 里：
+
+```yaml
+schemaVersion: v1alpha1
+name: fix-date
+description: Fix the date parser, then lint the fix.
+steps:
+  - id: fix
+    workspace: new
+    prompt: Fix the date parser.
+  - id: lint
+    needs: [fix]
+    workspace: new        # 从 fix 的分支开始
+    command: npm ci && npm run lint
+```
+
 检出目录有 `origin`，并且这一步产生了提交时，驱动会推送该分支，步骤失败时也一样。后一次尝试即使没有新提交，只要这个分支上有 `origin` 还没有的提交，仍会再推一次。这包括第一次推送根本没成功，以及 `origin` 上还没有任何分支。推送失败时，成功的步骤以 `push_failed` 失败，并保留 worktree。本身已失败的步骤保留自己的失败，消息里再补充推送失败。没有 `origin`，或 `origin` 已经有这个提交时，运行仍然成功，并报告该分支。
 
 `session: continue` 用同一个工具恢复这一步上一 pass 的会话。`session: { from: <步骤> }` 恢复这一步所依赖的步骤。换成别的工具时，会把会话复制到该工具里，再恢复这份副本。OpenCode 也会拿到副本，但总是新开会话，因为它没有恢复会话的参数。步骤恢复的会话，是最后一个继续它的步骤留下的样子，不管那个步骤在哪个工具或哪台机器上运行。新开会话的步骤（例如 OpenCode 步骤）不会改变后续步骤恢复什么。
@@ -509,7 +537,7 @@ teamai workflow start judge-change --driver local
 - `<dir>` 可以是模板，读取输入、`item` 和该步骤所需步骤的输出。它在步骤被租用时渲染，相对路径位于 `$TEAMAI_RUN_DIR` 下。目录在它之外、是符号链接，或没有可读的 `confined.json` 时，步骤以 `confined_invalid` 失败，并说明怎么修。
 - `confined.json` 是 `{ "level": "verified" | "best-effort", "prefer": "<tool>" | ["<tool>", …], "schema": "<file>" }`。`verified` 只在 TeamAI 检查过其受限启动的工具版本上运行，例如 Claude Code 2.1.308、Codex 0.163.0 或 OpenCode 2.1.2；`best-effort` 可在 TeamAI 能受限启动的任何工具上运行，例如 Cursor。`prefer` 最先尝试；列表按其顺序尝试。`schema` 是该目录里的一个 JSON Schema 文件，回答要符合它。级别由写证据的步骤决定：工作流文件不能设置或降低它。
 - 该步骤只运行一个提示，一次。pull 拒绝把 `workspace: { confined }` 用在命令步骤或 `workflow` 步骤上，也拒绝它与 `for_each`、`scorers`、`requires.env`、`agent`、`tool`、`session`、`role`、`interactive` 或 `deliver` 同时出现。它可以设置 `model`：本机没有一个达到其级别的工具能解析该模型时，步骤保持待处理。
-- 本地 driver 运行它。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。宿主不能启动子 agent 时，若会话所用工具在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的宿主上而该工具不在 PATH 上时，该步骤等待其他 driver。
+- 本地 driver 运行它；[driver 定义](workflow-advanced.md#回答限定提示的运行时)在回答限定提示的运行时上运行它；没有这种运行时而定义列出了 `local` 时，用本机的工具。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。宿主不能启动子 agent 时，若会话所用工具在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的宿主上而该工具不在 PATH 上时，该步骤等待其他 driver。
 - 该步骤记录 `confined`：工具、工具报告的模型和 effort、TeamAI 测得的隔离级别、工具拥有的访问权限，以及用量。成功的报告没有记录，或记录中的工具不在租约提供的工具里，或隔离级别低于该步骤的级别时，步骤以 `confined_report_mismatch` 失败。
 
 ## 交付 PR

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { DriverSchema } from '../driver-identity.js';
 import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { resolveReal } from '../utils/path-safety.js';
 import { redactJson } from '@teamai/shared/redact';
 import { getDataHome, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
@@ -38,9 +39,12 @@ export function generateRunId(): string {
   return `r${randomBytes(8).toString('hex')}`;
 }
 
-/** The directory that holds this scope's run files, `<run id>.json` each. */
+/**
+ * The directory that holds this scope's run files, `<run id>.json` each. It is spelled by its real path, so every
+ * process of a run names the run's files alike, whatever spelling of HOME each one was given.
+ */
 export function runsDir(config: LocalConfig): string {
-  return path.join(getDataHome(config), 'workflows', 'runs');
+  return path.join(resolveReal(getDataHome(config)), 'workflows', 'runs');
 }
 
 export function runFilePath(config: LocalConfig, runId: string): string {
@@ -105,9 +109,13 @@ export function placeRecordPath(config: LocalConfig, run: RunId, attempt: Attemp
   return path.join(attemptDir(config, run, attempt), 'place.json');
 }
 
-/** `attempts/<a>/result.json`: what a prompt step's tool or child agent, or a command step's driver, wrote the step produced. */
+/**
+ * `attempts/<a>/out/result.json`: what a prompt step's tool or child agent, or a command step's driver, wrote the step
+ * produced. It has a directory of its own, which a step runtime gets read-write, because the attempt directory beside
+ * it holds the place record and the saved overlay.
+ */
 export function attemptResultPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
-  return path.join(attemptDir(config, run, attempt), 'result.json');
+  return path.join(attemptDir(config, run, attempt), 'out', 'result.json');
 }
 
 /**
@@ -279,7 +287,7 @@ const RunProgressSchema = z.object({
   }).optional(),
   timeout: z.number().int().positive().optional(),
   driveOptions: (z.object({
-    tools: z.record(z.string(), z.string()).optional(), autoApprove: z.boolean().optional(), sandbox: z.literal(true).optional(),
+    tools: z.record(z.string(), z.string()).optional(), autoApprove: z.boolean().optional(), sandbox: z.literal(true).optional(), driver: z.string().min(1).optional(),
   }) satisfies z.ZodType<DriveOptions>).optional(),
 });
 

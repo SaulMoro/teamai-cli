@@ -7,6 +7,7 @@ import { type HomeMove } from '@teamai/tool-core/definition';
 import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
 import { getUserHome, normalizeHomePath, usesInstallHome } from './utils/home.js';
+import { RELOCATABLE_TOOLS } from './types.js';
 
 export type Host = {
   readonly platform: NodeJS.Platform;
@@ -66,6 +67,20 @@ export function realHost(overrides: Partial<Pick<Host, 'env' | 'home'>> = {}): H
     },
     userToolRoots: async () => (await (await import('./config.js')).loadLocalConfig())?.toolRoots,
   };
+}
+
+/**
+ * The one variable that moves `tool`'s whole home, its session store included: the variable `teamai init` records a
+ * relocated root under (Claude Code's `CLAUDE_CONFIG_DIR`, Codex's `CODEX_HOME`), else the tool's own `env` move.
+ * Undefined when no single variable does. A step runtime sets it to the attempt's tool home.
+ */
+export function homeEnvOf(tool: ToolId): string | undefined {
+  const recorded = Object.hasOwn(RELOCATABLE_TOOLS, tool) ? RELOCATABLE_TOOLS[tool]?.envVar : undefined;
+
+  if (recorded) return recorded;
+  const { home }: ShippedDescriptor = descriptorOf(tool);
+
+  return home.moves?.by.find((move) => move.kind === 'env')?.name;
 }
 
 /**

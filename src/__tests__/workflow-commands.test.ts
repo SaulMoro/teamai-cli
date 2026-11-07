@@ -252,7 +252,16 @@ describe('workflow next, report, start and resume without --driver skill', () =>
 });
 
 describe('workflow start and resume --driver', () => {
-  it.each(['acme-sandbox', 'fleet', 'none', 'acme sandbox'])('refuses --driver %s, which no driver of this machine is', async (named) => {
+  it('refuses --driver acme-sandbox, a driver definition name no team or member defines', async () => {
+    state.config = testConfig();
+    const refused = { error: { code: 'driver_not_found', message: expect.stringContaining('No driver definition is named "acme-sandbox".') } };
+
+    expect(await capture(() => workflowStart('mark', { driver: 'acme-sandbox' }))).toEqual(refused);
+    expect(await capture(() => workflowResume('r00000000', { driver: 'acme-sandbox' }))).toEqual(refused);
+    expect(await capture(() => workflowResume(undefined, { driver: 'acme-sandbox', next: true }))).toEqual(refused);
+  });
+
+  it.each(['fleet', 'none', 'acme sandbox'])('refuses --driver %s, which no driver of this machine is', async (named) => {
     state.config = testConfig();
     const refused = { error: { code: 'unsupported_driver', message: `Driver "${named}" is not available. Use --driver local or --driver skill.` } };
 

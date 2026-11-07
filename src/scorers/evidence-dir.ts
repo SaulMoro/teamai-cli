@@ -146,7 +146,7 @@ async function writeRecords(dir: string, group: GroupRecord, judge?: { confined:
 
 /** Writes the run's evidence of a pass, which main's evidence holds; a commit or session it recorded that is gone refuses. */
 async function passEvidence(attempt: ScoreAttempt, run: RunState, subject: RunSubject, rubrics: Rubrics): Promise<{ ok: true } | Refusal> {
-  const missing = await missingEvidence(run, subject);
+  const missing = await missingEvidence(attempt.config, run, subject);
 
   if (missing.length > 0) {
     return refused('evidence_missing', `Pass ${subject.pass} of step ${subject.step} in run ${run.id} cannot be scored: no longer on this machine: ${missing.join('; ')}. Restore what is missing, or score another pass.`);

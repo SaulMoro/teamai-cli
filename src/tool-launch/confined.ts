@@ -18,8 +18,8 @@ import { resolveCliPath } from '../utils/cli-path.js';
 import { execCommand, probeBinary } from '../utils/exec.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { JsonValueSchema, type JsonValue } from '../types.js';
-import type { ConfinedLevel, ConfinedUsage } from './confined-level.js';
-import type { CallLaunch, ConfinedAccess, ConfinedLaunch } from '@teamai/tool-core/launch';
+import type { ConfinedUsage } from './confined-level.js';
+import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { runTool, type ToolRun } from './run.js';
 import { toolStdout, type TokenUsage } from './stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
@@ -53,6 +53,15 @@ export function installedConfinedTools(preferred: readonly string[], { resolveTo
 
 function profileOf(tool: ConfinedTool): ConfinedLaunch {
   return launchAdapterOf(tool).confined;
+}
+
+/**
+ * The variables a confined run of `tool` gets: the common ones, proxies included, and those its profile reads, such as
+ * its API key and gateway. Of a runtime's credentials, a confined prompt on it gets these. None for a tool with no
+ * confined profile.
+ */
+export function confinedEnvNames(tool: string): readonly string[] {
+  return isConfinedTool(tool) ? [...COMMON_ENV, ...profileOf(tool).env] : [];
 }
 
 /** What `tool`, run confined, can do beyond answering, by its adapter's profile. */
@@ -162,10 +171,10 @@ function memberEnv(): NodeJS.ProcessEnv {
 
 function confinedEnv(tool: ConfinedTool): NodeJS.ProcessEnv {
   const restored = memberEnv();
-  const { env: toolEnv, homeEnv: variable } = profileOf(tool);
+  const { homeEnv: variable } = profileOf(tool);
   const moved = variable !== undefined && restored[variable] === undefined && isToolId(tool) ? movedToolHome(tool, realHost({ env: restored })) : null;
 
-  const env: NodeJS.ProcessEnv = Object.fromEntries([...COMMON_ENV, ...toolEnv].flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]]));
+  const env: NodeJS.ProcessEnv = Object.fromEntries(confinedEnvNames(tool).flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]]));
 
   if (variable !== undefined && moved !== null) env[variable] = moved;
 

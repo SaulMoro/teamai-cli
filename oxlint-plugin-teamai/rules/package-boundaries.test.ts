@@ -5,10 +5,11 @@ import { ruleHarness } from '../test/harness.ts';
 const rule = ruleHarness('teamai/package-boundaries', { filename: 'packages/tool-core/src/sessions.ts' });
 
 const workspace = {
-  'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'] }),
+  'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'], dependencies: { zod: '^4.0.0' } }),
   'packages/tool-core/package.json': JSON.stringify({ name: '@teamai/tool-core', private: true }),
   'packages/tool-core/src/definition.ts': 'export const definition = 1;',
   'packages/runtime-sandbox/package.json': JSON.stringify({ name: '@teamai/runtime-sandbox', private: true }),
+  'packages/runtime-protocol/package.json': JSON.stringify({ name: '@teamai/runtime-protocol', private: true }),
   'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }),
   'packages/tool-codex/package.json': JSON.stringify({ name: '@teamai/tool-codex', private: true }),
   'packages/tool-definitions/package.json': JSON.stringify({ name: '@teamai/tool-definitions', private: true }),
@@ -84,8 +85,41 @@ rule.valid('allows a package importing its own files', `import { definition } fr
 
 rule.valid('allows a package importing another package by name', `import { definition } from '@teamai/tool-core/definition';`, inWorkspace('packages/runtime-sandbox/src/index.ts'));
 
+rule.valid('allows src/ importing the runtime protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';`, inWorkspace('src/workflow/runtimes/stdio.ts'));
+
+rule.valid('allows a runtime package importing the runtime protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';`, inWorkspace('packages/runtime-sandbox/src/main.ts'));
+
+rule.invalid('still rejects src/ importing a runtime package beside the protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
+import { runtime } from '@teamai/runtime-sandbox';`, (output) => {
+  expect(output).toContain('src/workflow/runtimes/stdio.ts -> @teamai/runtime-sandbox');
+  expect(output).not.toContain('-> @teamai/runtime-protocol');
+}, inWorkspace('src/workflow/runtimes/stdio.ts'));
+
+rule.invalid('rejects src/ importing a runtime package whose name only starts like the protocol', `import { runtime } from '@teamai/runtime-protocol-next';`, undefined, inWorkspace('src/workflow/engine.ts', {
+  'packages/runtime-protocol-next/package.json': JSON.stringify({ name: '@teamai/runtime-protocol-next', private: true }),
+}));
+
 rule.valid('allows src/ importing a package that is not a runtime', `import { definition } from '@teamai/tool-core/definition';`, inWorkspace('src/tools.ts'));
 
 rule.valid('allows src/ importing src/', `import { locate } from './locate.js';`, inWorkspace('src/tools.ts'));
 
 rule.valid('leaves a checkout without workspaces alone', `import { locate } from '../../../src/locate.js';`, { filename: 'packages/tool-core/src/sessions.ts' });
+
+rule.invalid('rejects src/ importing a value from a package teamai-cli does not depend on, which the bundle would carry', `import { DaemonClient } from '@getpaseo/server';`, (output) => {
+  expect(output).toContain('src/ imports values only from Node, the workspace packages and the dependencies in package.json');
+  expect(output).toContain('@getpaseo/server');
+}, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ loading a package teamai-cli does not depend on at run time', `const ws = await import('ws');`, undefined, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ importing a file of an npm package whose name is also a Node module', `import { StringDecoder } from 'string_decoder/lib/string_decoder.js';`, undefined, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ re-exporting a value of a package teamai-cli does not depend on', `export { WebSocket } from 'ws';`, undefined, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.valid('allows src/ to import only the types of a package teamai-cli does not depend on', `import type { DaemonClient } from '@getpaseo/server';`, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.valid('allows src/ a dependency, a subpath of one, Node and a workspace package', [
+  `import { z } from 'zod';`, `import { toJSONSchema } from 'zod/v4';`, `import fs from 'node:fs';`, `import path from 'path';`, `import { readFile } from 'fs/promises';`, `import { definition } from '@teamai/tool-core';`,
+].join('\n'), inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.valid('allows a src/ test a package teamai-cli does not ship', `import { WebSocket } from 'ws';`, inWorkspace('src/__tests__/paseo.test.ts'));

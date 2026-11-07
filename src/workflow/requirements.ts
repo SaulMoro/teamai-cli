@@ -1,12 +1,9 @@
 import { z } from 'zod';
 import { ENV_KEY_RE, sameEnvName } from '../resources/env-key.js';
-import { ACCESS_LEVELS } from '@teamai/tool-core/launch';
-import { CONFINED_LEVELS } from '../tool-launch/confined-level.js';
-import { stepWorkflow, WORKSPACE_MODES, type WorkflowDefaults, type WorkflowFailure, type WorkflowStep } from './types.js';
+import { CanSchema, ISOLATION_LEVELS, type Can } from '@teamai/runtime-protocol';
+import { stepWorkflow, type WorkflowDefaults, type WorkflowFailure, type WorkflowStep } from './types.js';
 import type { WorkspaceMode } from './workspace.js';
 
-/** How far a driver keeps a step from the member's machine, weakest first. A workspace contract is at least `worktree`. */
-export const ISOLATION_LEVELS = ['none', 'worktree', 'sandbox'] as const;
 const IsolationSchema = z.enum(ISOLATION_LEVELS);
 
 export type Isolation = z.infer<typeof IsolationSchema>;
@@ -120,9 +117,11 @@ const ENFORCEMENT = {
   max_turns: 'bestEffort',
   /** Ending a prompt's turn at its limits under `on_limit: end_turn`, which only a driver with `can.end_turn` does. */
   on_limit: 'bestEffort',
+  /** A command step: the driver runs commands (`can.exec` is not false). Setup is a command too. */
+  exec: 'strict',
   /** Running the workflow's `setup` in each workspace the driver creates, before the step. */
   setup: 'strict',
-  /** A prompt step that names its `tool`: `can.tools` lists it. */
+  /** A prompt step: `can.tools` lists the tool it names, or the one the driver picks for it. */
   tools: 'strict',
   /** A prompt step with `permissions: unattended`: the driver launches its tool in that tool's unattended mode. */
   unattended: 'strict',
@@ -134,6 +133,12 @@ const ENFORCEMENT = {
   confined: 'strict',
   /** A confined step whose model a tool of those offers resolves. */
   model: 'strict',
+  /** A step pinned to this host (`Offer.pinned`): a driver here (`can.remote` is not set). */
+  host: 'strict',
+  /** A prompt step: the driver takes prompts (`can.prompt` is not false). */
+  prompt: 'strict',
+  /** A command step that is not pinned to the host: the driver takes it (`can.commands` is not `pinned`). */
+  commands: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 
 type Enforcement = typeof ENFORCEMENT;
@@ -144,57 +149,23 @@ export type StrictKey = KeysOf<'strict'>;
 
 type BestEffortKey = KeysOf<'bestEffort'>;
 
-/** The level a confined step runs at, which its `confined.json` sets: `verified` or `best-effort`. */
-export const ConfinedLevelSchema = z.enum(CONFINED_LEVELS);
-
-/** One offer of `can.confined`: tools a driver runs confined at `level`, which can do `access` there. */
-export const ConfinedOfferSchema = z.object({
-  level: ConfinedLevelSchema,
-  access: z.enum(ACCESS_LEVELS).optional(),
-  tools: z.array(z.string().min(1)).min(1),
-});
+/**
+ * A driver's `can` as the engine reads it: the protocol's keys, and those the local loop sets on the runtimes of a
+ * driver definition, which no driver or runtime declares in `can`.
+ * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
+ * - `prompt: false`: it takes no prompt step, only answer steps, as the host command slot of a definition with no `local`.
+ * - `commands: 'pinned'`: of command steps, it takes only those pinned to the host, since another runtime of the
+ *   definition runs commands. A prompt it takes still brings its setup, which runs where the prompt runs.
+ * - `fullAccess`: the tools its init reports in `permissions` as running without permission prompts. Of a runtime
+ *   that reports it, `unattended` holds only for those tools.
+ */
+export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[] };
 
 /**
- * `driver.can`: what the driver declares it can do on this request. An omitted key means "not offered". The engine
- * never stores it. Parsed by `parseNextPayload`; the local driver builds every key.
- * - `network`: the driver can deny a step the network.
- * - `isolation`: the level the driver keeps every step it runs at.
- * - `env`: the driver resolves `envScope.provide` itself, removes `envScope.withhold`, and keeps the values from
- *   whatever runs the step. `true` covers every step; `'commands'` only command steps and setup, which run in the
- *   driver's own processes, so a prompt step that requires env is held. A driver whose executor is the agent leaves it out.
- * - `tokens`: every success report of a headless prompt step carries the tokens it spent.
- * - `max_turns`: the driver passes `maxTurns` to the tools it can cap, and reports `unenforced: ['max_turns']` for the others.
- * - `setup`: in each workspace it creates, the driver runs `lease.setup` before the step with only setup's keys, and
- *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
- *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
- * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
- * - `end_turn`: the driver holds a prompt leased with `limits` to them from its tool's launch, stops the tool at the
- *   first it reaches and reports it as `limit`, with `durationMs`. Without it, such a prompt gets the `on_limit: fail`
- *   lease, and its pass records `on_limit` as not enforced.
- * - `unattended`: the driver launches a prompt leased with `permissions: 'unattended'` in its tool's own mode for
- *   editing and running commands without asking, and fails the step rather than launch a tool that has none.
- * - `role`: the driver runs a step leased with `role` with what teamai delivered into its prepared copy for that role,
- *   and starts nothing that delivers the member's own assets there instead.
- * - `confined`: the tools the driver runs a prompt on with one directory as its only readable root, each offer at the
- *   level it reaches, with what those tools can do there. An offer without `access` counts as `full`.
+ * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
+ * `default_tool` is no capability but the app's own default, which a driver that drives no app leaves out.
  */
-export const CanSchema = z.object({
-  hitl: z.boolean().optional(),
-  workspace: z.array(z.enum(WORKSPACE_MODES)).optional(),
-  network: z.boolean().optional(),
-  isolation: IsolationSchema.optional(),
-  env: z.union([z.boolean(), z.literal('commands')], { error: "Expected true, false or 'commands'" }).optional(),
-  tokens: z.boolean().optional(),
-  max_turns: z.boolean().optional(),
-  setup: z.boolean().optional(),
-  tools: z.array(z.string().min(1)).optional(),
-  end_turn: z.boolean().optional(),
-  unattended: z.boolean().optional(),
-  role: z.boolean().optional(),
-  confined: z.array(z.lazy(() => ConfinedOfferSchema)).optional(),
-});
-
-export type DriverCan = z.infer<typeof CanSchema>;
+export type DecidedCan = Required<Omit<Can, 'default_tool'>> & Pick<Can, 'default_tool'>;
 
 /** The `can` keys this CLI reads; any other key is echoed in `ignored`. */
 export const CAN_KEYS: ReadonlySet<string> = new Set(Object.keys(CanSchema.shape));
@@ -392,7 +363,7 @@ export interface Offer {
   endTurn?: TurnLimits;
   /** The workflow's setup, when the lease names a workspace the driver may create. */
   setup?: Setup;
-  /** The tool a prompt step names. */
+  /** The tool a prompt step runs on: the one it names, or the one the driver picks for it. */
   tool?: string;
   /** A prompt step with `permissions: unattended`. */
   unattended: boolean;
@@ -400,8 +371,23 @@ export interface Offer {
   clone: boolean;
   /** The caller asked `next --prepare`. */
   prepare: boolean;
+  /** The step runs only on this host (`isPinnedToHost`). Absent: not pinned. */
+  pinned?: boolean;
+  /** An answer step, which a slot that runs no prompt step takes. Absent: not one. */
+  answer?: boolean;
   /** The team role the step's copy runs with: its clone's, or the step's own in a worktree copy. */
   role?: string;
+}
+
+/**
+ * Whether a step runs only on this host, so no runtime that runs steps away from it (`can.remote`) takes it:
+ * - an answer step, which the local loop answers with the member's tool here, whatever runtime takes its lease;
+ * - a command step of a workflow teamai ships, which does its bookkeeping against the run's files, this machine's
+ *   sessions and the team repo;
+ * - a step that publishes to a teamai data branch.
+ */
+export function isPinnedToHost(step: { executor: Executor; answer: boolean; inShippedWorkflow: boolean; publishes: boolean }): boolean {
+  return step.answer || (step.executor === 'command' && step.inShippedWorkflow) || step.publishes;
 }
 
 /** What a granted lease carries besides the step itself. */
@@ -423,6 +409,16 @@ export type Negotiation =
   | { kind: 'hold'; missing: [Missing, ...Missing[]] }
   /** No driver can run the step on this machine as it is written or as its env stands. */
   | { kind: 'fail'; failure: WorkflowFailure };
+
+/** What an interactive step lacks on a driver that cannot ask a person. */
+function personGap(interactive: boolean, can: Pick<DriverCan, 'hitl'>): Missing[] {
+  return interactive && !can.hitl ? ['hitl'] : [];
+}
+
+/** What a step that runs on `tool` lacks on a driver that cannot launch it. */
+function toolGap(tool: string | undefined, can: Pick<DriverCan, 'tools'>): Missing[] {
+  return tool !== undefined && lacksTool(tool, can) ? ['tools'] : [];
+}
 
 /**
  * Decides whether this driver may take the step, and on what terms. Pure: the engine calls it at both places it hands
@@ -454,15 +450,20 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const provided = providedIsolation(can, offer.hasContract);
 
   const gaps: Missing[] = policy.length > 0 ? policy : [
-    ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
-    ...(offer.unattended && !can.unattended ? ['unattended' as const] : []),
+    ...toolGap(offer.tool, can),
+    ...(offer.unattended && !runsUnattended(offer.tool, can) ? ['unattended' as const] : []),
     ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
     ...(floor.network === false && !can.network ? ['network' as const] : []),
     // Only teamai delivers a role into a copy: one a driver makes itself gets the member's assets.
     ...((offer.clone || offer.role !== undefined) && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
-    ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
-    ...(offer.setup && !can.setup ? ['setup' as const] : []),
+    ...personGap(offer.interactive, can),
+    ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
+    ...(offer.pinned && can.remote ? ['host' as const] : []),
+    ...(offer.executor === 'prompt' && !offer.answer && can.prompt === false ? ['prompt' as const] : []),
+    ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),
+    // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
+    ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true) ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
@@ -532,7 +533,12 @@ export function envAdvice(keys: readonly string[], declared: ReadonlySet<string>
   return advice.join('; ');
 }
 
-/** Whether a driver that declares `can` is held from a step that names `tool`. */
+/** Whether a driver that declares `can` is held from a step that runs on `tool`. */
+/** Whether a driver runs a prompt on `tool` unattended: it offers it, and on a runtime that reports full access, for that tool. */
+function runsUnattended(tool: string | undefined, can: Pick<DriverCan, 'unattended' | 'fullAccess'>): boolean {
+  return can.unattended === true && (can.fullAccess === undefined || (tool !== undefined && can.fullAccess.includes(tool)));
+}
+
 export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean {
   return !(can.tools ?? []).includes(tool);
 }

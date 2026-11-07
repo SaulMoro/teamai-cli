@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 // oxlint-disable-next-line teamai/workflow-boundaries -- tests the merge snapshot place records before finish
 import { recordMergePreparation } from '../workflow/place/writer.js';
-import { commitWork, worktreeContentKey } from '../workflow/worktree.js';
+import { commitWork, git as runGit, worktreeContentKey } from '../workflow/worktree.js';
 
 const dirs: string[] = [];
 
@@ -76,7 +76,7 @@ describe('commitWork', () => {
     expect(() => git(dir, 'merge', 'other')).toThrow();
     fs.appendFileSync(path.join(dir, 'tracked.txt'), 'host\n');
 
-    expect(await recordMergePreparation(dir)).toBeUndefined();
+    expect(await recordMergePreparation(dir, runGit)).toBeUndefined();
     const recorded = path.resolve(dir, git(dir, 'rev-parse', '--git-path', 'teamai-merge.json').trim());
     const merge = JSON.parse(fs.readFileSync(recorded, 'utf8'));
     expect(merge).toHaveProperty('b.ts');
@@ -89,7 +89,7 @@ describe('commitWork', () => {
     git(dir, 'rm', '-q', 'tracked.txt');
     fs.writeFileSync(path.join(dir, 'tracked.txt'), 'host\n');
 
-    expect(await recordMergePreparation(dir)).toBeUndefined();
+    expect(await recordMergePreparation(dir, runGit)).toBeUndefined();
     const recorded = path.resolve(dir, git(dir, 'rev-parse', '--git-path', 'teamai-merge.json').trim());
     const merge = JSON.parse(fs.readFileSync(recorded, 'utf8'));
     expect(merge).not.toHaveProperty('tracked.txt');
@@ -129,8 +129,8 @@ describe('commitWork', () => {
     git(path.join(dir, 'vendor'), 'checkout', '-q', first);
     git(dir, 'update-index', '--add', '--cacheinfo', `160000,${first},vendor`);
 
-    expect(await worktreeContentKey(dir, 'vendor')).toBe(`gitlink:${first}`);
+    expect(await worktreeContentKey(dir, 'vendor', runGit)).toBe(`gitlink:${first}`);
     git(path.join(dir, 'vendor'), 'checkout', '-q', second);
-    expect(await worktreeContentKey(dir, 'vendor')).toBe(`gitlink:${second}`);
+    expect(await worktreeContentKey(dir, 'vendor', runGit)).toBe(`gitlink:${second}`);
   });
 });

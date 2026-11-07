@@ -5,7 +5,8 @@
  */
 import path from 'node:path';
 import { z } from 'zod';
-import { ATTEMPT_ENV, RUN_DIR_ENV } from '../launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
+import { ATTEMPT_ENV } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { isSameRealPath } from '../utils/fs.js';
 import { findRunConfig } from '../workflow/run-location.js';

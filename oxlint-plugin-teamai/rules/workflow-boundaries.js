@@ -54,7 +54,7 @@ const SKILL_IMPORTS = {
   // The confined tools of this machine, what each can do there, and the level the session's tool reaches here.
   'src/tool-launch/confined.ts': { names: ['isConfinedTool', 'confinedAccess', 'confinedToolLevel'] },
   // The level a confined run reaches.
-  'src/tool-launch/confined-level.ts': { typeOnly: true },
+  '@teamai/tool-core/launch': { typeOnly: true },
   // What describe proposes for the inputs of a workflow, for the calling session, without the driver naming one.
   'src/workflow-offers.ts': { names: ['WorkflowOffers'] },
   // What a teamai-score run the session drives gave each scorer, read from its outputs by the module that owns their shape.

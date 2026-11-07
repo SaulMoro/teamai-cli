@@ -263,7 +263,7 @@ const STEP_RULES = {
   outputs: 'publish', end: 'publish', results: 'publish', pr: 'publish', settledAt: 'publish', exitCode: 'publish', message: 'drop',
   tool: 'publish', model: 'publish', session: 'publish', tokens: 'publish', changes: 'publish', read: 'publish',
   agent: 'publish', used: 'publish', installId: 'publish', loopFinal: 'publish', failure: 'rewrite', delivery: 'publish', unenforced: 'publish',
-  runMode: 'publish', expiresAt: 'publish', limitsFrom: 'publish', allowanceSpent: 'publish', outcomes: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
+  runMode: 'publish', runtime: 'publish', expiresAt: 'publish', limitsFrom: 'publish', allowanceSpent: 'publish', outcomes: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
   confined: 'publish', progress: 'drop',
 } satisfies FieldRules<StepState>;
 
@@ -271,7 +271,7 @@ const PASS_RULES = {
   pass: 'publish', attempt: 'publish', outcome: 'publish', outputs: 'publish', end: 'publish', results: 'publish', pr: 'publish',
   failure: 'rewrite', exitCode: 'publish', message: 'drop', tool: 'publish', model: 'publish', session: 'publish',
   tokens: 'publish', changes: 'publish', read: 'publish', agent: 'publish', used: 'publish', installId: 'publish', answer: 'rewrite',
-  delivery: 'publish', unenforced: 'publish', runMode: 'publish', outcomes: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
+  delivery: 'publish', unenforced: 'publish', runMode: 'publish', runtime: 'publish', outcomes: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
   confined: 'publish', progress: 'drop',
 } satisfies FieldRules<StepPass>;
 
@@ -294,7 +294,7 @@ const PRIVATE_ANSWER_RULES = { ...ANSWER_RULES, note: 'drop' } satisfies FieldRu
 const FAILURE_RULES = { 'code': 'publish', message: 'rewrite' } satisfies FieldRules<WorkflowFailure>;
 
 // A lease another machine held is released when the run is handed over, so the session it offered stays here.
-const LEASE_RULES = { attempt: 'publish', revision: 'publish', driver: 'rewrite', session: 'drop', unenforced: 'drop', expiresAt: 'drop', leasedAt: 'drop', runMode: 'drop', limits: 'drop', confined: 'drop' } satisfies FieldRules<StepLease>;
+const LEASE_RULES = { attempt: 'publish', revision: 'publish', driver: 'rewrite', session: 'drop', unenforced: 'drop', expiresAt: 'drop', leasedAt: 'drop', runMode: 'drop', runtime: 'drop', limits: 'drop', confined: 'drop' } satisfies FieldRules<StepLease>;
 
 // An isolated run, the only one with a clone, is never published. A team copy is delivered only where it ran: another
 // machine reads its branch as a run branch, which the project's origin does not have, so its delivery fails.

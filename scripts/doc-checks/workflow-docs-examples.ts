@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import assert from 'node:assert/strict';
 import { check } from '../doc-check.js';
@@ -15,9 +16,12 @@ import { formatScorerDiagnostic } from '../../src/scorers/definition.js';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue, type LocalConfig, JsonObjectSchema } from '../../src/types.js';
 import { leaseNext, reportAttempt, startRun } from '../../src/workflow/engine.js';
 import { formatDiagnostic } from '../../src/workflow/parse.js';
-import { WORKSPACE_MODES, type DriverIdentity, type WorkflowEnvelope } from '../../src/workflow/types.js';
+import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
+import type { DriverIdentity, WorkflowEnvelope } from '../../src/workflow/types.js';
 import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
+import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
+import { engineOptions } from '../../src/workflow/runtimes/sources.js';
 
 const ROOT = process.cwd();
 
@@ -294,6 +298,13 @@ for (const page of [...PAGES, ...SCORER_PAGES, ...OTHER_PAGES]) {
           (match) => match[1] ?? '',
         ),
       );
+
+      // A page with no complete workflow and no diagnostic it shows has nothing for pull to check.
+      if (byFile.size === 0 && shown.size === 0) {
+        assert.deepEqual(failures, []);
+
+        return;
+      }
 
       // The scorers a workflow example lists are the ones the scorer pages show.
       for (const example of SCORER_PAGES.flatMap(scorerExamplesOf)) {
@@ -663,4 +674,76 @@ await check('shows the same benchmark files and CI commands in every language', 
     assert.deepEqual(other.commands, english?.commands, other.page);
     assert.deepEqual(other.gitlab, english?.gitlab, other.page);
   }
+});
+
+/** A block's first line, `# drivers/<name>.yaml` (in any language), names the definition file it shows. */
+const DEFINITION_FILE = /^#.*\bdrivers\/([A-Za-z0-9._-]+)\.yaml\b/;
+
+/**
+ * Why a driver definition example would not run, or undefined. A block is one when its first line names a
+ * `drivers/<name>.yaml` file, or when it lists `runtimes` and no `steps`, and it shows the whole file. Each runtime's
+ * options pass what teamai reads of them (`max_parallel`, `credentials`); the rest is the runtime's own.
+ */
+function definitionProblem(example: Example): string | undefined {
+  const named = DEFINITION_FILE.exec(example.source.split('\n')[0] ?? '')?.[1];
+  const document = parseDocument(example.source);
+  const shown: JsonValue = document.errors.length > 0 ? null : document.toJS();
+  const listsRuntimes = isJsonObject(shown) && Array.isArray(shown.runtimes) && !('steps' in shown);
+
+  if (named === undefined && !listsRuntimes) return undefined;
+
+  if (document.errors.length > 0) return document.errors[0]?.message;
+  const parsed = parseDriverDefinition(`drivers/${named ?? (isJsonObject(shown) ? String(shown.name) : 'unnamed')}.yaml`, example.source);
+
+  if (!parsed.ok) return parsed.failure.message;
+
+  for (const [index, { use, options }] of parsed.definition.runtimes.entries()) {
+    const read = engineOptions(options ?? {});
+
+    if (!read.ok) return `runtimes.${index} (${use}) option ${read.key}: ${read.message}`;
+  }
+
+  return undefined;
+}
+
+/** A block's first line saying it shows a definition teamai ships, in English or Chinese: `# drivers/<name>.yaml, shipped with teamai`. */
+const SHIPPED_DEFINITION = /^#\s*drivers\/([A-Za-z0-9._-]+\.yaml)(?:, shipped with teamai|，随 teamai 提供)\s*$/;
+
+// Every definition teamai ships parses, and a guide block that says it shows one shows it as it is: word for word in
+// English, and as the same YAML on a page whose comments are translated.
+await check('every shipped driver definition parses, and a guide block naming it as shipped equals it', () => {
+  const shipped = new Map(fs.readdirSync(path.join(ROOT, 'drivers')).filter((file) => file.endsWith('.yaml')).map((file) => [file, fs.readFileSync(path.join(ROOT, 'drivers', file), 'utf8')]));
+
+  const unparsed = [...shipped].flatMap(([file, source]) => {
+    const parsed = parseDriverDefinition(`drivers/${file}`, source);
+
+    return parsed.ok ? [] : [`drivers/${file}: ${parsed.failure.message}`];
+  });
+
+  const differing = guidePages(/\.md$/).flatMap((page) => examplesOf(page).flatMap((example) => {
+    const [heading = '', ...body] = example.source.split('\n');
+    const file = SHIPPED_DEFINITION.exec(heading)?.[1];
+
+    if (file === undefined) return [];
+    const source = shipped.get(file);
+
+    if (source === undefined) return [`${example.label}: teamai ships no drivers/${file}`];
+    const shown = body.join('\n');
+    const isSame = page.includes('/zh-CN/') ? isDeepStrictEqual(parseDocument(shown).toJS(), parseDocument(source).toJS()) : shown.trim() === source.trim();
+
+    return isSame ? [] : [`${example.label}: differs from drivers/${file}`];
+  }));
+
+  assert.deepEqual([...unparsed, ...differing], []);
+});
+
+// Guide pages only: a design note may show a definition with fields it proposes.
+await check('every driver definition a guide page shows passes the definition schema and teamai\'s runtime options', () => {
+  const failures = guidePages(/\.md$/).flatMap((page) => examplesOf(page).flatMap((example) => {
+    const problem = definitionProblem(example);
+
+    return problem === undefined ? [] : [`${example.label}: ${problem}`];
+  }));
+
+  assert.deepEqual(failures, []);
 });

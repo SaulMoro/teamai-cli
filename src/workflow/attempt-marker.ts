@@ -1,4 +1,5 @@
-import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_DIR_ENV, RUN_MODE_ENV, type RunMode } from '../launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
+import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_MODE_ENV, type RunMode } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import { isRunId, runScratchDir } from './store.js';

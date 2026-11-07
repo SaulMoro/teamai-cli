@@ -45,12 +45,13 @@ import { parseYaml } from '../utils/yaml.js';
 const RECORDED_FAILURES = [
   'cancelled', 'hitl_required',
   'loop_exhausted', 'invalid_output', 'invalid_template', 'invalid_inputs', 'invalid_items', 'item_cycle', 'input_rejected', 'command_failed',
-  'tool_failed', 'tool_unavailable', 'agent_unavailable', 'model_unavailable', 'read_only_dirty', 'unreported_changes', 'tool_unconfigured', 'tool_unsupported',
+  'tool_failed', 'tool_unavailable', 'agent_unavailable', 'model_unavailable', 'read_only_dirty', 'unreported_changes', 'tool_unconfigured', 'tool_unsupported', 'usage_limited',
   'merge_conflict', 'base_config', 'push_failed', 'workspace_base', 'bad_session',
   ...LIMIT_FAILURES,
   'delivery_failed', 'protected_path',
   'trial_prepare_failed', 'clone_prepare_failed', 'role_unavailable',
   'confined_invalid', 'confined_tool_unavailable', 'confined_failed', 'confined_reply_invalid', 'confined_report_mismatch',
+  'runtime_failed', 'runtime_interrupted', 'runtime_lost', 'requirement_unmet', 'login_missing', 'login_held', 'login_not_written_back',
 ] as const;
 
 type RecordedFailure = (typeof RECORDED_FAILURES)[number];

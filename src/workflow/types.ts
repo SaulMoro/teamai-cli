@@ -1,5 +1,6 @@
 /** Workflow types for the v1alpha1 local-driver subset. */
 
+import type { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import type { ContractCode, RunOrigin } from '../default-workflows.js';
 import type { RunMode } from '../launch-context.js';
 import type { TeamPin } from './team-pin.js';
@@ -199,12 +200,6 @@ export interface StepLoop {
   while?: string;
   maxIterations: number;
 }
-
-/**
- * Where a step runs: in the checkout as it is, in a new copy, in the copy an enclosing step opened, in a fresh clone
- * teamai prepares, or in a fresh clone of the team repo. A driver lists the ones it provides in `can.workspace`.
- */
-export const WORKSPACE_MODES = ['read-only', 'new', 'continue', 'clone', 'team'] as const;
 
 /**
  * The team repo branch a step commits to, `{ team: { branch } }`: a template that reads only `inputs`, so every run
@@ -436,6 +431,11 @@ export interface StepLease {
   leasedAt?: string;
   /** The run mode the driver runs the lease in, as its `next` reported it, so the pass keeps it however it settles. */
   runMode?: RunMode;
+  /**
+   * The runtime of the driver definition the lease was offered on, as its `use` names it, or `host`, the definition's
+   * host command slot. Absent for a driver that runs no definition.
+   */
+  runtime?: string;
   /** The turn limits the lease carried, for a driver that ends the turn at them. */
   limits?: TurnLimits;
   /** The terms a confined step was last leased with, which its report is checked against. Absent on a lease issued before teamai kept them. */
@@ -602,6 +602,8 @@ export interface DriveOptions {
   /** `false` after `resume --no-auto-approve`, which overrides `workflows.auto_approve` as the flag does. */
   autoApprove?: boolean;
   sandbox?: true;
+  /** The driver definition the run was last driven with, by its canonical name; absent for plain `local`. */
+  driver?: string;
 }
 
 /**

@@ -13,7 +13,8 @@ import { parseStepPath } from './step-path.js';
 import { renderLeaseText, renderValue, stepRoleSpec, type StepRoleSpec } from './template.js';
 import { passOf, type Delivery, type StepState } from './step-state.js';
 import { ClonePlaceSchema, type ClonePlace } from './clone.js';
-import { isWorkflowFile, stepWorkflow, workflowRunBy, type DriverIdentity, type InlineWorkflow, type RunState, type TeamPlace, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep, type WORKSPACE_MODES } from './types.js';
+import { isWorkflowFile, stepWorkflow, workflowRunBy, type DriverIdentity, type InlineWorkflow, type RunState, type TeamPlace, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep } from './types.js';
+import type { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 
 export type WorkspaceMode = typeof WORKSPACE_MODES[number];
 

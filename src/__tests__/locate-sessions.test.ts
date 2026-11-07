@@ -98,7 +98,7 @@ describe('a session store on Windows when HOME is not the profile home', () => {
     const located = await locate('cursor', 'sessions', at({}), host);
 
     expect(located.channel === 'files' && located.own?.path).toBe('C:\\Users\\member\\.cursor\\projects');
-    expect(sessionStoreDir('cursor', {}, host)).toBe('C:\\Users\\member\\.cursor\\projects');
+    expect(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: {} }, host)).toBe('C:\\Users\\member\\.cursor\\projects');
   });
 
   it('keeps a recorded root, which teamai init accepted under HOME', async () => {

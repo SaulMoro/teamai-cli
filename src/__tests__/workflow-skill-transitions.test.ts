@@ -11,7 +11,7 @@ import { reportsBranch } from '../utils/reports-branch.js';
 import { inProcessClient, type WorkflowClient } from '../workflow/protocol.js';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { WORKSPACE_MODES } from '../workflow/types.js';
+import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { respondProvenance, respondToHitl } from '../workflow/run-controls.js';
 import { attemptDir, AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, runScratchDir, runsDir, skillStatePath, updateRun, type RunId } from '../workflow/store.js';

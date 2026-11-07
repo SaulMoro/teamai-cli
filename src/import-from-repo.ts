@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import type { TeamwikiTarget } from './utils/teamwiki-root.js';
 import type { ShortcutEnd } from './workflow-commands.js';
-import { RUN_DIR_ENV } from './launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import { log } from './utils/logger.js';
 
 const WORKFLOW = 'teamai-import-from-repo';

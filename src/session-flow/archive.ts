@@ -20,7 +20,8 @@ import { archiveBusyMessage, authorForCwd, deriveArchiveIdentity, sessionArchive
 import { SyncManager, defaultSyncMeta, getRepoIdentity, type SessionSyncMeta } from './sync.js';
 
 /** A session in one tool, by the id that tool gave it. */
-export type ArchiveSessionRef = { platform: string; sessionId: string };
+/** A session to archive; `storeDir` is the store it is read from when it is not the member's, such as an attempt's tool home. */
+export type ArchiveSessionRef = { platform: string; sessionId: string; storeDir?: string };
 
 export type ArchiveRestore = { status: 'restored'; sessionId: string } | { status: 'fresh'; reason: string };
 

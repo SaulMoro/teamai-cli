@@ -12,7 +12,7 @@ import type { TeamaiInit } from './config.js';
 import { ImportInputError } from './import-from-repo.js';
 import { ImportLearnings } from './import-local.js';
 import { extractRepoUrlFromMrUrl, fetchMR, formatMrThreads, parseLearningDraft } from './import-mr.js';
-import { RUN_DIR_ENV } from './launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import type { LocalConfig } from './types.js';
 import type { ShortcutEnd } from './workflow-commands.js';
 import { log, spinner } from './utils/logger.js';
