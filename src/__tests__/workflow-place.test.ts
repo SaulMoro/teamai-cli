@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { resolveWorkflowEnv } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
-import { PROFILES_UNDER_TEST, profileRuns, inProcessConformanceClient, runConformanceScenario, type ConformanceClient } from '../workflow/conformance-interpreter.js';
+import { PROFILES_UNDER_TEST, profileLacks, inProcessConformanceClient, runConformanceScenario, type ConformanceClient } from '../workflow/conformance-interpreter.js';
 import { PLACE_CHECKOUT_FILES, workflowPlaceConformanceScenarios } from '../workflow/conformance/place.js';
 import { inProcessClient, refuseDirtyAdoptedCommand, type HostPlaceRequest } from '../workflow/protocol.js';
 import { pull } from '../pull.js';
@@ -1029,7 +1029,14 @@ steps:
 });
 
 describe.each(PROFILES_UNDER_TEST)('workflow place conformance in process as %s', (profile) => {
-  for (const scenario of workflowPlaceConformanceScenarios.filter((candidate) => profileRuns(profile, candidate))) {
+  for (const scenario of workflowPlaceConformanceScenarios) {
+    const lacks = profileLacks(profile, scenario);
+
+    if (lacks !== undefined) {
+      it.skip(`${scenario.name} (${profile} lacks ${lacks})`, () => undefined);
+      continue;
+    }
+
     it(scenario.name, async () => {
       for (const [name, value] of Object.entries(scenario.env ?? {})) vi.stubEnv(name, value);
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-place-conformance-')));

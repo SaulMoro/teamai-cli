@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { DRIVER_PROFILES, PROFILES_UNDER_TEST, profileRuns, runConformanceScenario, speaksAsDriverUnderTest, type ConformanceClient } from '../workflow/conformance-interpreter.js';
+import { DRIVER_PROFILES, PROFILES_UNDER_TEST, profileLacks, runConformanceScenario, speaksAsDriverUnderTest, type ConformanceClient } from '../workflow/conformance-interpreter.js';
 import { benchmarkConformanceScenarios } from '../benchmark/conformance.js';
 import { workflowConformanceScenarios } from '../workflow/conformance/run.js';
 import { RunIdSchema } from '../workflow/store.js';
@@ -22,7 +22,14 @@ afterEach(() => {
 });
 
 describe.each(PROFILES_UNDER_TEST)('workflow protocol conformance in process as %s', (profile) => {
-  for (const scenario of SCENARIOS.filter((candidate) => profileRuns(profile, candidate))) {
+  for (const scenario of SCENARIOS) {
+    const lacks = profileLacks(profile, scenario);
+
+    if (lacks !== undefined) {
+      it.skip(`${scenario.name} (${profile} lacks ${lacks})`, () => undefined);
+      continue;
+    }
+
     it(scenario.name, async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workflow-conformance-'));
       dirs.push(root);
@@ -42,7 +49,7 @@ describe('a protocol scenario that does not speak as the driver under test', () 
 
   it.each(independent.map((scenario) => [scenario.name, scenario] as const))('makes the same calls under every profile: %s', async (_name, scenario) => {
     const calls: Record<string, unknown> = {};
-    const profiles = PROFILES_UNDER_TEST.filter((profile) => profileRuns(profile, scenario));
+    const profiles = PROFILES_UNDER_TEST.filter((profile) => profileLacks(profile, scenario) === undefined);
     for (const profile of profiles) {
       vi.useRealTimers();
       vi.unstubAllEnvs();

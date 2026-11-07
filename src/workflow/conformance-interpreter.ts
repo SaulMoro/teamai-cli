@@ -340,16 +340,19 @@ function runsCommands(yaml: string): boolean {
 }
 
 /**
- * Whether `profile` runs `scenario`. A profile that runs no command (`exec: false`, a runtime that launches agents
- * its own way) runs no scenario with a command or setup step: in a driver definition, the host command slot takes
- * those, and the `local` profile holds it to them.
+ * What `profile` lacks to run `scenario`, or undefined when it runs it. A profile that runs no command (`exec: false`,
+ * a runtime that launches agents its own way) runs no scenario with a command or setup step: in a driver definition,
+ * the host command slot takes those, and the `local` profile holds it to them. A suite lists a scenario a profile
+ * skips with this, so what a runtime is not held to shows in every run.
  */
-export function profileRuns(profile: DriverProfile, scenario: { yaml: string; workflows?: Record<string, string> } | BenchmarkScenario): boolean {
+export function profileLacks(profile: DriverProfile, scenario: { yaml: string; workflows?: Record<string, string> } | BenchmarkScenario): string | undefined {
   const can: DriverCan = DRIVER_PROFILES[profile].can;
 
-  if (can.exec !== false || !('yaml' in scenario)) return true;
+  if (can.exec !== false || !('yaml' in scenario)) return undefined;
 
-  return ![scenario.yaml, ...Object.values(scenario.workflows ?? {})].some(runsCommands);
+  return [scenario.yaml, ...Object.values(scenario.workflows ?? {})].some(runsCommands)
+    ? 'exec for its command or setup step, which the host command slot runs and the local profile tests'
+    : undefined;
 }
 
 /**
