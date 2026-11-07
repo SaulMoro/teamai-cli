@@ -74,9 +74,10 @@ const BehaviourSchema = z.object({
   /**
    * The custom providers in the daemon's `agents.providers`, by id, as the member adds them: each extends a built-in
    * provider and runs its own command, as a team tool instance does. Paseo lists one beside the built-in ones, with the
-   * modes and models of the provider it extends, and calls it available once its command is on the daemon's PATH.
+   * modes and models of the provider it extends, and calls it available once its command is on the daemon's PATH. One with
+   * no command runs the tool's own.
    */
-  custom_providers: z.record(z.string(), z.object({ extends: z.string(), label: z.string().optional(), command: z.array(z.string()).min(1), env: z.record(z.string(), z.string()).optional() })).default({}),
+  custom_providers: z.record(z.string(), z.object({ extends: z.string(), label: z.string().optional(), command: z.array(z.string()).min(1).optional(), env: z.record(z.string(), z.string()).optional() })).default({}),
   /** Directories the member already has open as Paseo workspaces, as the app opens a project. */
   member_workspaces: z.array(z.string()).default([]),
   /**
@@ -119,6 +120,10 @@ const BehaviourSchema = z.object({
    * the daemon answers a request its handler threw on.
    */
   provider_errors: z.record(z.string(), z.object({ request: z.enum(['diagnostic', 'modes']), error: z.string() })).default({}),
+  /** How long the daemon takes to save a config change, as one that persists and applies it does. */
+  config_ms: z.number().int().nonnegative().default(0),
+  /** The daemon refuses every config change with this error. */
+  refuse_config: z.string().optional(),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
   /** The daemon answers every agent lookup with this error. */
@@ -424,7 +429,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
   };
 
   /** The requests `requests.jsonl` keeps. */
-  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request']);
+  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request']);
 
   /** The requests already held for the delay `models_ms`, `open_ms`, `create_ms` or `archive_ms` gives them. */
   const held = new WeakSet<Inbound>();
@@ -447,6 +452,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       open_project_request: opening,
       'agent.create.request': creating,
       archive_workspace_request: archiving,
+      set_daemon_config_request: behaviour().config_ms,
     };
 
     const hold = holds[message.type] ?? 0;
@@ -534,7 +540,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         if (handlerFailed(message.provider, 'diagnostic', message.requestId, message.type)) return;
         const base = baseOf(message.provider) ?? message.provider;
         // A custom provider runs its own command, which Paseo resolves on the daemon's PATH; a Codex one answers `login status` as Codex.
-        const command = does.custom_providers[message.provider]?.command[0];
+        const command = does.custom_providers[message.provider]?.command?.[0];
         const named = command === undefined ? base : path.basename(command);
         const resolved = base === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login, named, does.codex_login_home) : `/usr/local/bin/${named}`;
         reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: base === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(base, does.sign_in[message.provider], resolved, does.claude_home) } });
@@ -640,6 +646,33 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
             : { requestId: message.requestId, agent: snapshot(agent), creation: creation(agent), error: null },
         });
         work(agent);
+
+        return;
+      }
+
+      case 'set_daemon_config_request': {
+        // As Paseo 0.14.0 saves `agents.providers` (recorded): it applies the change at once, persists it, and refuses a
+        // custom provider with no label or an id other than lowercase letters, digits and dashes.
+        const file = path.join(state, 'behaviour.json');
+        const raw = z.record(z.string(), z.unknown()).parse(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
+        const custom = { ...behaviour().custom_providers };
+        const refused = behaviour().refuse_config ?? Object.entries(message.config.providers ?? {}).flatMap(([id, entry]) => {
+          if (!/^[a-z][a-z0-9-]*$/.test(id)) return [`[Config] Invalid config to save:\n  - agents.providers.${id}: Provider ID "${id}" must match /^[a-z][a-z0-9-]*$/.`];
+
+          return entry.label === undefined ? [`[Config] Invalid config to save:\n  - agents.providers.${id}.label: Custom provider "${id}" must declare label.`] : [];
+        })[0];
+
+        if (refused !== undefined) {
+          reply({ type: 'rpc_error', payload: { requestId: message.requestId, requestType: message.type, error: `Request failed: ${refused}`, code: 'handler_error' } });
+
+          return;
+        }
+
+        for (const [id, entry] of Object.entries(message.config.providers ?? {})) custom[id] = BehaviourSchema.shape.custom_providers.unwrap().valueType.parse({ ...custom[id], ...entry });
+
+        for (const id of message.config.removeProviders ?? []) delete custom[id];
+        fs.writeFileSync(file, JSON.stringify({ ...raw, custom_providers: custom }));
+        reply({ type: 'set_daemon_config_response', payload: { requestId: message.requestId, config: { mcp: { injectIntoAgents: true }, providers: custom } } });
 
         return;
       }

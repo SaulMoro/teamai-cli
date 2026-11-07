@@ -58,13 +58,13 @@ async function ready(runtime: Runtime, { mode = 'unattended', options = { url: d
   return runtime.next(isInit);
 }
 
-const openRequest = (op: string, attempt: string) => ({
-  type: 'open' as const, op, run: RUN, attempt, credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} },
+const openRequest = (op: string, attempt: string, tool?: string) => ({
+  type: 'open' as const, op, run: RUN, attempt, credentials: {}, ...(tool !== undefined && { tool }), view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} },
 });
 
 /** Opens the attempt's place and waits until it is ready, as teamai does before it sends a prompt there. */
-async function opened(runtime: Runtime, { attempt = ATTEMPT, op = 'op-0000000a' } = {}): Promise<string> {
-  runtime.send(openRequest(op, attempt));
+async function opened(runtime: Runtime, { attempt = ATTEMPT, op = 'op-0000000a', tool }: { attempt?: string; op?: string; tool?: string } = {}): Promise<string> {
+  runtime.send(openRequest(op, attempt, tool));
   const accepted = await runtime.next(isOp(op, 'accepted'));
 
   if (!('handle' in accepted) || !accepted.handle) throw new Error(`no handle in ${JSON.stringify(accepted)}`);
@@ -484,7 +484,8 @@ describe('teamai-runtime-paseo', () => {
     });
 
     it.each([
-      ['no Paseo provider runs its command', {}, {}, 'no Paseo provider runs its command acme-claude; add one on the daemon\'s host that extends claude with command ["acme-claude"] (`paseo daemon config set agents.providers …`, then `paseo daemon reload`), or name one in the runtime\'s providers option'],
+      ['no Paseo provider runs its command, and teamai finds no acme-claude on PATH to add one with', {}, {}, 'no Paseo provider runs its command acme-claude, and teamai adds one only for a command on its PATH; install acme-claude there, or name a Paseo provider that runs it in the runtime\'s providers option'],
+      ['a Paseo provider of its name runs another command', { 'acme-claude': { extends: 'claude', command: ['claude'] } }, {}, 'no Paseo provider runs its command acme-claude, and the Paseo provider acme-claude runs claude instead, so teamai adds none under that name; point that provider at acme-claude, or name the provider to use in the runtime\'s providers option'],
       ['two Paseo providers run its command', { a: { extends: 'claude', command: ['acme-claude'] }, b: { extends: 'claude', command: ['/usr/local/bin/acme-claude'] } }, {}, 'Paseo providers a and b both run its command acme-claude; name the one to use in the runtime\'s providers option, such as providers: { acme-claude: a }'],
       ['the provider the providers option names does not extend its tool', { a: { extends: 'codex', command: ['acme-claude'] } }, { providers: { 'acme-claude': 'a' } }, 'the runtime\'s providers option names a, which the daemon\'s agents.providers does not hold as a provider that extends claude'],
       ['the provider the providers option names runs another command', { a: { extends: 'claude', command: ['claude'] } }, { providers: { 'acme-claude': 'a' } }, 'the runtime\'s providers option names a, which runs claude rather than its command acme-claude; name a provider whose command is acme-claude'],
@@ -494,6 +495,133 @@ describe('teamai-runtime-paseo', () => {
       expect(await ready(start(), { options: { url: daemon.url, ...options }, instances: [ACME] })).toMatchObject({
         type: 'init', ok: true, can: { tools: ['claude', 'opencode'] }, unavailable: { 'acme-claude': cannotRun('acme-claude', reason) },
       });
+    });
+
+    /** `name` as an executable on the runtime's PATH, as a member installs a team tool, and the env a runtime finds it with. */
+    const installed = (name: string): { file: string; env: Record<string, string> } => {
+      const bin = path.join(dir, 'bin');
+      const file = path.join(bin, name);
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(file, '#!/bin/sh\nexec claude "$@"\n', { mode: 0o755 });
+
+      return { file, env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, PASEO_HOME: path.join(dir, 'paseo') } };
+    };
+
+    const notices = (runtime: Runtime): RuntimeMessage[] => runtime.lines.filter((line) => 'event' in line && line.event === 'notice');
+
+    const configChanges = (): unknown[] => received().filter((request) => request.type === 'set_daemon_config_request');
+
+    it('offers an instance no provider runs, adds a Paseo provider named after it at the first open that runs it, extending its tool and running its command from PATH in its own home, says so once, runs its steps there, and reuses it in a later run without adding it again', async () => {
+      const { file, env } = installed('acme-claude');
+      const home = path.join(dir, 'home', '.claude-acme');
+      behave({ output: { ok: true } });
+      const runtime = start(env);
+
+      expect(await ready(runtime, { instances: [ACME] })).toMatchObject({ type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-claude'] } });
+      expect(configChanges()).toEqual([]);
+      const handle = await opened(runtime, { tool: 'acme-claude' });
+
+      expect(notices(runtime)).toEqual([{
+        event: 'notice', op: 'op-0000000a',
+        message: `teamai added the Paseo provider acme-claude to the daemon at ${daemon.url} for its acme-claude steps: it extends claude and runs ${file}, with CLAUDE_CONFIG_DIR=${home}. It stays for later runs; remove it with \`paseo daemon config unset agents.providers.acme-claude --home ${path.join(dir, 'paseo')}\`.`,
+      }]);
+      runtime.send(promptRequest(handle, 'op-0000000b', { tool: 'acme-claude' }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'acme-claude', home }, result: { output: { ok: true } } });
+      expect(received()).toMatchObject([
+        { type: 'set_daemon_config_request', config: { providers: { 'acme-claude': { extends: 'claude', label: 'acme-claude', command: [file], env: { CLAUDE_CONFIG_DIR: home } } } } },
+        { type: 'agent.create.request', config: { provider: 'acme-claude', modeId: 'auto' } },
+      ]);
+
+      const later = start(env);
+
+      expect(await ready(later, { mode: 'attended', instances: [ACME] })).toMatchObject({ type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-claude'] } });
+      await opened(later, { attempt: 'a0123abce', tool: 'acme-claude' });
+      expect(notices(later)).toEqual([]);
+      expect(configChanges()).toHaveLength(1);
+    });
+
+    it('adds a provider once when two runtimes open the same instance together, setting no home for an instance with none of its own', async () => {
+      const { file, env } = installed('acme-claude');
+      const plain: InitInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+      behave({ config_ms: 500 });
+      const [first, second] = [start(env), start(env)];
+
+      for (const runtime of [first, second]) expect(await ready(runtime, { instances: [plain] })).toMatchObject({ can: { tools: ['claude', 'opencode', 'acme-claude'] } });
+      first.send(openRequest('op-0000000a', ATTEMPT, 'acme-claude'));
+      second.send(openRequest('op-0000000c', 'a0123abce', 'acme-claude'));
+
+      expect(await first.next(isOp('op-0000000a', 'ready'))).toMatchObject({ event: 'ready' });
+      expect(await second.next(isOp('op-0000000c', 'ready'))).toMatchObject({ event: 'ready' });
+      expect(configChanges()).toEqual([{ type: 'set_daemon_config_request', requestId: expect.any(String), config: { providers: { 'acme-claude': { extends: 'claude', label: 'acme-claude', command: [file] } } } }]);
+      expect([...notices(first), ...notices(second)]).toHaveLength(1);
+    });
+
+    it('adds a provider that runs its tool\'s own command in its own home for an instance with only a home of its own, and runs on one already there that does', async () => {
+      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
+      const home = path.join(dir, 'home', '.claude-work');
+      behave({ output: { ok: true } });
+      const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
+
+      expect(await ready(runtime, { instances: [work] })).toMatchObject({ can: { tools: ['claude', 'opencode', 'claude-work'] } });
+      runtime.send(promptRequest(await opened(runtime, { tool: 'claude-work' }), 'op-0000000b', { tool: 'claude-work' }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'claude-work', home } });
+      expect(received()).toMatchObject([
+        { type: 'set_daemon_config_request', config: { providers: { 'claude-work': { extends: 'claude', label: 'claude-work', env: { CLAUDE_CONFIG_DIR: home } } } } },
+        { type: 'agent.create.request', config: { provider: 'claude-work' } },
+      ]);
+      expect(notices(runtime)).toMatchObject([{ message: expect.stringContaining('it extends claude and runs claude\'s own command, with CLAUDE_CONFIG_DIR=') }]);
+
+      behave({ output: { ok: true }, custom_providers: { work: { extends: 'claude', label: 'work', env: { CLAUDE_CONFIG_DIR: home } } } });
+      const other = start();
+      await ready(other, { instances: [work] });
+      other.send(promptRequest(await opened(other, { attempt: 'a0123abce', op: 'op-0000000c', tool: 'claude-work' }), 'op-0000000d', { tool: 'claude-work' }));
+
+      expect(await other.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished' });
+      expect(received().at(-1)).toMatchObject({ type: 'agent.create.request', config: { provider: 'work' } });
+      expect(configChanges()).toHaveLength(1);
+    });
+
+    it('adds no provider on a daemon on another host, whose PATH teamai cannot see, and says how to add one there', async () => {
+      const { env } = installed('acme-claude');
+      // 0.0.0.0 reaches the fake on this machine, but names no loopback address, as a daemon on another host is named.
+      const url = daemon.url.replace('127.0.0.1', '0.0.0.0');
+
+      expect(await ready(start(env), { options: { url }, instances: [ACME] })).toMatchObject({
+        type: 'init', ok: true,
+        unavailable: { 'acme-claude': `The Paseo daemon at ${url} cannot run acme-claude: no Paseo provider runs its command acme-claude, and teamai adds one only on a daemon on this machine; add one on the daemon's host that extends claude with command ["acme-claude"] (\`paseo daemon config set agents.providers …\`, then \`paseo daemon reload\`), or name one in the runtime's providers option.` },
+      });
+    });
+
+    it('adds no provider for an instance whose name Paseo takes for no provider, and says how to add one', async () => {
+      const { env } = installed('acme.claude');
+
+      expect(await ready(start(env), { instances: [{ ...ACME, name: 'acme.claude', command: 'acme.claude' }] })).toMatchObject({
+        type: 'init', ok: true,
+        unavailable: { 'acme.claude': cannotRun('acme.claude', 'no Paseo provider runs its command acme.claude, and teamai cannot add one named acme.claude, since Paseo names a provider with lowercase letters, digits and dashes only, starting with a letter; add one on the daemon\'s host that extends claude with command ["acme.claude"], and name it in the runtime\'s providers option') },
+      });
+    });
+
+    it('fails the open of an instance whose provider Paseo refuses to add, naming Paseo\'s error and how to add one, and adds it at a later open once Paseo takes it', async () => {
+      const { file, env } = installed('acme-claude');
+      behave({ refuse_config: 'The daemon config is read-only' });
+      const runtime = start(env);
+      await ready(runtime, { instances: [ACME] });
+      runtime.send(openRequest('op-0000000a', ATTEMPT, 'acme-claude'));
+
+      expect(await runtime.next(isEnd('op-0000000a'))).toEqual({
+        op: 'op-0000000a', event: 'failed',
+        failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run acme-claude on the Paseo daemon at ${daemon.url}: Paseo refused the provider acme-claude teamai added for it (Request failed: The daemon config is read-only); add one on the daemon's host that extends claude with command ${JSON.stringify([file])}, or name one in the runtime's providers option. Then run the step again.` },
+      });
+
+      behave({});
+      runtime.send(openRequest('op-0000000c', 'a0123abce', 'acme-claude'));
+
+      expect(await runtime.next(isOp('op-0000000c', 'ready'))).toMatchObject({ event: 'ready' });
+      // The refused change, then the one Paseo took.
+      expect(configChanges()).toMatchObject([{ config: { providers: { 'acme-claude': { command: [file] } } } }, { config: { providers: { 'acme-claude': { command: [file] } } } }]);
+      expect(notices(runtime)).toMatchObject([{ op: 'op-0000000c' }]);
     });
 
     it('still offers its tools when the providers option names an instance teamai did not pass, naming it under unavailable', async () => {

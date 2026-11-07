@@ -4,12 +4,12 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, isUsageLimitText, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, isUsageLimitText, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, UNAVAILABLE_REASON_MAX, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type Target } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type ProviderToAdd, type Target } from './daemon.js';
 import { parseOptions } from './options.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
@@ -207,6 +207,18 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 /** `text` cut to `max` characters, its end marked when it is cut. */
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+/**
+ * What the person reads once teamai added a Paseo provider for instance `name`: what it holds, that it stays, and how to
+ * remove it from the daemon's config, in the Paseo home the member's Paseo uses.
+ */
+function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): string {
+  const runs = entry.command ? entry.command[0] : `${entry.extends}'s own command`;
+  const home = Object.entries(entry.env ?? {}).map(([variable, dir]) => `, with ${variable}=${dir}`).join('');
+  const paseoHome = process.env.PASEO_HOME ? ` --home ${process.env.PASEO_HOME}` : '';
+
+  return `teamai added the Paseo provider ${id} to the daemon at ${url} for its ${name} steps: it extends ${entry.extends} and runs ${runs}${home}. It stays for later runs; remove it with \`paseo daemon config unset agents.providers.${id}${paseoHome}\`.`;
+}
+
 export interface Serving {
   input: Readable;
   write(message: RuntimeMessage): void;
@@ -344,6 +356,58 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
   let closing = false;
 
   const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
+
+  /** The team instances init offered whose Paseo provider teamai adds at the first open or prompt that runs them, by name. */
+  let toAdd = new Map<string, { planned: ProviderToAdd; instance: InitInstance }>();
+  /** The adds this process runs, by instance name: two opens of one instance wait for the same add. */
+  const adding = new Map<string, Promise<RuntimeFailure | undefined>>();
+
+  /**
+   * Adds the Paseo provider of instance `name` when init offered it before it existed, once across the runtimes on this
+   * journal, and says so once on `op`; or why the instance cannot run, which fails `op`. Nothing for any other tool.
+   */
+  const ensureProvider = (live: Daemon, name: string, op: OpId): Promise<RuntimeFailure | undefined> => {
+    const pending = toAdd.get(name);
+
+    if (!pending) return Promise.resolve(undefined);
+    const { planned, instance } = pending;
+    const cannot = (why: string): RuntimeFailure => ({ code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run ${name} on the Paseo daemon at ${live.url}: ${why}. Then run the step again.` });
+
+    const running = adding.get(name) ?? (async (): Promise<RuntimeFailure | undefined> => {
+      let release: () => void;
+
+      try {
+        release = await journal.holdProviders(live.url);
+      } catch (error) {
+        return cannot(`it could not hold the daemon's providers in ${journal.root} to add one for it (${error instanceof Error ? error.message : String(error)}); make that directory writable`);
+      }
+
+      try {
+        const added = await live.addProvider(planned, instance);
+
+        if ('cannot' in added) return cannot(added.cannot);
+        toAdd.delete(name);
+        const target = targets.get(name);
+
+        if (target) targets.set(name, { ...target, provider: added.provider });
+
+        if (added.home !== undefined) sessionHomes.set(name, added.home);
+
+        if (added.providerHome !== undefined) providerHomes.set(name, added.providerHome);
+
+        if (added.added) write({ event: 'notice', op, message: addedNotice(live.url, planned, name) });
+
+        return undefined;
+      } finally {
+        release();
+        adding.delete(name);
+      }
+    })();
+
+    adding.set(name, running);
+
+    return running;
+  };
 
   const send = (op: OpId, outcome: OpState): void => {
     switch (outcome.state) {
@@ -622,6 +686,11 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     modeIds = new Map(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'unset' ? [] : [[name, stepMode.id]])));
     sessionHomes = new Map(tools.flatMap(({ name, home }) => (home === undefined ? [] : [[name, home]])));
     providerHomes = new Map(tools.flatMap(({ name, providerHome }) => (providerHome === undefined ? [] : [[name, providerHome.dir]])));
+    toAdd = new Map(tools.flatMap(({ name, toAdd: planned }) => {
+      const instance = instances.find((candidate) => candidate.name === name);
+
+      return planned && instance ? [[name, { planned, instance }]] : [];
+    }));
     offers = new Map(installed.map((entry): [string, Offer] => {
       if (!entry.canRun) return [entry.name, { runs: 'nothing', reason: entry.reason }];
       const confinedMode = CONFINED_MODES[entry.tool];
@@ -663,6 +732,18 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     }
 
     write({ op, event: 'accepted', handle });
+
+    // The first open that runs a team instance init offered before its provider existed adds that provider.
+    if (request.tool !== undefined) {
+      const failure = await ensureProvider(live, request.tool, op);
+
+      if (failure) {
+        fail(op, failure);
+
+        return;
+      }
+    }
+
     const opened = handle;
     const place = journal.place(opened);
 
@@ -987,7 +1068,15 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    // New, or pending in a runtime that died before it sent a create: launched from the start.
+    // New, or pending in a runtime that died before it sent a create: launched from the start, on a provider added first
+    // when no open added it yet.
+    const unadded = await ensureProvider(live, request.lease.tool, op);
+
+    if (unadded) {
+      fail(op, unadded);
+
+      return;
+    }
 
     const place = journal.place(request.handle);
     const { confined } = request;
