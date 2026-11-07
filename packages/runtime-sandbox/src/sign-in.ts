@@ -1,4 +1,4 @@
-import { UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
+import { SIGN_IN_VARIABLES, UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
 import type { Unavailable } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
 
@@ -20,7 +20,7 @@ import type { LAUNCHABLE } from './providers/cli.js';
 export type SignInProvider = 'sbx' | 'docker' | 'podman';
 
 interface SignIn {
-  /** The variables the tool signs in with, in the order a member is pointed at them. */
+  /** The variables the tool signs in with, as teamai finds them (`SIGN_IN_VARIABLES`). */
   env: readonly string[];
   /** The sbx service whose stored login sbx's proxy injects for it, when sbx keeps one. */
   sbx?: string;
@@ -41,7 +41,7 @@ const CODEBUDDY = 'add CODEBUDDY_API_KEY: env:CODEBUDDY_API_KEY to the sandbox\'
 /** How each tool a step runtime launches signs in inside a sandbox, by its executable. */
 export const SIGN_IN = {
   claude: {
-    env: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'],
+    env: SIGN_IN_VARIABLES.claude.signIn,
     sbx: 'anthropic',
     gateway: { url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' },
     hint: {
@@ -51,7 +51,7 @@ export const SIGN_IN = {
     },
   },
   codex: {
-    env: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+    env: SIGN_IN_VARIABLES.codex.signIn,
     sbx: 'openai',
     hint: {
       sbx: 'sign Codex in once with sbx, `sbx secret set openai --oauth` (or store an API key with `sbx secret set openai`), or add OPENAI_API_KEY: env:OPENAI_API_KEY to the sandbox\'s credentials',
@@ -59,7 +59,7 @@ export const SIGN_IN = {
       podman: CODEX_IN_A_CONTAINER,
     },
   },
-  codebuddy: { env: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'], hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY } },
+  codebuddy: { env: SIGN_IN_VARIABLES.codebuddy.signIn, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY } },
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
 
 /** `reason` cut to the longest protocol 1 takes in `unavailable`, its end marked when it is cut. */
