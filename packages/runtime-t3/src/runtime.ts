@@ -933,7 +933,9 @@ export function serve(options: ServeOptions): Promise<void> {
         const ours = teamaiToolHome(instance, driver, options.home);
 
         if (theirs !== ours) {
-          notice(`T3 Code provider instance "${provider.providerInstanceId}" runs ${instance.name} in ${tilde(theirs, options.t3UserHome)}, while teamai gives ${instance.name} the home ${tilde(ours, options.home)}: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ${tilde(ours, options.home)}.`, {});
+          // `~` names one home only when T3 Code's user and teamai share it; else "~/.claude" would read the same twice.
+          const shown = (home: string, user: string): string => (options.t3UserHome === options.home ? tilde(home, user) : home);
+          notice(`T3 Code provider instance "${provider.providerInstanceId}" runs ${instance.name} in ${shown(theirs, options.t3UserHome)}, while teamai gives ${instance.name} the home ${shown(ours, options.home)}: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ${shown(ours, options.home)}.`, {});
         }
       }
 

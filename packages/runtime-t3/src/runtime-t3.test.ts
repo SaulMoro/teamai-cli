@@ -1319,6 +1319,25 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-0000000f')).toMatchObject({ event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/), home: path.join(t3.home, '.claude') } });
     });
 
+    // Each home shortened against its own user's home would read alike, "~/.claude" against "~/.claude".
+    it('names both homes in full when the instance runs in T3 Code\'s own user\'s home and teamai runs with another HOME', async () => {
+      await t3.stop();
+      t3 = fakeT3(path.join(dir, 'member'), checkout, { t3HomeInHome: true });
+      await t3.start();
+      signIn(t3);
+      t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
+      t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } });
+      const elsewhere = path.join(dir, 'scratch-home');
+      fs.mkdirSync(elsewhere);
+      const runtime = start({ HOME: elsewhere });
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }] });
+      await runtime.next((line) => line['type'] === 'init');
+
+      const theirs = path.join(t3.home, '.claude');
+      const ours = path.join(elsewhere, '.claude');
+      expect(noticesOf(runtime)).toContainEqual({ event: 'notice', message: `T3 Code provider instance "acme-claude-t3" runs acme-claude in ${theirs}, while teamai gives acme-claude the home ${ours}: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ${ours}.` });
+    });
+
     it('runs a tool instance\'s step on the T3 provider instance whose Binary path is its command, and names the session after the instance, in that instance\'s home', async () => {
       t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
       t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', homePath: '~/.acme-claude' } } } });
