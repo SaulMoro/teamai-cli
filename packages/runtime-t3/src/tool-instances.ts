@@ -49,6 +49,8 @@ export interface InstanceLookup {
 export interface ServedInstances {
   served: Map<string, Provider>;
   unavailable: Record<string, string>;
+  /** What the person hears at the start: a misspelt `instances` key, which no step may ever name to show its reason. */
+  notices: string[];
 }
 
 /**
@@ -62,9 +64,14 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
   const unavailable: Record<string, string> = {};
   const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
 
+  const notices: string[] = [];
+
   // A misspelt name maps nothing, so it is named; it may also be a team tool this machine has not accepted.
+
   for (const stray of Object.keys(mapped ?? {}).filter((name) => !instances.some((instance) => instance.name === name))) {
-    unavailable[stray] = reason(`instances names ${stray}, which is neither claude, codex nor a tool instance teamai has here. Remove instances.${stray}, or name the instance as its tool definition does.`);
+    const message = reason(`instances names ${stray}, which is neither claude, codex nor a tool instance teamai has here. Remove instances.${stray}, or name the instance as its tool definition does.`);
+    unavailable[stray] = message;
+    notices.push(message);
   }
 
   for (const instance of instances) {
@@ -132,7 +139,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
     else unavailable[name] = reason(`No T3 Code provider instance runs ${command}. Add one in T3 Code under Settings → Providers, with driver ${label} and Binary path the absolute path of ${command} (command -v ${command}), or map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
   }
 
-  return { served, unavailable };
+  return { served, unavailable, notices };
 }
 
 /** The T3 driver of `provider`, when this runtime runs it. */
