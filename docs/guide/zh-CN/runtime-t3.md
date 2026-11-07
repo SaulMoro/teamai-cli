@@ -221,7 +221,7 @@ workflows:
 T3 只允许以 Full access 批准的登录修改它的设置（`settings:write`），所以 teamai 第一次添加实例时会以 Full access 重新登录：任何运行都通过 `t3` 命令；没有该命令时，在 T3 的页面上进行，你在那里选择 **Full access**。之后的运行沿用这次登录。每个线程仍按原来的模式启动。没有 `t3` 命令、也没有这样的登录的无人值守运行不会添加任何东西，也不提供这个工具：
 
 ```text
-No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
+No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on acme-claude once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
 ```
 
 T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它、运行它的实例被关掉了，或者 T3 已有一个同名实例），它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机）；在没有其他运行时能运行它的定义上，会在任何线程启动之前失败，并给出原因：

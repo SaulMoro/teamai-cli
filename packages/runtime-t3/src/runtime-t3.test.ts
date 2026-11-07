@@ -1438,7 +1438,7 @@ describe('teamai-runtime-t3', () => {
         expect(reply).toMatchObject({
           ok: true, can: { tools: ['claude', 'codex'] },
           unavailable: {
-            'acme-claude': `No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
+            'acme-claude': `No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on acme-claude once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
           },
         });
         expect(settingsNow()).toEqual(MEMBER_SETTINGS);

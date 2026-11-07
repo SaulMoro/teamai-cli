@@ -221,7 +221,7 @@ The instance is named after the tool. Its Binary path is the tool's command as y
 T3 lets a sign-in change its settings (`settings:write`) only with Full access, so the first time teamai adds an instance it signs in again with Full access: through the `t3` command, in any run, or, without one, in T3's page, where you pick **Full access**. It keeps that sign-in for later runs. Each thread still starts in the mode it would. An unattended run with no `t3` command and no such sign-in adds nothing, and does not offer the tool:
 
 ```text
-No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
+No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run a step on acme-claude once from a terminal, so teamai can ask you to approve its sign-in, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
 ```
 
 When T3 does not offer the tool (the command is not on your PATH, two instances run it, one that runs it is turned off, or T3 already has an instance of its name), its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`; on a definition with no other runtime for it they fail before any thread starts, with that reason:
