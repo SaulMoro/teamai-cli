@@ -80,7 +80,18 @@ export interface FakeEngine {
   labelsOf(name: string): Record<string, string> | undefined;
   /** The networks that exist, by name. */
   networks(): string[];
+  /** The tags of the images (sbx: templates) a `commit`, `build` or `template save` made. */
+  savedImages(): string[];
+  /** Every file a saved image holds in its home, and, for a built one, in its build context, each with its content. */
+  savedFiles(tag: string): { home: Record<string, string>; context: Record<string, string> };
   env(): NodeJS.ProcessEnv;
+}
+
+/** Every file under `root`, by its path relative to it, with its content; none when it does not exist. */
+function filesUnder(root: string): Record<string, string> {
+  if (!fs.existsSync(root)) return {};
+
+  return Object.fromEntries(fs.readdirSync(root, { recursive: true }).map(String).filter((file) => fs.lstatSync(path.join(root, file)).isFile()).map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 const StoredSchema = z.object({ name: z.string(), labels: z.record(z.string(), z.string()) });
@@ -169,6 +180,8 @@ export function fakeEngine(dir: string): FakeEngine {
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.array(z.string()).parse(JSON.parse(line))) : []),
     containers: () => stored().map(({ name }) => name),
     labelsOf: (name) => stored().find((container) => container.name === name)?.labels,
+    savedImages: () => (fs.existsSync(path.join(state, 'saved')) ? fs.readdirSync(path.join(state, 'saved')).map(decodeURIComponent).sort() : []),
+    savedFiles: (tag) => ({ home: filesUnder(path.join(state, 'saved', encodeURIComponent(tag), 'home')), context: filesUnder(path.join(state, 'saved', encodeURIComponent(tag), 'context')) }),
     networks: () => (fs.existsSync(path.join(state, 'networks')) ? fs.readdirSync(path.join(state, 'networks')).sort() : []),
     env: () => ({ PATH: `${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, FAKE_ENGINE_STATE: state, FAKE_ENGINE_LOG: log, FAKE_ENGINE_IMAGES: JSON.stringify(images) }),
   };

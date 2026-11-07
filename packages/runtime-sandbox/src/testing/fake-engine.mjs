@@ -33,6 +33,11 @@
 //   FAKE_ENGINE_VERSION optional: the server version `info` reports, 27.3.1 when unset
 //   FAKE_ENGINE_OS      optional: the OperatingSystem docker's `info` reports, "Docker Desktop" when unset
 //
+//  A saved image (docker `commit` or `build`, sbx `template save`) keeps the home of the container it was saved from,
+//  under `saved/<tag>/home`, and the base whose tools it holds; a container created from it starts with a copy of that
+//  home. `build` keeps the files of its context under `saved/<tag>/context`, and takes its base from the Containerfile's
+//  FROM line.
+//
 //  sbx answers `policy check network --json <target>` from a file `allowed-network` in its state directory, one
 //  `localhost:<port>` per line, as `sbx policy allow network` adds them; host.docker.internal is checked as localhost.
 import { spawn } from 'node:child_process';
@@ -162,8 +167,39 @@ function one(found, flag) {
   return all(found, flag).at(-1);
 }
 
+/** Where a saved image's record is: its base and home. */
+function savedDir(tag) {
+  return path.join(state, 'saved', encodeURIComponent(tag));
+}
+
+/** Saves `home` as image `tag` on `base`, which holds its tools. */
+function saveImage(tag, base, home) {
+  const dir = savedDir(tag);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'base'), base);
+
+  if (fs.existsSync(home)) fs.cpSync(home, path.join(dir, 'home'), { recursive: true, verbatimSymlinks: true });
+  fs.mkdirSync(path.join(state, 'pulled'), { recursive: true });
+  fs.writeFileSync(path.join(state, 'pulled', encodeURIComponent(tag)), '');
+}
+
+/** The image whose tools `image` holds: itself, or a saved image's base. */
+function toolsOf(image) {
+  const base = path.join(savedDir(image), 'base');
+
+  return images[image] ?? (fs.existsSync(base) ? images[fs.readFileSync(base, 'utf8')] : undefined);
+}
+
+/** Gives a new container the home of the saved image it starts from, when it is one. */
+function seedHome(id, image) {
+  const saved = path.join(savedDir(image), 'home');
+
+  if (fs.existsSync(saved)) fs.cpSync(saved, path.join(containers, id, 'home'), { recursive: true, verbatimSymlinks: true });
+}
+
 function imagePath(image) {
-  return `${images[image]}${path.delimiter}/usr/bin${path.delimiter}/bin`;
+  return `${toolsOf(image)}${path.delimiter}/usr/bin${path.delimiter}/bin`;
 }
 
 function pulled(image) {
@@ -279,8 +315,32 @@ function docker() {
         }),
       });
 
+      seedHome(id, image);
+
       if (fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(hold, 'utf8')));
       process.stdout.write(`${id}\n`);
+      break;
+    }
+
+    case 'commit': {
+      const [ref, tag] = rest;
+      const container = readContainer(ref);
+
+      if (!container) fail(`Error response from daemon: No such container: ${ref}`);
+      saveImage(tag, container.image, path.join(containers, container.id, 'home'));
+      process.stdout.write(`sha256:${crypto.createHash('sha256').update(tag).digest('hex')}\n`);
+      break;
+    }
+
+    case 'build': {
+      const { found, rest: [context] } = options(rest, ['-t', '-f']);
+      const tag = one(found, '-t');
+      const from = /^FROM\s+(\S+)/m.exec(fs.readFileSync(one(found, '-f'), 'utf8'))?.[1];
+
+      if (from === undefined || toolsOf(from) === undefined) fail(`ERROR: failed to solve: ${from}: not found`);
+      saveImage(tag, from, path.join(state, 'no-home'));
+      fs.cpSync(context, path.join(savedDir(tag), 'context'), { recursive: true });
+      process.stdout.write(`naming to ${tag} done\n`);
       break;
     }
 
@@ -439,14 +499,37 @@ function sbx() {
       break;
     }
 
+    case 'template': {
+      const [action, ...more] = rest;
+
+      if (action === 'ls') {
+        const saved = fs.existsSync(path.join(state, 'saved')) ? fs.readdirSync(path.join(state, 'saved')).map(decodeURIComponent) : [];
+        process.stdout.write(`${JSON.stringify([{ id: '4a94d9144a70', repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' }, ...saved.map((tag) => ({ id: crypto.createHash('sha256').update(tag).digest('hex').slice(0, 12), repository: tag.split(':')[0], tag: tag.split(':')[1] }))])}\n`);
+      } else if (action === 'save') {
+        const [name, tag] = more;
+        const sandbox = readContainer(name);
+
+        if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
+        saveImage(tag, sandbox.image, path.join(containers, sandbox.id, 'home'));
+        process.stdout.write(`Saved sandbox ${name} as ${tag}\n`);
+      } else {
+        fail(`fake sbx: unsupported template command ${action}`, 125);
+      }
+
+      break;
+    }
+
     case 'ls':
       process.stdout.write(`${JSON.stringify(sandboxes().map(({ name, image, running, mounts }) => ({ name, agent: image, status: running ? 'running' : 'stopped', workspaces: mounts.map(({ source, readonly }) => `${source}${readonly ? ':ro' : ''}`) })))}\n`);
       break;
     case 'create': {
       const { found, rest: positional } = options(rest, ['--name', '-e', '--env', '-t', '--template'], ['--no-progress']);
       const [agent, ...paths] = positional;
+      const template = one(found, '-t') ?? one(found, '--template');
 
       if (images[agent] === undefined) sbxFail(`unknown agent "${agent}"`, 'sbx create --help');
+
+      if (template !== undefined && !fs.existsSync(path.join(savedDir(template), 'base'))) sbxFail(`template ${template} not found in the local image store`, 'sbx template ls');
       const name = one(found, '--name') ?? `${agent}-${path.basename(paths[0] ?? 'none')}`;
 
       if (readContainer(name)) sbxFail(`sandbox '${name}' already exists; connect to the existing sandbox`, `sbx run --name ${name}`);
@@ -462,6 +545,8 @@ function sbx() {
 
       const id = crypto.randomBytes(16).toString('hex');
       createContainer({ id, name, image: agent, running: true, labels: {}, env: proxyEnv(), mounts });
+
+      if (template !== undefined) seedHome(id, template);
 
       // sbx's claude template keeps Claude's sign-in in its default home as a stand-in the proxy swaps for the login.
       if (fs.existsSync(path.join(images[agent], 'claude'))) {
