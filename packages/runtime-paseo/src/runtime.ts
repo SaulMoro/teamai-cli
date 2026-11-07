@@ -386,6 +386,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       try {
         release = await journal.holdProviders(live.url);
       } catch (error) {
+        adding.delete(name);
+
         return cannot(`it could not hold the daemon's providers in ${journal.root} to add one for it (${error instanceof Error ? error.message : String(error)}); make that directory writable`);
       }
 
@@ -407,8 +409,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
         return undefined;
       } finally {
-        release();
         adding.delete(name);
+        release();
       }
     })();
 
