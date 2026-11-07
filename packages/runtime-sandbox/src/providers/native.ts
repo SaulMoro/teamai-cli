@@ -20,7 +20,8 @@ import { commandsOf, LAUNCHABLE, WORKSPACES } from './cli.js';
 //                                               runtime process (a cancel after a restart) reaches it
 //
 //  The place view's paths are reachable with the access the view gives them; the PATH's directories and their install
-//  roots are readable; the member's home, temp directory, SSH keys, other repositories and logins are not. A step's
+//  roots are readable; the member's home and temp directory, and the SSH keys, logins and repositories there, are not
+//  (seatbelt hides only those two; a repository elsewhere on disk stays readable there, never on bwrap). A step's
 //  environment holds only the few names a shell needs (PATH, USER, LANG, …) and what teamai gives the exec: none of the
 //  member's own variables reaches it. They share this machine's network, so a URL on this machine reaches it as is.
 //
