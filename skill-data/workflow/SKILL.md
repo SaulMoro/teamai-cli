@@ -11,17 +11,28 @@ You orchestrate. You run the literal commands the CLI prints, and you keep the p
 
 ## Start
 
-Run `teamai workflow start --describe <name> --driver skill` with the workflow name from the skill that sent you. Where this machine runs teamai through `npx teamai-cli`, use that in its place; every literal the CLI prints after this already does.
+Run `teamai workflow start --describe <name> --driver skill` with the workflow name from the skill that sent you. When the person names no workflow, or one no generated skill names, run `teamai list workflows`, pick the one they mean, and describe it. Where this machine runs teamai through `npx teamai-cli`, use that in its place; every literal the CLI prints after this already does.
 
 Act on `data.describe.ask.kind`:
 
 - `start`: tell the person `ask.say` when the reply has it, then run `ask.start`. In an unattended run (CI, a cloud agent) describe never asks the person; when `ask.inputs` is listed, fill `{inputs}` in `ask.start` with their values from your task, as one JSON object. The slot sits inside single quotes, so write each `'` in that JSON as `'\''`.
-- `ask`: the question is the person's to answer, once, so the run goes on without them after. In one message, give them `ask.question.text` as it is, each entry of `ask.question.inputs`, and the `label` of each option as their choices. An entry with a `value` is a proposal: show it with its `why`, and say they may keep, change or empty it. An entry without one is theirs to fill in. Wait for their pick, also when an option is marked recommended. In the `start` of the option they pick, replace `{inputs}` with their answers as one JSON object, each `'` in it written as `'\''`, and run it. Those options are the whole choice: when the person wants a start none of them offers, show them the options again.
-- `local`: tell the person `ask.reason` and give them `ask.start` for their own terminal. It is theirs to run.
+- `ask`: the question is the person's to answer, once, so the run goes on without them after. In one message, give them `ask.question.text` as it is, each entry of `ask.question.inputs`, and the `label` of each option as their choices. An entry with a `value` is a proposal: show it with its `why`, and say they may keep, change or empty it. An entry without one is theirs to fill in. Wait for their pick, also when an option is marked recommended. In the `start` of the option they pick, replace `{inputs}` with their answers as one JSON object, each `'` in it written as `'\''`, and run it. Those options are the whole choice: when the person wants a start none of them offers, show them the options again. When the reply has `ask.background`, run that start as In the background says.
+- `background`: tell the person `ask.say` when the reply has it, then run `ask.start` as In the background says.
+- `local`: tell the person `ask.reason` and give them `ask.start` for the terminal it names. It is theirs to run.
 - `denied`: tell the person `ask.reason`. Nothing is left to run here.
 - `tool`: this session names no tool, and the run needs one. In `ask.describe`, replace `{tool}` with the entry of `ask.tools` for the tool you work in, run it, and act on its reply instead. When none of them is the tool you work in, tell the person `ask.reason`.
 
-Done when a reply carries `data.turn` with a `run` id, or the person has `ask.reason`.
+Done when a reply carries `data.turn` with a `run` id, a start in the background ended, or the person has `ask.reason`.
+
+## In the background
+
+The start runs the workflow on the driver of the app this session runs in, which shows its steps there. Run it in the background, tell the person `ask.background`, and wait for it to end. You interpret no turns.
+
+When it ends, act on its last line:
+
+- `data.done`: tell the person the run's `outcome`.
+- `data.hitl_waiting`: the run waits at a gate. Ask the person `message` with your question tool, offering `options`. When `required` is false, replace `<option>` in `respond` with their answer and run it. When it is true, only they may answer: give them `respond` with their answer for the terminal of this app, and wait until they say it is done. Then run `resume` in the background, and act on how it ends the same way.
+- `error`: tell the person `message`.
 
 ## The loop
 

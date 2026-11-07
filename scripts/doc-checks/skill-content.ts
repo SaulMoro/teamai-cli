@@ -104,7 +104,7 @@ await check('keeps the stub description within the 1024-character budget agents 
 await check('pre-approves only read-only skill and workflow calls', () => {
   const stub = fs.readFileSync(path.join(ROOT, 'skills/teamai/SKILL.md'), 'utf8');
   const patterns = (stub.match(/^allowed-tools: (.*)$/m)?.[1] ?? '').split(', ');
-  const calls = ['skill', 'workflow start --describe', 'workflow next', 'workflow report', 'workflow respond'];
+  const calls = ['skill', 'list workflows', 'workflow start --describe', 'workflow next', 'workflow report', 'workflow respond'];
   assert.deepEqual(
     [...patterns].sort(),
     INVOCATIONS.flatMap((invocation) => calls.map((call) => `Bash(${invocation} ${call}:*)`)).sort(),

@@ -1055,7 +1055,7 @@ In self mode, a workflow worktree holds the team files as committed. Commit a wo
 
 ### What the session does
 
-The agent runs `teamai workflow start --describe <name> --driver skill`. The reply says how to start the run: directly, after one question to the person, or with the local driver. The question covers the inputs, how many steps run at once, who answers optional approvals, and whether to judge.
+The agent runs `teamai workflow start --describe <name> --driver skill`. The reply says how to start the run: directly, after one question to the person, in the background, or with the local driver. The question covers the inputs, how many steps run at once, who answers optional approvals, and whether to judge.
 
 TeamAI names the session's tool from the session variable its host sets. When it finds none, as in Oh My Pi or Qoder, and a step pins a model or is scored, describe asks for it, and the agent describes again with `--tools default=<tool>`. Every command teamai prints after that keeps it. The run keeps that tool: it judges the scored steps, and the steps' models resolve for it when teamai installs agents for that tool.
 
@@ -1072,6 +1072,14 @@ After the start, every reply is a turn: the actions for the agent, the steps tha
 The skill driver declares `env: "commands"` (see [Requirements and limits](workflow-advanced.md#requirements-and-limits)). A command step and setup get their `requires.env` keys as with the local driver. A prompt step with `requires.env` waits, because TeamAI scopes team env only in the processes it starts. The driver never declares `tokens`, `max_turns`, or `network`, since no host reports a child's tokens or turns to TeamAI, nor `unattended`, so a prompt step with `permissions: unattended` waits. A headless prompt step under a `budget` waits, so a run-level `budget` holds every headless prompt step of the run. `max_turns` and `requires.network: false` are listed in `unenforced`. A worktree is not a sandbox: `requires.isolation: sandbox` is listed in `unenforced` too.
 
 When a step that waits for env or a budget works in a workspace that an earlier step of the run opens, describe sends the whole run to the local driver, for the person to start in their own terminal. Otherwise the session runs what it can. Once only waiting steps are left, it hands the run to the person, who continues it with `teamai workflow resume <run>` in their own terminal. The local driver runs its prompt steps with the headless tool that `workflows.tools` in local config names, or that `--tools` picks. When none of `TEAMAI_AI_TOOL`, `workflows.tools.default` and either `ai.tool` names a tool, the local start and the `resume` command the session gives carry `--tools default=<the session's tool>`.
+
+### From a T3 thread or a Paseo agent
+
+In a T3 Code thread (`T3CODE_THREAD_ID` is set) or a Paseo agent (`PASEO_AGENT_ID`), describe first checks whether a run could start now on that app's driver, `t3` or `paseo`. It opens the driver's runtimes as an unattended run would, so no sign-in page opens. When the run could start, the reply is `ask.kind: background` with `teamai workflow start <name> --driver t3`. When something is left to ask (`invoke: ask`, a required input, an optional gate), the reply is the usual question, and its starts use that driver. The agent runs the start in the background and waits for it to end. The steps appear in the app. When the run could not start there, describe answers as in any other session.
+
+The run in the background has no terminal, and no gate is decided for you. Only `--auto-approve` or `workflows.auto_approve` answers optional gates automatically. Once nothing else runs, the start ends with `hitl_waiting`. It names the step, its pass, message and options, whether the gate is required, the `respond` command, and the `resume --driver t3` command. The agent asks you. It answers an optional gate with `teamai workflow respond`, and gives you the command for a required one to run in the app's terminal. Then it resumes the run in the background. A run on the local driver from a session decides gates as before.
+
+An agent never starts a `deny` workflow. In an attended session, describe answers `ask.kind: local` with the start for you to run: in a T3 thread, `teamai workflow start <name> --driver t3` in the thread's T3 terminal; elsewhere, the local driver's start in your own terminal. An unattended run answers `denied`. Pull writes no skill for a `deny` workflow, so the agent finds it with `teamai list workflows`.
 
 ### Attended and unattended runs
 

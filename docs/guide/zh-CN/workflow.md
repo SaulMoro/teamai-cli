@@ -1055,7 +1055,7 @@ self 模式下，工作流 worktree 中的团队文件是已提交的版本。�
 
 ### 会话做什么
 
-agent 运行 `teamai workflow start --describe <name> --driver skill`。回复说明如何启动运行：直接启动、先问本人一个问题，或交给本地驱动。这个问题涵盖输入、同时运行几个步骤、谁回答可选审批，以及是否评审。
+agent 运行 `teamai workflow start --describe <name> --driver skill`。回复说明如何启动运行：直接启动、先问本人一个问题、在后台启动，或交给本地驱动。这个问题涵盖输入、同时运行几个步骤、谁回答可选审批，以及是否评审。
 
 TeamAI 从宿主设置的会话变量得知会话所用的工具。找不到时（例如 Oh My Pi 或 Qoder），且有步骤指定了模型或需要评分，describe 会要求提供工具，agent 就用 `--tools default=<tool>` 再次 describe。之后 teamai 打印的每条命令都会带上它。运行会记住这个工具：评分步骤由它评审；teamai 为该工具安装 agent 时，步骤的模型也按它解析。
 
@@ -1072,6 +1072,14 @@ TeamAI 从宿主设置的会话变量得知会话所用的工具。找不到时�
 skill 驱动声明 `env: "commands"`（见[要求和限制](workflow-advanced.md#要求和限制)）。命令步骤和 setup 像在本地驱动中一样获得各自的 `requires.env` 键。带 `requires.env` 的提示词步骤会等待，因为 TeamAI 只在自己启动的进程中限定团队 env。该驱动从不声明 `tokens`、`max_turns` 或 `network`，因为没有宿主会把子 agent 的 token 或轮次报告给 TeamAI；也从不声明 `unattended`，所以带 `permissions: unattended` 的提示词步骤会等待。处于 `budget` 下的无头提示词步骤会等待，所以运行级的 `budget` 会让该运行的所有无头提示词步骤等待。`max_turns` 和 `requires.network: false` 会列入 `unenforced`。worktree 不是 sandbox：`requires.isolation: sandbox` 也会列入 `unenforced`。
 
 当一个因 env 或 budget 而等待的步骤，在同一次运行中较早步骤打开的工作区里工作时，describe 会把整个运行交给本地驱动，由本人在自己的终端启动。否则会话先运行它能运行的部分。只剩等待的步骤时，它把运行交给本人，由本人在自己的终端用 `teamai workflow resume <run>` 继续。本地驱动用本地配置中 `workflows.tools` 指定的、或 `--tools` 选择的无头工具运行提示词步骤。`TEAMAI_AI_TOOL`、`workflows.tools.default` 和两处 `ai.tool` 都没有指定工具时，会话给出的本地启动命令和 `resume` 命令会带上 `--tools default=<会话的工具>`。
+
+### 从 T3 线程或 Paseo agent 启动
+
+在 T3 Code 线程（设置了 `T3CODE_THREAD_ID`）或 Paseo agent（`PASEO_AGENT_ID`）中，describe 先检查现在能否在该应用的驱动（`t3` 或 `paseo`）上启动运行。它像无人值守的运行那样打开驱动的运行时，所以不会打开登录页面。能启动时，回复是 `ask.kind: background`，带 `teamai workflow start <name> --driver t3`。还有要问的内容时（`invoke: ask`、必需输入、可选关卡），回复是平常的问题，其中的启动命令使用该驱动。agent 在后台运行启动命令，并等待它结束。步骤显示在应用中。不能在那里启动时，describe 的回答与其他会话相同。
+
+后台运行没有终端，任何关卡都不会替你决定。只有 `--auto-approve` 或 `workflows.auto_approve` 会自动回答可选关卡。其他内容都不再运行后，启动以 `hitl_waiting` 结束。它给出步骤、轮次、消息和选项、关卡是否必需、`respond` 命令，以及 `resume --driver t3` 命令。agent 会问你。可选关卡由它用 `teamai workflow respond` 回答；必需关卡则把命令交给你，在应用的终端中运行。然后它在后台继续运行。从会话中用本地驱动的运行仍按原来的方式决定关卡。
+
+agent 从不启动 `deny` 工作流。在有人值守的会话中，describe 回答 `ask.kind: local`，并给出由你运行的启动命令：在 T3 线程中，是在该线程的 T3 终端里运行 `teamai workflow start <name> --driver t3`；在其他地方，是在你自己的终端里运行本地驱动的启动命令。无人值守的运行回答 `denied`。pull 不会为 `deny` 工作流写 skill，所以 agent 用 `teamai list workflows` 找到它。
 
 ### 有人值守与无人值守的运行
 
