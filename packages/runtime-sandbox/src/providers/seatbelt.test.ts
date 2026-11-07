@@ -163,10 +163,10 @@ describe.runIf(process.platform === 'darwin')('seatbelt: on this Mac', () => {
 const fs = require('node:fs');
 const tries = { readHome: () => fs.readFileSync(process.argv[2], 'utf8'), listHome: () => fs.readdirSync(process.argv[3]), readOther: () => fs.readFileSync(process.argv[4], 'utf8'),
   writeOutside: () => fs.writeFileSync(process.argv[5], 'x'), writeWorktree: () => fs.writeFileSync('made.txt', 'made'), writeOwnHome: () => fs.writeFileSync(process.env.HOME + '/x', 'x'),
-  readGit: () => fs.readdirSync(process.argv[6]) };
+  readGit: () => fs.readdirSync(process.argv[6]), writeDotGit: () => fs.writeFileSync('.git', 'gitdir: /tmp/elsewhere') };
 console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, run]) => { try { run(); return [name, 'ok']; } catch (error) { return [name, error.code]; } }))));`;
 
-  it("keeps the member's home, temp directory and other repositories out of the step's reach, and lets it write only its place", async () => {
+  it("keeps the member's home, temp directory and other repositories out of the step's reach, and lets it write only its place, never the worktree's .git", async () => {
     host.tool('probe', PROBE);
     fs.writeFileSync(path.join(host.home, 'secret'), 'member secret');
     const other = path.join(host.dir, 'other-repo');
@@ -181,7 +181,8 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, 
     const { end, output } = await exec(connection, { argv: ['probe', path.join(host.home, 'secret'), host.home, path.join(other, 'file'), path.join(host.dir, 'outside.txt'), at.git], cwd: at.worktree });
 
     expect(end).toMatchObject({ event: 'exited', code: 0 });
-    expect(JSON.parse(output)).toEqual({ readHome: 'EPERM', listHome: 'EPERM', readOther: 'EPERM', writeOutside: 'EPERM', writeWorktree: 'ok', writeOwnHome: 'ok', readGit: 'ok' });
+    expect(JSON.parse(output)).toEqual({ readHome: 'EPERM', listHome: 'EPERM', readOther: 'EPERM', writeOutside: 'EPERM', writeWorktree: 'ok', writeOwnHome: 'ok', readGit: 'ok', writeDotGit: 'EPERM' });
+    expect(fs.readFileSync(at.dotGit, 'utf8')).toBe(`gitdir: ${at.git}\n`);
     expect(fs.readFileSync(path.join(at.worktree, 'made.txt'), 'utf8')).toBe('made');
     expect(fs.existsSync(path.join(host.dir, 'outside.txt'))).toBe(false);
   });
