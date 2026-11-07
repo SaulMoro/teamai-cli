@@ -25,7 +25,7 @@ const REFUSED = 2;
  * Runs `argv` with stdio, exit status and the signals this process gets passed through: to the process it starts, and,
  * through `signalling` (the grant's `signal`), to the tool in the sandbox when that process does not pass them on.
  */
-function passThrough(argv: readonly string[], env: NodeJS.ProcessEnv, signalling?: readonly string[]): Promise<WrapperEnd> {
+function passThrough({ argv, env, signalling }: { argv: readonly string[]; env: NodeJS.ProcessEnv; signalling?: readonly string[] }): Promise<WrapperEnd> {
   const [command = '', ...rest] = argv;
 
   return new Promise((resolve) => {
@@ -86,7 +86,7 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
   const command = instance?.command ?? tool;
 
   // Both apps probe the binary for its version: the host tool's, with nothing of teamai's.
-  if (args.length === 1 && args[0] === '--version') return passThrough([command, '--version'], env);
+  if (args.length === 1 && args[0] === '--version') return passThrough({ argv: [command, '--version'], env });
   const agent = env.PASEO_AGENT_ID === undefined || env.PASEO_AGENT_ID === '' ? null : env.PASEO_AGENT_ID;
   const at = realOf(env.PASEO_AGENT_CWD ?? cwd);
 
@@ -102,7 +102,7 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
 
   if (attempt === undefined) {
     // Paseo lists Codex's models with no agent, outside any step: without it no Codex agent can be made there.
-    if (agent === null && tool === 'codex' && args[0] === 'app-server' && env.PASEO_HOME !== undefined && env.PASEO_HOME !== '') return passThrough([command, ...args], env);
+    if (agent === null && tool === 'codex' && args[0] === 'app-server' && env.PASEO_HOME !== undefined && env.PASEO_HOME !== '') return passThrough({ argv: [command, ...args], env });
 
     return refuse(`teamai-sandbox-${name} runs only inside a teamai attempt; use the plain tool or instance`);
   }
@@ -115,7 +115,12 @@ export async function toolExec({ name, args, env, cwd, journal }: { name: string
 
   if ('refused' in answer) return refuse(`teamai-sandbox-${name} (${answer.refused.code}): ${answer.refused.message}`);
 
+  if ('unreadable' in answer) return refuse(`teamai-sandbox-${name}: the sandbox runtime of attempt ${attempt.attempt} answered what this wrapper cannot read (${answer.unreadable}), so nothing runs. Install the same teamai-cli version as the run's.`);
+
   if ('connected' in answer) return refuse(`teamai-sandbox-${name}: the attempt socket answered an ask as a registration, so nothing runs.`);
 
-  return passThrough([...answer.grant.argv, ...args], answer.grant.env, answer.grant.signal);
+  if ('grant' in answer) return passThrough({ argv: [...answer.grant.argv, ...args], env: answer.grant.env, signalling: answer.grant.signal });
+  const unhandled: never = answer;
+
+  return unhandled;
 }

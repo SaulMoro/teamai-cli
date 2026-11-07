@@ -76,7 +76,7 @@ const SOCKET_PATH_MAX = process.platform === 'darwin' ? 103 : 107;
  * past what a socket can bind, a directory of this user's own under the temp directory, named after the place so that
  * a reopen and a restarted runtime find the same path.
  */
-export function socketPathOf(result: string, place: string): string {
+export function socketPathOf({ result, place }: { result: string; place: string }): string {
   const beside = path.join(path.dirname(result), 'sandbox', 'attempt.sock');
 
   if (Buffer.byteLength(beside) <= SOCKET_PATH_MAX) return beside;
@@ -212,7 +212,12 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
       close: () => new Promise((resolve) => {
         for (const client of registrations) client.destroy();
         server.close(() => {
-          fs.rmSync(dir, { recursive: true, force: true });
+          try {
+            fs.rmSync(dir, { recursive: true, force: true });
+          } catch {
+            // A socket directory left behind holds no secret, and the next listen on this place replaces it.
+          }
+
           resolve();
         });
       }),
@@ -221,7 +226,7 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
 }
 
 /** Asks the socket at `socketPath` once, as the wrapper does: its answer, or why it could not reach the runtime. */
-export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unreachable: string }> {
+export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unreachable: string } | { unreadable: string }> {
   return new Promise((resolve) => {
     const client = net.connect(socketPath);
     client.on('error', (error) => resolve({ unreachable: error.message }));
@@ -232,7 +237,7 @@ export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unre
       try {
         resolve(AnswerSchema.parse(JSON.parse(line)));
       } catch (error) {
-        resolve({ unreachable: `it answered ${line.slice(0, 200)}: ${error instanceof Error ? error.message : String(error)}` });
+        resolve({ unreadable: `${line.slice(0, 200)}: ${error instanceof Error ? error.message : String(error)}` });
       }
     });
     client.on('end', () => resolve({ unreachable: 'it closed the connection without an answer' }));

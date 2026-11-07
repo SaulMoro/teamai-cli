@@ -392,7 +392,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
     client(id, spec) {
       const { args, env: clientEnv } = execOf(id, { ...spec, argv: [] }, { isInteractive: true });
 
-      return { ok: true, ...signalled([executable, ...args], spec.argv), env: definedOnly(clientEnv) };
+      return { ok: true, ...signalled({ exec: [executable, ...args], argv: spec.argv }), env: definedOnly(clientEnv) };
     },
 
     async exec(id, spec, onOutput): Promise<ExecEnd> {

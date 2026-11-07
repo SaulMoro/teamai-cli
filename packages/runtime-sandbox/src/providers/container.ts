@@ -368,7 +368,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     },
 
     client(id, spec) {
-      return { ok: true, ...signalled([executable, ...execArgs(id, { ...spec, argv: [] }, { isInteractive: true })], spec.argv), env: definedOnly(execEnv(spec)) };
+      return { ok: true, ...signalled({ exec: [executable, ...execArgs(id, { ...spec, argv: [] }, { isInteractive: true })], argv: spec.argv }), env: definedOnly(execEnv(spec)) };
     },
 
     async exec(id, spec, onOutput): Promise<ExecEnd> {

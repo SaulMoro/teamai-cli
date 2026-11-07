@@ -94,7 +94,7 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
  * it; and the command that signals that pid, the signal's name last. `exec` is the client's own argv up to the
  * sandbox's id; the pid file's name is random hex, so neither line takes anything from the step.
  */
-export function signalled(exec: readonly string[], argv: readonly string[]) {
+export function signalled({ exec, argv }: { exec: readonly string[]; argv: readonly string[] }) {
   const pidFile = `/tmp/teamai-tool-${crypto.randomBytes(8).toString('hex')}.pid`;
 
   return {
