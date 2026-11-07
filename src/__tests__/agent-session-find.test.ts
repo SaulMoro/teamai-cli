@@ -245,6 +245,20 @@ describe('AgentSession.find on OpenCode', () => {
     return id;
   }
 
+  // A runtime that launches OpenCode itself, such as a Paseo daemon, reports the data home its session is in.
+  it('reads a session from the data home its store is in, not the member\'s own', async () => {
+    const cwd = workspace('ws');
+    const elsewhere = path.join(mocks.home, 'daemon-data');
+    const session = opencodeExportFixture();
+    session.info.id = 'ses_ec4a5b73fffeElsewhereData1';
+    session.info.location.directory = cwd;
+    plantOpencodeSession(elsewhere, session);
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId: session.info.id, cwd, storeDir: path.join(elsewhere, 'opencode') }, { scrub: false });
+
+    expect(found).toMatchObject({ status: 'done', session: { sessionId: session.info.id, platform: 'opencode' } });
+  });
+
   it('reads a session with its tool calls, their results, and an attached image', async () => {
     const cwd = workspace('ws');
     const sessionId = plantOpencode(cwd);

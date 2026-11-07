@@ -73,12 +73,12 @@ type ChildServer =
   | { status: 'ready'; children(parent: string): Promise<string[]>; stop(): Promise<void> }
   | { status: 'unavailable'; reason: string };
 
-async function startChildServer(): Promise<ChildServer> {
+async function startChildServer(env: NodeJS.ProcessEnv): Promise<ChildServer> {
   const port = await freePort();
   const password = randomBytes(16).toString('hex');
 
   const child = crossSpawn('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
-    env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+    env: { ...env, OPENCODE_SERVER_PASSWORD: password },
     stdio: 'ignore',
     windowsHide: true,
   });
@@ -457,6 +457,15 @@ export class OpencodeAdapter extends AgentAdapter {
     return fs.existsSync(this.storageRoot);
   }
 
+  /**
+   * The environment OpenCode's CLI reads this adapter's store in: `XDG_DATA_HOME` set to the directory that holds
+   * `storageRoot`, so a store a runtime reported, such as a Paseo daemon's data home, is read there and not in the
+   * member's own.
+   */
+  private storeEnv(): NodeJS.ProcessEnv {
+    return path.basename(this.storageRoot) === 'opencode' ? { ...process.env, XDG_DATA_HOME: path.dirname(this.storageRoot) } : process.env;
+  }
+
   /** Run an `opencode session` command; throws `ToolUnavailableError` when no OpenCode 2 runs here. */
   private async session(args: string[], cwd?: string): Promise<ExecResult> {
     const version = await probeBinary('opencode');
@@ -470,7 +479,7 @@ export class OpencodeAdapter extends AgentAdapter {
       );
     }
 
-    return execCommand('opencode', ['session', ...args, '--standalone'], { cwd });
+    return execCommand('opencode', ['session', ...args, '--standalone'], { cwd, env: this.storeEnv() });
   }
 
   /**
@@ -521,7 +530,7 @@ export class OpencodeAdapter extends AgentAdapter {
    * reads each child with `session export`, and stops it.
    */
   async readSubagents(session: Session, _ref: SessionReadRef): Promise<SubagentsRead> {
-    const server = await startChildServer();
+    const server = await startChildServer(this.storeEnv());
 
     if (server.status === 'unavailable') return { status: 'unread', reason: server.reason };
 
