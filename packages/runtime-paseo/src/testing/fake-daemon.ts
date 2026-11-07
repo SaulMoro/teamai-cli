@@ -122,6 +122,8 @@ const BehaviourSchema = z.object({
   provider_errors: z.record(z.string(), z.object({ request: z.enum(['diagnostic', 'modes']), error: z.string() })).default({}),
   /** How long the daemon takes to save a config change, as one that persists and applies it does. */
   config_ms: z.number().int().nonnegative().default(0),
+  /** How long the daemon takes to save a config change that adds one of these providers, by id, over `config_ms`. */
+  provider_config_ms: z.record(z.string(), z.number().int().nonnegative()).default({}),
   /** The daemon refuses every config change with this error. */
   refuse_config: z.string().optional(),
   /** The daemon fails every read of its config with this error. */
@@ -456,7 +458,9 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       open_project_request: opening,
       'agent.create.request': creating,
       archive_workspace_request: archiving,
-      set_daemon_config_request: behaviour().config_ms,
+      set_daemon_config_request: message.type === 'set_daemon_config_request'
+        ? Math.max(behaviour().config_ms, ...Object.keys(message.config.providers ?? {}).map((id) => behaviour().provider_config_ms[id] ?? 0))
+        : 0,
       fetch_agent_request: behaviour().fetch_ms,
     };
 

@@ -226,12 +226,47 @@ function isAlive(pid: number): boolean {
 }
 
 /**
- * Holds `key` in `dir` for one runtime at a time across the runtimes on a journal, waiting while another live runtime
- * holds it, and taking it from one that died or has held it for `HOLD_STALE_MS`. Resolves to its release, which leaves a
- * hold another runtime took over; rejects when the hold cannot be written.
+ * The last hold this process took or waits for, by hold file. The file names the process that holds it, so it cannot
+ * tell two holds of one process apart: a second one waits here for the first instead.
+ */
+const queued = new Map<string, Promise<void>>();
+
+/**
+ * Holds `key` in `dir` for one caller at a time across the runtimes on a journal and within this process, waiting while
+ * another holds it, and taking it from a runtime that died or has held it for `HOLD_STALE_MS`. Resolves to its release,
+ * which leaves a hold another runtime took over; rejects when the hold cannot be written.
  */
 async function hold(dir: string, key: string): Promise<() => void> {
   const file = path.join(dir, createHash('sha256').update(key).digest('hex').slice(0, 32));
+  let leave = (): void => {};
+  const left = new Promise<void>((resolve) => { leave = resolve; });
+  const turn = queued.get(file) ?? Promise.resolve();
+  const mine = turn.then(() => left);
+  queued.set(file, mine);
+
+  const done = (): void => {
+    leave();
+
+    if (queued.get(file) === mine) queued.delete(file);
+  };
+
+  await turn;
+
+  try {
+    const release = await holdFile(dir, file);
+
+    return () => {
+      release();
+      done();
+    };
+  } catch (error) {
+    done();
+    throw error;
+  }
+}
+
+/** Holds `file` in `dir` for one runtime at a time, as `hold` does across processes. */
+async function holdFile(dir: string, file: string): Promise<() => void> {
   fs.mkdirSync(dir, { recursive: true });
   // Written whole, then linked into place, so another runtime never reads a hold with no pid in it. Each hold is told
   // apart from every other, so a hold found stale is never mistaken for one another runtime took since.
