@@ -109,6 +109,7 @@ await serve({
   t3Home,
   t3UserHome: t3UserHomeOf(t3Home, getUserHome()),
   home: getUserHome(),
+  env: process.env,
   settingsLock: path.join(state, 'settings.lock'),
   t3Cli,
   added: addedProjects(path.join(state, 'added-projects.json')),
