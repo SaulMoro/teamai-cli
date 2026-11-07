@@ -67,6 +67,9 @@ const ThreadShellSchema = z.object({
   worktreePath: z.string().nullable(),
   runCount: z.number().int().nonnegative(),
   pendingRequestCount: z.number().int().nonnegative(),
+  /** The provider instance and model the thread's runs use. T3 reports no model options here. */
+  providerInstanceId: z.string().min(1).nullable().optional().catch(undefined),
+  model: z.string().min(1).nullable().optional().catch(undefined),
 });
 
 export type ThreadShell = z.infer<typeof ThreadShellSchema>;

@@ -383,7 +383,11 @@ const TOOLS = {
     ].filter((item) => args.itemId === undefined || item.itemId === args.itemId);
 
     return ok({
-      thread: { threadId: thread.threadId, status: thread.status, worktreePath: thread.worktreePath ?? null, runCount: thread.runCount ?? 1, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled },
+      // As T3 reads a thread: the instance and model its runs use and its mode, but not the model's options.
+      thread: {
+        threadId: thread.threadId, status: thread.status, worktreePath: thread.worktreePath ?? null, runCount: thread.runCount ?? 1, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled,
+        providerInstanceId: thread.instanceId ?? null, model: thread.model ?? null, runtimeMode: thread.runtimeMode ?? null,
+      },
       items, nextPosition: items.at(-1)?.position ?? null, hasMore: false,
     });
   },

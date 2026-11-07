@@ -1387,6 +1387,68 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], default_tool: 'claude' } });
     });
 
+    // T3 sets T3CODE_THREAD_ID in the sessions of its threads, so a run started there takes that thread's model.
+    describe('started from a T3 thread', () => {
+      const FROM = { T3CODE_THREAD_ID: 'thread-parent-1' };
+      const MEMBER_DEFAULT = { defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, defaultRuntimeMode: 'approval-required' };
+
+      const initFrom = async (env: Record<string, string>): Promise<Connection> => {
+        const runtime = start(env);
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+
+        return runtime;
+      };
+
+      it('runs a step that names no tool or model on that thread\'s instance and model, sent as they are, in the member\'s mode, never the thread\'s', async () => {
+        t3.settings(MEMBER_DEFAULT);
+        t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId: 'codex', model: 'gpt-6.1-sol', runtimeMode: 'full-access' });
+        const runtime = start(FROM);
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], default_tool: 'codex' } });
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000021', { tool: 'codex', model: undefined }));
+
+        expect(await ended(runtime, 'op-00000021')).toMatchObject({ event: 'finished', session: { tool: 'codex' } });
+        // T3 applies only the project's default to a launch that names no model, so the thread's is named.
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).toMatchObject({ modelSelection: { instanceId: 'codex', model: 'gpt-6.1-sol' }, runtimeMode: 'approval-required' });
+        expect(noticesOf(runtime)).toEqual([]);
+      });
+
+      it('runs a claude step on the Claude instance that thread runs on, with its model, over the member\'s default instance', async () => {
+        t3.config({ providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work', displayName: 'Claude (work)' }, CODEX] });
+        t3.settings(MEMBER_DEFAULT);
+        t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'completed', instanceId: 'claude-work', model: 'claude-sonnet-5-5' });
+        const runtime = await initFrom(FROM);
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000022', { model: undefined }));
+
+        expect(await ended(runtime, 'op-00000022')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claude-work', model: 'claude-sonnet-5-5' });
+      });
+
+      it('keeps the model a step names over that thread\'s', async () => {
+        t3.settings(MEMBER_DEFAULT);
+        t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' });
+        const runtime = await initFrom(FROM);
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000023', { model: { name: 'claude-opus-5-5', effort: 'high' } }));
+
+        expect(await ended(runtime, 'op-00000023')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claudeAgent', model: 'claude-opus-5-5', options: [{ id: 'effort', value: 'high' }] });
+      });
+
+      it('runs on the member\'s T3 default, and says why once, when T3 cannot read that thread', async () => {
+        t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } });
+        const runtime = await initFrom({ T3CODE_THREAD_ID: 'thread-gone-1' });
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000024', { model: undefined }));
+
+        expect(await ended(runtime, 'op-00000024')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('modelSelection');
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: expect.stringMatching(/^teamai could not read the T3 thread thread-gone-1 this run was started from \(Thread thread-gone-1 was not found\), so a step that names no tool or model runs on your T3 Code default instead\.$/) }]);
+      });
+    });
+
     describe('a tool instance no T3 provider instance runs yet', () => {
       const ACME ={ name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
       const AUTO = 'orchestration:read orchestration:operate';
