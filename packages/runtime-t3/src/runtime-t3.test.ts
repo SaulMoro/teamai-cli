@@ -1356,14 +1356,17 @@ describe('teamai-runtime-t3', () => {
     });
 
     // teamai gives an instance with no home of its own its base tool's home, which CLAUDE_CONFIG_DIR moves.
-    it.each<{ set: string; homePath: string | undefined; noticed: boolean }>([
-      { set: 'names it when the T3 instance runs it in Claude\'s default home', homePath: undefined, noticed: true },
-      { set: 'says nothing when the T3 instance runs it in that home', homePath: 'claude-config', noticed: false },
-    ])('takes CLAUDE_CONFIG_DIR as the home of a command-only instance, and $set', async ({ homePath, noticed }) => {
+    it.each<{ set: string; homePath: string | undefined; env: Record<string, string>; noticed: boolean }>([
+      { set: 'names it when the T3 instance runs it in Claude\'s default home', homePath: undefined, env: {}, noticed: true },
+      { set: 'says nothing when the T3 instance runs it in that home', homePath: 'claude-config', env: {}, noticed: false },
+      // T3 sets CLAUDE_CONFIG_DIR in a thread to the home of that thread's instance, which says nothing of the tool.
+      { set: 'says nothing in a run started from a T3 thread, where T3 set it', homePath: undefined, env: { T3CODE_THREAD_ID: 'thread-parent-1' }, noticed: false },
+    ])('takes CLAUDE_CONFIG_DIR as the home of a command-only instance, and $set', async ({ homePath, env, noticed }) => {
       const moved = path.join(dir, 'claude-config');
       t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
       t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', ...(homePath && { homePath: path.join(dir, homePath) }) } } } });
-      const runtime = start({ CLAUDE_CONFIG_DIR: moved });
+      t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId: 'claudeAgent', model: 'claude-opus-5-5' });
+      const runtime = start({ CLAUDE_CONFIG_DIR: moved, ...env });
       runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }] });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
@@ -1528,6 +1531,15 @@ describe('teamai-runtime-t3', () => {
       };
 
       const ADDED = (binaryPath: string) => ({ driver: 'claudeAgent', displayName: 'acme-claude', enabled: true, config: { binaryPath } });
+
+      // A run's CLAUDE_CONFIG_DIR, such as the one T3 sets in a thread, is not a home the tool has for every run.
+      it('adds a command-only instance with no Home path when CLAUDE_CONFIG_DIR moves Claude\'s home', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const { runtime } = await initOn({ env: { CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config') } });
+
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toEqual({ ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+      });
 
       it('offers it at init and writes nothing there, then adds it on the first open that runs it, as the member, keeping every other setting, and runs the step on it', async () => {
         signIn(t3, undefined, undefined, AUTO);

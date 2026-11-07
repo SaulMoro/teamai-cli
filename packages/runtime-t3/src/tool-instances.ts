@@ -175,6 +175,7 @@ export function driverOfProvider(provider: Provider): Driver | undefined {
  */
 export function teamaiToolHome({ instance, driver, home, env, cwd }: { instance: InitInstance; driver: Driver; home: string; env: Readonly<Record<string, string | undefined>>; cwd: string }): string {
   if (instance.home) return path.resolve(home, instance.home.dir);
+
   const moved = env[DRIVERS[driver].homeEnv]?.trim();
 
   if (!moved) return path.join(home, DRIVERS[driver].home);
