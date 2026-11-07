@@ -177,6 +177,15 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
 
   const once = oneBuildPerKey<{ ok: true } | { ok: false; failure: RuntimeFailure }>();
 
+  /** sbx's version, which keys a warm template with the template it is saved from: a new sbx ships new templates. */
+  let version: Promise<string> | undefined;
+
+  const sbxVersion = (): Promise<string> => {
+    version ??= cli(['version'], { timeoutMs: COMMAND_MS }).then((ran) => (ran.kind === 'ran' && ran.code === 0 ? ran.stdout.trim() : 'unknown'));
+
+    return version;
+  };
+
   /** Whether sbx keeps the warm template of `plan` already; a list sbx cannot give is taken as not, so it is saved again. */
   const isSaved = async (plan: WarmPlan): Promise<boolean> => {
     const ran = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS });
@@ -218,7 +227,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
   /** The `-t` an attempt in `checkout` from `template` is created with: the warm template, saved first when it is not there. */
   const warmFrom = async (template: string, checkout: string): Promise<{ ok: true; args: string[] } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, args: [] };
-    const planned = planWarm({ base: template, recipe: warm, checkout });
+    const planned = planWarm({ base: `${template}@${await sbxVersion()}`, recipe: warm, checkout });
 
     if (!planned.ok) return planned;
     const { plan } = planned;

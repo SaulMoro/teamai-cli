@@ -2713,6 +2713,39 @@ describe('a warm image', () => {
     await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 5_000 });
   }, 30_000);
 
+  it('makes a new warm image on docker once its image here is another under the same tag', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: WARM });
+    const at = checkout();
+    await openAttempt(connection, at, ATTEMPT);
+    connection.send({ type: 'close', handle: HANDLE });
+    await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
+    // The team pushed the tag again with a new tool, and it was pulled here.
+    engine.image(IMAGE, { 'new-tool': 'console.log("new")' });
+
+    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    expect(builds().saves).toHaveLength(2);
+    expect(engine.savedImages()).toHaveLength(2);
+  });
+
+  it('makes a new warm template on sbx once sbx is upgraded, since a new sbx ships new templates', async () => {
+    const options = { provider: 'sbx', agent: 'claude', warm: WARM };
+    const first = start();
+    await init(first, options);
+    const at = checkout();
+    await openAttempt(first, at, ATTEMPT);
+    first.send({ type: 'close', handle: HANDLE });
+    await first.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
+    await first.end();
+    engine.upgrade('0.52.0');
+    const second = start();
+    await init(second, options);
+
+    expect(await openAttempt(second, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    expect(builds().saves).toHaveLength(2);
+    expect(engine.savedImages()).toHaveLength(2);
+  });
+
   it('removes the sandbox of an attempt whose close was still looking for it when its warm image was done, and fails the open', async () => {
     // The close's lookup outlasts the build, so the open, past its warm image, creates while the close forgets the place.
     engine.delay('commit', 2_000);

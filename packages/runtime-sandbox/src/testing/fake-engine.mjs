@@ -19,6 +19,7 @@
 //                       answers, as an engine that restarts the container does; a file `delay-<command>`
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
+//                       `version` holding a version makes `version` print it, as an upgraded engine does; a file
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
 //                       exists, before it answers, as a create still on its way; a file `exec-hold` holding a number
 //                       of milliseconds makes docker's or podman's `exec` wait that long once it found its container, before it
@@ -202,6 +203,16 @@ function imagePath(image) {
   return `${toolsOf(image)}${path.delimiter}/usr/bin${path.delimiter}/bin`;
 }
 
+/** An image's id, which follows what it holds: the same tag pushed again with other tools has another. */
+function imageId(image) {
+  const hash = crypto.createHash('sha256').update(image);
+  const dir = images[image];
+
+  if (dir !== undefined && fs.existsSync(dir)) for (const name of fs.readdirSync(dir).sort()) hash.update(`\0${name}\0`).update(fs.readFileSync(path.join(dir, name)));
+
+  return `sha256:${hash.digest('hex')}`;
+}
+
 function pulled(image) {
   return fs.existsSync(path.join(state, 'pulled', encodeURIComponent(image)));
 }
@@ -243,7 +254,8 @@ const commandDelay = path.join(state, `delay-${command}`);
 if (fs.existsSync(commandDelay)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(commandDelay, 'utf8')));
 
 if (command === '--version' || command === 'version') {
-  process.stdout.write(`${engine} version 0.0.0-fake\n`);
+  const version = path.join(state, 'version');
+  process.stdout.write(`${engine} version ${fs.existsSync(version) ? fs.readFileSync(version, 'utf8') : '0.0.0-fake'}\n`);
   process.exit(0);
 }
 
@@ -269,7 +281,7 @@ function docker() {
       const [, , , image] = rest;
 
       if (rest[0] !== 'inspect' || !pulled(image)) fail(`Error: No such image: ${image}`);
-      process.stdout.write(`sha256:${crypto.createHash('sha256').update(image).digest('hex')}\n`);
+      process.stdout.write(`${imageId(image)}\n`);
       break;
     }
 

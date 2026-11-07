@@ -147,9 +147,25 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   };
 
   /** The image an attempt in `checkout` starts from: the warm image, made first when it is not there yet, else `image`. */
+  /**
+   * What a warm image is keyed by: `image` with the id it has here, pulled first when it is not, so the tag pushed again
+   * and pulled makes a new warm image. An image the engine cannot give is keyed by its name: its build then fails.
+   */
+  const baseOf = async (): Promise<string> => {
+    const inspect = () => cli(['image', 'inspect', '--format', '{{.Id}}', image], { timeoutMs: COMMAND_MS });
+    let found = await inspect();
+
+    if (!(found.kind === 'ran' && found.code === 0)) {
+      await cli(['pull', image]);
+      found = await inspect();
+    }
+
+    return found.kind === 'ran' && found.code === 0 ? `${image}@${found.stdout.trim()}` : image;
+  };
+
   const imageFor = async (checkout: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, image };
-    const planned = planWarm({ base: image, recipe: warm, checkout });
+    const planned = planWarm({ base: await baseOf(), recipe: warm, checkout });
 
     if (!planned.ok) return planned;
     const { plan } = planned;

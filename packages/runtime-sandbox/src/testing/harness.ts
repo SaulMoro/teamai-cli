@@ -51,6 +51,8 @@ export interface FakeEngine {
   stopHold(ms: number): void;
   /** Makes every later run of `command` (`run`, `rm`, …) wait `ms` before it does anything; 0 lets it run at once again. */
   delay(command: string, ms: number): void;
+  /** Makes `version` print `version`, as the engine upgraded to it. */
+  upgrade(version: string): void;
   /** Makes `ps --format` fail, as an engine that cannot render the format, or work again. */
   failFormat(shouldFail: boolean): void;
   /** Makes every later `run -d` wait `ms` once its container exists, before it answers; 0 answers at once again. */
@@ -140,6 +142,9 @@ export function fakeEngine(dir: string): FakeEngine {
     },
     stopHold(ms) {
       fs.writeFileSync(path.join(state, 'stop-hold'), String(ms));
+    },
+    upgrade(version) {
+      fs.writeFileSync(path.join(state, 'version'), version);
     },
     delay(command, ms) {
       fs.writeFileSync(path.join(state, `delay-${command}`), String(ms));
