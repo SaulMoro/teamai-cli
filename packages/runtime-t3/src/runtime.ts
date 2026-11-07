@@ -15,7 +15,7 @@ import { parseOptions } from './options.js';
 import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
-import { driverOfProvider, runsOwnBinary, servedInstances } from './tool-instances.js';
+import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde } from './tool-instances.js';
 import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
@@ -155,6 +155,8 @@ export interface ServeOptions {
   t3Home: string;
   /** The home of the user T3 Code runs as, where a provider instance with no `homePath` keeps its tool's sessions. */
   t3UserHome: string;
+  /** The member's home as teamai runs, which the tool homes teamai gives are under. */
+  home: string;
   /** The `t3` command, which adds and removes a project as the member does. */
   t3Cli: T3Command;
   /** The projects teamai added for folders of its own, which it removes once it removed their folder. */
@@ -779,6 +781,20 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A step that never names a misspelt key would never show its reason.
       for (const message of served.notices) notice(message, {});
+
+      // T3 runs an instance in its provider instance's home, where it signs in and keeps its sessions.
+      for (const instance of request.instances ?? []) {
+        const provider = served.served.get(instance.name);
+        const driver = provider && driverOfProvider(provider);
+
+        if (!provider || !driver) continue;
+        const theirs = instanceToolHome(settings, { instanceId: provider.providerInstanceId, driver, userHome: options.t3UserHome });
+        const ours = teamaiToolHome(instance, driver, options.home);
+
+        if (theirs !== ours) {
+          notice(`T3 Code provider instance "${provider.providerInstanceId}" runs ${instance.name} in ${tilde(theirs, options.t3UserHome)}, while teamai gives ${instance.name} the home ${tilde(ours, options.home)}: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ${tilde(ours, options.home)}.`, {});
+        }
+      }
 
       // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
       const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => served.unavailable[tool] === undefined));

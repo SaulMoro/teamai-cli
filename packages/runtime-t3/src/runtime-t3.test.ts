@@ -453,6 +453,22 @@ describe('teamai-runtime-t3', () => {
         ]);
       });
 
+      // T3 runs the instance in its own home, so the instance signs in there and keeps its sessions there, not in teamai's.
+      it.each([
+        { case: 'has no home of its own, so runs in Claude\'s', homePath: undefined, notice: 'T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance\'s Home path in T3 Code under Settings → Providers to ~/.acme-claude.' },
+        { case: 'has another home', homePath: '~/.acme-old', notice: 'T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.acme-old, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance\'s Home path in T3 Code under Settings → Providers to ~/.acme-claude.' },
+        { case: 'has the same home', homePath: '~/.acme-claude', notice: undefined },
+      ])('says once when the instance that runs it $case than teamai gives it', async ({ homePath, notice }) => {
+        signIn(t3);
+        t3.config({ providers: [CLAUDE, CODEX, ACME] });
+        t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', ...(homePath && { homePath }) } } } });
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' }, instances: [{ ...INSTANCE, home: { dir: '.acme-claude', env: 'CLAUDE_CONFIG_DIR' } }] });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+        expect(noticesOf(runtime)).toEqual(notice === undefined ? [] : [{ event: 'notice', message: notice }]);
+      });
+
       it('runs it on the instance `instances` maps it to', async () => {
         const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude', 'acme-claude-2': '/usr/local/bin/acme-claude' }, providers: [CLAUDE, ACME, { ...ACME, providerInstanceId: 'acme-claude-2' }], options: { instances: { 'acme-claude': 'acme-claude-2' } } });
 
