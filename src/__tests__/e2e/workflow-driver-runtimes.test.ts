@@ -570,6 +570,41 @@ steps:
     expect(fs.existsSync(launches)).toBe(false);
   });
 
+  describe('an instance a runtime says it cannot run now', () => {
+    const reason = 'acme-claude runs acme-claude, which is not in the toy image: add it to the image, or run the step with --driver local.';
+
+    it('fails its step with the runtime\'s reason, on a definition whose runtimes are all off this host', async () => {
+      acmeInstance();
+      writeDefinition('toyacmeunavailable', [{ use: 'toy', options: { state, can: { tools: ['claude'] }, unavailable: { 'acme-claude': reason } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyacmeunavailable', '--tools', 'default=acme-claude'], repo, env());
+
+      expect(readRunState(runOf(ran)).steps, ran.stderr).toMatchObject([{
+        status: 'failed',
+        failure: { code: 'tool_unavailable', message: `Step "review" names no tool and runs on acme-claude, which the driver of this run cannot launch here: toy: ${reason} Or pick a tool it launches with --tools default=<tool>.` },
+      }]);
+      expect(fs.existsSync(launches)).toBe(false);
+    });
+
+    it('names the runtime\'s reason where a strict step needs what no single runtime offers', async () => {
+      acmeInstance();
+      writeFlow('strictnotool', `  - id: review
+    prompt: Review the repository in a sandbox.
+    requires: { isolation: sandbox, strict: true }
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('toysbxacme', [{ use: 'toy', options: { state, can: { isolation: 'sandbox', env: true, tools: ['claude'] }, unavailable: { 'acme-claude': reason } } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'strictnotool', '--driver', 'toysbxacme', '--tools', 'default=acme-claude'], repo, env());
+
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'requirement_unmet' } });
+      expect(review && 'failure' in review ? review.failure?.message : '').toContain(`runtime toy lacks tools (toy: ${reason})`);
+      expect(fs.existsSync(launches)).toBe(false);
+    });
+  });
+
   it('tells a runtime at init the checkout the run starts in, and starts it there', async () => {
     writeDefinition('toycheckout', [{ use: 'toy', options: { state } }]);
 

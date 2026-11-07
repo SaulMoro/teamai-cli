@@ -1898,12 +1898,15 @@ function beyondSoleDriver(
   if (helds.some((held) => held.some((key) => key.startsWith('policy.')))) return undefined;
   const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
 
+  // A runtime that cannot run the tool now says why and what to do; every refusal of the step quotes it.
+  const reasons = tool === undefined ? [] : sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
+
   if (lackedByAll.includes('tools') && tool !== undefined) {
     // A runtime off this host serves an instance only when it lists it; the member's own machine may launch it.
     const extended = toolOf(tool)?.instance?.extends;
     const prompted = sole.offers.filter((offer) => offer.can.prompt !== false);
 
-    if (extended !== undefined && prompted.length > 0 && prompted.every((offer) => offer.can.remote === true)) {
+    if (extended !== undefined && reasons.length === 0 && prompted.length > 0 && prompted.every((offer) => offer.can.remote === true)) {
       const runtimes = prompted.map((offer) => offer.runtime);
 
       return {
@@ -1912,15 +1915,20 @@ function beyondSoleDriver(
       };
     }
 
-    const reasons = sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
-
     return toolUnavailable(step, tool, isNamed, reasons);
   }
 
   if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
 
   if (sole.offers.length === 1 || lackedByAll.length > 0) return undefined;
-  const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.map(lackedKey).join(', ') ?? 'nothing'}`).join('; ');
+
+  const lackedOn = (offer: RuntimeOffer, key: Missing): string => {
+    const reason = key === 'tools' && tool !== undefined ? offer.unavailable?.[tool] : undefined;
+
+    return reason === undefined ? lackedKey(key) : `${lackedKey(key)} (${offer.runtime}: ${reason})`;
+  };
+
+  const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.map((key) => lackedOn(offer, key)).join(', ') ?? 'nothing'}`).join('; ');
 
   return {
     code: 'requirement_unmet',

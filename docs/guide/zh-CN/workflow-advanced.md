@@ -1782,6 +1782,8 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 ✖ Step "review" failed with tool_unsupported: Step "review" runs on acme-claude, an instance of claude, which runtime sandbox of driver sandboxed cannot launch. Run it with --driver local.
 ```
 
+如果你的运行时改为把这个实例列在 `unavailable` 里并说明原因，这个步骤的每一种拒绝都会引用这个原因：步骤以 `tool_unavailable` 失败并带上它；没有单个运行时能接手的严格步骤会在 `tools` 旁边写出它，例如 `runtime sandbox lacks tools (sandbox: acme-claude runs acme-claude, which is not in the image: …)`。
+
 当运行时的定义或成员配置让某个工具在不弹出权限提示的情况下运行时，运行时会在 `can` 旁边以 `permissions` 报告。teamai 从不替你设置这个选项。在沙箱之外，运行会提示一次，并把其步骤的隔离记录为 `none`。`permissions: unattended` 的步骤只在该运行时报告的工具上运行，并且仍然需要 `requires: { isolation: sandbox, strict: true }`：
 
 ```text

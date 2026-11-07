@@ -1788,6 +1788,8 @@ When your runtime's provider keeps its own login for a tool, such as a sandbox s
 ✖ Step "review" failed with tool_unsupported: Step "review" runs on acme-claude, an instance of claude, which runtime sandbox of driver sandboxed cannot launch. Run it with --driver local.
 ```
 
+When your runtime lists the instance in `unavailable` instead, with why, every refusal of its step quotes that reason: the step fails `tool_unavailable` with it, and a strict step that no single runtime takes names it beside `tools`, as in `runtime sandbox lacks tools (sandbox: acme-claude runs acme-claude, which is not in the image: …)`.
+
 A runtime whose definition or member config opts a tool into running without permission prompts reports it as `permissions`, beside `can`. teamai never sets that option for you. Outside a sandbox, the run warns once and records its steps' isolation as `none`. A `permissions: unattended` step runs on such a runtime only on a tool it reports there, and still needs `requires: { isolation: sandbox, strict: true }`:
 
 ```text
