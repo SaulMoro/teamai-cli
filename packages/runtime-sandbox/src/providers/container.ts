@@ -204,6 +204,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   };
 
   return {
+    family: 'bind',
     async offer(credentials, instances) {
       const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}|{{.OperatingSystem}}']);
 

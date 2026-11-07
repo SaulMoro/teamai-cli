@@ -264,6 +264,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
   };
 
   return {
+    family: 'bind',
     async offer(credentials, instances) {
       const ls = await cli(['ls', '--json']);
 

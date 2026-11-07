@@ -333,6 +333,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
   };
 
   return {
+    family: 'copy',
     async offer(credentials, instances) {
       const auth = signedIn();
 
