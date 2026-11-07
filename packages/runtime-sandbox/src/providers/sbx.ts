@@ -5,9 +5,9 @@ import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
 import type { WarmOptions } from '../options.js';
 import { isRunning, oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
-import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
-import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
+import { cliOf, commandsOf, definedOnly, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
 //
@@ -92,7 +92,18 @@ function namesListed(stdout: string): string[] | undefined {
  * template each attempt starts from, saved from that template.
  */
 export function sbxProvider({ agent, owner, env, warm }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }> }): Provider {
-  const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
+  const { run: cli, executable } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
+
+  /** `sbx exec`'s arguments and environment: the spec's names by name only, never sbx's own settings, which stay. */
+  const execOf = (id: string, spec: ExecSpec, { isInteractive }: { isInteractive: boolean }) => {
+    const passed = Object.keys(spec.env).filter((variable) => !CLI_SETTING.test(variable));
+    const withheld = spec.unset.length > 0 ? ['env', ...spec.unset.flatMap((variable) => ['-u', variable]), '--'] : [];
+
+    return {
+      args: ['exec', ...(isInteractive ? ['-i'] : []), '-w', spec.cwd, ...passed.flatMap((variable) => ['-e', variable]), id, ...withheld, ...spec.argv],
+      env: { ...env, ...Object.fromEntries(passed.map((variable) => [variable, spec.env[variable]])) } satisfies NodeJS.ProcessEnv,
+    };
+  };
 
   /** What starts the name of every sandbox of this journal. */
   const journalPrefix = `teamai-${owner}-`;
@@ -377,14 +388,18 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
       return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not create the sandbox for attempt ${key.attempt} from agent ${template}: ${messageOf(created)}` } };
     },
 
+    client(id, spec) {
+      const { args, env: clientEnv } = execOf(id, spec, { isInteractive: true });
+
+      return { ok: true, argv: [executable, ...args], env: definedOnly(clientEnv) };
+    },
+
     async exec(id, spec, onOutput): Promise<ExecEnd> {
-      const passed = Object.keys(spec.env).filter((variable) => !CLI_SETTING.test(variable));
-      const cliEnv: NodeJS.ProcessEnv = { ...env, ...Object.fromEntries(passed.map((variable) => [variable, spec.env[variable]])) };
-      const withheld = spec.unset.length > 0 ? ['env', ...spec.unset.flatMap((variable) => ['-u', variable]), '--'] : [];
+      const { args, env: cliEnv } = execOf(id, spec, { isInteractive: false });
       let isFirstChunk = true;
 
       // A sandbox sbx stopped while idle starts again first, with sbx's own notice before the step's stderr.
-      const ran = await cli(['exec', '-w', spec.cwd, ...passed.flatMap((variable) => ['-e', variable]), id, ...withheld, ...spec.argv], {
+      const ran = await cli(args, {
         env: cliEnv,
         onOutput: (stream, data) => {
           const own = isFirstChunk && stream === 'stderr' ? data.replace(STARTED, '') : data;

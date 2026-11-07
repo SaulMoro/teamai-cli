@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type Provider } from '../provider.js';
 import { offerSignedIn, type SignInProvider } from '../sign-in.js';
-import { commandsOf, LAUNCHABLE, WORKSPACES } from './cli.js';
+import { commandsOf, definedOnly, LAUNCHABLE, WORKSPACES } from './cli.js';
 
 // ─── Native sandboxes: seatbelt (macOS) and bwrap (Linux) ───
 //
@@ -200,6 +200,35 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
     return fs.existsSync(file) ? ViewFileSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8'))).view : undefined;
   };
 
+  /**
+   * The sandbox's command line for `spec` in sandbox `id`, its executable found on the runtime's PATH (never one the
+   * step sets), and the whole environment it runs with: only what a shell needs, the step's own home and temp
+   * directory, and the spec's names, less those it withholds.
+   */
+  const launchOf = (id: string, spec: ExecSpec): { ok: true; command: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; failure: RuntimeFailure } => {
+    const view = viewOf(id);
+
+    if (view === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
+    const [argv0 = ''] = spec.argv;
+    const own = { home: realOf(path.join(dirOf(id), 'home')), tmp: realOf(path.join(dirOf(id), 'tmp')) };
+    const kept = Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
+    const childEnv: NodeJS.ProcessEnv = { ...kept, HOME: own.home, TMPDIR: own.tmp, ...spec.env };
+
+    for (const name of spec.unset) delete childEnv[name];
+
+    const { command, args } = sandbox.wrap({
+      argv: spec.argv,
+      cwd: spec.cwd,
+      writable: [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)].map(realOf).concat(own.home, own.tmp),
+      readable: [...view.readonly.map(realOf), ...toolRoots(argv0, env.PATH, home)],
+      hidden: [realOf(home), ...(env.TMPDIR ? [realOf(env.TMPDIR)] : [])],
+      home: own.home,
+      tmp: own.tmp,
+    });
+
+    return { ok: true, command: onPath(command, env.PATH) ?? command, args, env: childEnv };
+  };
+
   return {
     async offer(credentials, instances) {
       const ready = await sandbox.preflight(env);
@@ -245,31 +274,24 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       return { ok: true, id };
     },
 
+    ...(sandbox.isolation === 'sandbox' && {
+      client(id: string, spec: ExecSpec) {
+        const launch = launchOf(id, spec);
+
+        return launch.ok ? { ok: true as const, argv: [launch.command, ...launch.args], env: definedOnly(launch.env) } : launch;
+      },
+    }),
+
     async exec(id, spec: ExecSpec, onOutput): Promise<ExecEnd> {
-      const view = viewOf(id);
+      const launch = launchOf(id, spec);
 
-      if (view === undefined) return { kind: 'failed', failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
-      const [argv0 = ''] = spec.argv;
-      const own = { home: realOf(path.join(dirOf(id), 'home')), tmp: realOf(path.join(dirOf(id), 'tmp')) };
-      const kept = Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
-      const childEnv: NodeJS.ProcessEnv = { ...kept, HOME: own.home, TMPDIR: own.tmp, ...spec.env };
-
-      for (const name of spec.unset) delete childEnv[name];
-
-      const { command, args } = sandbox.wrap({
-        argv: spec.argv,
-        cwd: spec.cwd,
-        writable: [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)].map(realOf).concat(own.home, own.tmp),
-        readable: [...view.readonly.map(realOf), ...toolRoots(argv0, env.PATH, home)],
-        hidden: [realOf(home), ...(env.TMPDIR ? [realOf(env.TMPDIR)] : [])],
-        home: own.home,
-        tmp: own.tmp,
-      });
+      if (!launch.ok) return { kind: 'failed', failure: launch.failure };
+      const { command, args, env: childEnv } = launch;
 
       return new Promise((resolve) => {
         // A process group of its own, so a stop ends the step and whatever it started.
         // Found on the runtime's PATH, never on one the step sets.
-        const child = spawn(onPath(command, env.PATH) ?? command, args, { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(command, args, { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
         const pidFile = child.pid === undefined ? undefined : path.join(pidsOf(id), String(child.pid));
 
         if (pidFile) fs.writeFileSync(pidFile, '');
