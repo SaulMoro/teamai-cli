@@ -109,6 +109,11 @@ const BehaviourSchema = z.object({
   cancel_reply_ms: z.number().int().nonnegative().default(0),
   /** How long an agent goes on running after the daemon answered a cancel or an archive that stops it. */
   stop_lag_ms: z.number().int().nonnegative().default(0),
+  /**
+   * The provider requests the daemon fails, by provider: its diagnostic or its modes listing, answered with this error as
+   * the daemon answers a request its handler threw on.
+   */
+  provider_errors: z.record(z.string(), z.object({ request: z.enum(['diagnostic', 'modes']), error: z.string() })).default({}),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
   /** The daemon answers every agent lookup with this error. */
@@ -436,6 +441,16 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
     const hold = holds[message.type] ?? 0;
 
+    /** Whether the daemon fails `provider`'s `request`, as `provider_errors` says, answering it so: as Paseo answers a handler that threw. */
+    const handlerFailed = (provider: string, request: 'diagnostic' | 'modes', requestId: string, requestType: string): boolean => {
+      const failing = behaviour().provider_errors[provider];
+
+      if (failing?.request !== request) return false;
+      reply({ type: 'rpc_error', payload: { requestId, requestType, error: failing.error, code: 'handler_error' } });
+
+      return true;
+    };
+
     // Recorded as it arrives, so a test sees a create the daemon still holds.
     if (!held.has(message) && RECORDED.has(message.type)) record(message);
 
@@ -505,6 +520,8 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
       case 'provider_diagnostic_request': {
         const does = behaviour();
+
+        if (handlerFailed(message.provider, 'diagnostic', message.requestId, message.type)) return;
         const base = baseOf(message.provider) ?? message.provider;
         // A custom provider runs its own command, which Paseo resolves on the daemon's PATH; a Codex one answers `login status` as Codex.
         const command = does.custom_providers[message.provider]?.command[0];
@@ -516,6 +533,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       }
 
       case 'list_provider_modes_request':
+        if (handlerFailed(message.provider, 'modes', message.requestId, message.type)) return;
         reply({ type: 'list_provider_modes_response', payload: { requestId: message.requestId, provider: message.provider, modes: modesOf(baseOf(message.provider)), error: null, fetchedAt: now() } });
 
         return;

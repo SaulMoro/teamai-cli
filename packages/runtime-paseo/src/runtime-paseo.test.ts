@@ -295,6 +295,18 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it('starts though Paseo fails one tool\'s diagnostic and another\'s modes listing, naming each of those unavailable with Paseo\'s error and still offering the rest', async () => {
+    behave({ provider_errors: { claude: { request: 'diagnostic', error: 'claude auth status crashed' }, opencode: { request: 'modes', error: 'OpenCode SDK did not start' } } });
+
+    expect(await ready(start())).toMatchObject({
+      type: 'init', ok: true, can: { tools: [] },
+      unavailable: {
+        claude: cannotRun('claude', 'Paseo failed its diagnostic (claude auth status crashed); run `paseo provider diagnostic claude` on the daemon\'s host to see why'),
+        opencode: cannotRun('opencode', 'Paseo failed to list its modes (OpenCode SDK did not start); run `paseo provider ls` on the daemon\'s host to see why'),
+      },
+    });
+  });
+
   it('runs a prompt step as a Paseo agent in teamai\'s worktree, and ends finished with the tool\'s session and the output the agent wrote', async () => {
     behave({ output: { verdict: 'approve', findings: 2 } });
     const runtime = start();

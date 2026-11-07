@@ -90,6 +90,15 @@ function stepModeOf(tool: PaseoTool, { defaultMode, configured, modes }: { defau
 
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/** What Paseo said of a request it failed: the daemon's own error, without the request details the client adds to it. */
+function paseoSaid(error: unknown): string {
+  const answered = z.object({ userMessage: z.string().min(1) }).safeParse(error);
+
+  if (answered.success) return answered.data.userMessage;
+
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * How long a question an open asks Paseo may go unanswered: an open holds its directory meanwhile, and the two it asks
  * end well within the minute after which another open takes that hold over (`HOLD_STALE_MS`).
@@ -668,10 +677,19 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const { tool, provider } = target;
 
         if (!available.has(provider)) return { ...target, canRun: false, reason: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\`` };
-        const signedIn = await signIn(target, teamInstances.find(({ instance }) => instance.name === target.name)?.instance);
+        // A request Paseo fails for one provider leaves that tool unavailable, never the runtime's other tools.
+        const signedIn = await signIn(target, teamInstances.find(({ instance }) => instance.name === target.name)?.instance)
+          .catch((error: unknown): SignIn => ({ canRun: false, problem: `Paseo failed its diagnostic (${paseoSaid(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` }));
 
         if (!signedIn.canRun) return { ...target, canRun: false, reason: signedIn.problem };
-        const modes = (await api.providers.listModes(provider)).modes ?? [];
+        let modes: ListedMode[];
+
+        try {
+          modes = (await api.providers.listModes(provider)).modes ?? [];
+        } catch (error) {
+          return { ...target, canRun: false, reason: `Paseo failed to list its modes (${paseoSaid(error)}); run \`paseo provider ls\` on the daemon's host to see why` };
+        }
+
         const stepMode = stepModeOf(tool, { defaultMode: entries.find((entry) => entry.provider === provider)?.defaultModeId, configured: configured[tool], modes });
 
         return 'cannot' in stepMode ? { ...target, canRun: false, reason: stepMode.cannot } : { ...target, canRun: true, modes: modes.map((mode) => mode.id), stepMode, ...(signedIn.home !== undefined && { home: signedIn.home }) };
