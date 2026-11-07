@@ -1484,6 +1484,24 @@ describe('teamai-runtime-t3', () => {
         expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claudeAgent', model: 'claude-opus-5-5', options: [{ id: 'effort', value: 'high' }] });
       });
 
+      it.each([
+        { set: 'runs on an instance this runtime does not run', instanceId: 'opencode', model: 'big-pickle' },
+        { set: 'runs on the member\'s own default, so T3 applies its options and fallback', instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' },
+      ])('leaves the member\'s T3 default to T3 when that thread $set', async ({ instanceId, model }) => {
+        t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } });
+        t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId, model });
+        const runtime = start(FROM);
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { default_tool: 'claude' } });
+        expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000026', { model: undefined }));
+
+        expect(await ended(runtime, 'op-00000026')).toMatchObject({ event: 'finished' });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('modelSelection');
+        expect(noticesOf(runtime)).toEqual([]);
+      });
+
       it('runs on the member\'s T3 default, and says why once, when T3 cannot read that thread', async () => {
         t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } });
         const runtime = await initFrom({ T3CODE_THREAD_ID: 'thread-gone-1' });
@@ -1491,7 +1509,7 @@ describe('teamai-runtime-t3', () => {
 
         expect(await ended(runtime, 'op-00000024')).toMatchObject({ event: 'finished' });
         expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('modelSelection');
-        expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: expect.stringMatching(/^teamai could not read the T3 thread thread-gone-1 this run was started from \(Thread thread-gone-1 was not found\), so a step that names no tool or model runs on your T3 Code default instead\.$/) }]);
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: expect.stringMatching(/^teamai could not read the T3 thread thread-gone-1 this run was started from \(Thread thread-gone-1 is no longer available\), so a step that names no tool or model runs on your T3 Code default instead\.$/) }]);
       });
     });
 

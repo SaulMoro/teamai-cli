@@ -207,8 +207,11 @@ interface Session extends Reached {
   runtimeMode: StepMode | undefined;
   /** The run's checkout, as `init` names it, else the folder teamai started the runtime in. */
   checkout: string;
-  /** The instance and model of the T3 thread the run was started from, which take the place of the member's T3 default. */
-  startedFromModel: ModelSelection | undefined;
+  /**
+   * The instance and model of the T3 thread the run was started from, which take the place of the member's T3 default:
+   * none when they are that default, which T3 applies itself, or when this runtime does not offer that instance.
+   */
+  threadModel: ModelSelection | undefined;
 }
 
 type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };
@@ -304,7 +307,7 @@ function instancesOf({ providers, instance, project, defaultModel, binaryPathOf 
  * The instance and model of the T3 thread `threadId`, the one the run was started from: none when the run was not, or
  * when the thread names none; a failure says why T3 could not read it. Its options stay T3's: T3 reports none of them.
  */
-async function startedFromModel(t3: T3, threadId: string | undefined): Promise<{ ok: true; selection: ModelSelection | undefined } | { ok: false; why: string } | undefined> {
+async function readThreadModel(t3: T3, threadId: string | undefined): Promise<{ ok: true; selection: ModelSelection | undefined } | { ok: false; threadId: string; why: string } | undefined> {
   if (threadId === undefined) return undefined;
 
   try {
@@ -315,7 +318,7 @@ async function startedFromModel(t3: T3, threadId: string | undefined): Promise<{
     // T3's own message, not the refusal's JSON, such as "Thread … is no longer available".
     const why = error instanceof T3Error ? error.refusal?.message ?? error.message : error instanceof Error ? error.message : String(error);
 
-    return { ok: false, why: why.replace(/\.$/, '') };
+    return { ok: false, threadId, why: why.replace(/\.$/, '') };
   }
 }
 
@@ -910,7 +913,7 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     try {
-      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout), startedFromModel(connected.t3, options.startedFrom)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
+      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout), readThreadModel(connected.t3, options.startedFrom)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
 
       if (!asking.answered) {
         void connected.t3.close().catch(() => {});
@@ -922,10 +925,16 @@ export function serve(options: ServeOptions): Promise<void> {
       const settings = readSettings(options.t3Home);
       const project = projectSettings(settings, here);
 
-      if (fromThread?.ok === false) notice(`teamai could not read the T3 thread ${options.startedFrom ?? ''} this run was started from (${fromThread.why}), so a step that names no tool or model runs on your T3 Code default instead.`, {});
-      const startedFrom = fromThread?.ok ? fromThread.selection : undefined;
+      if (fromThread?.ok === false) notice(`teamai could not read the T3 thread ${fromThread.threadId} this run was started from (${fromThread.why}), so a step that names no tool or model runs on your T3 Code default instead.`, {});
+      const read = fromThread?.ok ? fromThread.selection : undefined;
+
+      const offered = read && providers.some((provider) => provider.providerInstanceId === read.instanceId && driverOfProvider(provider) !== undefined
+        && (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false);
+
+      const isMemberDefault = read?.instanceId === project.defaultModel?.instanceId && read?.model === project.defaultModel?.model;
+      const threadModel = offered && !isMemberDefault ? read : undefined;
       // A run started from a thread runs as that thread does; else as the member's own new threads in this project.
-      const defaultModel = startedFrom ?? project.defaultModel;
+      const defaultModel = threadModel ?? project.defaultModel;
       const binaryPathOf = (instanceId: string): string | undefined => settings.providerInstances?.[instanceId]?.config?.binaryPath?.trim() || undefined;
       const instances = instancesOf({ providers, instance: parsed.options.instance, project, defaultModel, binaryPathOf });
 
@@ -974,7 +983,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
       const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => unavailable[tool] === undefined));
-      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, startedFromModel: startedFrom };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, threadModel };
       // An instance teamai adds on its first open is offered as well: the open adds it, or fails saying why.
       const tools = [...runs.keys(), ...toAdd.pending.keys()];
       // A step that names no tool runs on the member's effective T3 default, or the started-from thread's, when its instance is the one offered.
@@ -1445,8 +1454,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
     // T3 applies only the project's default to a launch that names no model, so a started-from thread's is named.
     const selection = modelSelection({
-      provider: instance, lease, defaultModel: s.startedFromModel ?? project.defaultModel,
-      appliedByT3: s.startedFromModel === undefined && (opened.kind !== 'worktree' || settingsProjectId === opened.projectId),
+      provider: instance, lease, defaultModel: s.threadModel ?? project.defaultModel,
+      appliedByT3: s.threadModel === undefined && (opened.kind !== 'worktree' || settingsProjectId === opened.projectId),
     });
 
     if (!selection.ok) {
