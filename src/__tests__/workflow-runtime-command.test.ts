@@ -19,6 +19,7 @@ function commandRun(): { run: AttemptRun; execs: () => number } {
     cancel: async () => {},
     collect: async () => undefined,
     close: async () => {},
+    stopLeftSetup: async () => undefined,
     stopLeftOperation: async () => undefined,
   };
 

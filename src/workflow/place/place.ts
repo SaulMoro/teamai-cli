@@ -747,7 +747,8 @@ export async function finishPlace(input: {
   if (recorded.phase === 'finished') return recorded.finished;
 
   // A setup that failed gave the place up, and a prepare that failed in git made none: the report carries that failure.
-  if ((recorded.phase === 'abandoned' || recorded.phase === 'opening') && end.outcome === 'failed') return end;
+  // A setup a killed teamai left that its runtime could not stop may still write the place, which is kept as it is.
+  if ((recorded.phase === 'abandoned' || recorded.phase === 'opening' || recorded.phase === 'setting-up') && end.outcome === 'failed') return end;
 
   // A step that failed before its setup ran, as on a step runtime that could not open the place setup runs in, gives
   // the place up as a failed setup does: the report carries the step's own failure.

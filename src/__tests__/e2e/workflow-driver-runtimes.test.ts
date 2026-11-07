@@ -332,6 +332,95 @@ steps:
       expect(fs.existsSync(launches)).toBe(false);
     });
 
+    /**
+     * Starts `flow` on a toy whose first setup runs until stopped, writing into the place by its path, and kills the
+     * driver once it runs. Answers the run, the setup's pid, and the toy's options, for the definition the run resumes on.
+     */
+    const killedDuringSetup = async (flow: string, definition: string): Promise<{ runId: string; pid: number; options: Record<string, unknown> }> => {
+      await writeSetupFlow(flow);
+      const marks = fs.mkdtempSync(path.join(sandbox, 'setup-marks-'));
+      const options = { state, path: toySetup([
+        `if [ -e "${marks}/started" ]; then exit 0; fi`,
+        `echo $$ > "${marks}/started"`,
+        'while :; do [ -d "$PWD" ] && : > "$PWD/left-by-old-setup" 2>/dev/null; sleep 0.01; done',
+      ].join('\n')) };
+      writeDefinition(definition, [{ use: 'toy', options }]);
+      const child = spawn(process.execPath, [CLI, 'workflow', 'start', flow, '--driver', definition], { cwd: repo, env: { ...process.env, ...env(), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const closed = new Promise((resolve) => child.on('close', resolve));
+      const started = path.join(marks, 'started');
+      for (const deadline = Date.now() + 30_000; !(fs.existsSync(started) && fs.readFileSync(started, 'utf8').trim() !== '') && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+      const pid = Number(fs.readFileSync(started, 'utf8'));
+      child.kill('SIGKILL');
+      await closed;
+      onTestFinished(() => {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already stopped.
+        }
+      });
+
+      return { runId: /Run (r[0-9a-f]+) started/.exec(stderr)?.[1] ?? '', pid, options };
+    };
+
+    it('stops the setup a killed driver left running on the runtime before it prepares the place again', async () => {
+      const { runId, pid } = await killedDuringSetup('toykilledsetupflow', 'toykilledsetup');
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'toykilledsetup'], repo, env());
+
+      expect(readRunState(runId).steps, resumed.stderr).toMatchObject([{ id: 'review', status: 'succeeded' }]);
+      // Stopped first, it wrote nothing into the place prepared again, so the step committed nothing of it.
+      expect(execFileSync('git', ['log', '--all', '--name-only', '--format='], { cwd: repo, encoding: 'utf8' })).not.toContain('left-by-old-setup');
+      expect(() => process.kill(pid, 0)).toThrow();
+    });
+
+    it('fails the step runtime_lost and keeps the place when the runtime cannot stop the setup a killed driver left', async () => {
+      const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down.' };
+      const { runId, options } = await killedDuringSetup('toystucksetupflow', 'toystucksetup');
+      writeDefinition('toystucksetup', [{ use: 'toy', options: { ...options, cancel_fails: stuck } }]);
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'toystucksetup'], repo, env());
+
+      const [review] = readRunState(runId).steps;
+      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining(`could not stop the setup of attempt ${attemptOf(review)} that a teamai before this one left running, so it may still run there: ${stuck.message}`) } });
+      // Its place is left as the setup has it, not removed under it.
+      const place = JSON.parse(fs.readFileSync(path.join(attemptDir(runId, attemptOf(review)), 'place.json'), 'utf8')) as { phase: string; dir: string };
+      expect(place.phase).toBe('setting-up');
+      expect(fs.existsSync(place.dir)).toBe(true);
+    });
+
+    it('fails the step runtime_lost and keeps the place when the run resumes on another runtime than the one a killed driver left a setup on', async () => {
+      const otherDir = path.join(os.homedir(), '.teamai', 'runtimes', 'othertoy');
+      fs.mkdirSync(otherDir, { recursive: true });
+      fs.copyFileSync(TOY_RUNTIME, path.join(otherDir, 'runtime'));
+      fs.chmodSync(path.join(otherDir, 'runtime'), 0o755);
+      const { runId } = await killedDuringSetup('toymovedsetupflow', 'toymovedsetup');
+      writeDefinition('othertoysetup', [{ use: 'othertoy', options: { state: fs.mkdtempSync(path.join(sandbox, 'othertoy-')) } }]);
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'othertoysetup'], repo, env());
+
+      const [review] = readRunState(runId).steps;
+      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('left running on step runtime "toy" of driver "toymovedsetup", which this driver cannot stop, so it may still run there. Resume the run with --driver toymovedsetup') } });
+      // The runtime the setup was left on is not open here to stop it, so its place is left as the setup has it.
+      const place = JSON.parse(fs.readFileSync(path.join(attemptDir(runId, attemptOf(review)), 'place.json'), 'utf8')) as { phase: string; dir: string };
+      expect(place.phase).toBe('setting-up');
+      expect(fs.existsSync(place.dir)).toBe(true);
+    });
+
+    it('fails the step runtime_lost and keeps the place when the run resumes on the local driver after a killed driver left a setup on a runtime', async () => {
+      const { runId } = await killedDuringSetup('toylocalsetupflow', 'toylocalsetup');
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'local'], repo, env());
+
+      const [review] = readRunState(runId).steps;
+      expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('left running on step runtime "toy" of driver "toylocalsetup", which this driver cannot stop, so it may still run there. Resume the run with --driver toylocalsetup') } });
+      const place = JSON.parse(fs.readFileSync(path.join(attemptDir(runId, attemptOf(review)), 'place.json'), 'utf8')) as { phase: string; dir: string };
+      expect(place.phase).toBe('setting-up');
+      expect(fs.existsSync(place.dir)).toBe(true);
+    });
+
     it('keeps the failure a runtime opens the place with when setup never ran there, and gives up the worktree', async () => {
       await writeSetupFlow('toybadopenflow');
       writeDefinition('toybadopensetup', [{ use: 'toy', options: { state, path: toySetup('exit 0'), open_fails: { code: 'bad_option', message: 'Option "image" names acme/agent:9, which this machine cannot pull' } } }]);

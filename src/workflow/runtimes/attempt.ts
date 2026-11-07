@@ -88,6 +88,25 @@ export async function readAttemptRuntime(config: LocalConfig, run: RunId, attemp
 }
 
 /**
+ * Whether `record` holds a setup that may still run: sent, its work not brought back yet (a setup that ended is
+ * collected before the place is ready), and no step exec or prompt sent after it.
+ */
+function isSetupLeftRunning(record: AttemptRuntimeRecord): boolean {
+  return record.setup !== undefined && record.phase === 'running' && record.exec === undefined && record.prompt === undefined;
+}
+
+/**
+ * Why a setup a killed teamai left running on the step runtime `record` names cannot be stopped from `runtime`, the step
+ * runtime that now takes attempt `attempt`, or from none: it may still write into the place. Undefined when no setup was
+ * left, or it was left on `runtime`, which stops it (`AttemptRun.stopLeftSetup`).
+ */
+export function setupLeftElsewhere(record: AttemptRuntimeRecord | undefined, attempt: string, runtime: string | undefined): RuntimeFailure | undefined {
+  if (!record || !isSetupLeftRunning(record) || record.runtime === runtime) return undefined;
+
+  return { code: 'runtime_failed', message: `Attempt ${attempt} has a setup a teamai before this one left running on step runtime "${record.runtime}" of driver "${record.driver}", which this driver cannot stop, so it may still run there. Resume the run with --driver ${record.driver}.` };
+}
+
+/**
  * Records the place of attempt `attempt` as no longer teamai's to close, without its runtime's close, once the person
  * checked that nothing of it still runs. Why the runtime could not close it stays in the record.
  */
@@ -240,10 +259,17 @@ export interface AttemptRun {
   open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
-   * Runs the workflow's setup as an exec of the open place, recorded apart from the step's exec. A setup a teamai before
-   * this one left is stopped first: its place was prepared again, so setup runs again under a new id.
+   * Runs the workflow's setup as an exec of the open place, recorded apart from the step's exec, under a new id. A setup
+   * a teamai before this one left is stopped before its place is prepared again (`stopLeftSetup`), and here again for a
+   * caller that did not.
    */
   setup(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
+  /**
+   * Stops the setup a killed teamai left running, before the place it ran in is prepared again: on a runtime that
+   * mounts the host's folders, it would go on writing into the new one. Ends `lost` when the stop is not confirmed, so
+   * the place is kept; undefined once it is, or when no setup was left.
+   */
+  stopLeftSetup(): Promise<Lost | undefined>;
   /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
    * outcome the runtime kept, or reconnects to the prompt still running by sending the same id again.
@@ -394,6 +420,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     return { kind: 'lost', failure };
   };
 
+  /** The setup a teamai before this one left, which the runtime could not stop, may still run in its place. */
+  const leftSetupNotStopped = (notStopped: RuntimeFailure): Lost => lostFor({ code: notStopped.code, message: `Step runtime "${runtime.name}" could not stop the setup of attempt ${attempt} that a teamai before this one left running, so it may still run there: ${notStopped.message}` });
+
   /** `failure` with the values of the credentials the place was opened with masked, for what teamai records or prints. */
   const masked = (failure: RuntimeFailure): RuntimeFailure => ({ ...failure, message: redact(failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) });
 
@@ -501,10 +530,11 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       if (!before || handle === undefined) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${attempt} has no open place to run setup in.` } };
 
+      // Stopped before its place was prepared again (`stopLeftSetup`); stopped here too for a caller that did not, late as that is.
       if (before.setup) {
         const notStopped = await stopLeftRunning(handle, before.setup.op);
 
-        if (notStopped) return lostFor({ code: notStopped.code, message: `Step runtime "${runtime.name}" could not stop the setup of attempt ${attempt} that a teamai before this one left running, so it may still run there: ${notStopped.message}` });
+        if (notStopped) return leftSetupNotStopped(notStopped);
       }
 
       const setup = { op: newOpId() };
@@ -626,6 +656,21 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       await save({ ...kept, phase: 'closed' });
 
       return undefined;
+    },
+
+    async stopLeftSetup() {
+      const before = await current();
+      const handle = before?.open.handle;
+
+      if (!before?.setup || !isSetupLeftRunning(before) || handle === undefined) return undefined;
+
+      // Resumed with another driver, the runtime the setup was left on is not open here to stop it.
+      const elsewhere = setupLeftElsewhere(before, attempt, runtime.name);
+
+      if (elsewhere) return lostFor(elsewhere);
+      const notStopped = await stopLeftRunning(handle, before.setup.op);
+
+      return notStopped && leftSetupNotStopped(notStopped);
     },
 
     async stopLeftOperation() {
