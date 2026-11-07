@@ -1172,7 +1172,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   for (const entry of defined.runtimes) {
     if (entry.kind === 'external' && unproven(entry.can)) {
-      log.warn(`Runtime ${entry.use} of driver ${defined.driver} runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.`);
+      log.warn(`Runtime ${entry.use} of driver ${defined.driver} runs steps in full access on this machine, as ${entry.optionsFrom} sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.`);
     }
   }
 
