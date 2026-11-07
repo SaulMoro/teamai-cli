@@ -484,13 +484,13 @@ async function start(call: Extract<SkillCall, { kind: 'describe' | 'start' }>, c
 
     const input: DescribeInput = {
       needed: neededAnswers(description), ...denied, undeliverable: undeliverable?.message, ...why, judged: judgedBy(judging) !== undefined,
-      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }), ...(app && { app: { session: app.session, isReady: false } }),
+      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }), ...(app && { app: { session: app.session, readiness: 'unchecked' } }),
     };
 
     const unchecked = describeRow(input);
     // Whether a run could start on the app's driver is asked only where the answer would change.
     const isChecked = app !== undefined && context.mode === 'attended' && APP_CHECKED_ROWS.has(unchecked.row);
-    const { row, verdict } = isChecked ? describeRow({ ...input, app: { session: app.session, isReady: await app.canStart() } }) : unchecked;
+    const { row, verdict } = isChecked ? describeRow({ ...input, app: { session: app.session, readiness: await app.canStart() ? 'ready' : 'not-ready' } }) : unchecked;
 
     context.trace?.(row);
     const caller = { session: context.session, tool: call.tool ?? context.tool };

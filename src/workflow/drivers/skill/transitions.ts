@@ -187,7 +187,10 @@ export type ReportReply = { kind: 'reported'; outcome: Extract<TurnEvent, { kind
  * workflow needs a person. `needsTool`: the session names no tool, and the workflow has a step whose model or judging
  * needs one. `app`: the app whose session the caller runs in, and whether a run could start on its driver now, once asked.
  */
-export interface DescribeInput { needed: StartAnswer[]; denied?: string; undeliverable?: string; local?: string; judged: boolean; mode: RunMode; attended?: string; needsTool: boolean; app?: { session: SessionApp; isReady: boolean } }
+/** Whether a run could start on the driver of the app the session runs in: not asked yet, or asked with this answer. */
+export type AppReadiness = 'unchecked' | 'ready' | 'not-ready';
+
+export interface DescribeInput { needed: StartAnswer[]; denied?: string; undeliverable?: string; local?: string; judged: boolean; mode: RunMode; attended?: string; needsTool: boolean; app?: { session: SessionApp; readiness: AppReadiness } }
 
 /** Who judges a run's scored steps on this machine: the confined judge of `tool` here, or the session itself with `tool`. */
 export type JudgedBy = { kind: 'here'; tool: string } | { kind: 'session'; tool: string };
@@ -253,11 +256,11 @@ export type Refusal =
 /**
  * How describe says to start, and why, for the kinds that start no run here. `unattended`: start with the recommended
  * answers and optional gates auto-approved, since nobody answers a question. `background`: start on the driver of the
- * app the session runs in, in the background, after asking the person first when `asks`.
+ * app the session runs in, in the background, after asking the person first when `hasQuestion`.
  */
 export type DescribeVerdict =
   | { ask: 'start' | 'ask' | 'unattended' | 'tool' }
-  | { ask: 'background'; asks: boolean; app: SessionApp }
+  | { ask: 'background'; hasQuestion: boolean; app: SessionApp }
   /** `app`: the app whose driver the person starts it on, from the place it names; the local driver when absent. */
   | { ask: 'local'; reason: string; app?: SessionApp }
   | { ask: 'denied'; reason: string };
@@ -404,10 +407,10 @@ export function describeRow(input: DescribeInput): DescribeRow {
 
   if (input.mode === 'unattended' && input.attended !== undefined) return { row: 'R17', verdict: { ask: 'denied', reason: input.attended } };
 
-  if (input.app?.isReady === true && input.mode === 'attended') {
-    const asks = input.needed.some((answer) => APP_START_ANSWERS.has(answer));
+  if (input.app?.readiness === 'ready' && input.mode === 'attended') {
+    const hasQuestion = input.needed.some((answer) => APP_START_ANSWERS.has(answer));
 
-    return { row: asks ? 'R3' : 'R30', verdict: { ask: 'background', asks, app: input.app.session } };
+    return { row: hasQuestion ? 'R3' : 'R30', verdict: { ask: 'background', hasQuestion, app: input.app.session } };
   }
 
   if (input.needsTool) return { row: 'R27', verdict: { ask: 'tool' } };

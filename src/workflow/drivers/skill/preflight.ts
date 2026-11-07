@@ -199,7 +199,6 @@ function guardsFact(guards: GateGuards): string {
   }
 }
 
-/** Who answers optional gates: whom the start the person picks names (`picked`), or the engine, as an unattended start has it (`auto-approve`). */
 /**
  * How optional gates are answered: as the person picks among the skill driver's starts, auto-approved, or, on the
  * driver of the app the session runs in, by the person as the run reaches them, unless the start auto-approves them.
@@ -437,7 +436,7 @@ export function askFor(verdict: DescribeVerdict, description: WorkflowDescriptio
       const { app } = verdict;
       const flags = startFlags(description);
 
-      if (!verdict.asks) {
+      if (!verdict.hasQuestion) {
         const ask: DescribeAsk = { kind: 'background', start: appStartLiteral(invocation, name, app.driver), background: app.steps };
 
         if (facts.length > 0) ask.say = facts.join('\n');
