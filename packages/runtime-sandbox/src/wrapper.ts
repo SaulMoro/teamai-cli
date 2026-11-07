@@ -41,7 +41,10 @@ function passThrough({ argv, env, signalling }: { argv: readonly string[]; env: 
 
       const [sender = '', ...senderArgs] = signalling;
 
-      spawn(sender, [...senderArgs, received.replace(/^SIG/, '')], { env, stdio: 'ignore' }).on('error', () => child.kill(received));
+      // A signal the tool cannot get yet (it has not started) still ends the client.
+      spawn(sender, [...senderArgs, received.replace(/^SIG/, '')], { env, stdio: 'ignore' }).on('error', () => child.kill(received)).on('exit', (code) => {
+        if (code !== 0) child.kill(received);
+      });
     };
 
     for (const each of signals) process.on(each, forward);
