@@ -2038,6 +2038,25 @@ steps:
       expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
     });
 
+    it('masks the result file an agent wrote itself with a credential\'s value when teamai workflow cancel stops the run of a killed driver', async () => {
+      writeDefinition('echodies', [{ use: 'toy', options: { state, die_at: 'prompt-finished', credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, agent: { echo: 'TOY_TEAM' } } }]);
+      writeFlow('echoedkilled', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      echoed: string`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      const killed = await runCLI(['workflow', 'start', 'echoedkilled', '--driver', 'echodies'], repo, env({ MEMBER_TOY_TEAM: VALUE }));
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const runId = /Run (r[0-9a-f]+) started/.exec(killed.stderr)?.[1] ?? '';
+      // The agent wrote its result, the credential's value in it, before teamai could read and mask it.
+      expect(holding(path.join(dataHome, 'workflows', 'runs', runId), VALUE)).not.toEqual([]);
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env({ MEMBER_TOY_TEAM: VALUE }));
+
+      expect(cancelled.code, cancelled.stderr).toBe(0);
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+    });
+
     it('masks each entry\'s credential value when a definition lists one runtime twice under the same credential name', async () => {
       const OTHER = 'toy-token-other-91c4';
       writeDefinition('tokentwice', [

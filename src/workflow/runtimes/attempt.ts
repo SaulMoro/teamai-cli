@@ -11,10 +11,11 @@ import { log } from '../../utils/logger.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 import type { LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
-import { attemptDir, AttemptIdSchema, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
+import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { credentialSecrets, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
@@ -100,6 +101,19 @@ function isSetupLeftRunning(record: AttemptRuntimeRecord): boolean {
  */
 export async function releaseAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId, record: AttemptRuntimeRecord): Promise<void> {
   await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...record, phase: 'closed' });
+}
+
+/** Masks the result file of every attempt of `run` with `secrets`, so one that ended without a report, on a signal or a killed driver too, keeps no secret. */
+export async function maskAttemptResults(config: LocalConfig, run: RunId, secrets: Record<string, string>): Promise<void> {
+  const names = await fs.readdir(attemptsDir(config, run)).catch((): string[] => []);
+
+  const attempts = names.flatMap((name) => {
+    const attempt = AttemptIdSchema.safeParse(name);
+
+    return attempt.success ? [attempt.data] : [];
+  });
+
+  await Promise.all(attempts.map((attempt) => AttemptResult.mask(attemptResultPath(config, run, attempt), secrets)));
 }
 
 /** The tool home of `tool` for attempt `attempt`: under the attempt directory, beside its record. */

@@ -267,6 +267,11 @@ function credentialValues(driver: ResolvedDriver, use: string, credentials: EnvC
   return { ok: true, values };
 }
 
+/** The values of `credentials` that `env` sets, by name, skipping those it does not: for masking only. */
+function valuesSet(credentials: EnvCredential[], env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(credentials.flatMap(({ name, variable }) => (env[variable] ? [[name, env[variable]]] : [])));
+}
+
 /** The sign-in variables of each tool an exec runtime launches: the protocol must name every one. */
 const SIGN_INS: Readonly<Record<ExecRuntimeTool, SignInVariables>> = SIGN_IN_VARIABLES;
 
@@ -393,8 +398,9 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const found = purpose === 'run' && !isDeclaring ? signInsFound(process.env) : {};
 
   // What the runtime tells the person is shown with the values of the credentials it gets masked, and with the team's
-  // secrets, which the drive adds here as it resolves them (`masks`).
-  const masks = credentialSecrets(source.name, { ...values.values, ...found });
+  // secrets, which the drive adds here as it resolves them (`masks`). A stop sends no credential, but still masks with
+  // the values the member's environment holds for them, which what the attempt left may echo.
+  const masks = credentialSecrets(source.name, { ...values.values, ...found, ...(purpose === 'stop' && valuesSet(split.credentials, process.env)) });
 
   const spawned = (): StepRuntime => (source.kind === 'shipped'
     ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], cwd: checkout, secrets: masks })
