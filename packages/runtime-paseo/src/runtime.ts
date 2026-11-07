@@ -908,10 +908,22 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
    */
   async function launch(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, following: Following, target: Target, how: Launch): Promise<void> {
     const { op } = request;
-    const models = await listModels(live, target.provider, following);
+    // Accepted already: a provider no open added yet for a team instance is added now, which may wait on another runtime.
+    const unadded = await ensureProvider(live, target.name, op);
+
+    if (!goesOn(op, following)) return;
+
+    if (unadded) {
+      settle(op, { op, state: 'failed', failure: unadded }, following);
+
+      return;
+    }
+
+    const on = targets.get(target.name) ?? target;
+    const models = await listModels(live, on.provider, following);
 
     if (!goesOn(op, following) || models === 'stopped') return;
-    const create = 'code' in models ? models : createFor(live, request, target, models, how);
+    const create = 'code' in models ? models : createFor(live, request, on, models, how);
 
     if ('code' in create) {
       settle(op, { op, state: 'failed', failure: create }, following);
@@ -1076,16 +1088,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
       return;
     }
 
-    // New, or pending in a runtime that died before it sent a create: launched from the start, on a provider added first
-    // when no open added it yet.
-    const unadded = await ensureProvider(live, request.lease.tool, op);
-
-    if (unadded) {
-      fail(op, unadded);
-
-      return;
-    }
-
+    // New, or pending in a runtime that died before it sent a create: launched from the start.
     const place = journal.place(request.handle);
     const { confined } = request;
 

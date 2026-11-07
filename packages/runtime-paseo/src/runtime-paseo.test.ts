@@ -583,6 +583,22 @@ describe('teamai-runtime-paseo', () => {
       expect(configChanges()).toHaveLength(1);
     });
 
+    it('accepts a prompt on an instance no open added a provider for before it adds that provider, and runs the prompt on it', async () => {
+      const { file, env } = installed('acme-claude');
+      behave({ output: { ok: true }, config_ms: 500 });
+      const runtime = start(env);
+
+      await ready(runtime, { instances: [ACME] });
+      runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'acme-claude' }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'acme-claude' } });
+      expect(runtime.lines.flatMap((line) => ('event' in line && 'op' in line && line.op === 'op-0000000b' ? [line.event] : []))).toEqual(['accepted', 'notice', 'display', 'finished']);
+      expect(received()).toMatchObject([
+        { type: 'set_daemon_config_request', config: { providers: { 'acme-claude': { command: [file] } } } },
+        { type: 'agent.create.request', config: { provider: 'acme-claude' } },
+      ]);
+    });
+
     it('fails the open of an instance whose added provider is signed out, naming its sign-in step, and still says once that it added the provider and how to remove it', async () => {
       const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
       behave({ sign_in: { 'claude-work': 'signed_out' } });
