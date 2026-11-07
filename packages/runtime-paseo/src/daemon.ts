@@ -831,6 +831,12 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         if (status.code === 0 && /^Logged in\b/m.test(answer)) return { canRun: true };
 
         if (status.code === 1 && /^Not logged in\b/m.test(answer)) return { canRun: false, problem: `signed out; run \`${signInStep({ runsIn, command: command ?? 'codex', login: 'login' })}\` on the daemon's host` };
+
+        // Codex refuses a CODEX_HOME that does not exist, its login too, so the home is made first.
+        if (runsIn && !fs.existsSync(runsIn.dir)) {
+          return { canRun: false, problem: `signed out, as its home ${runsIn.shown} does not exist yet; run \`mkdir -p ${runsIn.shown} && ${signInStep({ runsIn, command: command ?? 'codex', login: 'login' })}\` on the daemon's host` };
+        }
+
         const said = answer.trim().split('\n')[0]?.slice(0, 120) ?? '';
 
         return { canRun: false, problem: `\`${resolved} login status\` gave no sign-in answer (exit ${status.code}${said ? `: ${said}` : ''}); run it on the daemon's host to see why` };

@@ -49,6 +49,8 @@ const BehaviourSchema = z.object({
   codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
   /** The Codex home that `codex_login: signed_in` holds: the fake codex answers signed out unless CODEX_HOME names it. */
   codex_login_home: z.string().optional(),
+  /** The fake codex refuses a CODEX_HOME that does not exist before it answers, as Codex 0.166.0 does (recorded). */
+  codex_needs_home: z.boolean().default(false),
   /**
    * The config directory of the daemon's Claude, which `claude auth status` reports from Claude Code 2.1 on as
    * `configDirectory`, beside its `projectsDirectory` (recorded on 2.1.318). Absent: an older Claude that reports neither.
@@ -553,7 +555,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         // A custom provider runs its own command, which Paseo resolves on the daemon's PATH; a Codex one answers `login status` as Codex.
         const command = does.custom_providers[message.provider]?.command?.[0];
         const named = command === undefined ? base : path.basename(command);
-        const resolved = base === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login, named, does.codex_login_home) : `/usr/local/bin/${named}`;
+        const resolved = base === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login, { name: named, home: does.codex_login_home, needsHome: does.codex_needs_home }) : `/usr/local/bin/${named}`;
         reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: base === 'opencode' && does.opencode_server ? `OpenCode server: ${does.opencode_server}` : diagnosticOf(base, does.sign_in[message.provider], resolved, does.claude_home) } });
 
         return;
@@ -822,7 +824,7 @@ function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | un
  * The path of the daemon host's `codex`, or of the command a custom Codex provider runs (`name`), which answers `codex login status` as `login` says, as Codex 0.166.0 does on
  * stderr (recorded); with no `login`, the path holds nothing.
  */
-function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' | undefined, name = 'codex', home?: string): string {
+function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' | undefined, { name = 'codex', home, needsHome = false }: { name?: string; home?: string | undefined; needsHome?: boolean } = {}): string {
   const file = path.join(state, 'host-bin', name);
   fs.rmSync(file, { force: true });
 
@@ -831,7 +833,9 @@ function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' 
     const [answer, code] = answers[login];
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const elsewhere = home === undefined ? '' : `[ "$CODEX_HOME" = '${home}' ] || { echo 'Not logged in' >&2; exit 1; }\n`;
-    fs.writeFileSync(file, `#!/bin/sh\n[ "$*" = "login status" ] || exit 2\n${elsewhere}echo '${answer}' >&2\nexit ${code}\n`, { mode: 0o755 });
+    const missing = 'CODEX_HOME points to \\"$CODEX_HOME\\", but that path does not exist';
+    const noHome = needsHome ? `[ -z "$CODEX_HOME" ] || [ -d "$CODEX_HOME" ] || { echo "WARNING: proceeding, even though we could not create PATH aliases: ${missing}" >&2; echo "Error loading configuration: ${missing}" >&2; exit 1; }\n` : '';
+    fs.writeFileSync(file, `#!/bin/sh\n[ "$*" = "login status" ] || exit 2\n${noHome}${elsewhere}echo '${answer}' >&2\nexit ${code}\n`, { mode: 0o755 });
   }
 
   return file;
