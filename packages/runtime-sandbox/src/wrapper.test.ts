@@ -344,6 +344,20 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(ran.stdout).not.toContain('host codex');
   });
 
+  it('asks no socket whose directory others may write, and runs nothing', async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at);
+    await register(handle, null);
+    fs.chmodSync(path.dirname(socketOf(handle)), 0o777);
+    const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+
+    expect(ran).toMatchObject({ code: 2, stdout: '' });
+    expect(ran.stderr).toContain(path.dirname(socketOf(handle)));
+    expect(execsIn()).toEqual([]);
+  });
+
   it("serves its socket at 0600 in a 0700 directory, and removes it at close, though a client sits on it saying nothing", async () => {
     const connection = start();
     await init(connection);
