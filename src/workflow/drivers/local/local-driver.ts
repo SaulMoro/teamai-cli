@@ -659,7 +659,7 @@ async function promptReport(
     const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: launched, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
 
     // The tool starts on the member's own model choices, from their home of it, or of the instance.
-    if (isExecRuntimeTool(selected)) await seedMemberModel({ tool: selected, dir: toolHome.dir, memberHome: target.instance?.home ? instanceHomeDir(target.instance.home) : memberToolHome(selected) });
+    if (isExecRuntimeTool(selected)) await seedMemberModel({ tool: selected, dir: toolHome.dir, memberHome: target.instance?.home ? instanceHomeDir(target.instance.home, target.instance.extends) : memberToolHome(selected) });
 
     if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
   } else {

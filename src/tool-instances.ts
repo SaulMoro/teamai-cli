@@ -7,7 +7,8 @@ import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai
 import { isSafeNamespaceSegment } from './manifest-schema.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import { isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
+import { homeEnvOf } from './tool-home.js';
+import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
@@ -184,11 +185,22 @@ function resolveWithoutConflicts(candidates: readonly NamespaceCandidate<Resolve
   return resolveWithoutConflicts(candidates.filter((candidate) => candidate.name !== resolution.name), namespaces);
 }
 
-/** Where an instance's home is on this machine: its variable's value when set, else its directory under `$HOME`. */
-export function instanceHomeDir(home: ToolInstanceHome, env: NodeJS.ProcessEnv = process.env): string {
-  const moved = home.env === undefined ? undefined : env[home.env];
+/**
+ * Where an instance of `base` has its home on this machine: its variable's value when set, else its directory under
+ * `$HOME`. A variable that moves `base`'s own home, or an XDG base directory, is set for that tool or for every tool, so
+ * its value is never the instance's home: the instance's home is then its directory.
+ */
+export function instanceHomeDir(home: ToolInstanceHome, base: string, env: NodeJS.ProcessEnv = process.env): string {
+  const moved = home.env === undefined || movesSharedHome(home.env, base) ? undefined : env[home.env];
 
   return moved ? moved : path.join(getUserHome(), home.dir);
+}
+
+/** Whether `variable` moves the home of shipped tool `base` itself, or every XDG tool's. */
+function movesSharedHome(variable: string, base: string): boolean {
+  if (variable === 'XDG_CONFIG_HOME' || variable === 'XDG_DATA_HOME') return true;
+
+  return isToolId(base) && (homeEnvOf(base) === variable || homeVariables(base).includes(variable));
 }
 
 /** The member's own instance directory, `~/.teamai/tools/`: teamai reads it and never writes it. */

@@ -328,7 +328,8 @@ export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
  * A tool instance the member may run: `name`, the name a step and `can.tools` give it; `tool`, the shipped tool it
  * extends; `command`, the executable on PATH that starts it; `home`, the absolute path of its home on this machine and
  * the variable that moves it, as teamai resolves it once for every runtime (the member's value of `home.env` when their
- * environment sets it, else `~/<its directory>`); `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its
+ * environment sets it and it moves neither the extended tool's own home nor an XDG base directory, else
+ * `~/<its directory>`); `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its
  * tool, teamai then launches `command` with `home.env` set to the attempt's tool home. `home.dir` is absolute from the
  * first release of protocol 1, which needs no new version for it: teamai ships its runtimes with the engine, so no
  * runtime reads a relative one.

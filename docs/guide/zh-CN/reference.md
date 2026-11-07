@@ -272,6 +272,8 @@ teamai score --session <id> --source acme-claude --scorer review-quality
 
 步骤运行 `acme-claude`，会话从 `$ACME_CLAUDE_CONFIG_DIR/projects/` 读取，未设置时从 `~/.acme-claude/projects/` 读取。记录、续跑和打分都算在 `acme-claude` 名下，不会算成 Claude 的。
 
+如果 `env` 也是所扩展工具自己的 home 变量（例如 `claude` 实例的 `CLAUDE_CONFIG_DIR`），或者是 `XDG_CONFIG_HOME`、`XDG_DATA_HOME`，teamai 不使用你给它设置的值。这个值属于工具本身，所以实例的 home 始终是 `~/<dir>`。
+
 **接受命令。** 设了 `command` 的实例会运行队友指定的程序。第一次运行时在终端里询问：
 
 ```text

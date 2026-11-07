@@ -217,6 +217,30 @@ describe('the sessions of an instance', () => {
   });
 });
 
+describe('the home of an instance', () => {
+  it('stays the instance\'s own directory when its variable is the home variable of the tool it extends, which the member set for that tool', async () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, '.claude2'));
+    vi.stubEnv('XDG_DATA_HOME', path.join(home, 'data'));
+    await load(teamRepo({
+      'tools/claude-work.yaml': 'schemaVersion: v1alpha1\nname: claude-work\nextends: claude\nhome: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }\n',
+      'tools/opencode-work.yaml': 'schemaVersion: v1alpha1\nname: opencode-work\nextends: opencode\nhome: { dir: .opencode-work, env: XDG_DATA_HOME }\n',
+    }));
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+    const recorded = { kind: 'recorded', toolRoots: undefined } as const;
+
+    expect(storeDirOf('claude-work', recorded)).toBe(path.join(home, '.claude-work', 'projects'));
+    expect(storeDirOf('opencode-work', recorded)).toBe(path.join(home, '.opencode-work', 'opencode'));
+  });
+
+  it('follows the member\'s value of a variable of the instance\'s own', async () => {
+    vi.stubEnv('ACME_CLAUDE_CONFIG_DIR', path.join(root, 'acme'));
+    await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE }));
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+
+    expect(storeDirOf('acme-claude', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(root, 'acme', 'projects'));
+  });
+});
+
 describe('personal tool instances', () => {
   it('lets a member\'s own instance replace the team\'s of the same name', async () => {
     personal('acme-claude', ACME_CLAUDE.replace('command: acme-claude', 'command: my-acme-build'));
