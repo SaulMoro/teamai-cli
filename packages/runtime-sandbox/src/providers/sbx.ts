@@ -3,6 +3,8 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
+import type { WarmOptions } from '../options.js';
+import { oneBuildPerKey, planWarm, scratchOf, tailOf, WARM_REPOSITORY, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
@@ -15,6 +17,13 @@ import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, WORKSPACES, type Ra
 //    sbx exec -w <cwd> -e NAME … teamai-<journal>-<run>-<attempt> env -u WITHHELD … -- <argv>
 //    sbx stop teamai-<journal>-<run>-<attempt>          ends every process; the next exec starts the sandbox again
 //    sbx rm --force teamai-<journal>-<run>-<attempt>
+//
+//  With `warm`, each attempt's sandbox starts from the template teamai-warm:<key> (warm.ts, `create -t`), saved once per
+//  key from the attempt's template:
+//
+//    sbx create --name teamai-warm-<key>-<random> --no-progress <template> <scratch>
+//    sbx exec -w <scratch> teamai-warm-<key>-<random> /bin/sh -c <prepare>              no credential, with the network
+//    sbx stop …; sbx template save teamai-warm-<key>-<random> teamai-warm:<key>; sbx rm --force …
 //
 //  The worktree is the primary workspace. sbx does not follow a linked worktree's `.git` to its common directory, so
 //  the git paths the view names are mounted read-only at their own paths: `git status` works, `git commit` cannot
@@ -46,6 +55,9 @@ const CLI_SETTING = /^(?:HOME|XDG_[A-Z_]+|SBX_[A-Z0-9_]*|DOCKER_[A-Z0-9_]*)$/;
 
 const ListedSchema = z.array(z.looseObject({ name: z.string() }));
 
+/** `sbx template ls --json`: each saved template's repository and tag (sbx 0.51.0). */
+const TemplatesSchema = z.array(z.looseObject({ repository: z.string(), tag: z.string() }));
+
 /** `sbx policy check network --json <target>`: whether the member's policy lets a sandbox reach it (sbx 0.51.0). */
 const CheckedSchema = z.object({ allowed: z.boolean() });
 
@@ -76,9 +88,10 @@ function namesListed(stdout: string): string[] | undefined {
 
 /**
  * `owner`: the id of the journal whose attempts the sandboxes are, which starts each one's name. `agent`: the template
- * or kit every sandbox starts from; unset, each attempt's tool picks its template.
+ * or kit every sandbox starts from; unset, each attempt's tool picks its template. `warm`: the recipe of the warm
+ * template each attempt starts from, saved from that template.
  */
-export function sbxProvider({ agent, owner, env }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv }): Provider {
+export function sbxProvider({ agent, owner, env, warm }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }> }): Provider {
   const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
 
   /** What starts the name of every sandbox of this journal. */
@@ -153,6 +166,62 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
     if (ran.kind === 'ran' && ran.code === 0) return { ok: true };
 
     return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not give the tool in sandbox ${name} the login sbx keeps for it: ${messageOf(ran) || 'the link failed'}. Remove it with \`sbx rm --force ${name}\`, and start again.` } };
+  };
+
+  const once = oneBuildPerKey<{ ok: true } | { ok: false; failure: RuntimeFailure }>();
+
+  /** Whether sbx keeps the warm template of `plan` already; a list sbx cannot give is taken as not, so it is saved again. */
+  const isSaved = async (plan: WarmPlan): Promise<boolean> => {
+    const ran = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS });
+
+    try {
+      const listed = ran.kind === 'ran' && ran.code === 0 ? TemplatesSchema.safeParse(JSON.parse(ran.stdout)) : undefined;
+
+      return listed?.success === true && listed.data.some(({ repository, tag }) => tag === plan.key && (repository === WARM_REPOSITORY || repository.endsWith(`/${WARM_REPOSITORY}`)));
+    } catch {
+      return false;
+    }
+  };
+
+  /** Saves the warm template of `plan` from `template`, prepared in a scratch sandbox on copies of the `cache` files. */
+  const makeWarm = async (plan: WarmPlan, template: string, prepare: string, checkout: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const scratch = scratchOf({ cache: plan.cache, checkout });
+    const name = `teamai-warm-${plan.key}-${crypto.randomBytes(3).toString('hex')}`;
+
+    const failed = (what: string, ran: Ran) => ({
+      ok: false as const,
+      failure: { code: 'sandbox_failed', message: `${what}${ran.kind === 'ran' ? `, exiting with code ${ran.code}. It printed: ${tailOf(`${ran.stdout}\n${ran.stderr}`) || 'nothing'}` : `: ${ran.message}`}. No step ran; fix warm, and start again.` },
+    });
+
+    try {
+      const created = await cli(['create', '--name', name, '--no-progress', template, scratch.dir]);
+
+      if (!(created.kind === 'ran' && created.code === 0)) return failed(`sbx could not create a sandbox from ${template} to prepare the warm template ${plan.tag}`, created);
+      const prepared = await cli(['exec', '-w', scratch.dir, name, '/bin/sh', '-c', prepare]);
+
+      if (!(prepared.kind === 'ran' && prepared.code === 0)) return failed(`The warm template's prepare, \`${prepare}\`, failed in a sandbox from ${template}`, prepared);
+      const stopped = await cli(['stop', name], { timeoutMs: COMMAND_MS });
+
+      if (!(stopped.kind === 'ran' && stopped.code === 0)) return failed(`sbx could not stop sandbox ${name} to save the warm template ${plan.tag}`, stopped);
+      const saved = await cli(['template', 'save', name, plan.tag]);
+
+      return saved.kind === 'ran' && saved.code === 0 ? { ok: true } : failed(`sbx could not save the warm template ${plan.tag}`, saved);
+    } finally {
+      await remove(name);
+      scratch.remove();
+    }
+  };
+
+  /** The `-t` an attempt in `checkout` from `template` is created with: the warm template, saved first when it is not there. */
+  const warmFrom = async (template: string, checkout: string): Promise<{ ok: true; args: string[] } | { ok: false; failure: RuntimeFailure }> => {
+    if (warm === undefined) return { ok: true, args: [] };
+    const planned = planWarm({ base: template, recipe: warm, checkout });
+
+    if (!planned.ok) return planned;
+    const { plan } = planned;
+    const made = await once(plan.key, async () => ((await isSaved(plan)) ? { ok: true } : makeWarm(plan, template, warm.prepare, checkout)));
+
+    return made.ok ? { ok: true, args: ['-t', plan.tag] } : made;
   };
 
   /** The services whose login sbx's proxy holds for every sandbox, which it injects into a tool's requests. */
@@ -258,10 +327,13 @@ export function sbxProvider({ agent, owner, env }: { agent: string | undefined; 
       const mounted = mountsOf('sbx', view);
 
       if (!mounted.ok) return mounted;
+      const from = await warmFrom(template, view.worktree);
+
+      if (!from.ok) return from;
       const name = nameOf(key);
       // mountsOf lists the worktree first, which sbx takes as the primary workspace.
       const paths = mounted.mounts.map(({ at, mode }) => (mode === 'ro' ? `${at}:ro` : at));
-      const created = await cli(['create', '--name', name, '--no-progress', template, ...paths]);
+      const created = await cli(['create', '--name', name, '--no-progress', ...from.args, template, ...paths]);
 
       if (created.kind === 'ran' && created.code === 0) {
         // An open that names no tool is of the agent's, when the agent is a tool's own template.

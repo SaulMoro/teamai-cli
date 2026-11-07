@@ -41,12 +41,13 @@ serve({
 function providerOf(options: SandboxOptions): Provider {
   switch (options.provider) {
     case 'sbx':
-      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env });
+      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env, warm: options.warm });
     case 'docker':
     case 'podman':
       return containerProvider({
         engine: options.provider,
         image: options.image,
+        warm: options.warm,
         owner: sandboxJournal.owner,
         host: { user: uid !== undefined && gid !== undefined ? { uid, gid } : undefined, selinux: fs.existsSync('/sys/fs/selinux/enforce'), env: process.env },
       });

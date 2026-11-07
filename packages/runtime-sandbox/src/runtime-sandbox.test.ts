@@ -2576,3 +2576,150 @@ describe('an attempt in an sbx sandbox', () => {
     expect(engine.containers()).toEqual([]);
   });
 });
+
+describe('a warm image', () => {
+  const LOCK = '{"lockfileVersion":3,"marker":"lock-7c1e"}';
+  // prepare sees the copies of the cache files, and fills a store in the sandbox's home, outside the checkout.
+  const PREPARE = 'test -f package.json && test -f package-lock.json && mkdir -p "$HOME/.store" && echo filled > "$HOME/.store/ready"';
+  const WARM = { prepare: PREPARE, cache: ['package.json', 'package-lock.json'] };
+  const PROVIDERS: Array<{ options: Message; save: string }> = [
+    { options: { provider: 'docker', image: IMAGE }, save: 'commit' },
+    { options: { provider: 'podman', image: IMAGE }, save: 'commit' },
+    { options: { provider: 'sbx', agent: 'claude' }, save: 'template' },
+  ];
+
+  /** The attempt's place, with the checkout files the warm image is keyed by. */
+  function checkout(lock = LOCK): Place {
+    const at = place();
+    fs.writeFileSync(path.join(at.worktree, 'package.json'), '{"name":"app"}');
+    fs.writeFileSync(path.join(at.worktree, 'package-lock.json'), lock);
+
+    return at;
+  }
+
+  /** Opens `attempt` at `at` and answers its ready or failed. */
+  async function openAttempt(connection: Connection, at: Place, attempt: string): Promise<Message> {
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-1' }, view: { worktree: at.worktree, readonly: [at.git], result: path.join(dir, 'attempts', attempt, 'out'), runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: path.join(dir, 'attempts', attempt, 'tool-home', 'claude') } } });
+
+    return connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
+  }
+
+  /** The commands that saved a warm image, and the prepares that ran, since `before`. */
+  const builds = (before = 0): { saves: string[][]; prepares: string[][] } => {
+    const calls = engine.calls().slice(before);
+
+    return { saves: calls.filter(([, command, action]) => command === 'commit' || command === 'build' || (command === 'template' && action === 'save')), prepares: calls.filter((call) => call.includes(PREPARE)) };
+  };
+
+  /** The host directory the warm image was prepared in: docker's and podman's mount, or sbx's workspace. */
+  const scratchDir = (): string | undefined => {
+    for (const call of engine.calls()) {
+      const mount = call.find((arg) => arg.endsWith(':/teamai-warm:rw'));
+
+      if (mount !== undefined) return mount.slice(0, -':/teamai-warm:rw'.length);
+
+      if (call[1] === 'create' && call.some((arg) => arg.startsWith('teamai-warm-'))) return call.at(-1);
+    }
+
+    return undefined;
+  };
+
+  beforeEach(() => {
+    engine.image('claude', { claude: CLAUDE });
+  });
+
+  it.each(PROVIDERS)('starts an attempt on $options.provider from a warm image prepared once, which holds the store and no checkout file or credential', async ({ options }) => {
+    const connection = start();
+    await init(connection, { ...options, warm: WARM });
+    const at = checkout();
+
+    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    const [tag] = engine.savedImages();
+    expect(tag).toMatch(/^teamai-warm:[0-9a-f]{16}$/);
+    // The attempt's sandbox starts from it, and sees the store prepare filled.
+    expect(engine.calls().find((call) => call.includes(String(tag)) && (call[1] === 'run' || call[1] === 'create'))).toBeDefined();
+    const { end, output } = await exec(connection, { argv: ['/bin/sh', '-c', 'cat "$HOME/.store/ready"'], cwd: at.worktree });
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(output).toBe('filled\n');
+    // Prepare got no name from teamai, and the image holds no file of the checkout nor any credential.
+    const { prepares } = builds();
+    expect(prepares).toHaveLength(1);
+    expect(prepares[0]).not.toContain('-e');
+    const { home } = engine.savedFiles(String(tag));
+    expect(Object.keys(home)).toContain(path.join('.store', 'ready'));
+    expect(Object.keys(home).filter((file) => file.includes('package'))).toEqual([]);
+    expect(JSON.stringify(home)).not.toMatch(/lock-7c1e|oauth-secret-1/);
+    // Only the attempt's sandbox is left, and the scratch directory prepare ran in is gone.
+    expect(engine.containers()).toEqual([options.provider === 'sbx' ? expect.stringMatching(/-r0123abcd-a0123abcd$/) : HANDLE]);
+    const scratch = scratchDir();
+    expect(scratch).toMatch(/teamai-warm-/);
+    expect(fs.existsSync(String(scratch))).toBe(false);
+  });
+
+  it.each(PROVIDERS)('reuses the warm image on $options.provider while the lockfile is unchanged, in another runtime process, and prepares a new one when it changes', async ({ options }) => {
+    const first = start();
+    await init(first, { ...options, warm: WARM });
+    const at = checkout();
+    await openAttempt(first, at, ATTEMPT);
+    first.send({ type: 'close', handle: HANDLE });
+    await first.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
+    await first.end();
+    const before = engine.calls().length;
+    const second = start();
+    await init(second, { ...options, warm: WARM });
+
+    expect(await openAttempt(second, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    expect(builds(before)).toEqual({ saves: [], prepares: [] });
+    second.send({ type: 'close', handle: HANDLE });
+    await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000);
+    fs.writeFileSync(path.join(at.worktree, 'package-lock.json'), '{"lockfileVersion":3,"marker":"lock-9d20"}');
+
+    expect(await openAttempt(second, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    expect(builds(before).saves).toHaveLength(1);
+    expect(engine.savedImages()).toHaveLength(2);
+  });
+
+  it.each(PROVIDERS)('builds one warm image on $options.provider for two attempts that open at once', async ({ options, save }) => {
+    engine.delay(save, 1_000);
+    const connection = start();
+    await init(connection, { ...options, warm: WARM });
+    const at = checkout();
+    const [one, two] = await Promise.all([openAttempt(connection, at, ATTEMPT), openAttempt(connection, at, 'a0123abce')]);
+
+    expect([one?.event, two?.event]).toEqual(['ready', 'ready']);
+    expect(builds()).toMatchObject({ saves: [expect.anything()], prepares: [expect.anything()] });
+  });
+
+  it.each(PROVIDERS)('fails the open on $options.provider with the last lines of a prepare that fails, and leaves nothing', async ({ options }) => {
+    const connection = start();
+    await init(connection, { ...options, warm: { prepare: 'echo "npm error 401 Unauthorized" >&2; exit 7', cache: ['package-lock.json'] } });
+
+    expect(await openAttempt(connection, checkout(), ATTEMPT)).toMatchObject({
+      event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringMatching(/prepare, `echo .*`, failed in a (container|sandbox) from .*, exiting with code 7\. It printed: npm error 401 Unauthorized\. No step ran; fix warm, and start again\./) },
+    });
+    expect(engine.containers()).toEqual([]);
+    expect(engine.savedImages()).toEqual([]);
+  });
+
+  it('builds a warm image on docker from a Containerfile whose context holds only the cache files', async () => {
+    const connection = start();
+    const at = checkout();
+    fs.writeFileSync(path.join(at.worktree, 'Containerfile'), `FROM ${IMAGE}\nRUN npm ci\n`);
+    fs.writeFileSync(path.join(at.worktree, 'secret.env'), 'TOKEN=checkout-only');
+    await init(connection, { provider: 'docker', image: IMAGE, warm: { containerfile: 'Containerfile', cache: ['package.json', 'package-lock.json'] } });
+
+    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    const [tag] = engine.savedImages();
+    expect(Object.keys(engine.savedFiles(String(tag)).context).sort()).toEqual(['package-lock.json', 'package.json']);
+    expect(engine.calls().find(([, command, ...rest]) => command === 'run' && rest.includes(HANDLE))).toContain(tag);
+  });
+
+  it('fails the open with bad_option on warm.cache naming a cache file the checkout does not hold, before any sandbox exists', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: { prepare: PREPARE, cache: ['pnpm-lock.yaml'] } });
+
+    expect(await openAttempt(connection, checkout(), ATTEMPT)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.cache', message: expect.stringContaining('pnpm-lock.yaml is not a file in the checkout') } });
+    expect(engine.containers()).toEqual([]);
+  });
+});

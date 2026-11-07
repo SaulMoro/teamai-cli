@@ -1,9 +1,11 @@
-import type { ContainerEngine } from '../options.js';
+import crypto from 'node:crypto';
+import type { ContainerEngine, WarmOptions } from '../options.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
+import { oneBuildPerKey, planWarm, scratchOf, tailOf, type WarmPlan } from '../warm.js';
 import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -16,6 +18,13 @@ import { cliOf, commandsOf, heldProbe, LAUNCHABLE, mountsOf, unmountable, WORKSP
 //      -v <worktree>:<worktree>:rw -v <run dir>:<run dir>:rw -v <git path>:<git path>:ro …   every view path at its host path (,z on SELinux)
 //      --entrypoint /bin/sh <image> -c <idle>
 //    docker exec -w <cwd> -e NAME … <container> env -u WITHHELD … -- <argv>
+//
+//  With `warm`, each attempt's container starts from teamai-warm:<key> (warm.ts), made once per key from the image:
+//
+//    docker run -d --name teamai-warm-<key>-<random> --env HOME=/tmp/teamai-home -v <scratch>:/teamai-warm:rw … <image>
+//    docker exec -w /teamai-warm teamai-warm-<key>-<random> /bin/sh -c <prepare>        no credential, with the network
+//    docker commit teamai-warm-<key>-<random> teamai-warm:<key>; docker rm --force …
+//      or: docker build -t teamai-warm:<key> -f <checkout>/<containerfile> <scratch>
 //
 //  A judge gets a container of its own, with no route out but a filter that lets through only its model provider:
 //
@@ -57,6 +66,9 @@ function dnsStaysInside(version: string): boolean {
   return major >= 26 || (major === 25 && (minor > 0 || patch >= 5)) || (major === 23 && (minor > 0 || patch >= 11));
 }
 
+/** Where a warm image's prepare runs, with the copies of the `cache` files mounted there. */
+const WARM_DIR = '/teamai-warm';
+
 /** Seconds a stop waits before the engine kills the container, well inside COMMAND_MS. */
 const STOP_GRACE = '5';
 
@@ -69,8 +81,11 @@ export interface Host {
   env: NodeJS.ProcessEnv;
 }
 
-/** `owner`: the id of the journal whose attempts the containers are, which labels each one. */
-export function containerProvider({ engine, image, owner, host }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host }): Provider {
+/**
+ * `owner`: the id of the journal whose attempts the containers are, which labels each one. `warm`: the recipe of the
+ * warm image each attempt's container starts from, made on `image`; unset, it starts from `image`.
+ */
+export function containerProvider({ engine, image, owner, host, warm }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host; warm?: WarmOptions }): Provider {
   const notInstalled = engine === 'docker'
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';
@@ -91,6 +106,62 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
   const said = (ran: Ran, pattern: RegExp): boolean => ran.kind === 'ran' && pattern.test(ran.stderr);
 
   const sandboxFailed = (message: string) => ({ ok: false as const, failure: { code: 'sandbox_failed', message } });
+
+  const once = oneBuildPerKey<{ ok: true } | { ok: false; failure: RuntimeFailure }>();
+
+  /** Makes the warm image of `plan` from `image` with the `cache` files of `checkout`, in a scratch container or build. */
+  const makeWarm = async (plan: WarmPlan, checkout: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const scratch = scratchOf({ cache: plan.cache, checkout });
+    const failed = (what: string, ran: Ran) => sandboxFailed(`${what}${ran.kind === 'ran' ? `, exiting with code ${ran.code}. It printed: ${tailOf(`${ran.stdout}\n${ran.stderr}`) || 'nothing'}` : `: ${ran.message}`}. No step ran; fix warm, and start again.`);
+
+    try {
+      const { make } = plan;
+
+      if ('containerfile' in make) {
+        const built = await cli(['build', '-t', plan.tag, '-f', make.containerfile, scratch.dir]);
+
+        return built.kind === 'ran' && built.code === 0 ? { ok: true } : failed(`${engine} could not build the warm image ${plan.tag} from ${make.containerfile}`, built);
+      }
+
+      const name = `teamai-warm-${plan.key}-${crypto.randomBytes(3).toString('hex')}`;
+      const created = await cli([
+        'run', '-d', '--name', name, '--label', `teamai.owner=${owner}`, '--label', `teamai.warm=${plan.key}`, ...user(), '--env', `HOME=${CONTAINER_HOME}`,
+        '-v', `${scratch.dir}:${WARM_DIR}:rw${host.selinux ? ',z' : ''}`, '--entrypoint', '/bin/sh', image, '-c', IDLE,
+      ]);
+
+      if (!(created.kind === 'ran' && created.code === 0)) return failed(`${engine} could not start a container from ${image} to prepare the warm image ${plan.tag}`, created);
+
+      try {
+        const prepared = await cli(['exec', '-w', WARM_DIR, name, '/bin/sh', '-c', make.prepare]);
+
+        if (!(prepared.kind === 'ran' && prepared.code === 0)) return failed(`The warm image's prepare, \`${make.prepare}\`, failed in a container from ${image}`, prepared);
+        const committed = await cli(['commit', name, plan.tag]);
+
+        return committed.kind === 'ran' && committed.code === 0 ? { ok: true } : failed(`${engine} could not save the warm image ${plan.tag}`, committed);
+      } finally {
+        await cli(['rm', '--force', name], { timeoutMs: COMMAND_MS });
+      }
+    } finally {
+      scratch.remove();
+    }
+  };
+
+  /** The image an attempt in `checkout` starts from: the warm image, made first when it is not there yet, else `image`. */
+  const imageFor = async (checkout: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
+    if (warm === undefined) return { ok: true, image };
+    const planned = planWarm({ base: image, recipe: warm, checkout });
+
+    if (!planned.ok) return planned;
+    const { plan } = planned;
+
+    const made = await once(plan.key, async () => {
+      const present = await cli(['image', 'inspect', '--format', '{{.Id}}', plan.tag]);
+
+      return present.kind === 'ran' && present.code === 0 ? { ok: true } : makeWarm(plan, checkout);
+    });
+
+    return made.ok ? { ok: true, image: plan.tag } : made;
+  };
 
   const find: Provider['find'] = async (key) => {
     const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`], { timeoutMs: COMMAND_MS });
@@ -184,12 +255,15 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
       const mounted = mountsOf(engine, view);
 
       if (!mounted.ok) return mounted;
+      const from = await imageFor(view.worktree);
+
+      if (!from.ok) return from;
       const label = host.selinux ? ',z' : '';
       const volumes = mounted.mounts.flatMap(({ at, mode }) => ['-v', `${at}:${at}:${mode}${label}`]);
 
       const created = await cli([
         'run', '-d', '--name', handleOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(),
-        '--env', `HOME=${CONTAINER_HOME}`, ...volumes, '--entrypoint', '/bin/sh', image, '-c', IDLE,
+        '--env', `HOME=${CONTAINER_HOME}`, ...volumes, '--entrypoint', '/bin/sh', from.image, '-c', IDLE,
       ]);
 
       if (created.kind === 'ran' && created.code === 0) return { ok: true, id: created.stdout.trim() };
@@ -198,7 +272,7 @@ export function containerProvider({ engine, image, owner, host }: { engine: Cont
 
       if (existing.ok && existing.id !== undefined) return { ok: true, id: existing.id };
 
-      return { ok: false, failure: { code: 'sandbox_failed', message: created.kind !== 'ran' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${image}: ${lastLine(created)}` } };
+      return { ok: false, failure: { code: 'sandbox_failed', message: created.kind !== 'ran' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${from.image}: ${lastLine(created)}` } };
     },
 
     judges: {
