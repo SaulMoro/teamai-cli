@@ -112,6 +112,17 @@ describe('a toy through a toy, over stdio', () => {
     ]);
   });
 
+  it('opens only the outer for a command step\'s place, which runs no tool, and runs its exec and close there', async () => {
+    const runtime = await start();
+    const { tool: _none, ...request } = openRequest();
+    const opened = await runtime.open({ ...request, credentials: {} }, async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+
+    expect(await runtime.exec({ op: newOpId(), handle: opened.handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: worktree }, {})).toMatchObject({ kind: 'exited', code: 0 });
+    expect(await runtime.close(opened.handle)).toEqual({ ok: true });
+    expect(asked().map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['outer open', 'outer exec', 'outer close']);
+  });
+
   it('runs a prompt on the inner with only its credentials, and an exec on the outer', async () => {
     const runtime = await start();
     const opened = await runtime.open(openRequest(), async () => {});
