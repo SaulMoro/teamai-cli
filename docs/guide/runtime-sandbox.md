@@ -419,6 +419,61 @@ podman machine start                     # macOS and Windows
 teamai workflow start review --driver containers-podman
 ```
 
+## seatbelt and bwrap
+
+`seatbelt` (macOS 14 or later) and `bwrap` (Linux, [bubblewrap](https://github.com/containers/bubblewrap)) run each step as a sandboxed process on this machine, with this machine's own tools: no image and no daemon. They take only `provider` and `credentials`.
+
+```yaml
+# drivers/native.yaml
+schemaVersion: v1alpha1
+name: native
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: seatbelt                 # bwrap on Linux
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+```
+
+- The step writes its worktree, its result and its tool home, and reads the git directories and the directories on your `PATH`. It cannot read your home, your other repositories or your SSH keys: its `HOME` and `TMPDIR` are empty directories of its own.
+- Its environment holds `PATH`, `USER`, `SHELL`, `LANG` and `TERM`, plus what teamai gives the step. None of your other variables reaches it.
+- It shares this machine's network, so a base URL on `localhost` or `127.0.0.1` reaches it as is.
+- A Claude login in the macOS Keychain or in `~/.claude` is not read there: name a key in `credentials`, as for a container.
+- `seatbelt` confines files only, through `sandbox-exec`. A step with `requires: { isolation: sandbox }` or `permissions: unattended` is not offered to it. `bwrap` also gives each step its own process, IPC and user namespaces, and takes both.
+
+When `bwrap` is missing, or AppArmor on Ubuntu 24.04 or later keeps it from creating a namespace, `init` fails `sandbox_unavailable` with the fix, and nothing runs on the host:
+
+```sh
+sudo apt install bubblewrap
+```
+
+## Vercel
+
+`vercel` runs each attempt in its own [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox), a microVM on Vercel. Its image ships Claude, so it offers Claude steps.
+
+```yaml
+# drivers/hosted.yaml
+schemaVersion: v1alpha1
+name: hosted
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: vercel
+      timeout: 2h                        # optional: the sandbox's lifetime, 1m to 5h
+      provider_auth:                     # optional: where teamai reads the Vercel sign-in
+        VERCEL_TOKEN: file:~/.config/vercel-token
+      credentials:
+        ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY
+```
+
+- teamai signs in to Vercel from `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID`, or from `VERCEL_OIDC_TOKEN` (`vercel link`, then `vercel env pull`). `provider_auth` names another variable or a file for any of them. They are read on this machine and never reach the step.
+- teamai copies the worktree, the git directories (read-only), the run's files and the tool home in at their host paths. At the end of the step it copies the worktree, the result and the tool home back, changes and deletions alike. The git directories and the run's files are not copied back. A link the step planted comes back as a link, and nothing is written outside the place.
+- Each sandbox is created with persistence off and deleted when the attempt closes. Unset, `timeout` lasts until 5 minutes past the step's time limit, at most 5 hours, or 45 minutes for a step with none. A `timeout` that would end before the step's time limit fails the step `bad_option` on `timeout` before any sandbox exists.
+- A sandbox on Vercel cannot reach this machine, so a credential such as `ANTHROPIC_BASE_URL` on `localhost` or `127.0.0.1` fails `bad_option`.
+- A sandbox left behind shows in the Vercel dashboard (Sandboxes) as `teamai-<home id>-<run>-<attempt>`; its timeout ends it.
+
 ## Limits and budgets
 
 A step's `timeout`, `max_turns` and `budget` hold in a container as on the host. At a limit, teamai stops the tool: the runtime restarts the attempt's container, which ends every process in it.
