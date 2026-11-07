@@ -1304,6 +1304,23 @@ describe('teamai-runtime-t3', () => {
       expect(end).toMatchObject({ event: 'finished', session: { tool, id: expect.stringMatching(/^[0-9a-f-]{36}$/), home: home() } });
     });
 
+    // T3 runs a Codex instance that has a shadow home, its own or the one T3 gives a managed instance not named codex,
+    // with only its sign-in there: it links the shadow's sessions to the instance's shared home, which scoring reads.
+    it.each<{ set: string; config: Line; home(): string | undefined }>([
+      { set: 'a shadow home of its own', config: { homePath: '~/.codex-work', shadowHomePath: '~/.codex-t3/work' }, home: () => path.join(t3.home, '.codex-work') },
+      { set: 'the shadow home T3 gives a managed instance', config: { setupMode: 'managed' }, home: () => undefined },
+    ])('names the shared home of a Codex instance with $set, where its sessions are', async ({ config, home }) => {
+      t3.config({ providers: [CLAUDE, { ...CODEX, providerInstanceId: 'codex-work' }] });
+      t3.settings({ providerInstances: { 'codex-work': { driver: 'codex', config } } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-00000025', { tool: 'codex', model: { name: 'gpt-6.1-sol' } }));
+
+      const end = await ended(runtime, 'op-00000025');
+      expect(end).toMatchObject({ event: 'finished', session: { tool: 'codex', id: expect.stringMatching(/^[0-9a-f-]{36}$/) } });
+      expect(z.object({ session: z.object({ home: z.string().optional() }) }).parse(end).session.home).toBe(home());
+    });
+
     // A member whose shell runs teamai with another HOME, such as a script's scratch HOME, still runs T3 Code as
     // themselves: an instance with no homePath keeps its sessions in the tool's home in T3 Code's own home.
     it('finds the session in the tool home of T3 Code\'s own user when teamai runs with another HOME, and names that home', async () => {

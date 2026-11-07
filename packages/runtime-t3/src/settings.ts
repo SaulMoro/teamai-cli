@@ -49,10 +49,11 @@ export const SettingsSchema = z.object({
     driver: lenient(z.string()),
     enabled: lenient(z.boolean().nullable()),
     /**
-     * Where the instance runs its tool: `homePath`, and for Codex `shadowHomePath`, which T3 runs it in when set; and
-     * `binaryPath`, the command T3 starts for it in place of the tool's own.
+     * Where the instance keeps its tool's sessions, `homePath`, and `binaryPath`, the command T3 starts for it in place
+     * of the tool's own. A Codex shadow home holds only its sign-in: T3 links the shadow's `sessions` and
+     * `archived_sessions` to `homePath` (`KNOWN_SHARED_DIRECTORIES` in T3's server).
      */
-    config: lenient(z.object({ homePath: lenient(z.string()), shadowHomePath: lenient(z.string()), binaryPath: lenient(z.string()) }).catch({})),
+    config: lenient(z.object({ homePath: lenient(z.string()), binaryPath: lenient(z.string()) }).catch({})),
   }).catch({}))),
 });
 
@@ -83,12 +84,12 @@ export function readSettings(t3Home: string): Read {
 
 /**
  * The home the provider instance `instanceId` runs `driver`'s tool in, as T3 resolves it: the instance's `homePath`
- * (for Codex, its `shadowHomePath` first), with `~` as the home of the user T3 Code runs as, `userHome`; else the
+ * (a Codex shadow home links its sessions there), with `~` as the home of the user T3 Code runs as, `userHome`; else the
  * tool's own home there.
  */
 export function instanceToolHome(settings: Read, { instanceId, driver, userHome }: { instanceId: string; driver: Driver; userHome: string }): string {
   const config = settings.providerInstances?.[instanceId]?.config;
-  const own = (driver === 'codex' ? config?.shadowHomePath?.trim() || config?.homePath?.trim() : config?.homePath?.trim()) ?? '';
+  const own = config?.homePath?.trim() ?? '';
 
   if (own === '') return path.join(userHome, DRIVERS[driver].home);
 
