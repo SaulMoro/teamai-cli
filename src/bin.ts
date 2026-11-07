@@ -10,4 +10,5 @@ import module from 'node:module';
 // so it is typed optional and called only where it exists.
 (module as typeof module & { enableCompileCache?: () => void }).enableCompileCache?.();
 
+// oxlint-disable-next-line teamai/package-boundaries -- the CLI bundle beside this file, by URL so tsup leaves it out
 await import(new URL('./cli.js', import.meta.url).href);
