@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, type Creation, type Daemon, type Model, type PaseoTool, type ProviderToAdd, type Target } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, paseoHome, type Creation, type Daemon, type Model, type PaseoTool, type ProviderToAdd, type Target } from './daemon.js';
 import { parseOptions } from './options.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 
@@ -209,14 +209,16 @@ const clip = (text: string, max: number): string => (text.length > max ? `${text
 
 /**
  * What the person reads once teamai added a Paseo provider for instance `name`: what it holds, that it stays, and how to
- * remove it from the daemon's config, in the Paseo home the member's Paseo uses.
+ * remove it from the config of the Paseo home the member's Paseo uses. Paseo's CLI cannot unset one provider (0.14
+ * refuses `config unset` on a dynamic key), so the person edits that file and reloads the daemon.
  */
 function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): string {
   const runs = entry.command ? entry.command[0] : `${entry.extends}'s own command`;
   const home = Object.entries(entry.env ?? {}).map(([variable, dir]) => `, with ${variable}=${dir}`).join('');
-  const paseoHome = process.env.PASEO_HOME ? ` --home ${process.env.PASEO_HOME}` : '';
+  const paseoDir = paseoHome(process.env);
+  const homeFlag = process.env.PASEO_HOME ? ` --home ${paseoDir}` : '';
 
-  return `teamai added the Paseo provider ${id} to the daemon at ${url} for its ${name} steps: it extends ${entry.extends} and runs ${runs}${home}. It stays for later runs; remove it with \`paseo daemon config unset agents.providers.${id}${paseoHome}\`.`;
+  return `teamai added the Paseo provider ${id} to the daemon at ${url} for its ${name} steps: it extends ${entry.extends} and runs ${runs}${home}. It stays for later runs; to remove it, delete agents.providers.${id} from ${path.join(paseoDir, 'config.json')}, then run \`paseo daemon reload${homeFlag}\`.`;
 }
 
 export interface Serving {

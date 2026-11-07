@@ -521,13 +521,16 @@ function urlOfListen(listen: string): { url: string } | { cannot: string } {
   return { url: `ws://${reached.includes(':') ? `[${reached}]` : reached}:${port}/ws` };
 }
 
+/** The member's Paseo home: `PASEO_HOME`, or `~/.paseo` as Paseo defaults it. */
+export const paseoHome = (env: NodeJS.ProcessEnv): string => path.resolve(expandHome(env.PASEO_HOME || '~/.paseo'));
+
 /**
  * The address of the daemon the member's Paseo runs: the one `daemon.listen` names in Paseo's own config,
  * `$PASEO_HOME/config.json` (`PASEO_HOME` defaults to `~/.paseo`), or Paseo's default address when that config names
  * none. A config that cannot be read fails, rather than send teamai's steps to another daemon.
  */
 export function daemonUrl(env: NodeJS.ProcessEnv): { url: string } | RuntimeFailure {
-  const file = path.join(path.resolve(expandHome(env.PASEO_HOME || '~/.paseo')), 'config.json');
+  const file = path.join(paseoHome(env), 'config.json');
 
   const cannot = (why: string): RuntimeFailure => ({
     code: 'paseo_config',
