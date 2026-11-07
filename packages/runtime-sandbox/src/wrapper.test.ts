@@ -344,12 +344,15 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(ran.stdout).not.toContain('host codex');
   });
 
-  it("serves its socket at 0600 in a 0700 directory, and removes it at close", async () => {
+  it("serves its socket at 0600 in a 0700 directory, and removes it at close, though a client sits on it saying nothing", async () => {
     const connection = start();
     await init(connection);
     const at = place();
     const handle = await openFor(connection, at);
     const socket = socketOf(handle);
+    const idle = net.connect(socket);
+    registered.push(idle);
+    await new Promise<void>((resolve, reject) => idle.once('connect', resolve).once('error', reject));
 
     expect(fs.statSync(socket).mode & 0o777).toBe(0o600);
     expect(fs.statSync(path.dirname(socket)).mode & 0o777).toBe(0o700);
