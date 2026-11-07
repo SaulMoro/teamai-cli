@@ -103,7 +103,10 @@ export interface StepRuntime {
    * `checkout`. In `recover` mode it only answers for the handles it recorded.
    */
   init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[]; checkout?: string }): Promise<Initialized>;
-  /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open` rejects with its error. */
+  /**
+   * Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open`
+   * rejects with its error. A place made in steps (a runtime through another) is accepted at each, with the handle so far.
+   */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
   /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */
@@ -112,7 +115,8 @@ export interface StepRuntime {
   cancel(op: OpId): Promise<void>;
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */
   collect(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
-  reattach(handle: string): Promise<Reattached>;
+  /** `credentials`: as the outer of a runtime through it, the prompt's credentials again, which it keeps only in memory. */
+  reattach(handle: string, how?: { credentials: Record<string, string> }): Promise<Reattached>;
   /**
    * Ends the handle: the runtime may drop its retained outcomes. A failure says the place, and what runs in it, may
    * remain. `release` says the person let the attempt go, so the runtime forgets the place even when it cannot end it.
