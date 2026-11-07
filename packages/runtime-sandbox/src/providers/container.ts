@@ -109,9 +109,9 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
 
   const once = oneBuildPerKey<{ ok: true } | { ok: false; failure: RuntimeFailure }>();
 
-  /** Makes the warm image of `plan` from `image` with the `cache` files of `checkout`, in a scratch container or build. */
-  const makeWarm = async (plan: WarmPlan, checkout: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
-    const scratch = scratchOf({ cache: plan.cache, checkout });
+  /** Makes the warm image of `plan` from `image` with its `cache` files, in a scratch container or build. */
+  const makeWarm = async (plan: WarmPlan): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const scratch = scratchOf(plan.cache);
 
     try {
       const { make } = plan;
@@ -157,7 +157,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     const made = await once(plan.key, async () => {
       const present = await cli(['image', 'inspect', '--format', '{{.Id}}', plan.tag]);
 
-      return present.kind === 'ran' && present.code === 0 ? { ok: true } : makeWarm(plan, checkout);
+      return present.kind === 'ran' && present.code === 0 ? { ok: true } : makeWarm(plan);
     });
 
     return made.ok ? { ok: true, image: plan.tag } : made;

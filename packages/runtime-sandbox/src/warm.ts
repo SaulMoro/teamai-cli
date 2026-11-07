@@ -68,7 +68,8 @@ const TAIL = 600;
 export interface WarmPlan {
   tag: string;
   key: string;
-  cache: readonly string[];
+  /** Each `cache` file: its path relative to the checkout, and where its bytes are on this machine, inside the checkout. */
+  cache: ReadonlyArray<{ file: string; from: string }>;
   make: { prepare: string } | { containerfile: string };
 }
 
@@ -93,43 +94,53 @@ export function warmFailed(what: string, ran: Ran) {
 export function planWarm({ base, recipe, checkout }: { base: string; recipe: WarmOptions; checkout: string }): { ok: true; plan: WarmPlan } | { ok: false; failure: RuntimeFailure } {
   const hash = crypto.createHash('sha256').update(JSON.stringify({ base, recipe }));
   const files = [...recipe.cache.map((file) => ({ file, key: 'warm.cache' })), ...(recipe.containerfile === undefined ? [] : [{ file: recipe.containerfile, key: 'warm.containerfile' }])];
+  const real = fs.realpathSync(checkout);
+  const read: Array<{ file: string; from: string }> = [];
 
   for (const { file, key } of files) {
-    const full = path.resolve(checkout, file);
-    const inside = path.relative(checkout, full);
+    const inside = path.relative(checkout, path.resolve(checkout, file));
 
-    if (path.isAbsolute(file) || inside.startsWith('..') || inside === '') {
+    if (path.isAbsolute(file) || inside === '..' || inside.startsWith(`..${path.sep}`) || inside === '') {
       return { ok: false, failure: { code: 'bad_option', key, message: `${file} is not a path inside the checkout. Give it relative to the checkout, for example package-lock.json` } };
     }
 
+    let from: string;
     let bytes: Buffer;
 
     try {
-      bytes = fs.readFileSync(full);
+      from = fs.realpathSync(path.join(real, inside));
+      bytes = fs.readFileSync(from);
     } catch {
       return { ok: false, failure: { code: 'bad_option', key, message: `${file} is not a file in the checkout, so the warm image has no key. Commit it, or list only files the checkout holds` } };
     }
 
+    // A link is followed only to a file of the checkout: what it points to elsewhere on this machine never reaches a sandbox.
+    if (path.relative(real, from).startsWith(`..${path.sep}`)) {
+      return { ok: false, failure: { code: 'bad_option', key, message: `${file} is a link to a file outside the checkout, so its bytes never go into a warm image. Commit the file itself, or remove it from ${key}` } };
+    }
+
     hash.update(`\0${inside}\0`).update(bytes);
+    read.push({ file: inside, from });
   }
 
   const key = hash.digest('hex').slice(0, 16);
-  const make = recipe.containerfile === undefined ? { prepare: recipe.prepare } : { containerfile: path.resolve(checkout, recipe.containerfile) };
+  const cache = read.slice(0, recipe.cache.length);
+  const make = recipe.containerfile === undefined ? { prepare: recipe.prepare } : { containerfile: read[recipe.cache.length]?.from ?? path.resolve(checkout, recipe.containerfile) };
 
-  return { ok: true, plan: { tag: `${WARM_REPOSITORY}:${key}`, key, cache: recipe.cache, make } };
+  return { ok: true, plan: { tag: `${WARM_REPOSITORY}:${key}`, key, cache, make } };
 }
 
 /**
- * A fresh scratch directory outside the checkout holding copies of the `cache` files of `checkout`, at their relative
- * paths, and what removes it.
+ * A fresh scratch directory outside the checkout holding copies of the `cache` files, at their paths relative to the
+ * checkout, and what removes it.
  */
-export function scratchOf({ cache, checkout }: { cache: readonly string[]; checkout: string }) {
+export function scratchOf(cache: WarmPlan['cache']) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `teamai-warm-${process.pid}-`)));
 
-  for (const file of cache) {
+  for (const { file, from } of cache) {
     const to = path.join(dir, file);
     fs.mkdirSync(path.dirname(to), { recursive: true });
-    fs.copyFileSync(path.resolve(checkout, file), to);
+    fs.copyFileSync(from, to);
   }
 
   return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
