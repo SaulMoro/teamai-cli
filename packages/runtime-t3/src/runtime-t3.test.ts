@@ -407,12 +407,12 @@ describe('teamai-runtime-t3', () => {
       it.each([
         { case: 'a relative Binary path', binaryPath: 'acme-claude' },
         { case: 'a Binary path to another file', binaryPath: '/opt/acme/bin/acme-claude-old' },
-      ])('does not offer it on an instance with $case, and names the instance to add', async ({ binaryPath }) => {
+      ])('does not offer it on an instance with $case, and names the instance to add when teamai cannot add it', async ({ binaryPath }) => {
         const reply = await initWith({ binaryPaths: { 'acme-claude-t3': binaryPath } });
 
         expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
         expect(reply['unavailable']).toEqual({
-          'acme-claude': 'No T3 Code provider instance runs acme-claude. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition\'s t3 options.',
+          'acme-claude': 'No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition\'s t3 options.',
         });
       });
 
@@ -1345,6 +1345,178 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-00000020')).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claudeAgent', model: 'claude-opus-5-5' });
+    });
+
+    describe('a tool instance no T3 provider instance runs yet', () => {
+      const ACME = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+      const AUTO = 'orchestration:read orchestration:operate';
+      const FULL = 'orchestration:read orchestration:operate settings:write source-control:write';
+      const FULL_PAIRING = ['auth', 'pairing', 'create', '--json', '--base-dir', '<t3 home>', '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'settings:write', '--scope', 'source-control:write', '--ttl', '2m', '--label', 'teamai workflow'];
+      const MEMBER_SETTINGS = { defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, providerInstances: { cursor: { driver: 'cursor', enabled: true } } };
+      let bin: string;
+
+      beforeEach(() => {
+        // The team's wrapper and Claude itself, on the member's PATH.
+        bin = path.join(dir, 'acme-bin');
+        fs.mkdirSync(bin);
+
+        for (const command of ['acme-claude', 'claude']) fs.writeFileSync(path.join(bin, command), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        t3.settings(MEMBER_SETTINGS);
+      });
+
+      const settingsNow = (): unknown => JSON.parse(fs.readFileSync(path.join(t3.t3Home, 'userdata', 'settings.json'), 'utf8'));
+      const pathWith = (...dirs: string[]): string => [...dirs, bin, PATH_WITHOUT_T3].join(path.delimiter);
+      const pairings = (): string[][] => t3.commandRuns().map((args) => args.map((arg) => (arg === t3.t3Home ? '<t3 home>' : arg)));
+
+      const initOn = async ({ mode = 'attended', env = {}, instances = [ACME] }: { mode?: 'attended' | 'unattended'; env?: Record<string, string>; instances?: Line[] } = {}): Promise<{ runtime: Connection; reply: Line }> => {
+        const runtime = start({ PATH: pathWith(t3.bin), ...env });
+        runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local' }, instances });
+
+        return { runtime, reply: await runtime.next((line) => line['type'] === 'init') };
+      };
+
+      /** Opens the place of a step that runs `tool`, and answers how the open ended. */
+      const openFor = async (runtime: Connection, tool: string, op = OPEN, attempt = 'a1b2c3d4'): Promise<Line> => {
+        runtime.send({ type: 'open', op, run: RUN, attempt, tool, credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
+        await runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
+
+        return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && !isNotice(line), 30_000);
+      };
+
+      const ADDED = (binaryPath: string) => ({ driver: 'claudeAgent', displayName: 'acme-claude', enabled: true, config: { binaryPath } });
+
+      it('offers it at init and writes nothing there, then adds it on the first open that runs it, through the t3 command, keeping every other setting, and runs the step on it', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const { runtime, reply } = await initOn();
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+        expect(reply).not.toHaveProperty('unavailable');
+        expect(settingsNow()).toEqual(MEMBER_SETTINGS);
+        expect(t3.commandRuns()).toEqual([]);
+
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+
+        expect(settingsNow()).toEqual({ ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+        expect(pairings()).toEqual([FULL_PAIRING]);
+        expect(noticesOf(runtime)).toContainEqual({
+          event: 'notice', op: OPEN,
+          message: `Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path ${path.join(bin, 'acme-claude')}), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.`,
+        });
+
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000021', { tool: 'acme-claude' }));
+
+        expect(await ended(runtime, 'op-00000021')).toMatchObject({ event: 'finished', session: { tool: 'acme-claude' } });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'acme-claude', model: 'claude-opus-5-5' });
+      });
+
+      it('runs a later run on the instance it added, writing nothing and asking for nothing', async () => {
+        t3.settings({ ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+        const written = fs.readFileSync(path.join(t3.t3Home, 'userdata', 'settings.json'));
+        const { runtime, reply } = await initOn({ mode: 'unattended' });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(fs.readFileSync(path.join(t3.t3Home, 'userdata', 'settings.json'))).toEqual(written);
+        expect(t3.commandRuns()).toEqual([]);
+        expect(noticesOf(runtime)).toEqual([]);
+      });
+
+      it('adds it in an unattended run too, minting the wider sign-in through the t3 command', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const { runtime, reply } = await initOn({ mode: 'unattended' });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(pairings()).toEqual([FULL_PAIRING]);
+        expect(settingsNow()).toMatchObject({ providerInstances: { 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+      });
+
+      it('does not offer it, naming what to do, in an unattended run with no t3 command and a sign-in that may not change T3\'s settings, and writes nothing', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const { reply } = await initOn({ mode: 'unattended', env: { PATH: pathWith() } });
+
+        expect(reply).toMatchObject({
+          ok: true, can: { tools: ['claude', 'codex'] },
+          unavailable: {
+            'acme-claude': `No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
+          },
+        });
+        expect(settingsNow()).toEqual(MEMBER_SETTINGS);
+      });
+
+      it('adds it in an unattended run with no t3 command on a kept sign-in that may change T3\'s settings', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const { runtime, reply } = await initOn({ mode: 'unattended', env: { PATH: pathWith() } });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toMatchObject({ providerInstances: { 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+      });
+
+      it('fails the open, naming what to do, when the person approves only Auto access in T3\'s page, and writes nothing', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const browser = fakeBrowser(dir);
+        const { runtime } = await initOn({ env: { PATH: pathWith(browser.bin) } });
+
+        expect(await openFor(runtime, 'acme-claude')).toEqual({
+          op: OPEN, event: 'failed',
+          failure: {
+            code: 'open_failed',
+            message: `teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access, which T3 Code requires to change its settings. Start the workflow again and approve teamai with Full access in the page T3 Code opens, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
+          },
+        });
+        expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: expect.stringMatching(/^Approve teamai in T3 Code with Full access, so it can add a T3 Code provider instance for acme-claude: /) }]);
+        expect(settingsNow()).toEqual(MEMBER_SETTINGS);
+      });
+
+      it('adds it once when two runs open steps on it at once', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const [first, second] = await Promise.all([initOn({ mode: 'unattended' }), initOn({ mode: 'unattended' })]);
+
+        // A judge's place: no worktree, so both runs open at once.
+        const judgeOpen = (runtime: Connection, op: string): Promise<Line> => {
+          runtime.send({ type: 'open', op, run: RUN, attempt: op, tool: 'acme-claude', credentials: {} });
+
+          return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && !isNotice(line), 30_000);
+        };
+
+        expect(await Promise.all([judgeOpen(first.runtime, 'op-00000031'), judgeOpen(second.runtime, 'op-00000032')])).toMatchObject([{ event: 'ready' }, { event: 'ready' }]);
+        expect(settingsNow()).toEqual({ ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+        expect([...noticesOf(first.runtime), ...noticesOf(second.runtime)].filter((line) => String(line['message']).startsWith('Added'))).toHaveLength(1);
+      });
+
+      it('fails the open, adding nothing, when T3 already has a provider instance of that name that runs another command', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const taken = { ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': { driver: 'claudeAgent', config: { binaryPath: '/opt/old/claude-old' } } } };
+        t3.settings(taken);
+        const { runtime } = await initOn({ mode: 'unattended' });
+
+        expect(await openFor(runtime, 'acme-claude')).toEqual({
+          op: OPEN, event: 'failed',
+          failure: {
+            code: 'open_failed',
+            message: `teamai could not add a T3 Code provider instance for acme-claude: T3 Code already has a provider instance "acme-claude" that runs another command. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
+          },
+        });
+        expect(settingsNow()).toEqual(taken);
+      });
+
+      // A second account of the same tool: no command of its own, a home of its own.
+      it('adds an instance with a home of its own and no command on its tool\'s own binary in that home, rather than running it on the member\'s Claude', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const { runtime, reply } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }] });
+
+        expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'claude-work'] } });
+        expect(await openFor(runtime, 'claude-work')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toMatchObject({
+          providerInstances: { 'claude-work': { driver: 'claudeAgent', displayName: 'claude-work', enabled: true, config: { binaryPath: path.join(bin, 'claude'), homePath: path.join(t3.home, '.claude-work') } } },
+        });
+
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000022', { tool: 'claude-work' }));
+
+        expect(await ended(runtime, 'op-00000022')).toMatchObject({ event: 'finished', session: { tool: 'claude-work', home: path.join(t3.home, '.claude-work') } });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claude-work', model: 'claude-opus-5-5' });
+      });
     });
 
     // A T3 thread always starts a session of its own, so teamai must not link it to the one the step asked to resume.

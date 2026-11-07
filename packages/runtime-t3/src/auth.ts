@@ -39,10 +39,18 @@ export type SignInAccess = Extract<StepMode, 'auto' | 'full-access'>;
  * The scopes T3 grants a sign-in approved with each access (`mcpClientScopes` in T3's server): reading and operating
  * threads, and for Full access also writing settings and source control, which T3 requires for it.
  */
+/** The scope T3 requires to change its settings, which a provider instance is part of. */
+const SETTINGS_WRITE = 'settings:write';
+
 const SCOPES = {
   auto: ['orchestration:read', 'orchestration:operate'],
-  'full-access': ['orchestration:read', 'orchestration:operate', 'settings:write', 'source-control:write'],
+  'full-access': ['orchestration:read', 'orchestration:operate', SETTINGS_WRITE, 'source-control:write'],
 } as const satisfies Record<SignInAccess, readonly string[]>;
+
+/** The scopes a sign-in with `access` asks T3 for, as OAuth spells them. */
+export function scopeOf(access: SignInAccess): string {
+  return SCOPES[access].join(' ');
+}
 
 /**
  * Whether `tokens` serve a run that needs `access`: T3 names the scopes it granted. A token kept with none named
@@ -99,6 +107,15 @@ export function validToken(stateDir: string, resource: string, access: SignInAcc
   const entry = credentialStore(stateDir).entry(resource);
 
   return entry.tokens && (entry.expiresAt === undefined || entry.expiresAt - EXPIRY_MARGIN_MS > now) && grants(entry.tokens, access) ? entry.tokens : undefined;
+}
+
+/**
+ * Whether the sign-in kept for `resource` may change T3's settings, such as add a provider instance: T3 named
+ * `settings:write` among the scopes it granted, which it grants only a sign-in approved with Full access. A token that
+ * names no scope does not count, so teamai never writes T3's settings on a grant it cannot read.
+ */
+export function mayWriteSettings(stateDir: string, resource: string): boolean {
+  return validToken(stateDir, resource, 'auto')?.scope?.split(' ').includes(SETTINGS_WRITE) ?? false;
 }
 
 /**
@@ -163,9 +180,15 @@ export interface SignIn {
 /**
  * An attended sign-in for `resource`: a loopback listener for T3's redirect, and the SDK's OAuth client over the
  * credentials file. The page opens in the person's browser; `say` also gives them its link, for a browser that does not
- * open, after why the silent sign-in could not serve the run, when it was tried.
+ * open, after why the silent sign-in could not serve the run, when it was tried, and the access to pick.
  */
-export async function attendedSignIn({ stateDir, resource, access, silentFailure, say }: { stateDir: string; resource: string; access: SignInAccess; silentFailure?: string; say(message: string): void }): Promise<SignIn> {
+export async function attendedSignIn({ stateDir, resource, access, adding, silentFailure, say }: {
+  stateDir: string; resource: string; access: SignInAccess;
+  /** The tool instances a sign-in with Full access lets teamai add a T3 provider instance for, when that is why it asks. */
+  adding?: string[] | undefined;
+  silentFailure?: string | undefined;
+  say(message: string): void;
+}): Promise<SignIn> {
   let answer: { resolve: (code: string) => void; reject: (error: Error) => void } | undefined;
   const answered = new Promise<string>((resolve, reject) => { answer = { resolve, reject }; });
   // A rejection nobody awaits yet must not end the process.
@@ -200,7 +223,9 @@ export async function attendedSignIn({ stateDir, resource, access, silentFailure
     ...keptClient({ stateDir, resource, redirectUrl, access }),
     redirectToAuthorization: (authorizationUrl) => {
       // The person picks the access in the page: Full access only when the run asks for it.
-      if (access === 'full-access') {
+      if (adding !== undefined) {
+        say(`Approve teamai in T3 Code with Full access, so it can add a T3 Code provider instance for ${adding.join(', ')}: T3 Code lets a sign-in change its settings only with Full access, and teamai still starts each thread in the mode it would.${silentFailure === undefined ? '' : ` (Silent sign-in failed: ${silentFailure}.)`} If no browser opened, visit: ${authorizationUrl.toString()}`);
+      } else if (access === 'full-access') {
         say(silentFailure === undefined
           ? `Approve teamai in T3 Code with Full access, since runtime_mode is full-access, to run workflow steps as threads: ${authorizationUrl.toString()}`
           : `Approve teamai in T3 Code with Full access, since runtime_mode is full-access (silent sign-in failed: ${silentFailure}). If no browser opened, visit: ${authorizationUrl.toString()}`);

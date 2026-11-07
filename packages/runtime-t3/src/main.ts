@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/tool-core/home';
+import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { z } from 'zod';
 import { addedProjects } from './added-projects.js';
-import { attendedSignIn, signInOf, signInSilently, unattendedAuth, validToken } from './auth.js';
+import { attendedSignIn, mayWriteSettings, scopeOf, signInOf, signInSilently, unattendedAuth, validToken } from './auth.js';
 import { journal } from './journal.js';
 import { serve, type ServeOptions } from './runtime.js';
 import { connectT3 } from './t3.js';
@@ -99,6 +100,33 @@ const connect: ServeOptions['connect'] = async (how) => {
   }
 };
 
+const widen: ServeOptions['widen'] = async ({ mode, adding }) => {
+  const resource = localEndpoint();
+
+  if (!resource) return { ok: false, why: 'T3 Code is not running on this machine' };
+
+  if (mayWriteSettings(state, resource.href)) return { ok: true };
+  // The t3 command mints the grant as the member, as it adds a project; only without it does a person approve it.
+  const silent = await signInSilently({ stateDir: state, resource, t3Home, t3Cli, access: 'full-access' });
+
+  if (mayWriteSettings(state, resource.href)) return { ok: true };
+  const silentFailure = silent.ok ? 'T3 Code granted no settings access' : silent.reason;
+
+  if (mode !== 'attended') return { ok: false, why: `teamai could not get a T3 Code sign-in that may change T3's settings through the t3 command (${silentFailure}), and an unattended run cannot ask for one` };
+  const signIn = await attendedSignIn({ stateDir: state, resource: resource.href, access: 'full-access', adding, silentFailure, say: (message) => write({ event: 'notice', message }) });
+  const scope = scopeOf('full-access');
+
+  try {
+    if (await auth(signIn.provider, { serverUrl: resource, scope }) === 'REDIRECT') await auth(signIn.provider, { serverUrl: resource, scope, authorizationCode: await signIn.code() });
+  } catch (error) {
+    return { ok: false, why: `T3 Code did not approve the sign-in (${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')})` };
+  } finally {
+    signIn.close();
+  }
+
+  return mayWriteSettings(state, resource.href) ? { ok: true } : { ok: false, why: 'teamai\'s T3 Code sign-in was approved without Full access, which T3 Code requires to change its settings' };
+};
+
 const startedFrom = process.env['T3CODE_THREAD_ID'];
 
 await serve({
@@ -106,9 +134,16 @@ await serve({
   write,
   journal: journal(path.join(state, 'places')),
   connect,
+  widen,
+  mayWriteSettings: () => {
+    const resource = localEndpoint();
+
+    return resource !== undefined && mayWriteSettings(state, resource.href);
+  },
   t3Home,
   t3UserHome: t3UserHomeOf(t3Home, getUserHome()),
   home: getUserHome(),
+  settingsLock: path.join(state, 'settings.lock'),
   t3Cli,
   added: addedProjects(path.join(state, 'added-projects.json')),
   cwd: process.cwd(),

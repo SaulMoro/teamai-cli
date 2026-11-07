@@ -25,7 +25,7 @@ function namesCommand(binaryPath: string, command: string): boolean {
 }
 
 /** Whether `binaryPath` is an absolute path to `command`. */
-function runsCommand(binaryPath: string, command: string): boolean {
+export function runsCommand(binaryPath: string, command: string): boolean {
   return path.isAbsolute(binaryPath) && namesCommand(binaryPath, command);
 }
 
@@ -44,6 +44,12 @@ export interface InstanceLookup {
   isUsable(provider: Provider): boolean;
   /** The Binary path the member set for the provider instance in T3, if any. */
   binaryPathOf(instanceId: string): string | undefined;
+  /** The tool home T3 runs the provider instance in. */
+  homeOf(provider: Provider, driver: Driver): string;
+  /** The tool home teamai gives the instance. */
+  homeFor(instance: InitInstance, driver: Driver): string;
+  /** A home as the person writes it. */
+  shown(home: string): string;
 }
 
 export interface ServedInstances {
@@ -51,12 +57,18 @@ export interface ServedInstances {
   unavailable: Record<string, string>;
   /** What the person hears at the start: a misspelt `instances` key, which no step may ever name to show its reason. */
   notices: string[];
+  /**
+   * The instances no provider instance runs, and `instances` does not map, which teamai may add: the command each runs,
+   * and for one with a home of its own and no command, that home, which tells its provider instance apart.
+   */
+  missing: Array<{ instance: InitInstance; driver: Driver; command: string; home?: string }>;
 }
 
 /**
  * The provider instance that serves each of `instances` T3 can run: the one `mapped` names, checked, else the one whose
- * Binary path runs its command. One it cannot find, whose command two instances run, or whose mapping cannot hold is
- * not served, and `unavailable` says what to set. teamai passes every instance the member may run at init, so a problem
+ * Binary path runs its command (with no command of its own: the tool's own binary, in the instance's home). One missing
+ * is listed for teamai to add. One whose command two instances run, one the member turned off, or one whose mapping
+ * cannot hold is not served, and `unavailable` says what to set. teamai passes every instance the member may run at init, so a problem
  * with one never fails the others.
  */
 export function servedInstances({ instances, mapped, lookup }: { instances: InitInstance[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
@@ -65,7 +77,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
   const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
 
   const notices: string[] = [];
-
+  const missing: ServedInstances['missing'] = [];
   // A misspelt name maps nothing, so it is named; it may also be a team tool this machine has not accepted.
 
   for (const stray of Object.keys(mapped ?? {}).filter((name) => !instances.some((instance) => instance.name === name))) {
@@ -114,32 +126,46 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 
     // One named like the tool it adjusts, with no command of its own, is that tool, on the instance T3 runs it on.
     if (command === undefined && name === instance.tool) continue;
-
-    // An instance with no command of its own runs the tool's, so no Binary path tells it apart.
-    if (command === undefined) {
-      unavailable[name] = reason(`${name} names no command of its own, so teamai cannot tell which T3 Code provider instance runs it. Map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
-      continue;
-    }
+    // One with a home of its own and no command runs its tool's own command in that home: both tell its instance apart.
+    const runs = command ?? DRIVERS[driver].tool;
+    const home = command === undefined ? lookup.homeFor(instance, driver) : undefined;
 
     const found = lookup.providers.filter((provider) => {
       const binaryPath = lookup.binaryPathOf(provider.providerInstanceId);
 
-      return provider.driverKind === driver && lookup.isUsable(provider) && binaryPath !== undefined && runsCommand(binaryPath, command);
+      if (provider.driverKind !== driver) return false;
+
+      return home === undefined ? binaryPath !== undefined && runsCommand(binaryPath, runs) : runsOwnBinary(binaryPath, driver) && lookup.homeOf(provider, driver) === home;
     });
 
-    if (found.length > 1) {
-      const names = found.map((provider) => `"${provider.providerInstanceId}"`);
-      unavailable[name] = reason(`T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${command}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`);
+    const what = home === undefined ? runs : `${runs} in ${lookup.shown(home)}`;
+    const usable = found.filter((provider) => lookup.isUsable(provider));
+
+    if (usable.length > 1) {
+      const names = usable.map((provider) => `"${provider.providerInstanceId}"`);
+      unavailable[name] = reason(`T3 Code provider instances ${names.slice(0, -1).join(', ')} and ${names.at(-1)} both run ${what}. Pick one with instances: { ${name}: <its id> } in the definition's t3 options.`);
       continue;
     }
 
-    const [provider] = found;
+    const [provider] = usable;
 
-    if (provider) served.set(name, provider);
-    else unavailable[name] = reason(`No T3 Code provider instance runs ${command}. Add one in T3 Code under Settings → Providers, with driver ${label} and Binary path the absolute path of ${command} (command -v ${command}), or map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
+    if (provider) {
+      served.set(name, provider);
+      continue;
+    }
+
+    // One the member has but turned off, or T3 cannot run now, is theirs to fix: teamai adds no second one.
+    const [off] = found;
+
+    if (off) {
+      unavailable[name] = reason(`T3 Code provider instance "${off.providerInstanceId}" runs ${what}, but cannot run now: ${(off.constraints ?? []).join(' ') || 'it is turned off for this project.'} Enable it in T3 Code under Settings → Providers, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
+      continue;
+    }
+
+    missing.push({ instance, driver, command: runs, ...(home !== undefined && { home }) });
   }
 
-  return { served, unavailable, notices };
+  return { served, unavailable, notices, missing };
 }
 
 /** The T3 driver of `provider`, when this runtime runs it. */
