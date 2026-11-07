@@ -155,15 +155,17 @@ export function fingerprintsOf(root: string): Record<string, string> {
 
 /**
  * Makes each of `roots` on the host match the archive's copy of it: what the archive holds is written, what it lacks is
- * deleted. Of `added` (the run directory, which other steps write too), what the archive holds is written and nothing
- * is deleted. A path under one of `kept` (the git paths) is never written or deleted, and an entry outside every root is
+ * deleted. Of `added.roots` (the run directory, which other steps write too), only the regular files the step changed
+ * come back: a file whose bytes match `added.wentIn` (its fingerprint as it went in) is left as the host has it now, a
+ * link is not brought back, a directory is made only when missing, and no path there is ever removed. A path under one of `kept` (the git paths) is never written or deleted, and an entry outside every root is
  * left out. Everything is written before anything is deleted, and a directory takes its mode last, deepest first, so a
  * copy that stops halfway (a full disk) deletes nothing and a read-only directory still gets its files.
  */
-export function applyTar(entries: TarEntry[], { roots, added = [], kept }: { roots: string[]; added?: string[]; kept: string[] }): void {
+export function applyTar(entries: TarEntry[], { roots, added = { roots: [], wentIn: {} }, kept }: { roots: string[]; added?: { roots: string[]; wentIn: Record<string, string> }; kept: string[] }): void {
   const isKept = (at: string): boolean => kept.some((keep) => isWithin(at, keep));
-  const rootOf = (at: string): string | undefined => [...roots, ...added].find((root) => isWithin(at, root));
+  const rootOf = (at: string): string | undefined => [...roots, ...added.roots].find((root) => isWithin(at, root));
   const listed = new Set(entries.map((entry) => entry.at));
+  const archived = new Map(entries.flatMap((entry) => (entry.kind === 'file' ? [[entry.at, entry.data] as const] : [])));
   const files = new Map<string, Buffer>();
   const dirs: Array<{ at: string; mode: number }> = [];
 
@@ -173,6 +175,18 @@ export function applyTar(entries: TarEntry[], { roots, added = [], kept }: { roo
     if (root === undefined || isKept(entry.at) || !hasRealParents(root, entry.at)) continue;
 
     const existing = lstatOf(entry.at);
+
+    if (added.roots.includes(root)) {
+      const data = entry.kind === 'file' ? entry.data : entry.kind === 'hardlink' ? archived.get(entry.target) : undefined;
+
+      if (entry.kind === 'dir' && existing === undefined) fs.mkdirSync(entry.at, { mode: entry.mode || 0o755 });
+
+      if (data !== undefined && (existing === undefined || existing.isFile()) && added.wentIn[entry.at] !== fingerprintOf(data)) {
+        fs.writeFileSync(entry.at, data, { mode: entry.mode || 0o644 });
+      }
+
+      continue;
+    }
 
     if (entry.kind === 'dir') {
       if (existing && !existing.isDirectory()) fs.rmSync(entry.at, { force: true });

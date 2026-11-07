@@ -202,6 +202,24 @@ describe('vercel: an attempt', () => {
     expect(fs.readFileSync(path.join(at.runDir, 'notes.md'), 'utf8')).toBe('step 1\nanother attempt\n');
   });
 
+  it('keeps every run-directory path the step left alone: a hardlinked pair, and a link another step replaced meanwhile', async () => {
+    const connection = start();
+    await init(connection);
+    const at = preparedPlace();
+    fs.mkdirSync(at.runDir, { recursive: true });
+    fs.writeFileSync(path.join(at.runDir, 'a.md'), 'same\n');
+    fs.linkSync(path.join(at.runDir, 'a.md'), path.join(at.runDir, 'b.md'));
+    fs.symlinkSync('a.md', path.join(at.runDir, 'latest.md'));
+    await openPlace(connection, at);
+    fs.rmSync(path.join(at.runDir, 'latest.md'));
+    fs.writeFileSync(path.join(at.runDir, 'latest.md'), 'another attempt\n');
+
+    expect(await collect(connection)).toMatchObject({ event: 'collected' });
+    expect(fs.readFileSync(path.join(at.runDir, 'a.md'), 'utf8')).toBe('same\n');
+    expect(fs.readFileSync(path.join(at.runDir, 'b.md'), 'utf8')).toBe('same\n');
+    expect(fs.readFileSync(path.join(at.runDir, 'latest.md'), 'utf8')).toBe('another attempt\n');
+  });
+
   it('copies back a read-only directory the step made with its files in it, and deletes what the step deleted', async () => {
     fs.writeFileSync(path.join(imageDir, 'lock'), `#!${process.execPath}\nconst fs = require('node:fs'); fs.mkdirSync('locked'); fs.writeFileSync('locked/child.txt', 'kept'); fs.chmodSync('locked', 0o555); fs.rmSync('obsolete.txt');\n`, { mode: 0o755 });
     const connection = start();

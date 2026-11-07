@@ -11,7 +11,7 @@ import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provi
 import { offerSignedIn } from '../sign-in.js';
 import { isRunning, oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
 import { WORKSPACES } from './cli.js';
-import { applyTar, fingerprintOf, fingerprintsOf, readTar } from './vercel-copy.js';
+import { applyTar, fingerprintsOf, readTar } from './vercel-copy.js';
 
 // ─── vercel: a hosted sandbox per attempt (Vercel Sandbox), the copy family ───
 //
@@ -554,8 +554,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
         await run(sandbox, 'rm', ['-f', file]);
 
         if (data === null) return failed(`Vercel sandbox ${id} lost the packed work before it was read. Nothing was copied back.`);
-        const changed = readTar(data).filter((entry) => !(entry.kind === 'file' && runFiles[entry.at] === fingerprintOf(entry.data)));
-        applyTar(changed, { roots, added: [view.runDir], kept: view.readonly });
+        applyTar(readTar(data), { roots, added: { roots: [view.runDir], wentIn: runFiles }, kept: view.readonly });
 
         return { ok: true };
       } catch (error) {
