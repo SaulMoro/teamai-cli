@@ -329,7 +329,9 @@ export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
  * extends; `command`, the executable on PATH that starts it; `home`, the absolute path of its home on this machine and
  * the variable that moves it, as teamai resolves it once for every runtime (the member's value of `home.env` when their
  * environment sets it, else `~/<its directory>`); `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its
- * tool, teamai then launches `command` with `home.env` set to the attempt's tool home.
+ * tool, teamai then launches `command` with `home.env` set to the attempt's tool home. `home.dir` is absolute from the
+ * first release of protocol 1, which needs no new version for it: teamai ships its runtimes with the engine, so no
+ * runtime reads a relative one.
  */
 export const InitInstanceSchema = z.object({
   name: z.string().min(1),
