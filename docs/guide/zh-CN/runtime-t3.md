@@ -224,7 +224,7 @@ T3 只允许以 Full access 批准的登录修改它的设置（`settings:write`
 No T3 Code provider instance runs acme-claude, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path /opt/acme/bin/acme-claude.
 ```
 
-T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它，或者运行它的实例被关掉了），它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机）；在没有其他运行时能运行它的定义上，会在任何线程启动之前失败，并给出原因：
+T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它、运行它的实例被关掉了，或者 T3 已有一个同名实例），它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机）；在没有其他运行时能运行它的定义上，会在任何线程启动之前失败，并给出原因：
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.
@@ -342,7 +342,7 @@ teamai workflow cancel r70d31098c8884803
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | 这个检出不是 T3 项目，`t3 project add` 也失败了。括号里的文字说明原因。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
 | `… teamai could not add a T3 Code provider instance for acme-claude: teamai's T3 Code sign-in was approved without Full access …` | teamai 需要添加团队工具的实例，而登录页面上批准的是 Auto。 | 重新启动工作流并选择 **Full access**，或者按消息所说自己添加实例。 |
-| `… teamai could not add a T3 Code provider instance for acme-claude: T3 Code already has a provider instance "acme-claude" that runs another command …` | 你已有一个同名实例，运行的是别的命令。teamai 不会改动它。 | 把它的 Binary path 指向工具的命令，或者用 `instances` 映射另一个实例。 |
+| `… No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command …` | 你已有一个同名实例，运行的是别的命令。teamai 不会改动它。 | 把它的 Binary path 指向工具的命令，或者用 `instances` 映射另一个实例。 |
 | `… teamai added the T3 Code provider instance "claude-work" for claude-work, but T3 Code cannot run it yet: Claude Code is not authenticated …` | teamai 已添加该实例，但 T3 Code 对它的检查没有通过，例如工具从未在该实例的 home 中登录。 | 按 T3 Code 的提示，在消息给出的 home 中处理（Claude 用 `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`），然后重试该步骤。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
 | `… (cancel_failed): The T3 thread t3code://threads/… ("review · teamai r70d…") still runs, and T3 Code did not stop it …` | teamai 取消了这个步骤，但 T3 没有在 10 秒内确认线程已停止。 | 从链接打开线程，用 Stop 按钮停止它，然后再次运行 `teamai workflow cancel <run>`。 |

@@ -10,7 +10,7 @@ import {
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import { z } from 'zod';
-import { addProviderInstance, type NewInstance } from './add-instance.js';
+import { addProviderInstance, isInstanceId, type NewInstance } from './add-instance.js';
 import type { AddedProjects } from './added-projects.js';
 import type { SignInAccess } from './auth.js';
 import { parseOptions } from './options.js';
@@ -732,7 +732,7 @@ export function serve(options: ServeOptions): Promise<void> {
    * config file elsewhere once its home is set at all). It may when its kept sign-in may change T3's settings, or can come to:
    * through the `t3` command, or in an attended run through T3's page. Else why not, for `unavailable`.
    */
-  const toBeAdded = ({ missing, mode }: { missing: ServedInstances['missing']; mode: WorkMode }): { pending: Map<string, NewInstance>; reasons: Record<string, string> } => {
+  const toBeAdded = ({ missing, mode, taken }: { missing: ServedInstances['missing']; mode: WorkMode; taken(id: string): boolean }) => {
     const pending = new Map<string, NewInstance>();
     const reasons: Record<string, string> = {};
     const reason = (message: string): string => message.slice(0, UNAVAILABLE_REASON_MAX);
@@ -746,6 +746,10 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (binaryPath === null) {
         reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: ${command} is not on PATH here. Install ${command}, or add one in T3 Code under Settings → Providers, ${setting}, or map one with instances: { ${name}: <its id> } in the definition's t3 options.`);
+      } else if (!isInstanceId(name)) {
+        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code takes no provider instance named "${name}" (a letter, then letters, digits, _ or -). Add one in T3 Code under Settings → Providers, ${setting}, and map it with instances: { ${name}: <its id> } in the definition's t3 options.`);
+      } else if (taken(name)) {
+        reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai cannot add one: T3 Code already has a provider instance "${name}" that runs another command. Point its Binary path at ${command}, or map another with instances: { ${name}: <its id> } in the definition's t3 options.`);
       } else if (!mayAdd) {
         reasons[name] = reason(`No T3 Code provider instance runs ${name}, and teamai's T3 Code sign-in may not add one, which an unattended run with no t3 command cannot ask for. Run any workflow with --driver t3 once from a terminal, or add one in T3 Code under Settings → Providers, ${setting}.`);
       } else {
@@ -921,7 +925,7 @@ export function serve(options: ServeOptions): Promise<void> {
         },
       });
 
-      const toAdd = toBeAdded({ missing: served.missing, mode: request.mode });
+      const toAdd = toBeAdded({ missing: served.missing, mode: request.mode, taken: (id) => settings.providerInstances?.[id] !== undefined });
       const unavailable = { ...Object.fromEntries(Object.entries(served.unavailable)), ...toAdd.reasons };
 
       // A step that never names a misspelt key would never show its reason.

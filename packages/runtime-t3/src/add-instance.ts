@@ -52,6 +52,11 @@ const ATTEMPTS = 3;
 /** T3's provider instance ids: a letter, then letters, digits, `_` or `-`, at most 64 (`PROVIDER_SLUG_PATTERN` in T3). */
 const INSTANCE_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
+/** Whether T3 takes `id` as the id of a provider instance. */
+export function isInstanceId(id: string): boolean {
+  return INSTANCE_ID.test(id);
+}
+
 /** The whole settings file, every key kept as it is, which the runtime writes back. */
 const FileSchema = z.record(z.string(), z.unknown());
 
@@ -218,7 +223,7 @@ export async function addProviderInstance({ t3Home, lockFile, userHome, instance
   userHome: string;
   instance: NewInstance;
 }): Promise<AddedInstance> {
-  if (!INSTANCE_ID.test(instance.id)) return { kind: 'failed', why: `"${instance.id}" is not a name T3 Code takes for a provider instance (a letter, then letters, digits, _ or -)` };
+  if (!isInstanceId(instance.id)) return { kind: 'failed', why: `"${instance.id}" is not a name T3 Code takes for a provider instance (a letter, then letters, digits, _ or -)` };
   const settingsFile = path.join(t3Home, 'userdata', 'settings.json');
   // T3 follows a settings file that is a link to its target, and so does this write.
   const file = fs.existsSync(settingsFile) ? fs.realpathSync(settingsFile) : settingsFile;
