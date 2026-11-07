@@ -671,6 +671,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         const custom = { ...behaviour().custom_providers };
 
         const removing = (message.config.removeProviders ?? []).length > 0 ? behaviour().refuse_remove : undefined;
+
         const refused = behaviour().refuse_config ?? removing ?? Object.entries(message.config.providers ?? {}).flatMap(([id, entry]) => {
           if (!/^[a-z][a-z0-9-]*$/.test(id)) return [`[Config] Invalid config to save:\n  - agents.providers.${id}: Provider ID "${id}" must match /^[a-z][a-z0-9-]*$/.`];
 
