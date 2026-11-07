@@ -387,7 +387,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * Serves `place`'s socket at `socketPath` in this process, with `credentials` (undefined: not given yet), or gives it
    * the credentials when it serves it already.
    */
-  const serveSocket = async (place: string, socketPath: string, credentials: Record<string, string> | undefined): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+  const serveSocket = async ({ place, socketPath, credentials }: { place: string; socketPath: string; credentials: Record<string, string> | undefined }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const served = sockets.get(place);
 
     if (served !== undefined) {
@@ -448,10 +448,10 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // A place whose tool an app may launch through teamai's wrapper serves the attempt socket from now on; its path
     // travels in the handle, which teamai gives that app's runtime as `outer`.
-    const outer = tool !== undefined && provider.client !== undefined ? { socket: socketPathOf(view.result, handle), worktree: view.worktree, toolHome: view.toolHome } : undefined;
+    const outer = tool !== undefined && provider.client !== undefined ? { socket: socketPathOf({ result: view.result, place: handle }), worktree: view.worktree, toolHome: view.toolHome } : undefined;
 
     if (outer !== undefined) {
-      const served = await serveSocket(handle, outer.socket, credentials);
+      const served = await serveSocket({ place: handle, socketPath: outer.socket, credentials });
 
       if (!served.ok) {
         write({ op, event: 'failed', failure: served.failure });
@@ -952,7 +952,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // A place whose tool an app launches through the wrapper is served again, with the credentials teamai sent again.
     if (place.outer !== undefined) {
-      const served = await serveSocket(placeKey, place.outer.socket, credentials);
+      const served = await serveSocket({ place: placeKey, socketPath: place.outer.socket, credentials });
 
       if (!served.ok) warn(`teamai-runtime-sandbox: warning: ${served.failure.message}. The step's tool cannot start in its sandbox until it can.`);
     }
