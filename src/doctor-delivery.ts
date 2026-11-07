@@ -893,7 +893,8 @@ function olderRuleCopyMeaning(tool: string): string {
  * build writes it; its context hook is what adds `what`. Null on V1.
  */
 async function opencodeV2PluginCheck(ctx: DoctorContext, name: string, what: string): Promise<Check | null> {
-  const { opencodeContextPlugin, opencodeMajorVersion } = await import('./opencode-hooks.js');
+  const { opencodeContextPlugin } = await import('./opencode-hooks.js');
+  const { opencodeMajorVersion } = await import('./opencode-version.js');
 
   if (await opencodeMajorVersion() < 2) return null;
   const { file, ready } = await opencodeContextPlugin();

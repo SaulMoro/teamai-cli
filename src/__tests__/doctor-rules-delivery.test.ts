@@ -14,10 +14,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 
 // These checks are OpenCode V1's, which reads rules through `instructions`. The version comes from whichever
 // `opencode` is first on PATH: a member's V2 there would swap in the V2 plugin check.
-vi.mock('../opencode-hooks.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../opencode-hooks.js')>()),
-  opencodeMajorVersion: async () => 1,
-}));
+vi.mock('../opencode-version.js', () => ({ opencodeMajorVersion: async () => 1 }));
 
 vi.mock('@teamai/tool-core/log', () => ({
   log: {

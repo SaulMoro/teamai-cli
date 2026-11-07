@@ -5,7 +5,7 @@ import path from 'node:path';
 import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
 import { launchEnv, type Launch } from '../../../launch-context.js';
-import { opencodeMajorVersion } from '../../../opencode-hooks.js';
+import { opencodeMajorVersion } from '../../../opencode-version.js';
 import { resolveCliPath, resolvePathCommand } from '../../../utils/cli-path.js';
 import { log } from '../../../utils/logger.js';
 import type { toolExtrasFor } from '../../../resources/agent-format.js';

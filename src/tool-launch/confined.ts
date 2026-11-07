@@ -10,7 +10,7 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { withoutTomlBom } from '../utils/toml.js';
 import { observedEffort, observedModel, type ObservedEffort, type ObservedModel } from '../agent-observation.js';
 import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV } from '../launch-context.js';
-import { opencodeMajorVersion } from '../opencode-hooks.js';
+import { opencodeMajorVersion } from '../opencode-version.js';
 import { movedToolHome, realHost, toolHome } from '../tool-home.js';
 import { isToolId, mcpSyntaxOf } from '../tool-registry.js';
 import { parseJsonAs } from '../utils/json.js';
