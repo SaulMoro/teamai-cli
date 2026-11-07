@@ -159,6 +159,18 @@ describe('a toy through a toy, over stdio', () => {
     fs.writeFileSync(release, '');
   });
 
+  it('reattaches each attempt\'s outer with that attempt\'s own credentials, when two attempts share the runtime', async () => {
+    const runtime = await start();
+    const claude = await runtime.open(openRequest(), async () => {});
+    const codex = await runtime.open({ ...openRequest(), attempt: 'a0123abce', tool: 'codex', credentials: { OPENAI_API_KEY: 'codex-value' } }, async () => {});
+    if (claude.kind !== 'ready' || codex.kind !== 'ready') throw new Error('not opened');
+
+    await runtime.reattach(claude.handle);
+    await runtime.reattach(codex.handle);
+
+    expect(asked().filter((call) => call.type === 'reattach' && call.toy === 'outer').map((call) => call.credentials)).toEqual([['CLAUDE_CODE_OAUTH_TOKEN'], ['OPENAI_API_KEY']]);
+  });
+
   it('keeps both places and fails a close whose inner runtime cannot confirm its stop', async () => {
     const runtime = await start({ close_fails: true });
     const opened = await runtime.open(openRequest(), async () => {});
