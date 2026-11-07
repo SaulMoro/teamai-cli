@@ -376,8 +376,18 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       if (!found.ok) return found;
       const created = found.id === undefined ? await provider.create(key, view, launched) : { ok: true as const, id: found.id };
 
-      // A place a released close forgot meanwhile stays forgotten: its sandbox is left to a later open's sweep.
-      if (created.ok && journal.place(handle) !== undefined) journal.savePlace(handle, { ...key, id: created.id });
+      if (!created.ok) return created;
+
+      // A place a close forgot meanwhile stays forgotten, and the sandbox made for it is removed: a close that found
+      // nothing yet, or a released one past its bound.
+      if (journal.place(handle) === undefined) {
+        const destroyed = await provider.destroy(created.id);
+        const removal = destroyed.ok ? 'so it was removed' : `and removing it failed, so a later open's sweep removes it: ${destroyed.failure.message}`;
+
+        return { ok: false, failure: { code: 'sandbox_failed', message: `Attempt ${attempt} was closed while its sandbox was being made, ${removal}.` } };
+      }
+
+      journal.savePlace(handle, { ...key, id: created.id });
 
       return created;
     };

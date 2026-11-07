@@ -2713,6 +2713,28 @@ describe('a warm image', () => {
     await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 5_000 });
   }, 30_000);
 
+  it('removes the sandbox of an attempt whose close was still looking for it when its warm image was done, and fails the open', async () => {
+    // The close's lookup outlasts the build, so the open, past its warm image, creates while the close forgets the place.
+    engine.delay('commit', 2_000);
+    engine.delay('ps', 4_000);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: WARM });
+    const at = checkout();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-1' }, view: { worktree: at.worktree, readonly: [at.git], result: path.join(dir, 'attempts', ATTEMPT, 'out'), runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: path.join(dir, 'attempts', ATTEMPT, 'tool-home', 'claude') } } });
+    await connection.next((message) => message.op === op && message.event === 'accepted', 5_000);
+    await vi.waitFor(() => { expect(builds().prepares).toHaveLength(1); }, { timeout: 10_000 });
+
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 10_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 20_000)).toMatchObject({
+      event: 'failed', failure: { code: 'sandbox_failed', message: `Attempt ${ATTEMPT} was closed while its sandbox was being made, so it was removed.` },
+    });
+    engine.delay('ps', 0);
+    await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 10_000 });
+  }, 40_000);
+
   it.each(PROVIDERS)('removes, at the next open on $options.provider, the scratch sandbox and directory of a warm image whose runtime was killed, and keeps those of one that runs', async ({ options }) => {
     const tmp = path.join(dir, 'tmp');
     fs.mkdirSync(tmp);
