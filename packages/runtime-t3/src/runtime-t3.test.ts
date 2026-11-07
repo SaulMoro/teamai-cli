@@ -1484,14 +1484,23 @@ describe('teamai-runtime-t3', () => {
         expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'claudeAgent', model: 'claude-opus-5-5', options: [{ id: 'effort', value: 'high' }] });
       });
 
-      it.each([
+      it.each<{ set: string; instanceId: string; model: string; providers?: FakeT3Config['providers']; binaryPaths?: Record<string, string>; options?: Line }>([
         { set: 'runs on an instance this runtime does not run', instanceId: 'opencode', model: 'big-pickle' },
         { set: 'runs on the member\'s own default, so T3 applies its options and fallback', instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' },
-      ])('leaves the member\'s T3 default to T3 when that thread $set', async ({ instanceId, model }) => {
-        t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } });
+        {
+          set: 'runs on another instance than the one `instance` names', instanceId: 'claude-work', model: 'claude-opus-5-5',
+          providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work' }, CODEX], options: { instance: 'claudeAgent' },
+        },
+        {
+          set: 'runs on an instance whose Binary path is a wrapper no tool of this run runs', instanceId: 'acme-claude-t3', model: 'claude-opus-5-5',
+          providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'acme-claude-t3' }, CODEX], binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude' },
+        },
+      ])('leaves the member\'s T3 default to T3 when that thread $set', async ({ instanceId, model, providers, binaryPaths = {}, options = {} }) => {
+        if (providers) t3.config({ providers });
+        t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' }, providerInstances: Object.fromEntries(Object.entries(binaryPaths).map(([id, binaryPath]) => [id, { config: { binaryPath } }])) });
         t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId, model });
         const runtime = start(FROM);
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, checkout });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { default_tool: 'claude' } });
         expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
