@@ -126,6 +126,8 @@ const BehaviourSchema = z.object({
   provider_config_ms: z.record(z.string(), z.number().int().nonnegative()).default({}),
   /** The daemon refuses every config change with this error. */
   refuse_config: z.string().optional(),
+  /** The daemon refuses every config change that removes a provider with this error. */
+  refuse_remove: z.string().optional(),
   /** The daemon fails every read of its config with this error. */
   refuse_config_read: z.string().optional(),
   /** The daemon refuses to archive a workspace with this error. */
@@ -666,7 +668,8 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         const raw = z.record(z.string(), z.unknown()).parse(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
         const custom = { ...behaviour().custom_providers };
 
-        const refused = behaviour().refuse_config ?? Object.entries(message.config.providers ?? {}).flatMap(([id, entry]) => {
+        const removing = (message.config.removeProviders ?? []).length > 0 ? behaviour().refuse_remove : undefined;
+        const refused = behaviour().refuse_config ?? removing ?? Object.entries(message.config.providers ?? {}).flatMap(([id, entry]) => {
           if (!/^[a-z][a-z0-9-]*$/.test(id)) return [`[Config] Invalid config to save:\n  - agents.providers.${id}: Provider ID "${id}" must match /^[a-z][a-z0-9-]*$/.`];
 
           return entry.label === undefined ? [`[Config] Invalid config to save:\n  - agents.providers.${id}.label: Custom provider "${id}" must declare label.`] : [];

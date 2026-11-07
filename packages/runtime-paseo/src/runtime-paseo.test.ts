@@ -574,6 +574,9 @@ describe('teamai-runtime-paseo', () => {
 
     const configChanges = (): unknown[] => received().filter((request) => request.type === 'set_daemon_config_request');
 
+    /** The custom providers the daemon keeps now, by id. */
+    const customProviders = (): Record<string, unknown> => (JSON.parse(fs.readFileSync(path.join(daemonState, 'behaviour.json'), 'utf8')) as { custom_providers?: Record<string, unknown> }).custom_providers ?? {};
+
     it('offers an instance no provider runs, adds a Paseo provider named after it at the first open that runs it, extending its tool and running its command from PATH in its own home, says so once, runs its steps there, and reuses it in a later run without adding it again', async () => {
       const { file, env } = installed('acme-claude');
       const home = path.join(dir, 'home', '.claude-acme');
@@ -586,7 +589,7 @@ describe('teamai-runtime-paseo', () => {
 
       expect(notices(runtime)).toEqual([{
         event: 'notice', op: 'op-0000000a',
-        message: `teamai added the Paseo provider acme-claude to the daemon at ${daemon.url} for its acme-claude steps: it extends claude and runs ${file}, with CLAUDE_CONFIG_DIR=${home}. It stays for later runs; to remove it, delete agents.providers.acme-claude from ${path.join(dir, 'paseo', 'config.json')}, then run \`paseo daemon reload --home ${path.join(dir, 'paseo')}\`.`,
+        message: `teamai added the Paseo provider acme-claude to the daemon at ${daemon.url} for its acme-claude steps: it extends claude and runs ${file}, with CLAUDE_CONFIG_DIR=${home}. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from ${path.join(dir, 'paseo', 'config.json')}, then run \`paseo daemon reload --home ${path.join(dir, 'paseo')}\`. Paseo cannot show its agents' logs once it is gone, so read them first.`,
       }]);
       runtime.send(promptRequest(handle, 'op-0000000b', { tool: 'acme-claude' }));
 
@@ -701,7 +704,7 @@ describe('teamai-runtime-paseo', () => {
       ]);
     });
 
-    it('fails the open of an instance whose added provider is signed out, naming its sign-in step, and still says once that it added the provider and how to remove it', async () => {
+    it('fails the open of an instance whose added provider is signed out, naming its sign-in step, and removes the provider it added, which no agent ran on', async () => {
       const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
       behave({ sign_in: { 'claude-work': 'signed_out' } });
       const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
@@ -712,12 +715,33 @@ describe('teamai-runtime-paseo', () => {
         op: 'op-0000000a', event: 'failed',
         failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run claude-work on the Paseo daemon at ${daemon.url}: signed out; run \`CLAUDE_CONFIG_DIR=~/.claude-work claude auth login\` on the daemon's host. Then run the step again.` },
       });
+      expect(configChanges()).toEqual([
+        expect.objectContaining({ config: { providers: { 'claude-work': expect.objectContaining({ extends: 'claude' }) } } }),
+        expect.objectContaining({ config: { removeProviders: ['claude-work'] } }),
+      ]);
+      expect(customProviders()).not.toHaveProperty('claude-work');
+      expect(notices(runtime)).toEqual([]);
+    });
+
+    it('says once that the provider it added stays, and how to remove it, when Paseo refuses to remove it again for an instance that cannot run on it', async () => {
+      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } };
+      behave({ sign_in: { 'claude-work': 'signed_out' }, refuse_remove: 'The daemon config is read-only' });
+      const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
+      await ready(runtime, { instances: [work] });
+      runtime.send(openRequest('op-0000000a', ATTEMPT, 'claude-work'));
+
+      expect(await runtime.next(isEnd('op-0000000a'))).toEqual({
+        op: 'op-0000000a', event: 'failed',
+        failure: { code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run claude-work on the Paseo daemon at ${daemon.url}: signed out; run \`CLAUDE_CONFIG_DIR=~/.claude-work claude auth login\` on the daemon's host. Paseo refused to remove the provider claude-work teamai added for it (Request failed: The daemon config is read-only), so it stays. Then run the step again.` },
+      });
+      expect(customProviders()).toHaveProperty('claude-work');
       expect(notices(runtime)).toMatchObject([{ op: 'op-0000000a', message: expect.stringContaining('teamai added the Paseo provider claude-work') }]);
 
       runtime.send(openRequest('op-0000000c', 'a0123abce', 'claude-work'));
       await runtime.next(isEnd('op-0000000c'));
 
-      expect(configChanges()).toHaveLength(1);
+      // The provider it kept is found again: nothing more is added or said.
+      expect(configChanges().filter((change) => JSON.stringify(change).includes('"providers"'))).toHaveLength(1);
       expect(notices(runtime)).toHaveLength(1);
     });
 

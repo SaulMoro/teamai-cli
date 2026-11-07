@@ -969,22 +969,42 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }
 
       const provider = 'add' in found ? id : found.provider;
+      const before = custom;
       custom = new Map(custom).set(provider, 'add' in found ? entry : custom.get(provider) ?? { extends: tool });
+
+      /**
+       * Why the instance cannot run on `provider`. One this call added is removed again, through the same config change
+       * Paseo's app removes a provider with: no agent ran on it yet, so none loses its logs. One Paseo will not remove
+       * stays, and the caller says how to remove it.
+       */
+      const cannotRun = async (why: string): Promise<Added> => {
+        if (!added) return { cannot: why, added };
+
+        try {
+          await api.config.patch({ removeProviders: [id] });
+          custom = before;
+
+          return { cannot: why, added: false };
+        } catch (error) {
+          return { cannot: `${why}. Paseo refused to remove the provider ${id} teamai added for it (${PaseoSaidSchema.parse(error)}), so it stays`, added };
+        }
+      };
+
       let signedIn: SignIn;
 
       try {
         const { providers } = await api.providers.listAvailable();
 
         if (!providers.some((listed) => listed.provider === provider && listed.available)) {
-          return { cannot: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``, added };
+          return await cannotRun(`Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``);
         }
 
         signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: shownPath(home.home) }, command: instance.command });
       } catch (error) {
-        return { cannot: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why`, added };
+        return cannotRun(`Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why`);
       }
 
-      if (!signedIn.canRun) return { cannot: signedIn.problem, added };
+      if (!signedIn.canRun) return cannotRun(signedIn.problem);
 
       // The provider it added, or one with no command of its own that it matched, runs in the instance's own home.
       const providerHome = ('add' in found || instance.command === undefined) ? home.home : undefined;
