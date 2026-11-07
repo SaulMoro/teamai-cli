@@ -106,6 +106,11 @@ export interface Provider {
    */
   create(key: PlaceKey, view: PlaceView, tool: string | undefined): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**
+   * On a provider with a warm image: makes the one an attempt with `view` and `tool` starts from, when it is not there
+   * yet, before `create`, which then finds it. It may take minutes, and nothing but its open waits for it.
+   */
+  warm?(view: PlaceView, tool: string | undefined): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
+  /**
    * On a provider whose own network policy decides what a sandbox reaches (sbx): whether it lets one reach `port` of
    * this machine, or how to allow it, naming the credential `variable` that needs it. The policy is never edited.
    */

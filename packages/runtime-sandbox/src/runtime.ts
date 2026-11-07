@@ -345,6 +345,22 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // An instance's place is its tool's: the same template, sign-in link and gateway; its command and home come in exec.
     const launched = tool === undefined ? undefined : current.instanceTools.get(tool) ?? tool;
 
+    // The warm image comes before the sandbox's creation, which a close waits for: a close meanwhile ends at once, and its
+    // place then gets no sandbox.
+    const warmed = provider.warm === undefined ? { ok: true as const } : await provider.warm(view, launched);
+
+    if (!warmed.ok) {
+      write({ op, event: 'failed', failure: warmed.failure });
+
+      return;
+    }
+
+    if (journal.place(handle) === undefined) {
+      write({ op, event: 'failed', failure: { code: 'sandbox_failed', message: `Attempt ${attempt} was closed while its warm image was being made, so no sandbox was made for it.` } });
+
+      return;
+    }
+
     /** The attempt's sandbox, found or created, kept under its id. */
     const make = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
       const found = await provider.find(key);
