@@ -251,7 +251,7 @@ const MODES = ['full-access', 'auto', 'auto-accept-edits', 'approval-required'];
 const fail = (message) => ({ isError: true, content: [{ type: 'text', text: message }] });
 
 // As T3 answers a call on a thread it does not have, such as one the person deleted.
-const notFound = (threadId) => fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'thread_not_found', message: `Thread ${threadId} was not found.` }));
+const notFound = (threadId) => fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'thread_not_found', message: `Thread ${threadId} is no longer available.` }));
 
 const ok = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
 
