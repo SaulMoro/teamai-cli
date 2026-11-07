@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseJson, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
 import { instanceToolHome, SettingsSchema } from './settings.js';
@@ -182,7 +183,15 @@ async function locked<TValue>(file: string, work: () => TValue): Promise<{ ok: t
 function addTo(file: string, instance: NewInstance, userHome: string): AddedInstance {
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const before = readText(file);
-    const parsed = FileSchema.safeParse(before === undefined ? {} : JSON.parse(before));
+    let json: JsonValue;
+
+    try {
+      json = before === undefined ? {} : parseJson(before);
+    } catch {
+      return { kind: 'failed', why: `T3 Code's settings file ${file} is not valid JSON` };
+    }
+
+    const parsed = FileSchema.safeParse(json);
 
     if (!parsed.success) return { kind: 'failed', why: `T3 Code's settings file ${file} is not a JSON object` };
     const settings = parsed.data;

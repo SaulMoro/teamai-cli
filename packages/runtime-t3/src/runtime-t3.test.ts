@@ -1534,6 +1534,22 @@ describe('teamai-runtime-t3', () => {
         expect(settingsNow()).toMatchObject({ providerInstances: { 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
       });
 
+      it('fails the open naming T3\'s settings file, and changes nothing, when that file is not valid JSON', async () => {
+        signIn(t3, undefined, undefined, FULL);
+        const { runtime } = await initOn({ mode: 'unattended' });
+        const file = path.join(t3.t3Home, 'userdata', 'settings.json');
+        fs.writeFileSync(file, '{ "providerInstances": ');
+
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({
+          event: 'failed',
+          failure: {
+            code: 'open_failed',
+            message: `teamai could not add a T3 Code provider instance for acme-claude: T3 Code's settings file ${fs.realpathSync(file)} is not valid JSON. Add one in T3 Code under Settings → Providers, with driver Claude and Binary path ${path.join(bin, 'acme-claude')}.`,
+          },
+        });
+        expect(fs.readFileSync(file, 'utf8')).toBe('{ "providerInstances": ');
+      });
+
       it('does not offer it, naming what to do, when its name is not one T3 takes for a provider instance', async () => {
         signIn(t3, undefined, undefined, FULL);
         const { reply } = await initOn({ mode: 'unattended', instances: [{ ...ACME, name: 'acme.claude' }] });
