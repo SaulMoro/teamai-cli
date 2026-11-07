@@ -22,6 +22,7 @@ import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
 import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
 import { engineOptions } from '../../src/workflow/runtimes/sources.js';
+import { nestedOptions } from '../../src/workflow/runtimes/composed.js';
 import { localStepRuntime } from '../../src/workflow/runtimes/local.js';
 import { parseOptions as parsePaseoOptions } from '../../packages/runtime-paseo/src/options.js';
 import { parseOptions as parseSandboxOptions } from '../../packages/runtime-sandbox/src/options.js';
@@ -694,6 +695,12 @@ const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
   ['paseo', async (options) => parsePaseoOptions(options)],
 ]);
 
+/**
+ * The runtimes the guide defines itself, as examples of a team's own: their pages show the runtime's file or say it is
+ * one you write. Any other runtime an example names must be one teamai ships, so a misspelt name fails the check.
+ */
+const GUIDE_RUNTIMES: ReadonlySet<string> = new Set(['toy', 'threads', 'my-app', 'my-sandbox']);
+
 /** The runtimes teamai ships: `local`, and each `teamai-runtime-<name>` in package.json's `bin`. */
 function shippedRuntimes(): string[] {
   const { bin } = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')));
@@ -728,16 +735,34 @@ async function definitionProblem(example: Example): Promise<string | undefined> 
 
   if (!parsed.ok) return parsed.failure.message;
 
-  for (const [index, { use, options }] of parsed.definition.runtimes.entries()) {
-    const read = engineOptions(options ?? {});
+  for (const [index, { use, through, options }] of parsed.definition.runtimes.entries()) {
+    // An entry through another nests each runtime's options under its name, as the engine splits them at the start.
+    const nested = through === undefined ? undefined : nestedOptions(options ?? {}, { inner: use, outer: through });
 
-    if (!read.ok) return `runtimes.${index} (${use}) option ${read.key}: ${read.message}`;
-    const own = await RUNTIME_OPTIONS.get(use)?.(read.runtime);
+    if (nested?.ok === false) return `runtimes.${index} (${use} through ${through}) option ${nested.key}: ${nested.message}`;
+    const parts: Array<[string, RuntimeOptions]> = nested === undefined || through === undefined ? [[use, options ?? {}]] : [[use, nested.inner], [through, nested.outer]];
 
-    if (own?.ok === false) return `runtimes.${index} (${use}) option ${own.failure.key ?? '?'}: ${own.failure.message}`;
+    for (const [name, given] of parts) {
+      const problem = await runtimeOptionsProblem(name, given);
+
+      if (problem !== undefined) return `runtimes.${index} ${problem}`;
+    }
   }
 
   return undefined;
+}
+
+/** Why one runtime of an entry would refuse `options` at `init`, or why the guide may not name it, or undefined. */
+async function runtimeOptionsProblem(name: string, options: RuntimeOptions): Promise<string | undefined> {
+  const ownCheck = RUNTIME_OPTIONS.get(name);
+
+  if (ownCheck === undefined && !GUIDE_RUNTIMES.has(name)) return `names ${name}, a runtime teamai does not ship and the guide does not define: name a shipped runtime, or add it to GUIDE_RUNTIMES where the guide shows its file`;
+  const read = engineOptions(options);
+
+  if (!read.ok) return `(${name}) option ${read.key}: ${read.message}`;
+  const own = await ownCheck?.(read.runtime);
+
+  return own?.ok === false ? `(${name}) option ${own.failure.key ?? '?'}: ${own.failure.message}` : undefined;
 }
 
 /** A block's first line saying it shows a definition teamai ships, in English or Chinese: `# drivers/<name>.yaml, shipped with teamai`. */

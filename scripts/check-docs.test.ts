@@ -139,6 +139,25 @@ it('check rejects a driver definition example whose options the runtime itself r
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
   expect(checked.output).toContain('Provider sbx takes no option "image"');
 });
+it('check reads each runtime of an entry through another with that runtime\'s own options', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: t3\n    through: sandbox\n    options:\n      t3: { environment: local }\n      sandbox: { provider: sbx, image: ghcr.io/acme/agent:1 }\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('runtimes.0 (sandbox) option image: Provider sbx takes no option "image"');
+});
+it('check rejects a driver definition example naming a runtime teamai does not ship and the guide does not define', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbx\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('runtimes.0 names sandbx');
+});
 it('check fails for a runtime teamai ships whose options it cannot validate', () => {
   const root = checkout();
   const manifest = path.join(root, 'package.json');
