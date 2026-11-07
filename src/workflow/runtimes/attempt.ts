@@ -234,9 +234,10 @@ export interface AttemptRun {
   /**
    * Opens the place, with what of the host it gets, or with nothing for a confined prompt's place. `toolHome` is the
    * tool home a prompt's tool keeps its session in, recorded for every later lookup; `credentials` are the values its
-   * tool gets, sent and never recorded; `tool` is the tool its prompt runs, which the runtime is told.
+   * tool gets, sent and never recorded; `tool` is the tool its prompt runs, and `instance` the instance of it, which the
+   * runtime is told.
    */
-  open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
+  open(view: PlaceView | undefined, place?: { tool?: string; instance?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Runs the workflow's setup as an exec of the open place, recorded apart from the step's exec. A setup a teamai before
@@ -404,7 +405,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   };
 
   return {
-    async open(view, { tool, toolHome: home, credentials = {} } = {}) {
+    async open(view, { tool, instance, toolHome: home, credentials = {} } = {}) {
       openedWith = credentials;
       const before = await current();
 
@@ -434,7 +435,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       await save(opening);
 
-      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(deadline !== undefined && { deadline }), ...(view && { view }) }, async (handle) => {
+      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(instance !== undefined && { instance }), ...(deadline !== undefined && { deadline }), ...(view && { view }) }, async (handle) => {
         const now = await current();
 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });

@@ -239,7 +239,7 @@ function open(request) {
   handles[key] = handle;
   writeJson(file('handles.json'), handles);
   // A confined prompt's place is opened with no view of the host.
-  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null, deadline: request.deadline ?? null });
+  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null, instance: request.instance ?? null, deadline: request.deadline ?? null });
   noteCredentials(request, handle);
   openCredentials.set(handle, request.credentials ?? {});
 

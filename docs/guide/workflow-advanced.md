@@ -1780,7 +1780,7 @@ When your runtime's provider keeps its own login for a tool, such as a sandbox s
 
 `init` names the run's checkout too, `"checkout":"/abs/path"`, and teamai starts your runtime in that directory.
 
-`init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. List in `can.tools` the ones your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with its `home.env` set to the attempt's tool home. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
+`init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. List in `can.tools` the ones your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with its `home.env` set to the attempt's tool home. A step on an instance names it as `"instance":"acme-claude"` on its `open`, and on its prompt's `lease` for a runtime that launches agents, while `tool` stays the tool it extends. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
 
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":".acme-claude","env":"ACME_CLAUDE_CONFIG_DIR"}}]}
