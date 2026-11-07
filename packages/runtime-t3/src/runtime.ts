@@ -5,7 +5,7 @@ import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
   CANCEL_FAILED, fitReason, OpIdSchema, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type RUNTIME_MODES,
-  type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
+  type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { findOnPath } from '@teamai/tool-core/lookpath';
@@ -513,6 +513,10 @@ export function serve(options: ServeOptions): Promise<void> {
   let recovering: { connecting?: Promise<Reach> } | undefined;
   /** The handle of each operation this process saw, so `cancel` (which names only the op) reaches its place. */
   const handleOf = new Map<OpId, string>();
+  // In a T3 thread, T3 sets CLAUDE_CONFIG_DIR or CODEX_HOME to the home of that thread's instance: a fact of the
+  // thread, not a home teamai gives a tool.
+  const toolHomeEnv = options.startedFrom === undefined ? options.env : {};
+  const toolHomeOf = (instance: InitInstance, driver: Driver): string => teamaiToolHome({ instance, driver, home: options.home, env: toolHomeEnv, cwd: options.cwd });
   /** The ops whose end this process owns, by op: prompts it runs and cancels it retries. A repeated prompt joins one. */
   const running = new Map<OpId, Running>();
   /** Ops teamai cancelled before this process saw their prompt. */
@@ -757,8 +761,9 @@ export function serve(options: ServeOptions): Promise<void> {
       const found = path.isAbsolute(command) ? (fs.existsSync(command) ? command : null) : findOnPath(command);
       // A PATH folder named relatively finds it relative to this folder, which T3 does not run in.
       const binaryPath = found === null ? null : path.resolve(found);
-      const toolHome = teamaiToolHome({ instance, driver, home: options.home, env: options.env, cwd: options.cwd });
-      const homePath = toolHome === path.join(options.home, DRIVERS[driver].home) ? undefined : toolHome;
+      // Only a home of the tool's own goes into T3's settings, never one a run's environment moved: it stays for every run.
+      const ownHome = instance.home && path.resolve(options.home, instance.home.dir);
+      const homePath = ownHome === path.join(options.home, DRIVERS[driver].home) ? undefined : ownHome;
       const setting = `with driver ${DRIVERS[driver].label} and Binary path ${binaryPath ?? `the absolute path of ${command} (command -v ${command})`}${homePath ? `, and Home path ${tilde(homePath, options.home)}` : ''}`;
       const wanted: NewInstance | undefined = binaryPath === null ? undefined : { id: name, driver, displayName: name, command, binaryPath, ...(homePath && { homePath }) };
       // One another run added, which T3 has not listed yet, is not in the way.
@@ -940,7 +945,7 @@ export function serve(options: ServeOptions): Promise<void> {
         lookup: {
           providers, binaryPathOf, homeOf,
           isUsable: (provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false,
-          homeFor: (instance, driver) => teamaiToolHome({ instance, driver, home: options.home, env: options.env, cwd: options.cwd }),
+          homeFor: toolHomeOf,
           shown: (home) => tilde(home, options.home),
         },
       });
@@ -958,7 +963,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
         if (!provider || !driver) continue;
         const theirs = homeOf(provider, driver);
-        const ours = teamaiToolHome({ instance, driver, home: options.home, env: options.env, cwd: options.cwd });
+        const ours = toolHomeOf(instance, driver);
 
         if (theirs !== ours) {
           // `~` names one home only when T3 Code's user and teamai share it; else "~/.claude" would read the same twice.
