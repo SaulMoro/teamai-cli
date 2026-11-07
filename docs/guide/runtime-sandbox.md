@@ -475,6 +475,61 @@ runtimes:
 - A sandbox on Vercel cannot reach this machine, so a credential such as `ANTHROPIC_BASE_URL` on `localhost` or `127.0.0.1` fails `bad_option`.
 - A sandbox left behind shows in the Vercel dashboard (Sandboxes) as `teamai-<home id>-<run>-<attempt>`. The next attempt that opens deletes it, or its timeout ends it.
 
+## Through an app: `teamai-sandbox-<tool>`
+
+An app's runtime, such as T3 Code's or Paseo's, launches a tool through a binary you can set: a T3 provider instance's Binary path, or a Paseo custom provider's `command`. Set it to teamai's wrapper, and the thread stays in your app while the tool runs in the attempt's sandbox. teamai-cli installs one wrapper per tool:
+
+```sh
+command -v teamai-sandbox-claude teamai-sandbox-codex teamai-sandbox-codebuddy
+# /usr/local/bin/teamai-sandbox-claude
+# /usr/local/bin/teamai-sandbox-codex
+# /usr/local/bin/teamai-sandbox-codebuddy
+teamai-sandbox-claude --version          # the host tool's own version, so the app sees a working binary
+# 2.1.318 (Claude Code)
+```
+
+A team instance runs through a link named after it, and the wrapper runs that instance's `command` with its home variable:
+
+```sh
+ln -s "$(command -v teamai-runtime-sandbox)" ~/.local/bin/teamai-sandbox-acme-claude
+```
+
+The sandbox is the outer runtime of the entry. It must mount the place at its host paths, so `sbx`, `docker`, `podman` and `bwrap` serve; `seatbelt` and `vercel` do not.
+
+```yaml
+# drivers/t3-sandboxed.yaml
+schemaVersion: v1alpha1
+name: t3-sandboxed
+runtimes:
+  - use: t3
+    through: sandbox
+    options:
+      t3: { environment: local, runtime_mode: full-access }
+      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
+  - use: local
+```
+
+What happens on each prompt step:
+
+```text
+teamai  → sandbox   open          the container, and a socket of the attempt's (0600, in a 0700 directory beside its result)
+teamai  → T3        open (outer)  the inner reads the socket's path from the handle and registers its agent there
+T3      → teamai-sandbox-claude -p …          started in the attempt's worktree (Paseo: PASEO_AGENT_CWD)
+wrapper → socket    ask           granted: docker exec -i -w <cwd> -e CLAUDE_CODE_OAUTH_TOKEN -e CLAUDE_CONFIG_DIR <container> claude
+wrapper            runs it         stdin, stdout, exit status and signals passed through
+```
+
+- The step's credentials and the attempt's tool home reach the tool by name (`-e NAME`). Their values stay in the runtime's memory and in that one `docker exec`'s environment: never in an argv, never on disk, and nothing of the app's own environment reaches the tool.
+- Only the agent the app's runtime registered is served. A helper agent of the app in the same worktree (titles, commit messages) is refused, and so is any wrapper started before the step registered.
+- Outside an attempt the wrapper runs nothing and exits 2, except `--version` and Paseo's `codex app-server` model listing (no agent, under a Paseo daemon), which run the host's tool:
+
+```text
+$ teamai-sandbox-claude -p "hello"
+teamai-sandbox-claude runs only inside a teamai attempt; use the plain tool or instance
+$ teamai-sandbox-acme-claude -p "hello"            # in an attempt whose image lacks it
+teamai-sandbox-acme-claude (tool_unsupported): acme-claude is not installed in this sandbox (image ghcr.io/acme/agent:1). Add it to the image or template the sandbox starts from, or run the step with --driver local.
+```
+
 ## Limits and budgets
 
 A step's `timeout`, `max_turns` and `budget` hold in a container as on the host. At a limit, teamai stops the tool: the runtime restarts the attempt's container, which ends every process in it.
@@ -517,7 +572,7 @@ sbx ls -q
 
 | Error | What happened | Next step |
 | --- | --- | --- |
-| `sandbox_unavailable` | `sbx`, `docker` or `podman` is not installed, its daemon or machine is not running, sbx has no network policy yet, the image cannot be pulled, or your sbx policy does not let a sandbox reach the port of this machine a base URL names. Nothing runs on the host instead. | Install or start it: `sbx daemon start`, Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For sbx, `sbx policy init balanced`, or the `sbx policy allow network localhost:<port>` the message names. For an image, check its name and `docker login <registry>`. |
+| `sandbox_unavailable` | `sbx`, `docker` or `podman` is not installed, its daemon or machine is not running, sbx has no network policy yet, the image cannot be pulled, or your sbx policy does not let a sandbox reach the port of this machine a base URL names. `bwrap` is missing or AppArmor keeps it from making a namespace (Ubuntu 24.04 or later); `seatbelt` runs on macOS older than 14; `vercel` finds no Vercel sign-in. Nothing runs on the host instead. | Install or start it: `sbx daemon start`, Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For sbx, `sbx policy init balanced`, or the `sbx policy allow network localhost:<port>` the message names. For an image, check its name and `docker login <registry>`. For bwrap, `sudo apt install bubblewrap` and the AppArmor profile the message names; for seatbelt, macOS 14; for vercel, `VERCEL_TOKEN` with `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID`, or `VERCEL_OIDC_TOKEN` (`vercel link`, then `vercel env pull`). |
 | `tool_unavailable` | The step's tool cannot sign in inside the sandbox | The command the message names: on sbx, `sbx run claude <any dir>` then `/login`, or `sbx secret set openai --oauth`; in a container, `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN` and name it in `credentials` |
 | `credential_missing` | A credential's variable is not set where teamai runs, or a judge got no env credential its tool reads | Set the variable the message names, or add the key it names to `credentials` |
 | `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` or `sbx` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `local` in the definition |
@@ -526,6 +581,9 @@ sbx ls -q
 | `cancel_failed` | A cancel or a limit could not confirm the step stopped: the engine refused the stop, or the stop (a judge's removal included) and the end of the step's process took over 10 s. What ran there may still run, so teamai keeps the container, the work and the login. Example: `docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | Start the engine again, then run `teamai workflow cancel <run>` again: the runtime stops the step and closes its place. Or remove it with the `docker rm --force` or `sbx rm --force` command the message names |
 | **Not closed** in run details | The engine could not remove the attempt's container or sandbox, or the removal and the end of what ran there took over 10 s, so what ran there may still run. The run ends as it would. | `docker rm --force <container>` or `sbx rm --force <sandbox>`, as the message says. Once nothing of it runs, `teamai workflow cancel <run> --release <attempt>` lets the attempt go: the runtime forgets the place even when it cannot remove it, and its message still names the `rm --force` command |
 | `runtime_interrupted` | teamai restarted while the step ran | `teamai workflow retry <run> <step>` |
+| `isolation_unproven` (from `teamai-sandbox-<tool>`) | The wrapper was started for an agent the attempt did not register, before the step registered, or outside the attempt's worktree, so it ran nothing | Start the step from teamai, not the app's own agent; a helper agent of the app is refused by design |
+| `credentials_pending` (from `teamai-sandbox-<tool>`) | The sandbox runtime restarted and teamai has not reattached the attempt yet, so it holds no credentials for the tool | `teamai workflow resume <run>`: teamai reattaches the attempt with the credentials, and the app's next start of the tool is granted |
+| `tool_unsupported` (from `teamai-sandbox-<tool>`) | The sandbox does not offer the tool, or the instance's `command` is not installed in it | Add the command to the image or template the message names, or run the step with `--driver local` |
 
 ## Not in this version
 
