@@ -48,7 +48,7 @@ import { cloneBranchOf } from '../workspace.js';
 import { cloneRoleProblem, copyKnowledgePaths, launchedTools, roleCopyRefusal, roleNotDeliveredFailure, type CloneRoleGap } from './role-copy.js';
 import { commitWithout } from './team-without.js';
 import { teamClonesOf } from './team.js';
-import { AGENT_PATHS, boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type Git } from '../worktree.js';
+import { AGENT_PATHS, boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type Git, type UntrustedGit } from '../worktree.js';
 
 /**
  * The commit a clone's install pulled for a treatment without some paths, which teamai made of `revision` without them.
@@ -340,7 +340,7 @@ export async function cloneHead(config: LocalConfig, run: RunId, branch: string,
 }
 
 /** `untrustedGit` without `withhold`: a step ran in the clone, so its config may start anything. */
-async function cloneGit(withhold: readonly string[], expiresAt: string | undefined): Promise<Git | WorkflowFailure> {
+async function cloneGit(withhold: readonly string[], expiresAt: string | undefined): Promise<UntrustedGit | WorkflowFailure> {
   const scoped = await cloneEnv(withhold);
 
   return scoped.ok ? untrustedGit(scoped.env, expiresAt) : scoped.failure;

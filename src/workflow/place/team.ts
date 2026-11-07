@@ -17,7 +17,7 @@ import { checkoutCredentials, getConfiguredRemoteUrl, redactGitCredentials } fro
 import type { StepChanges } from '../workspace.js';
 import { runsDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
-import { commitWork, git, untrustedGit, type Git } from '../worktree.js';
+import { commitWork, git, untrustedGit, type Git, type UntrustedGit } from '../worktree.js';
 
 /** How long one git call that reaches origin may take. */
 const ORIGIN_TIMEOUT_MS = 120_000;
@@ -29,7 +29,7 @@ const TEAMAI = ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost'];
  * is the step's own, without what it withholds, for every call but those that reach origin, which sign in with the
  * member's own helpers and environment.
  */
-function stepGit(env: NodeJS.ProcessEnv): Git {
+function stepGit(env: NodeJS.ProcessEnv): UntrustedGit {
   return untrustedGit({ ...env, ...NON_INTERACTIVE_GIT_ENV });
 }
 

@@ -70,6 +70,11 @@ type GitOptions = { input: string; timeoutMs?: number } | { timeoutMs: number; e
 
 export type Git = (cwd: string, args: string[], options?: GitOptions) => Promise<GitResult>;
 
+const UNTRUSTED = Symbol('untrusted git');
+
+/** git that runs nothing the config of the checkout it runs in names: only `untrustedGit` makes one. */
+export type UntrustedGit = Git & { readonly [UNTRUSTED]: true };
+
 // `git worktree add` writes a new worktree's entry under `.git/worktrees/` one file at a time and takes no lock, so a
 // command that reads every worktree (`fetch`, `branch`, `worktree add`, `worktree list`) dies on an entry it finds half
 // written (#1526). Each dies before it changes anything, all but `worktree add -b`, and git finishes the entry within a
@@ -116,14 +121,16 @@ export const UNTRUSTED_CONFIG: readonly string[] = ['-c', `core.hooksPath=${os.d
  * instead of this process's environment, for git and for whatever the member's config starts, such as a filter. Past
  * `expiresAt`, each git it started is stopped, so a filter that never returns holds its caller no longer than that.
  */
-export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
-  return async (cwd, args, options) => {
+export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): UntrustedGit {
+  const run: Git = async (cwd, args, options) => {
     const off = await plantedOff(cwd, env, expiresAt);
 
     if ('error' in off) return off.error;
 
     return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...withPackPrograms(args, off.packPrograms)], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
   };
+
+  return Object.assign(run, { [UNTRUSTED]: true as const });
 }
 
 /**
@@ -1094,11 +1101,11 @@ async function stagePaths(dir: string, paths: readonly string[], runGit: Git): P
 }
 
 /**
- * Commits changes in `dir`, with `runGit` running every git call.
+ * Commits changes in `dir`, with `runGit` running every git call: a step ran there, so `untrustedGit`.
  * `paths` stages only those paths. Absent, every change is staged. An empty list stages nothing.
  */
 export async function commitWork(
-  dir: string, message: string, fromCommit?: string, runGit: Git = git, paths?: readonly string[],
+  dir: string, message: string, fromCommit: string | undefined, runGit: UntrustedGit, paths?: readonly string[],
 ): Promise<{ from: string; to: string; commits: string[] } | { error: string }> {
   const before = fromCommit === undefined ? await runGit(dir, ['rev-parse', 'HEAD']) : { code: 0, stdout: fromCommit, stderr: '' };
 
@@ -1127,9 +1134,9 @@ export async function commitWork(
  * Pushes when `origin` exists and the branch is ahead of the copy `origin` has.
  * A retry that adds no commit still pushes when an earlier attempt left commits unpublished,
  * including a first push that never created the remote branch.
- * No origin is not a failure. `runGit` runs each git call.
+ * No origin is not a failure. `runGit` runs each git call: a step ran in `dir`, so `untrustedGit`.
  */
-export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: Git = git): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
+export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: UntrustedGit): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
   const origin = await runGit(dir, ['remote', 'get-url', 'origin']);
 
   if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';

@@ -22,7 +22,7 @@ import { parseWorkflow } from '../workflow/parse.js';
 import { readRun, updateRun } from '../workflow/store.js';
 import type { DriverIdentity, RunState } from '../workflow/types.js';
 import { branchName, stepRoleOf } from '../workflow/workspace.js';
-import { applyBaseConfig, ensureWorktree, git as workflowGit, hooksPath, pushIfOrigin, worktreePath } from '../workflow/worktree.js';
+import { applyBaseConfig, ensureWorktree, git as workflowGit, hooksPath, pushIfOrigin, untrustedGit, worktreePath } from '../workflow/worktree.js';
 import { launchHoldsCheckout } from '../launch-context.js';
 import { teamDelivery } from '../pull.js';
 import { pendingRecords } from '../workflow/records.js';
@@ -1581,21 +1581,21 @@ steps:
     execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'three'], { cwd: repo });
 
-    expect(await pushIfOrigin(repo, 'teamai/demo', [])).toBe('pushed');
+    expect(await pushIfOrigin(repo, 'teamai/demo', [], untrustedGit(process.env))).toBe('pushed');
     expect(git(['rev-parse', 'teamai/demo'], bare)).toBe(git(['rev-parse', 'HEAD'], repo));
-    expect(await pushIfOrigin(repo, 'teamai/demo', [])).toBe('unchanged');
-    expect(await pushIfOrigin(repo, 'teamai/never-pushed', [])).toBe('unchanged');
+    expect(await pushIfOrigin(repo, 'teamai/demo', [], untrustedGit(process.env))).toBe('unchanged');
+    expect(await pushIfOrigin(repo, 'teamai/never-pushed', [], untrustedGit(process.env))).toBe('unchanged');
 
     execFileSync('git', ['checkout', '-q', '-b', 'teamai/first'], { cwd: repo });
     fs.writeFileSync(path.join(repo, 'tracked.txt'), 'four\n');
     execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'four'], { cwd: repo });
-    expect(await pushIfOrigin(repo, 'teamai/first', [])).toBe('pushed');
+    expect(await pushIfOrigin(repo, 'teamai/first', [], untrustedGit(process.env))).toBe('pushed');
     expect(git(['rev-parse', 'teamai/first'], bare)).toBe(git(['rev-parse', 'HEAD'], repo));
-    expect(await pushIfOrigin(repo, 'teamai/first', [])).toBe('unchanged');
+    expect(await pushIfOrigin(repo, 'teamai/first', [], untrustedGit(process.env))).toBe('unchanged');
 
     execFileSync('git', ['checkout', '-q', '-b', 'teamai/already', 'main'], { cwd: repo });
-    expect(await pushIfOrigin(repo, 'teamai/already', [])).toBe('unchanged');
+    expect(await pushIfOrigin(repo, 'teamai/already', [], untrustedGit(process.env))).toBe('unchanged');
   });
 
   it('keeps an executable hook executable after a step that does not edit it', async () => {
@@ -1676,10 +1676,10 @@ steps:
     execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'two'], { cwd: repo });
 
-    expect(await pushIfOrigin(repo, 'teamai/solo', [])).toBe('pushed');
+    expect(await pushIfOrigin(repo, 'teamai/solo', [], untrustedGit(process.env))).toBe('pushed');
     expect(git(['rev-parse', 'teamai/solo'], bare)).toBe(git(['rev-parse', 'HEAD'], repo));
     execFileSync('git', ['checkout', '-q', '-b', 'teamai/same', 'main'], { cwd: repo });
-    expect(await pushIfOrigin(repo, 'teamai/same', [])).toBe('unchanged');
+    expect(await pushIfOrigin(repo, 'teamai/same', [], untrustedGit(process.env))).toBe('unchanged');
   });
 
   it('pushes a branch only it holds when the user forces branch colors', async () => {
@@ -1697,7 +1697,7 @@ steps:
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'two'], { cwd: repo });
     git(['config', 'color.branch', 'always'], repo);
 
-    expect(await pushIfOrigin(repo, 'teamai/solo', [])).toBe('pushed');
+    expect(await pushIfOrigin(repo, 'teamai/solo', [], untrustedGit(process.env))).toBe('pushed');
   });
 
   // While `git worktree add` writes a new worktree's entry, git's own `worktree add` and `worktree list` in the same
