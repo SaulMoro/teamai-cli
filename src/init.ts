@@ -207,12 +207,12 @@ import {
   SELF_MODE_AGENT_CHOICES,
   KNOWN_AGENTS,
 } from './known-agents.js';
-import { TOOLS } from './tools.js';
+import { descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 
 function validAgentIds(teamConfig?: TeamaiConfig | null): string[] {
   return [...new Set([
-    ...Object.keys(TOOLS),
+    ...TOOL_ORDER,
     ...KNOWN_AGENTS.map((agent) => agent.id),
     ...Object.keys(teamConfig?.toolPaths ?? {}),
   ])].sort();
@@ -1402,7 +1402,7 @@ export async function promptForSelfModeAgents(options: {
   const tools = SELF_MODE_AGENT_CHOICES.map((id) => {
     const meta = KNOWN_AGENTS.find((a) => a.id === id);
 
-    return { id, label: meta?.displayName ?? id, root: TOOLS[id].home.dir };
+    return { id, label: meta?.displayName ?? id, root: descriptorOf(id).home.dir };
   });
 
   const detectedLabels = detected
@@ -2726,7 +2726,7 @@ export async function init(options: GlobalOptions & {
               if (forcedProvider) mrLocalConfig.provider = forcedProvider;
 
               if (mrTeamConfig) {
-                const prUrl = await withTimeout(
+                const mrPush = await withTimeout(
                   autoPushViaMR(
                     localPath,
                     `[teamai] Configure reviewers: ${reviewers.join(', ')}`,
@@ -2739,8 +2739,8 @@ export async function init(options: GlobalOptions & {
                   'Reviewer config push',
                 );
 
-                if (prUrl) {
-                  log.success(`Reviewer config pushed via MR: ${prUrl}`);
+                if (mrPush.pushed && mrPush.prUrl) {
+                  log.success(`Reviewer config pushed via MR: ${mrPush.prUrl}`);
                 } else {
                   log.warn('Reviewer config MR could not be created (you can push manually later)');
                 }

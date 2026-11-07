@@ -7,6 +7,7 @@ import attemptResultWrites from './rules/attempt-result-writes.js';
 import learningsRoot from './rules/learnings-root.js';
 import configuredToolPaths from './rules/configured-tool-paths.js';
 import launchEnv from './rules/launch-env.js';
+import launchThroughWorkflows from './rules/launch-through-workflows.js';
 import noProviderMerge from './rules/no-provider-merge.js';
 import workflowBoundaries from './rules/workflow-boundaries.js';
 import windowsTests from './rules/windows-tests.js';
@@ -17,6 +18,9 @@ import toolFacts from './rules/tool-facts.js';
 import noLowValueComments from './rules/no-low-value-comments.js';
 import suppressionReason from './rules/suppression-reason.js';
 import yamlParse from './rules/yaml-parse.js';
+import packageBoundaries from './rules/package-boundaries.js';
+import toolRegistry from './rules/tool-registry.js';
+import mockSource from './rules/mock-source.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -31,6 +35,7 @@ export default definePlugin({
     'config-load-options': configLoadOptions,
     'configured-tool-paths': configuredToolPaths,
     'launch-env': launchEnv,
+    'launch-through-workflows': launchThroughWorkflows,
     'no-provider-merge': noProviderMerge,
     'workflow-boundaries': workflowBoundaries,
     'windows-tests': windowsTests,
@@ -44,6 +49,9 @@ export default definePlugin({
     'no-low-value-comments': noLowValueComments,
     'suppression-reason': suppressionReason,
     'yaml-parse': yamlParse,
+    'package-boundaries': packageBoundaries,
+    'tool-registry': toolRegistry,
+    'mock-source': mockSource,
     ...antiSlopRules,
   },
 });

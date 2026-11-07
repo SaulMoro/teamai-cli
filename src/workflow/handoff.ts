@@ -10,7 +10,7 @@ import { getRepoIdentity } from '../session-flow/sync.js';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { gitRoot } from '../utils/branch-worktree.js';
 import { canonicalJson } from '../utils/canonical-json.js';
-import { sanitizeGitUrl } from '../utils/redact.js';
+import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { fetchReportsOriginFile, readReportsOriginFile, updateReports, type ReportsChange, type ReportsWriteContext } from '../utils/reports-branch.js';
 import { loadWorkflowBundle, loadWorkflowBundleAt, loadWorkflowTree, type WorkflowBundle } from './cache.js';
 import { stepLoops } from './loop.js';
@@ -23,6 +23,7 @@ import { openPrivateStep } from './scope.js';
 import { takeOver, type UnleasedStep } from './step-state.js';
 import { installOwner, isRunId, readRun, updateRun } from './store.js';
 import { workflowRunBy, type RunPublication, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
+import { attemptHoldingSession } from './runtimes/attempt.js';
 import { basePinBranch, branchName, isIsolated, runBranchPrefix, stepMode, worksInTeam, type LeaseSession, type SessionRef } from './workspace.js';
 import { fetchMissingCommits, git, reconcileCopy } from './worktree.js';
 
@@ -392,8 +393,17 @@ async function shareSessions(config: LocalConfig, runId: string, chains: LeaseSe
     for (const session of [chain, ...(chain.earlier ?? [])]) {
       const platform = AgentSession.platformForTool(session.tool);
 
-      if (platform) refs.push({ tool: session.tool, id: session.id, platform, sessionId: session.id });
-      else skipped.push({ tool: session.tool, id: session.id });
+      if (!platform) {
+        skipped.push({ tool: session.tool, id: session.id });
+        continue;
+      }
+
+      const ref: ChainRef = { tool: session.tool, id: session.id, platform, sessionId: session.id };
+      // A step on a step runtime kept its session in its attempt's tool home.
+      const holding = await attemptHoldingSession(config, runId, session);
+
+      if (holding) ref.storeDir = holding.storeDir;
+      refs.push(ref);
     }
 
     if (refs.length === 0) return refused(sessionsNotArchived(runId, `teamai cannot read sessions of ${chain.tool}.`));

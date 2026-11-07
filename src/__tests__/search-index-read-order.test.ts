@@ -8,7 +8,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, readFile: vi.fn(actual.readFile) };
 });
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

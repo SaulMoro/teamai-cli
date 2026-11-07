@@ -4,7 +4,10 @@
   "description": "TeamAI — Make Every Team AI Native (skill sync + shared knowledge base, powered by Git)",
   "type": "module",
   "bin": {
-    "teamai": "dist/index.js"
+    "teamai": "dist/index.js",
+    "teamai-runtime-sandbox": "dist/runtime-sandbox.js",
+    "teamai-runtime-t3": "dist/runtime-t3.js",
+    "teamai-runtime-paseo": "dist/runtime-paseo.js"
   },
   "files": [
     "dist/**/*.js",
@@ -14,9 +17,14 @@
     "!**/*.pyc",
     "agents",
     "workflows",
+    "scorers",
+    "drivers",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
+  ],
+  "workspaces": [
+    "packages/*"
   ],
   "publishConfig": {
     "access": "public"

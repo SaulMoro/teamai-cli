@@ -1,0 +1,9 @@
+{
+  "name": "@teamai/tool-claude",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code, claude-internal and tclaude: their descriptors, launch profile and session platforms; bundled into teamai-cli.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

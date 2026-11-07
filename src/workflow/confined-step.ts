@@ -1,12 +1,15 @@
 /**
- * Runs a lease of a step confined to a directory, as a driver that runs it here does: on the first of its tools that
- * resolves its model, with that directory as the tool's only readable root, no team env, and no session saved.
+ * Runs a lease of a step confined to a directory, as a driver that runs it here does, or on a step runtime that answers
+ * confined prompts: on the first of its tools that resolves its model, with that directory as the tool's only readable
+ * root, no team env, and no session saved.
  */
 import fs from 'node:fs/promises';
-import { isConfinedTool, runConfined, type ConfinedResult, type ConfinedRun } from '../tool-launch/confined.js';
+import { CONFINED_LEVELS, type ConfinedLevel } from '@teamai/tool-core/launch';
+import type { ConfinedOffer } from '@teamai/runtime-protocol';
+import { confinedEnvNames, isConfinedTool, runConfined, type ConfinedResult, type ConfinedRun } from '../tool-launch/confined.js';
 import type { ConfinedTool } from '../tool-launch/tools.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
-import { isAgentToolId } from '../tools.js';
+import { isAgentToolId } from '../tool-registry.js';
 import { JsonValueSchema, type JsonValue, type LocalConfig } from '../types.js';
 import { AttemptResult } from './attempt-result.js';
 import type { ReportInput } from './engine.js';
@@ -15,6 +18,9 @@ import { MAX_TIMER_DELAY } from './shell-command.js';
 import { chooseStepModel, type StepModel } from './step-model.js';
 import { attemptDir, attemptResultPath, type RunId } from './store.js';
 import type { WorkflowFailure } from './types.js';
+import type { ConfinedRunReport } from './step-state.js';
+import type { AttemptRun } from './runtimes/attempt.js';
+import { withRetry, type PromptEnd } from './runtimes/step-runtime.js';
 
 /** What a driver reports of a confined run, besides the attempt and itself. */
 export type ConfinedStepReport = Pick<ReportInput, 'outcome' | 'outputs' | 'tool' | 'model' | 'tokens' | 'cost' | 'durationMs' | 'confined' | 'message' | 'failure'>;
@@ -39,15 +45,23 @@ export interface ConfinedStepInput {
   resolveTool?: (executable: string) => string | null;
 }
 
-/** The first tool of the lease that teamai runs confined and that resolves the step's model, with that model. */
-async function firstResolving({ config, lease }: Pick<ConfinedStepInput, 'config' | 'lease'>): Promise<{ tool: ConfinedTool; model?: StepModel } | { reasons: string[] }> {
+/** Who runs a confined tool: which tools it runs, and why it does not run another. */
+interface ConfinedRunner<TTool extends string> {
+  runs(tool: string): tool is TTool;
+  whyNot(tool: string): string;
+}
+
+const HOST: ConfinedRunner<ConfinedTool> = { runs: isConfinedTool, whyNot: (tool) => `${tool} is not a tool teamai runs confined.` };
+
+/** The first tool of the lease that `runner` runs and that resolves the step's model, with that model. */
+async function firstResolving<TTool extends string>({ config, lease }: Pick<ConfinedStepInput, 'config' | 'lease'>, runner: ConfinedRunner<TTool>): Promise<{ tool: TTool; model?: StepModel } | { reasons: string[] }> {
   const reasons: string[] = [];
 
   const asks = lease.model !== undefined || lease.defaultModel !== undefined;
 
   for (const tool of lease.confined.tools) {
-    if (!isConfinedTool(tool)) {
-      reasons.push(`${tool} is not a tool teamai runs confined.`);
+    if (!runner.runs(tool)) {
+      reasons.push(runner.whyNot(tool));
       continue;
     }
 
@@ -117,7 +131,7 @@ function timeoutOf(lease: ConfinedStepLease): number {
  */
 export async function runConfinedStep(input: ConfinedStepInput): Promise<ConfinedStepEnd> {
   const { config, run, lease, signal, resolveTool, secrets } = input;
-  const found = await firstResolving(input);
+  const found = await firstResolving(input, HOST);
 
   if ('reasons' in found) {
     return { kind: 'unresolved', reason: `Step "${lease.step}" runs confined on ${lease.confined.tools.join(', ')}, and none of them resolves its model here. ${found.reasons.join(' ')}` };
@@ -162,4 +176,117 @@ function ranReport({ run, reply, durationMs }: { run: ConfinedRun; reply: JsonVa
   if (model !== undefined) report.model = model;
 
   return report;
+}
+
+/** Whether `level` reaches `floor`: `verified` reaches both levels, `best-effort` only itself. */
+function reaches(level: ConfinedLevel, floor: ConfinedLevel): boolean {
+  return CONFINED_LEVELS.indexOf(level) >= CONFINED_LEVELS.indexOf(floor);
+}
+
+export interface RuntimeConfinedInput extends Omit<ConfinedStepInput, 'resolveTool'> {
+  /** The step runtime the attempt runs on, by its definition's name, and the attempt's run there. */
+  runtime: string;
+  attemptRun: AttemptRun;
+  /** The runtime's `can.confined`, which the lease's tools come from. */
+  offers: readonly ConfinedOffer[];
+  /** The credentials the definition gives the runtime's tools, of which the prompt's tool gets those it reads. */
+  credentials: Record<string, string>;
+}
+
+/**
+ * Runs `lease` on a step runtime that answers confined prompts: in a place opened with no view of the host, as one
+ * `prompt` confined to the lease's directory, with no team env, and only the credentials its tool's confined profile
+ * reads: a credential no profile names goes to no judge. The reply is the step's outputs, and the level and
+ * access the runtime says it kept are the run's; a runtime that kept less than the lease's level fails the step.
+ */
+export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Promise<ConfinedStepEnd> {
+  const { config, run, lease, signal, runtime, attemptRun, offers, credentials } = input;
+  const offered = (tool: string): ConfinedOffer | undefined => offers.find((offer) => offer.tools.includes(tool) && reaches(offer.level, lease.confined.level));
+  const found = await firstResolving(input, { runs: (tool): tool is string => offered(tool) !== undefined, whyNot: (tool) => `step runtime "${runtime}" offers no confined ${tool} at ${lease.confined.level}.` });
+
+  if ('reasons' in found) {
+    return { kind: 'unresolved', reason: `Step "${lease.step}" runs confined on ${lease.confined.tools.join(', ')}, and none of them resolves its model on step runtime "${runtime}". ${found.reasons.join(' ')}` };
+  }
+
+  const { tool, model } = found;
+  const schema = lease.confined.schema === undefined ? undefined : await replySchema(lease.step, lease.confined.schema);
+
+  if (schema && !schema.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: schema.failure.message, failure: schema.failure } };
+  const access = offered(tool)?.access ?? 'full';
+  const reads = confinedEnvNames(tool);
+  const given = Object.fromEntries(Object.entries(credentials).filter(([name]) => reads.includes(name)));
+  const startedAt = Date.now();
+  const opened = await attemptRun.open(undefined, { tool, credentials: given });
+
+  if (!opened.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: opened.failure.message, failure: opened.failure } };
+  // A stop before the prompt is sent, or while the place opened, is kept and sent once the runtime accepts the prompt.
+  let stopped = false;
+
+  const stop = (): void => {
+    stopped = true;
+    void attemptRun.cancel();
+  };
+
+  const timer = setTimeout(stop, timeoutOf(lease));
+  signal?.addEventListener('abort', stop, { once: true });
+
+  if (signal?.aborted) stop();
+
+  const end = await attemptRun.prompt({
+    lease: {
+      step: lease.step, tool, prompt: lease.prompt ?? '', result: attemptResultPath(config, run, lease.attempt), permissions: 'approval-required', interactive: false,
+      ...(model && { model: model.effort ? { name: model.name, effort: model.effort } : { name: model.name } }),
+    },
+    env: {}, unset: [], credentials: given, cwd: lease.confined.dir,
+    confined: { dir: lease.confined.dir, level: lease.confined.level, access, ...(schema && { schema: schema.schema }) },
+  }, {
+    onAccepted: () => {
+      if (stopped) void attemptRun.cancel();
+    },
+  });
+
+  clearTimeout(timer);
+  signal?.removeEventListener('abort', stop);
+
+  return { kind: 'ran', report: runtimeConfinedReport({ runtime, tool, model, level: lease.confined.level, end, durationMs: Date.now() - startedAt, retry: { run, step: lease.step } }) };
+}
+
+/** The report of a confined prompt a step runtime ended. */
+function runtimeConfinedReport(input: { runtime: string; tool: string; model: StepModel | undefined; level: ConfinedLevel; end: PromptEnd; durationMs: number; retry: { run: string; step: string } }): ConfinedStepReport {
+  const { runtime, tool, model, level, end, durationMs, retry } = input;
+  const failed = (failure: WorkflowFailure): ConfinedStepReport => ({ outcome: 'failed', tool, durationMs, message: failure.message, failure });
+
+  switch (end.kind) {
+    case 'finished': {
+      if (end.session.tool !== tool) return failed({ code: 'runtime_failed', message: `Step runtime "${runtime}" finished the confined ${tool} prompt with a session of ${end.session.tool}.` });
+      const kept = end.confined;
+
+      if (kept === undefined) return failed({ code: 'runtime_failed', message: `Step runtime "${runtime}" finished a confined prompt without saying what it kept.` });
+
+      if (!reaches(kept.level, level)) {
+        return failed({ code: 'confined_failed', message: `Step runtime "${runtime}" kept the confined prompt at ${kept.level}, below the ${level} its directory asks for.` });
+      }
+
+      if (end.result.failure) return failed({ code: 'confined_failed', message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` });
+      const outputs = JsonValueSchema.safeParse(end.result.output);
+
+      if (!outputs.success) return failed({ code: 'confined_reply_invalid', message: `${tool} on step runtime "${runtime}" replied with no JSON value.` });
+      const usage = end.usage && { inputTokens: end.usage.input, outputTokens: end.usage.output };
+      const ran: ConfinedRunReport = { tool, isolation: kept.level, access: kept.access, ...(usage && { usage }), ...(model && { model: { requested: model.name } }) };
+
+      return { outcome: 'success', tool, outputs: outputs.data, durationMs, confined: ran, ...spentOf(usage), ...(model && { model: model.name }) };
+    }
+
+    case 'cancelled':
+      return failed({ code: 'confined_failed', message: `The confined ${tool} prompt on step runtime "${runtime}" was stopped before it replied.` });
+    case 'failed':
+      return failed({ code: 'confined_failed', message: withRetry({ code: end.failure.code, message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` }, retry) });
+    case 'lost':
+      return failed({ code: 'runtime_lost', message: `Step runtime "${runtime}" stopped answering while it ran the confined ${tool} prompt, which may still run there: ${end.failure.message}` });
+    default: {
+      const unhandled: never = end;
+
+      return unhandled;
+    }
+  }
 }

@@ -13,7 +13,7 @@ import { isModelAlias, loadModelAliases, noModelCause, noModelReason, resolveMod
 import {
   agentFileExtensionForTool, reverseByTool, toolExtrasFor, type AgentSpec, type ToolName,
 } from '../resources/agent-format.js';
-import { isAgentToolId } from '../tools.js';
+import { isAgentToolId } from '../tool-registry.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { isLaunchTool, launchAdapterIdOf } from '../tool-launch/tools.js';
 import { readFileSafe } from '../utils/fs.js';
@@ -48,6 +48,8 @@ export interface StepModelRequest {
   defaultModel?: string;
   /** The definition deployed for the tool, when the step names an agent. */
   agent?: AgentSpec;
+  /** False when the tool is not started with `--agent`, as on a runtime that launches agents its own way. */
+  passesAgentFile?: boolean;
   /** The scope whose aliases resolve the step's `model` or `defaults.model`. */
   config: LocalConfig;
 }
@@ -101,7 +103,9 @@ export async function chooseStepModel(request: StepModelRequest): Promise<StepMo
     const family = isLaunchTool(tool) ? launchAdapterIdOf(tool) : undefined;
 
     // Claude and CodeBuddy read it from the agent file `--agent` names.
-    if (!agent || !defined || family === undefined || family === 'claude' || family === 'codebuddy') return { ok: true };
+    const readsAgentFile = request.passesAgentFile !== false && (family === 'claude' || family === 'codebuddy');
+
+    if (!agent || !defined || family === undefined || readsAgentFile) return { ok: true };
     const variant = family === 'opencode' ? toolExtrasFor(agent, 'opencode')?.['variant'] : undefined;
 
     const model: StepModel = { name: defined };

@@ -13,14 +13,14 @@ import { knownSecrets } from '../env-resolution.js';
 import { getReportsDir, REPORTS_BRANCH, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { errnoCode } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { sanitizeGitUrl } from '../utils/redact.js';
+import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { publishRunEnd, type HandoffError } from './handoff.js';
 import { pullRequestBranches, RECORDS_DIR, RunRecordFieldsSchema } from './records.js';
 import { ownRunSweptAt, resolveRetention, type ResolvedRetention } from './retention.js';
 import { parseSnapshot, snapshotPath } from './snapshot.js';
 import { AttemptIdSchema, attemptsDir, installOwner, readRun, readRuns, RunIdSchema, updateRun, withCleanupLock } from './store.js';
 import type { KeptBranchReason, RunLeftovers, RunState } from './types.js';
-import { basePinBranch, runBranchPrefix, runCopyToMerge } from './workspace.js';
+import { runBranchPrefix, runCopyToMerge } from './workspace.js';
 import { fetchMissingCommits, git, removeWorktree, worktreeCheckout } from './worktree.js';
 
 /** Where each branch of a run points: in the checkout, and on `origin`, which is absent when the checkout has none. */
@@ -209,13 +209,14 @@ async function settleSucceeded(run: RunState, { checkout, now }: { checkout: str
       continue;
     }
 
-    // The base pin holds the commit the run started from, which the branch it started from has.
-    const pinned = branch === basePinBranch(run.id) && tipsOf(branch).every((tip) => tip === run.base?.commit);
+    // A branch at the commit the run started from, as the base pin and the copy of an answer are, holds nothing the
+    // branch the run started from lacks.
+    const atBase = tipsOf(branch).every((tip) => tip === run.base?.commit);
     let held = true;
 
     for (const tip of tipsOf(branch)) held &&= await contains({ checkout, tip, holders });
 
-    if (pinned || held) removable.push(branch);
+    if (atBase || held) removable.push(branch);
     else kept.push({ branch, why: 'unmerged' });
   }
 

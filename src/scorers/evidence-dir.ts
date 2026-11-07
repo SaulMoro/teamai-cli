@@ -9,10 +9,10 @@ import { z } from 'zod';
 import { knownSecrets } from '../env-resolution.js';
 import { AgentSession } from '../session-flow/agent-session.js';
 import { pushedSession } from '../session-flow/scoring.js';
-import { judgeSession, SessionWork, writeSessionEvidence, type JudgedSession } from '../session-flow/session-work.js';
+import { firstPromptOnly, judgeSession, SessionWork, writeSessionEvidence, type JudgedSession } from '../session-flow/session-work.js';
 import type { JsonValue } from '../types.js';
 import { readFileIfExists } from '../utils/fs.js';
-import { redact } from '../utils/redact.js';
+import { redact } from '@teamai/shared/redact';
 import { CONFINED_FILE, ConfinedFileSchema, type ConfinedFile } from '../workflow/confined-place.js';
 import type { RunState } from '../workflow/types.js';
 import type { ScorerDefinition } from './definition.js';
@@ -101,8 +101,10 @@ function pinsOf(names: readonly string[], read: { ok: true; pins: Record<string,
 
 /** The session judged: one of this machine, or one a member pushed, read from the archive. */
 async function sessionRead(attempt: ScoreAttempt, subject: Exclude<Subject, { kind: 'run' }>): Promise<{ ok: true; judged: JudgedSession } | Refusal> {
+  const control = attempt.isControl;
+
   if (subject.kind === 'session') {
-    const read = await SessionWork.read(attempt.config, subject.subject);
+    const read = await SessionWork.read(attempt.config, subject.subject, { control });
 
     return read.ok ? read : refused('evidence_empty', `Session ${subject.subject.sessionId} of ${subject.subject.platform} is gone from this machine, or holds nothing to judge.`);
   }
@@ -111,7 +113,7 @@ async function sessionRead(attempt: ScoreAttempt, subject: Exclude<Subject, { ki
 
   if ('error' in pushed) return refused(pushed.error.code, pushed.error.message);
   const envSecrets = await knownSecrets(pushed.config);
-  const read = { platform: pushed.platform, found: pushed.found, captures: [], mask: (text: string) => redact(text, { envSecrets }) };
+  const read = { platform: pushed.platform, found: control ? firstPromptOnly(pushed.found) : pushed.found, captures: [], mask: (text: string) => redact(text, { envSecrets }) };
 
   return { ok: true, judged: judgeSession(pushed.agent ? { ...read, agent: pushed.agent } : read) };
 }
@@ -144,7 +146,7 @@ async function writeRecords(dir: string, group: GroupRecord, judge?: { confined:
 
 /** Writes the run's evidence of a pass, which main's evidence holds; a commit or session it recorded that is gone refuses. */
 async function passEvidence(attempt: ScoreAttempt, run: RunState, subject: RunSubject, rubrics: Rubrics): Promise<{ ok: true } | Refusal> {
-  const missing = await missingEvidence(run, subject);
+  const missing = await missingEvidence(attempt.config, run, subject);
 
   if (missing.length > 0) {
     return refused('evidence_missing', `Pass ${subject.pass} of step ${subject.step} in run ${run.id} cannot be scored: no longer on this machine: ${missing.join('; ')}. Restore what is missing, or score another pass.`);
@@ -217,7 +219,7 @@ async function sessionEvidence(attempt: ScoreAttempt, subject: Exclude<Subject, 
     return { dir: attempt.dir, rubric: '', schema: '', delivers: false };
   }
 
-  await writeSessionEvidence(attempt.dir, judged, pinned.rubrics);
+  await writeSessionEvidence(attempt.dir, judged, pinned.rubrics, Object.assign({}, ...pinned.scorers.map(({ pin }) => pin.evidence ?? {})));
 
   return judgeRecords(attempt, group, pinned.rubrics, AgentSession.toolForPlatform(judged.subject.platform));
 }

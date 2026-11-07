@@ -5,14 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn(), persist: vi.fn() },
   spinner: vi.fn(() => ({ start: vi.fn().mockReturnThis(), succeed: vi.fn().mockReturnThis(), fail: vi.fn().mockReturnThis() })),
 }));
 
 import { buildMcpReadFileChecks, mcpTransportNotes } from '../doctor-delivery.js';
 import type { DoctorContext } from '../doctor.js';
-import { mcpFormatOf } from '../tools.js';
+import { mcpFormatOf } from '../tool-registry.js';
 import { log } from '../utils/logger.js';
 import { judgeTeamaiOnlyMcpConfigs, reconcileMcpForConfig, resolveMcpTargets, shadowedMcpRecords } from '../mcp-reconcile.js';
 import { entryHash, renderCodexBlock, renderJsonEntry } from '../resources/mcp-format.js';

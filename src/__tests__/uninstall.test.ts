@@ -32,7 +32,7 @@ vi.mock('../hooks.js', async (importOriginal) => {
   return { ...actual, reconcileHooks: (...args: unknown[]) => mockReconcileHooks(...args) };
 });
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

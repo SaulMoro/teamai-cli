@@ -63,7 +63,7 @@ teamai dashboard --port 8080
 
 在交出运行的那个安装上，下一步改为 `teamai workflow resume <run>`，在那里把它收回。待接手的本机运行，或现在由其他安装持有的本机运行，会在状态下方注明。**运行器需要**（需要人工的运行上为**其机器需要**）列出剩余步骤的 `requires.env` 键和提示词步骤：照[其作业](workflow.md#从-ci-接手交出的运行)那样在运行器上配好。**本机缺少**是本机缺的那部分，与 `teamai workflow resume` 列为 `cannot run here` 的一致。状态栏统计待接手的运行和需要人工的运行。页面本身不认领任何运行：命令在接手运行的机器上启动驱动。
 
-页面显示运行记录会发布的内容，以及每个步骤的实时状态和等待中 HITL 请求的选项。输入、`for_each` 条目、输出、提示词、HITL 消息和本地路径都留在运行文件里。HITL 问题请在运行的驱动提问处阅读。运行详情显示每个 pass 的产出：它分支上的 commit、为它交付的拉取请求，以及 `teamai contribute` 在它的 attempt 中记录的经验。每个 pass 标出它的 Harness，例如 `claude · claude-sonnet-5-5 · review 步骤角色 · 3bb7751`。Harness 与同一步骤上一个 pass 不同的 pass 会写明改了什么，例如 `review` 第 2 个 pass 下的 `模型已变: claude-sonnet-5-5 → claude-opus-5-5`。本机运行中被跳过的步骤会在状态下方显示原因，例如 `Step "label" was skipped: its if is false: steps.check.outcome == 'failed'` 或 `Step "ship" was skipped: it needs "test", which failed.`。每个 pass 的评分显示标签、分数和判定来源：`评审模型`、`评分器检查`、`合并请求 CI`、`受保护路径` 或 `人工标注`，例如 `delivered: partial · 分数 0.5  合并请求 CI`。运行的评审次数统计每个评审模型标签（批量评审的 Token 只算一次）和每次失败的评审及其消耗的 Token，不计入由阶段判定的标签。已结算的本机运行的**分支**显示它的[分支](workflow.md#运行留下的分支)去向：成功的运行列出保留的分支及原因（`拉取请求`、`最终副本`）、已删除的分支，以及删不掉、由 `teamai doctor --fix` 再次尝试的分支。失败或取消的运行列出保留以供检查的分支，以及按 `workflows.retention` 从何时起 `doctor --fix` 会移除它们，并给出设置它的文件。已结束的[基准测试](benchmarks.md)运行的详情显示它的结果、用量和任务 × arm 表格，与 CLI 打印的一致。
+页面显示运行记录会发布的内容，以及每个步骤的实时状态和等待中 HITL 请求的选项。输入、`for_each` 条目、输出、提示词、HITL 消息和本地路径都留在运行文件里。HITL 问题请在运行的驱动提问处阅读。运行详情显示每个 pass 的产出：它分支上的 commit、为它交付的拉取请求，以及 `teamai contribute` 在它的 attempt 中记录的经验。每个 pass 标出它的 Harness，例如 `claude · claude-sonnet-5-5 · review 步骤角色 · 3bb7751`。Harness 与同一步骤上一个 pass 不同的 pass 会写明改了什么，例如 `review` 第 2 个 pass 下的 `模型已变: claude-sonnet-5-5 → claude-opus-5-5`。本机运行中被跳过的步骤会在状态下方显示原因，例如 `Step "label" was skipped: its if is false: steps.check.outcome == 'failed'` 或 `Step "ship" was skipped: it needs "test", which failed.`。每个 pass 的评分显示标签、分数和判定来源：`评审模型`、`评分器检查`、`合并请求 CI`、`受保护路径` 或 `人工标注`，例如 `delivered: partial · 分数 0.5  合并请求 CI`。运行的评审次数统计每个评审模型标签（批量评审的 Token 只算一次）和每次失败的评审及其消耗的 Token，不计入由阶段判定的标签。已结算的本机运行的**分支**显示它的[分支](workflow.md#运行留下的分支)去向：成功的运行列出保留的分支及原因（`拉取请求`、`最终副本`）、已删除的分支，以及删不掉、由 `teamai doctor --fix` 再次尝试的分支。失败或取消的运行列出保留以供检查的分支，以及按 `workflows.retention` 从何时起 `doctor --fix` 会移除它们，并给出设置它的文件。已结束的[基准测试](benchmarks.md)运行的详情显示它的结果、用量和任务 × arm 表格，与 CLI 打印的一致。本地运行的详情还会在[步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)上运行过的步骤下面，显示运行时、它的句柄和运行时展示的位置信息（例如打开它的链接）；显示持有某个步骤正在等待的 Codex 登录的尝试；显示驱动的每个运行时暂缓了哪些步骤、为什么；并在等待中的 HITL 请求旁边显示在终端里回答它的 `teamai workflow respond` 命令。
 
 在本机运行中，本机负责评审的 pass 还会列出每个没有标签的评分器及原因：
 
@@ -375,6 +375,8 @@ teamai session push --source codebuddy                     # --all：该平台�
 teamai session push --session <id> --source claude-code    # 只推送这一个会话，已脱敏
 teamai session pull
 teamai session list                                        # --all：全部项目
+teamai session list --finished --all                       # 可分享经验的会话；--within 3d
+teamai session show <id> --source hermes                   # 其中一个，已脱敏
 teamai session search <query>
 teamai session resume <name> --platform claude-code
 ```
@@ -384,6 +386,26 @@ teamai session resume <name> --platform claude-code
 脚本可用 `migrate <sessionId> -s <工具> -t <工具> --json`：stdout 只输出一行，格式与 `teamai workflow` 相同，即 `{ "data": ... }` 或 `{ "error": { "code", "message" } }`；进度信息走 stderr。`data` 包含目标 `sessionId`、`cwd`、`reused` 和 `fidelity` 报告。`error.code` 标明失败原因，如 `no_adapter`（未知工具）、`tool_unavailable`（源工具或目标工具未安装，或其 CLI 无法运行）、`not_found`、`unreadable`，退出码为 1。`--json` 从不询问：缺少会话 id、`-s` 或 `-t` 时以 `prompt_refused` 失败，`--push` 需要 `-y` 或 `--scrub`。
 
 `--dry-run` 只预览。`--scrub` 先脱敏再归档；不加时，交互运行会询问，脚本需要 `-y`。`--all` 超过 10 条要确认（push 为 5 条）。`push --session <id>` 只推送 `--source` 的这一个会话，不限工作区，总会脱敏，也不询问。归档在团队仓库 `teamai-reports` 分支的 `sessions/repos/<repo>/<author>/`，按会话自己的 git remote；否则归入 `_unattributed`。工作流步骤在自己工作树里运行的会话，归到该工作树所属检出目录的仓库下。
+
+### 读取已结束的会话
+
+`session list --finished --all` 列出本机最近 7 天内结束的各工具会话（`--within 3d` 可缩短），不管[会话策略](sharing.md#会话)怎么设，已经用它贡献过经验的会话不列出。`session show` 打印其中一个，不论是不是你自己的会话，脱敏方式与评审读取时相同。两者也能读取 Hermes 这样的 SQLite 存储，读取时需要 `sqlite3` CLI。
+
+```console
+$ teamai session list --finished --all
+  7c1e5a2b-0000-4000-8000-00000000c001  claude-code  2026-11-05T05:57:02.000Z  Rename the config loader; the deploy key is <REDACTED:anthropic>
+  20261104_091523_c1c2c3d4  hermes  2026-11-05T05:57:02.000Z  Why does the pod restart before it is ready
+
+$ teamai session show 20261104_091523_c1c2c3d4 --source hermes
+### user
+Why does the pod restart before it is ready
+
+
+### assistant
+The readiness probe fires before the cache warms up; raise initialDelaySeconds to 20.
+```
+
+加 `--json` 时，`list --finished --all` 输出 `{"list":[{"session","source","ended","prompt"}]}`，`show` 输出 `{"session","source","transcript"}`。`show` 找不到的会话以 1 退出，输出 `{"error":{"code":"session_not_found","message":…}}`。默认工作流 [`teamai-share-learnings-from-sessions`](workflow.md#teamai-share-learnings-from-sessions) 逐个询问是否分享这些会话。
 
 ### 脱敏后的会话保留什么
 

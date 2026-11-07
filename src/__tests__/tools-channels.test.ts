@@ -5,12 +5,13 @@ import { COPILOT_INSTRUCTIONS_FORMAT } from '../resources/copilot-instructions.j
 import { CURSOR_MDC_FORMAT } from '../resources/cursor-mdc.js';
 import { JOYCODE_RULE_FORMAT } from '../resources/joycode-rule.js';
 import { KIRO_STEERING_FORMAT } from '../resources/kiro-steering.js';
-import type { McpFormat } from '../resources/mcp-format.js';
+import type { McpFormat } from '@teamai/tool-core/definition';
 import { OMP_RULE_FORMAT } from '../resources/omp-rule.js';
 import { QODER_RULE_FORMAT } from '../resources/qoder-rule.js';
 import { getsRulesFromExtension, getsRulesFromSessionHook, ruleFormatById, ruleFormatForTool, type RuleFormat } from '../resources/rule-format.js';
 import { TRAE_RULE_FORMAT } from '../resources/trae-rule.js';
-import { AGENT_TOOLS, hookFormatOf, isToolId, mcpFormatOf, ruleFormatIdOf, runTimeRulesOf, hasDefaultHomeLeftovers, type HookFormat } from '../tools.js';
+import { type HookFormat } from '@teamai/tool-core/definition';
+import { AGENT_TOOLS, hookFormatOf, isToolId, mcpFormatOf, ruleFormatIdOf, runTimeRulesOf, hasDefaultHomeLeftovers } from '../tool-registry.js';
 import { DEFAULT_TOOL_PATHS } from '../types.js';
 
 const TOOL_IDS = Object.keys(DEFAULT_TOOL_PATHS).filter(isToolId);

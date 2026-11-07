@@ -37,7 +37,7 @@ const SKILL_IMPORTS = {
   'src/workflow/step-model.ts': {},
   'src/env-resolution.ts': {},
   'src/env-exec.ts': { names: ['stepEnvironment', 'withRunningCli'] },
-  'src/utils/redact.ts': {},
+  '@teamai/shared/redact': {},
   'src/utils/session-id.ts': {},
   // Equal values as equal text, so a kept end is compared with the engine's latest one.
   'src/utils/canonical-json.ts': {},
@@ -48,16 +48,15 @@ const SKILL_IMPORTS = {
   'src/builtin-hooks.ts': { names: ['resolveCliEntry'] },
   // The tools (`ToolId`) a session may name with `--tools default=<tool>`, which of them a child's model resolves for, and the
   // skill-data root the host question's reference is under.
-  'src/tools.ts': { names: ['isToolId', 'TOOLS', 'isAgentToolId', 'ToolId'] },
+  'src/tools.ts': { names: ['ToolId'] },
+  'src/tool-registry.ts': { names: ['isToolId', 'TOOL_ORDER', 'isAgentToolId'] },
   'src/skill-content.ts': { names: ['packagedSkillRoots'] },
   // The confined tools of this machine, what each can do there, and the level the session's tool reaches here.
   'src/tool-launch/confined.ts': { names: ['isConfinedTool', 'confinedAccess', 'confinedToolLevel'] },
-  // The level a confined run reaches and what its tool can do there.
-  'src/tool-launch/confined-level.ts': { typeOnly: true },
-  // What describe proposes for the inputs of teamai's default share workflows, for the calling session.
-  'src/session-share.ts': { names: ['SessionShare'] },
-  // What describe proposes for the inputs of teamai's default teamai-session-to-task, for the calling session.
-  'src/session-to-task.ts': { names: ['SessionToTask'] },
+  // The level a confined run reaches.
+  '@teamai/tool-core/launch': { typeOnly: true },
+  // What describe proposes for the inputs of a workflow, for the calling session, without the driver naming one.
+  'src/workflow-offers.ts': { names: ['WorkflowOffers'] },
   // What a teamai-score run the session drives gave each scorer, read from its outputs by the module that owns their shape.
   'src/scorers/engine-hooks.ts': { names: ['scoredLabels', 'ScoredLabels'] },
   // The identity every driver reports, the repository's atomic file writes, and the shared config types.

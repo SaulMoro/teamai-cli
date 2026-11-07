@@ -1,6 +1,7 @@
 /** @import { Context, ESTree } from '@oxlint/plugins' */
 import fs from 'node:fs';
 import path from 'node:path';
+import { z } from 'zod';
 
 /**
  * The linted file's path with `/` separators, so a rule can scope itself on any platform.
@@ -40,6 +41,38 @@ function packageRoot(dir) {
   return root;
 }
 
+const ManifestSchema = z.object({ name: z.string().optional(), private: z.boolean().optional(), workspaces: z.unknown().optional(), dependencies: z.record(z.string(), z.string()).optional() });
+
+/**
+ * The package.json at `dir`, or undefined when it is missing or unreadable.
+ * @param {string} dir
+ */
+export function manifest(dir) {
+  const file = `${dir}/package.json`;
+
+  if (!fs.existsSync(file)) return undefined;
+  const parsed = ManifestSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8')));
+
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** @type {Map<string, string | undefined>} */
+const roots = new Map();
+
+/**
+ * The nearest directory at or above `dir` whose package.json declares workspaces.
+ * @param {string} dir
+ * @returns {string | undefined}
+ */
+export function workspaceRoot(dir) {
+  if (roots.has(dir)) return roots.get(dir);
+  const parent = path.posix.dirname(dir);
+  const root = manifest(dir)?.workspaces !== undefined ? dir : parent === dir ? undefined : workspaceRoot(parent);
+  roots.set(dir, root);
+
+  return root;
+}
+
 /**
  * The linted file's path from its package root, so a checkout cloned under some `src/` directory keeps `scripts/` out.
  * @param {Context} context
@@ -53,14 +86,14 @@ export function sourcePath(context) {
 }
 
 /**
- * Whether the linted file is production source: under `src/` of its package, outside `src/__tests__/`.
+ * Whether the linted file is production source: under `src/` of its package or of a `packages/<name>/` folder, outside `src/__tests__/`, and not a test beside its source.
  * @param {Context} context
  * @returns {boolean}
  */
 export function inProductionSource(context) {
-  const relative = sourcePath(context);
+  const relative = sourcePath(context).replace(/^packages\/[^/]+\//, '');
 
-  return relative.startsWith('src/') && !relative.startsWith('src/__tests__/');
+  return relative.startsWith('src/') && !relative.startsWith('src/__tests__/') && !/\.test\.[cm]?[jt]sx?$/.test(relative);
 }
 
 /**

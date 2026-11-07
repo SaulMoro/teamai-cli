@@ -43,7 +43,7 @@ vi.mock('fs-extra', () => ({
   },
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

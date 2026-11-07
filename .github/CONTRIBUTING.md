@@ -77,7 +77,13 @@ src/
   resources/         # per-resource-type handlers (skills, rules, docs, env, ...)
   utils/             # shared helpers (git, fs, logger, prompt, ...)
   *.ts               # top-level command entry points (init, push, pull, ...)
+packages/            # private npm workspace packages, bundled into teamai-cli by tsup
+  <name>/
+    package.json     # "name": "@teamai/<name>", "private": true, "exports": { ".": "./src/index.ts" }
+    src/             # source, with each test beside its file (index.ts, index.test.ts)
 ```
+
+`src/` imports a package by its name (`import { ... } from '@teamai/<name>'`), never by a relative path, and never imports a `runtime-*` package except `@teamai/runtime-protocol`, which holds the protocol both sides speak; a package never imports `src/`. `teamai/package-boundaries` checks this. A package is not listed in the root `dependencies`: npm links it through `workspaces`, and tsup bundles it.
 
 See [docs/dev/adding-a-provider.md](../docs/dev/adding-a-provider.md) for how to add a new git provider.
 
@@ -101,6 +107,9 @@ Your PR also gets an informational `Code Erosion` report (SlopCodeBench verbosit
 - Prefer async/await over callbacks.
 - Keep commands in `src/*.ts` thin — heavy lifting lives in `src/resources/` or `src/utils/`.
 - Workflow first: a feature that orchestrates AI work ships as a default workflow in `workflows/`, which a team can replace. Put what a team may change in that YAML, keep only invariants in code, and make its command a shortcut that starts the workflow. Add no new CLI command when an existing one can take an option (see AGENTS.md).
+- Shortcut on the default driver: a feature command starts its default workflow on the driver `workflows.driver` names, local when unset, and adds no `--driver` flag.
+- No AI call outside a workflow: only drivers launch AI tools, so a feature asks one through an `answer` or `prompt` step. `teamai/launch-through-workflows` enforces it in `npm run lint`.
+- Judgment goes through scorers: anything that judges AI work is a scorer judged by `teamai-score`. A rubric teamai ships is a default scorer in `scorers/`, which a team can replace; code keeps only its contract (see AGENTS.md).
 - Compose workflows: reuse an existing workflow as a `workflow:` step rather than copying its steps, and write a new one so another workflow can run it as a step, with inputs and outputs that say what it takes and gives.
 - Avoid narrating comments ("// increment counter"). Comments should explain _why_, not _what_; `teamai/no-low-value-comments` rejects one that only repeats the name below it.
 
@@ -146,7 +155,7 @@ npx vitest run src/__tests__/delivered-copies.test.ts
 
 It does not need a new E2E file for every command. Keep E2Es for real CLI behavior such as persisted state, providers, hooks, and worktree isolation.
 
-Documentation generators and Markdown checks live in `scripts/`. Check mode runs in `npm run lint`. After changing CLI help or `src/tools.ts`, regenerate the command reference and both tool-support pages:
+Documentation generators and Markdown checks live in `scripts/`. Check mode runs in `npm run lint`. After changing CLI help or `src/tools.ts`, regenerate the command reference, both tool-support pages and the tool ids `teamai/tool-facts` reads (`oxlint-plugin-teamai/tool-ids.generated.json`):
 
 ```bash
 node scripts/check-docs.mjs --write

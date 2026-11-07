@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as envExec from '../env-exec.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { AgentSession } from '../session-flow/agent-session.js';
-import type { Session } from '../session-flow/ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 import { SyncManager, defaultSyncMeta, getRepoIdentity } from '../session-flow/sync.js';
 import { getDataHome, getReportsDir, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { log } from '../utils/logger.js';
@@ -125,11 +125,13 @@ ${fields}`;
 
   /** The prompt every tool receives for `text`, with the result instruction the adapter adds. */
   const prompt = (text: string) => expect.stringMatching(new RegExp(`^${text.replaceAll('.', '\\.')}\\n\\nWrite the workflow result as JSON to .+result\\.json\\. Use this shape`, 's'));
+  /** Claude's allow rule for the result file, and only it. */
+  const resultGrant = expect.stringMatching(/^--allowedTools=Edit\(\/.+\/out\/result\.json\)$/);
 
   it('launches claude with --model and --effort of the alias for claude', async () => {
     const { argv, run } = await runOn('claude', oneStep('    model: strong\n'));
 
-    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'opus', '--effort', 'high']]);
+    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'opus', '--effort', 'high']]);
     expect(run.steps[0]).toMatchObject({
       status: 'succeeded',
       model: 'claude-opus-4-1-20250805',
@@ -157,7 +159,7 @@ Follow the review checklist.
 `;
     const claude = await runOn('claude', oneStep('    agent: reviewer\n    model: strong\n'), { agents: { reviewer } });
 
-    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--agent', 'reviewer', '--model', 'opus', '--effort', 'high']]);
+    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer', '--model', 'opus', '--effort', 'high']]);
     expect(fs.readFileSync(path.join(claude.workspace, '.claude', 'agents', 'reviewer.md'), 'utf8')).toBe(reviewer);
     expect(claude.run.steps[0]).toMatchObject({
       status: 'succeeded',
@@ -180,14 +182,14 @@ model_reasoning_effort = "low"
     const claude = await runOn('claude', oneStep('    model: claude-opus-4.1\n'));
     const opencode = await runOn('opencode', oneStep('    model: anthropic/claude-sonnet\n'));
 
-    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'claude-opus-4.1']]);
+    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'claude-opus-4.1']]);
     expect(opencode.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
   });
 
   it('passes an exact model and effort as written, never through an alias of the same name', async () => {
     const { argv, run } = await runOn('claude', oneStep('    model: { name: strong, effort: max }\n'));
 
-    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'strong', '--effort', 'max']]);
+    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'strong', '--effort', 'max']]);
     expect(run.steps[0]).toMatchObject({ status: 'succeeded', agent: { model: { requested: 'strong' }, effort: { requested: 'max' } } });
     expect(run.steps[0]).not.toMatchObject({ agent: { model: { alias: expect.anything() } } });
   });
@@ -266,7 +268,7 @@ model = "gpt-5.4"
 ` } });
     const opencode = await runOn('opencode', oneStep(''));
 
-    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--agent', 'reviewer']]);
+    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer']]);
     expect(codex.argv).toEqual([['exec', '--json', '--model', 'gpt-5.4', prompt('Follow the review checklist.\n\nReview this project.')]]);
     expect(opencode.argv).toEqual([['run', '--format', 'json', prompt('Review this project.')]]);
   });
@@ -298,10 +300,10 @@ steps:
     } });
 
     expect(argv).toEqual([
-      ['-p', prompt('Plan it.'), '--output-format', 'stream-json', '--verbose', '--model', 'haiku'],
-      ['-p', prompt('Help with it.'), '--output-format', 'stream-json', '--verbose', '--agent', 'helper', '--model', 'haiku'],
-      ['-p', prompt('Review it.'), '--output-format', 'stream-json', '--verbose', '--agent', 'reviewer'],
-      ['-p', prompt('Summarize it.'), '--output-format', 'stream-json', '--verbose', '--model', 'opus', '--effort', 'high'],
+      ['-p', prompt('Plan it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'haiku'],
+      ['-p', prompt('Help with it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'helper', '--model', 'haiku'],
+      ['-p', prompt('Review it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer'],
+      ['-p', prompt('Summarize it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'opus', '--effort', 'high'],
     ]);
   });
 
@@ -459,6 +461,36 @@ steps:
     expect(question).toHaveBeenCalledTimes(2);
     const run = await readRun(config, runId);
     expect(typeof run === 'object' && run.steps[0]?.answer).toMatchObject({ choice: 'yes', note: 'Keep the flag', channel: 'tty', agent: false });
+  });
+
+  it('counts the timeout of a step waiting for the checkout from the answer to a question asked meanwhile', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Answer while a step waits for the checkout.
+steps:
+  - id: first
+    command: node -e "setTimeout(() => {}, 3000)"
+  - id: second
+    needs: []
+    timeout: 1s
+    command: echo second
+  - id: go
+    needs: []
+    approve: Go on?
+    command: echo go
+`);
+    config.workflows!.max_parallel = 2;
+    onTestFinished(() => _setDriverPollMs(20));
+    const question = vi.fn(async () => {
+      _setDriverPollMs(10_000);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return 'yes';
+    });
+    const result = await runLocalDriver(config, runId, workspace, { hitl: true, question });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'second')).toMatchObject({ status: 'succeeded' });
+    expect(result).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(question).toHaveBeenCalledTimes(1);
   });
 
   it('aborts a question when another process answers its HITL request', async () => {
@@ -704,7 +736,7 @@ steps:
     vi.unstubAllEnvs();
     const attempts = path.join(getDataHome(config), 'workflows', 'runs', runId, 'attempts');
     const [attempt] = fs.readdirSync(attempts);
-    const kept = fs.readFileSync(path.join(attempts, attempt ?? '', 'result.json'), 'utf8');
+    const kept = fs.readFileSync(path.join(attempts, attempt ?? '', 'out', 'result.json'), 'utf8');
     expect(kept).toContain('<REDACTED:DEPLOY_TOKEN>');
     expect(kept).not.toContain('deploy-secret-value-1082');
   });
@@ -794,7 +826,7 @@ steps:
 
   function keptResult(config: LocalConfig, runId: string): string {
     const attempts = path.join(getDataHome(config), 'workflows', 'runs', runId, 'attempts');
-    return fs.readdirSync(attempts).map((attempt) => fs.readFileSync(path.join(attempts, attempt, 'result.json'), 'utf8')).join('\n');
+    return fs.readdirSync(attempts).map((attempt) => fs.readFileSync(path.join(attempts, attempt, 'out', 'result.json'), 'utf8')).join('\n');
   }
 
   it('masks a result file that is not valid JSON', async () => {
@@ -829,9 +861,9 @@ steps:
     vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value-1082');
     let ran = false;
     const snapshot = worktreeSnapshot.snapshotWorktree;
-    vi.spyOn(worktreeSnapshot, 'snapshotWorktree').mockImplementation(async (dir) => {
+    vi.spyOn(worktreeSnapshot, 'snapshotWorktree').mockImplementation(async (dir, run) => {
       if (ran) throw new Error('snapshot failed');
-      return snapshot(dir);
+      return snapshot(dir, run);
     });
     const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn<LocalToolAdapter['run']>(async (_tool, input) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });
@@ -1041,6 +1073,30 @@ steps:
   expect(question).toHaveBeenCalledTimes(2);
 });
 
+
+it('asks a waiting approval while every other ready step is held back, then stops busy on the held step', async () => {
+  const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Ship while the fetch is held back.
+steps:
+  - id: fetch
+    command: echo fetched
+    requires: { network: true }
+  - id: ship
+    needs: []
+    approve: { message: Ship it?, required: true }
+    command: echo shipped
+`);
+  config.workflows = { ...config.workflows, tools: {}, allow: { network: false } };
+  const asked: string[] = [];
+  const question = async (hitl: { step: string }): Promise<string> => { asked.push(hitl.step); return 'yes'; };
+
+  const ended = await runLocalDriver(config, runId, workspace, { hitl: true, question });
+
+  expect(asked).toEqual(['ship']);
+  expect(ended).toMatchObject({ error: { code: 'busy' } });
+  expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'fetch', status: 'pending' }, { id: 'ship', status: 'succeeded' }] });
+});
 
 it('asks HITL only after a held interactive tool has run', async () => {
   const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1

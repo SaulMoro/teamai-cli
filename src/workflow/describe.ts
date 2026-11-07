@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sameEnvName } from '../resources/env-key.js';
-import { mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type InEffect, type Missing, type Setup } from './requirements.js';
+import { DefaultWorkflows } from '../default-workflows.js';
+import { isPinnedToHost, mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type InEffect, type Missing, type Setup } from './requirements.js';
 import { stepWorkflow, workflowRunBy, type Invoke, type OutputSchema, type WorkflowDefinition, type WorkflowSource, type WorkflowStep } from './types.js';
 import { confinedOf, copyOf, isRunLevel, levelsInside, opensCopy, roleLevelOf, runLevels, runsInCheckout, writesBranch, writtenRole, type RoleLevel } from './workspace.js';
 
@@ -39,7 +40,7 @@ function guardsOf(step: WorkflowStep, steps: WorkflowStep[], prefix: string): Ga
 
   if (step.interactive) return { kind: 'interactive' };
 
-  if (step.prompt !== undefined || step.promptFile !== undefined) return { kind: 'prompt' };
+  if (step.prompt !== undefined || step.promptFile !== undefined || step.answer !== undefined) return { kind: 'prompt' };
   const child = stepWorkflow(step);
 
   if (child) return child.kind === 'named' ? { kind: 'workflow', name: child.name } : { kind: 'workflow' };
@@ -96,7 +97,8 @@ export interface WorkflowDescription {
      * Each step that runs a command or a prompt, by path, with what the machine that runs it needs: the `requires.env`
      * keys of the step and its setup, and the agent and `tool` of a prompt step, from which the driver picks its tool.
      */
-    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; agent?: string; tool?: string }>;
+    /** `answer`: the step is an answer step, which the local driver runs on the member's AI tool rather than a workflow tool. */
+    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; agent?: string; tool?: string; answer?: true }>;
     /** Steps the describing driver is held from, by path, with what it lacks, and the `requires.env` keys they need. */
     held: Array<{ step: string; missing: Missing[]; env: string[] }>;
     localRoute?: LocalRoute;
@@ -110,6 +112,8 @@ type Gate = Facts['gates'][number];
 /** What the steps of one workflow in the tree run under, as the engine's scopes give it. */
 interface Scope {
   prefix: string;
+  /** The workflow its steps belong to, as the engine's scope names it: an inline workflow's is the one around it. */
+  workflow: string;
   requires: InEffect;
   budgeted: boolean;
   setup?: Setup;
@@ -130,8 +134,8 @@ type CopyOpener = { kind: 'run' } | { kind: 'step'; path: string };
 
 /**
  * Describes `definition`, which runs the workflows in `workflows` by name, for a driver that declares `can`, under the
- * member's `allow` and this machine's `env`. A `for_each` with no `max_parallel` counts as `ceiling` wide, and so does a
- * run wider than it.
+ * member's `allow` and this machine's `env`. A `for_each` with no `max_parallel`, or a template one its inputs decide at
+ * start, counts as `ceiling` wide, and so does a run wider than it.
  */
 export function describeWorkflow(input: {
   definition: WorkflowDefinition; source: WorkflowSource; workflows: Record<string, WorkflowDefinition>; ceiling: number; can: DriverCan; allow: Allow; env: EnvFacts; base?: string;
@@ -168,7 +172,7 @@ export function describeWorkflow(input: {
 
   /** As the engine's `offerTerms` asks `negotiate`, so describe holds exactly what `next` would hold. */
   const offer = (step: WorkflowStep, path: string, scope: Scope): void => {
-    const hasContract = !runsInCheckout(step, scope.around.map((level) => level.step));
+    const hasContract = step.answer === undefined && !runsInCheckout(step, scope.around.map((level) => level.step));
     const requires = mergeRequirements(scope.requires, step.requires);
     const executor = step.command !== undefined ? 'command' : 'prompt';
     // The role of the copy it runs in, as the engine's `stepRoleOf` finds it; a role template stands for its item's role.
@@ -180,6 +184,8 @@ export function describeWorkflow(input: {
     if (executor === 'prompt' && step.agent !== undefined) run.agent = step.agent;
 
     if (executor === 'prompt' && step.tool !== undefined) run.tool = step.tool;
+
+    if (step.answer !== undefined) run.answer = true;
     facts.runs.push(run);
 
     const negotiation = negotiate({
@@ -190,6 +196,8 @@ export function describeWorkflow(input: {
       maxTurns: step.maxTurns, setup: hasContract ? scope.setup : undefined,
       tool: step.tool,
       unattended: step.permissions === 'unattended',
+      answer: step.answer !== undefined,
+      pinned: isPinnedToHost({ executor, answer: step.answer !== undefined, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, publishes: step.deliver === 'publish' }),
     }, can, allow, env);
 
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
@@ -245,9 +253,9 @@ export function describeWorkflow(input: {
         }
       }
 
-      if (!child && step.end === undefined && !runsInCheckout(step, scope.around.map((level) => level.step))) facts.inWorkspace.push(path);
+      if (!child && step.end === undefined && step.answer === undefined && !runsInCheckout(step, scope.around.map((level) => level.step))) facts.inWorkspace.push(path);
 
-      if (step.prompt !== undefined || step.promptFile !== undefined) facts.prompts.push(path);
+      if (step.prompt !== undefined || step.promptFile !== undefined || step.answer !== undefined) facts.prompts.push(path);
 
       if (step.interactive) facts.interactive.push(path);
 
@@ -283,6 +291,7 @@ export function describeWorkflow(input: {
         const placed = around.at(-1)?.step;
         own = visit(child.steps, {
           prefix: `${path}.`,
+          workflow: named?.name ?? scope.workflow,
           requires: mergeRequirements(scope.requires, step.requires, named?.defaults?.requires),
           budgeted: scope.budgeted || step.budget !== undefined || named?.budget !== undefined,
           setup,
@@ -291,7 +300,7 @@ export function describeWorkflow(input: {
           around,
           defaultRole,
         });
-      } else if (step.command !== undefined || step.prompt !== undefined || step.promptFile !== undefined) {
+      } else if (step.command !== undefined || step.prompt !== undefined || step.promptFile !== undefined || step.answer !== undefined) {
         own = 1;
         offer(step, path, scope);
       } else if (stepWorkflow(step)?.kind === 'from') {
@@ -309,14 +318,16 @@ export function describeWorkflow(input: {
 
       const level = Math.max(-1, ...(step.needs ?? []).map((need) => levels.get(need) ?? -1)) + 1;
       levels.set(step.id, level);
-      widths[level] = (widths[level] ?? 0) + (step.forEach ? (step.forEach.maxParallel ?? ceiling) * own : own);
+      const declared = step.forEach?.maxParallel;
+      const itemWidth = declared === undefined || declared instanceof Object ? ceiling : declared;
+      widths[level] = (widths[level] ?? 0) + (step.forEach ? itemWidth * own : own);
     }
 
     return Math.max(0, ...widths.map((width) => width ?? 0));
   };
 
   const top: Scope = {
-    prefix: '', requires: mergeRequirements(definition.defaults?.requires), budgeted: definition.budget !== undefined,
+    prefix: '', workflow: definition.name, requires: mergeRequirements(definition.defaults?.requires), budgeted: definition.budget !== undefined,
     setup: definition.setup,
     defaultModel: definition.defaults?.model,
     around: runLevels(definition).map((step) => roleLevelOf(step, definition.defaults?.role)),

@@ -63,7 +63,7 @@ The Workflow Runs page has three lists for the selected workspace. **Local runs*
 
 On the install that offered a run, the next step is `teamai workflow resume <run>` instead, which takes it back there. A local run that is offered, or that another install now holds, says so under its status. **A runner needs** (**Their machine needs** on a run that needs a person) lists the `requires.env` keys and prompt steps of the steps left: set those up on the runner, as [its job](workflow.md#take-offered-runs-from-ci) does. **Not on this machine** is what this machine lacks of them, as `teamai workflow resume` lists it as `cannot run here`. The status line counts the offered runs and the ones that need a person. The page claims nothing: the command runs a driver on the machine that takes the run.
 
-The page shows what a run record publishes, plus each step's live status and the options of a waiting HITL request. Inputs, `for_each` items, outputs, prompts, HITL messages, and local paths stay in the run file. Read a HITL question where the run's driver asks it. A run's details show what each pass delivered: the commits on its branch, the pull request delivered for it, and the learnings `teamai contribute` recorded inside its attempt. Each pass names its harness, such as `claude · claude-sonnet-5-5 · review step role · 3bb7751`. A pass whose harness differs from the previous pass of its step says what changed, such as `model changed: claude-sonnet-5-5 → claude-opus-5-5` under `review` pass 2. A skipped step of a run on this machine shows why under its status, such as `Step "label" was skipped: its if is false: steps.check.outcome == 'failed'` or `Step "ship" was skipped: it needs "test", which failed.` Each pass's scores show the label, its score, and what decided it: `Judge`, `Scorer check`, `Pull request CI`, `Protected paths` or `Hand label`, such as `delivered: partial · score 0.5  Pull request CI`. The run's judge count counts each judge label, a batch's tokens once, and each failed judge attempt with the tokens it spent, and leaves out the labels a stage decided. The **Branches** of a settled local run show what happened to its [branches](workflow.md#the-branches-a-run-leaves): for a run that succeeded, the ones it kept and why (`Pull request`, `Final copy`), the ones it deleted, and any it could not delete, which `teamai doctor --fix` tries again. For a failed or cancelled run, they list the branches kept for inspection, and from when `doctor --fix` removes them under `workflows.retention`, with the file that set it. The details of a [benchmark](benchmarks.md) run that ended show its results, usage and task × arm tables, as the CLI prints them.
+The page shows what a run record publishes, plus each step's live status and the options of a waiting HITL request. Inputs, `for_each` items, outputs, prompts, HITL messages, and local paths stay in the run file. Read a HITL question where the run's driver asks it. A run's details show what each pass delivered: the commits on its branch, the pull request delivered for it, and the learnings `teamai contribute` recorded inside its attempt. Each pass names its harness, such as `claude · claude-sonnet-5-5 · review step role · 3bb7751`. A pass whose harness differs from the previous pass of its step says what changed, such as `model changed: claude-sonnet-5-5 → claude-opus-5-5` under `review` pass 2. A skipped step of a run on this machine shows why under its status, such as `Step "label" was skipped: its if is false: steps.check.outcome == 'failed'` or `Step "ship" was skipped: it needs "test", which failed.` Each pass's scores show the label, its score, and what decided it: `Judge`, `Scorer check`, `Pull request CI`, `Protected paths` or `Hand label`, such as `delivered: partial · score 0.5  Pull request CI`. The run's judge count counts each judge label, a batch's tokens once, and each failed judge attempt with the tokens it spent, and leaves out the labels a stage decided. The **Branches** of a settled local run show what happened to its [branches](workflow.md#the-branches-a-run-leaves): for a run that succeeded, the ones it kept and why (`Pull request`, `Final copy`), the ones it deleted, and any it could not delete, which `teamai doctor --fix` tries again. For a failed or cancelled run, they list the branches kept for inspection, and from when `doctor --fix` removes them under `workflows.retention`, with the file that set it. The details of a [benchmark](benchmarks.md) run that ended show its results, usage and task × arm tables, as the CLI prints them. A local run's details also show, under a step that ran on a [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes), the runtime, its handle and what the runtime shows of the place, such as a link that opens it; the attempt holding the Codex login a step waits for; which steps each runtime of the driver held back and why; and, beside a waiting HITL request, the `teamai workflow respond` command that answers it from a terminal.
 
 On a local run, a pass this machine judges also lists each scorer that has no label, and why:
 
@@ -375,6 +375,8 @@ teamai session push --source codebuddy                     # --all: every worksp
 teamai session push --session <id> --source claude-code    # exactly that session, scrubbed
 teamai session pull
 teamai session list                                        # --all: every project
+teamai session list --finished --all                       # sessions to share learnings from; --within 3d
+teamai session show <id> --source hermes                   # one of them, redacted
 teamai session search <query>
 teamai session resume <name> --platform claude-code
 ```
@@ -384,6 +386,26 @@ A migration never overwrites. If the target workspace already has a copy of the 
 For a script, `migrate <sessionId> -s <tool> -t <tool> --json` prints one line on stdout, the same `{ "data": ... }` or `{ "error": { "code", "message" } }` shape as `teamai workflow`; progress goes to stderr. `data` has the target `sessionId`, `cwd`, `reused`, and the `fidelity` report. `error.code` names the failure, such as `no_adapter` (unknown tool), `tool_unavailable` (the source or target tool is not installed, or its CLI cannot run), `not_found`, or `unreadable`, and the exit code is 1. `--json` never prompts: a missing id, `-s`, or `-t` fails with `prompt_refused`, and `--push` needs `-y` or `--scrub`.
 
 `--dry-run` previews. `--scrub` redacts before an archive; without it, an interactive run asks and a script needs `-y`. `--all` confirms above 10 sessions (push: 5). `push --session <id>` pushes exactly that session of `--source`, from any workspace, always scrubbed and without a prompt. Archives go to `sessions/repos/<repo>/<author>/` on the team repo's `teamai-reports` branch, under the session's own git remote, or `_unattributed`. A session that a workflow step ran in its own worktree goes under the repository of the checkout that the worktree came from.
+
+### Read a finished session
+
+`session list --finished --all` lists the sessions of every tool that finished on this machine in the last 7 days (`--within 3d` for fewer), leaving out the ones a learning was already contributed from, whatever the [session policies](sharing.md#sessions) say. `session show` prints one, your own or another, redacted the way a judge reads it. Both read SQLite stores such as Hermes's too; reading those needs the `sqlite3` CLI.
+
+```console
+$ teamai session list --finished --all
+  7c1e5a2b-0000-4000-8000-00000000c001  claude-code  2026-11-05T05:57:02.000Z  Rename the config loader; the deploy key is <REDACTED:anthropic>
+  20261104_091523_c1c2c3d4  hermes  2026-11-05T05:57:02.000Z  Why does the pod restart before it is ready
+
+$ teamai session show 20261104_091523_c1c2c3d4 --source hermes
+### user
+Why does the pod restart before it is ready
+
+
+### assistant
+The readiness probe fires before the cache warms up; raise initialDelaySeconds to 20.
+```
+
+With `--json`, `list --finished --all` prints `{"list":[{"session","source","ended","prompt"}]}` and `show` prints `{"session","source","transcript"}`. A session `show` cannot find exits 1 with `{"error":{"code":"session_not_found","message":…}}`. The default workflow [`teamai-share-learnings-from-sessions`](workflow.md#teamai-share-learnings-from-sessions) offers these sessions one by one.
 
 ### What a scrubbed session keeps
 

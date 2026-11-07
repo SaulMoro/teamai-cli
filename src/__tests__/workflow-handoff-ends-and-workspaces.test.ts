@@ -15,7 +15,7 @@ import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun, retryStep } from '../workflow/run-controls.js';
 import { readRun, runLockPath } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
-import { markReadCopy, worktreePath } from '../workflow/worktree.js';
+import { git as workflowGit, markReadCopy, worktreePath } from '../workflow/worktree.js';
 import { knownSecrets } from '../env-resolution.js';
 import { BUILD, cacheFiles, COPY, creates, deleteRunBranches, DELIVERED_STACK, deliveringStack, dirs, editRun, git, hasCommit, holdBasePin, Member, openPull, originFile, originRef, PACKAGE_VERSION, PAIR, pull, pushCommitTo, receiveHook, runStep, settle, SHIP, STACK, start, startIn, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
 
@@ -918,7 +918,7 @@ steps:
     ['is not on its branch', (dir: string) => git(dir, 'checkout', '-q', '--detach')],
     ['a reader left and is not back', async (dir: string, branch: string) => {
       fs.writeFileSync(path.join(dir, 'stray.txt'), 'stray\n');
-      await markReadCopy(dir, { branch, step: 'change.read' });
+      await markReadCopy(dir, { branch, step: 'change.read' }, workflowGit);
       fs.rmSync(path.join(dir, 'stray.txt'));
     }],
   ])('refuses to continue a copy it took back that %s, and leaves it as it is', async (_name, change) => {

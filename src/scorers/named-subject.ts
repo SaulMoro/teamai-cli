@@ -8,7 +8,7 @@ import { safeText } from '../session-flow/session-cmd-shared.js';
 import { firstPrompt } from '../session-flow/session-work.js';
 import type { LocalConfig } from '../types.js';
 import { log } from '../utils/logger.js';
-import { redact } from '../utils/redact.js';
+import { redact } from '@teamai/shared/redact';
 import { judgeablePasses } from '../workflow/judge-work.js';
 import { findRunConfig } from '../workflow/run-location.js';
 import { stepDefinitions } from '../workflow/scope.js';
@@ -21,7 +21,7 @@ import { scoringUnavailable } from './home.js';
 import { pinnedDefinition, type PinnedScorer } from './pin.js';
 import { missingEvidence } from './scoring-evidence.js';
 import { scopeScoring } from './settings.js';
-import { isRoutingScorer } from './skill-routing.js';
+import { GeneratedQuestions } from './generated-questions.js';
 import type { Subject } from './subject.js';
 
 type Refusal = { ok: false; code: string; message: string };
@@ -115,7 +115,7 @@ async function ofPass(current: LocalConfig | undefined, named: NamedPass): Promi
   if (!chosen.ok) return chosen;
   const { step, pass } = chosen;
   const subject = { runId: run.id, step, pass };
-  const missing = await missingEvidence(run, subject);
+  const missing = await missingEvidence(config, run, subject);
 
   if (missing.length > 0) {
     return refused('evidence_missing', `Pass ${pass} of step ${step} in run ${run.id} cannot be scored: no longer on this machine: ${missing.join('; ')}. Restore what is missing, or score another pass. No label was written.`);
@@ -161,7 +161,7 @@ function definitionsOf(scorers: readonly string[], pins: Readonly<Record<string,
 
 /**
  * The session `demand` names, on this machine or pushed by a member, in the scope its labels are kept in, with each
- * named scorer cached there. A hand label must be one of its scorer's values. Says which session it is and its first
+ * named scorer cached there; a scorer file is read by the run that tries it. A hand label must be one of its scorer's values. Says which session it is and its first
  * prompt, redacted, as the person reads before a label is written.
  */
 async function ofSession(from: LocalConfig, demand: SessionDemand): Promise<({ ok: true } & NamedSubject) | Refusal> {
@@ -175,7 +175,7 @@ async function ofSession(from: LocalConfig, demand: SessionDemand): Promise<({ o
   const unready = await scoringRefusal(config);
 
   if (unready) return unready;
-  const teamScorers = demand.scorers.filter((name) => !isRoutingScorer(name));
+  const teamScorers = demand.scorers.filter((name) => !GeneratedQuestions.isGenerated(name) && !isScorerFile(name));
   const pinned = definitionsOf(teamScorers, await pinScorers(config, teamScorers));
 
   if (!pinned.ok) return notCached(config, pinned.unpinned);

@@ -81,10 +81,10 @@ export function resolveRunMode(env: NodeJS.ProcessEnv): RunMode {
 export const ATTEMPT_ENV = 'TEAMAI_WORKFLOW_ATTEMPT';
 
 /**
- * The variable every process of a step gets: a directory of the root run under the data home, which its steps share,
- * sub-workflows included, and which the engine removes when the run ends.
+ * The variable every process of a run with no `teamai init` gets: the config file the run built for itself, which
+ * config detection reads in place of any config the process's directory has (`readEphemeralConfig` in `config.ts`).
  */
-export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
+export const EPHEMERAL_CONFIG_ENV = 'TEAMAI_EPHEMERAL_CONFIG';
 
 /** The variable that names who launched a tool's session: `workflow` for a step, `confined` for a run confined to a directory, or the {@link LaunchedBy} caller of one of teamai's own AI calls. */
 export const LAUNCHED_BY_ENV = 'TEAMAI_LAUNCHED_BY';
@@ -134,9 +134,7 @@ export const readSessionRun = ForwardedSessionRunSchema.parse;
  * Who in teamai launched a tool's session, as `TEAMAI_LAUNCHED_BY` carries it: a workflow step, a run confined to a directory, or the
  * module whose AI call started it.
  */
-export type LaunchedBy =
-  | 'workflow' | 'confined'
-  | 'codebase' | 'deep-enrich' | 'enrich-with-ai' | 'import-local' | 'iwiki-dual' | 'import-mr' | 'recall-promote' | 'quality-update' | 'votes-judge';
+export type LaunchedBy = 'workflow' | 'confined' | 'answer';
 
 /** A tool launched by a workflow step, in the checkout whose pull record has key `checkout`. */
 export type Launch = { by: 'workflow'; tool: string; checkout: string };

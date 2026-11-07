@@ -73,7 +73,7 @@ import {
 } from './builtin-skills.js';
 import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, workspaceHooksOf, writesOf, type Location } from './locate.js';
 import { toolHome, toolHomesAcrossProfiles } from './tool-home.js';
-import { channelsOf, hookFormatOf, hookSyntaxOf, isToolId, TOOLS } from './tools.js';
+import { channelsOf, hookFormatOf, hookSyntaxOf, isToolId, descriptorOf } from './tool-registry.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { allowsSkillDirectory, CODEX_TOOL, describeOutsideSkillLink, describeSkillDirectoryBlock, findSkillDirectoryBlock, skillOrigin } from './resources/skills.js';
 import { describeKeptDir, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';
@@ -3191,7 +3191,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     for (const line of [...plan.keptSkillDirs, ...plan.keptFiles]) log.warn(line);
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
-      && ((isToolId(agentKey) && TOOLS[agentKey].projectFromHome) || plan.sharedRetentionOnly);
+      && ((isToolId(agentKey) && descriptorOf(agentKey).projectFromHome) || plan.sharedRetentionOnly);
 
     if (isPlanEmpty(plan) && !exclusionOnly) {
       log.info('Nothing to uninstall');

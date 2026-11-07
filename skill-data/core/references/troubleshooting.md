@@ -231,6 +231,10 @@ For new HTTP local-agent MCP installs, a failed initial ownership-manifest write
   installed for it before stays, in the place the workspace's rules give it. Tell the user to make the two copies equal in the team repo or
   rename one. Each repo still receives its own copy.
 
+## `tool_not_accepted`: a team tool's command did not run
+
+The step's tool is a team instance (`tools/<name>.yaml` in the team repo) that sets `command`, and no one accepted that file on this machine. An agent cannot accept it: tell the person to run the same `teamai workflow start …` once in their own terminal, read the file it names, and answer `y`. An edit to the file asks again.
+
 ## Permission / access denied
 
 `init`, `pull`, or `push` failing with a permission error usually means the user
@@ -384,9 +388,13 @@ each session.
 A recalled doc is upvoted once per session when the session that ran the recall
 opens it within 24 hours: a file read, a reader command (`cat`, `sed -n`, …), or
 a search whose output shows its lines. Listing the doc does not count, and
-neither does working from the recall subagent's summary alone; only the opt-in
-judge (`TEAMAI_UPVOTE_JUDGE=1`) credits that. For Codex, Muse and ZCode it uses the Stop payload's final reply and this session's settled recall log; a Claude transcript is not required. `teamai stats` shows each recent
-session's runs, recalled docs and adopted docs. Per agent:
+neither does working from the recall subagent's summary alone; with
+`recall_adoption: true` (team `scorers/scoring.yaml` or the member's
+`scoring` in `config.yaml`), the finished session's adoption question credits
+that instead, once `teamai-score` judges the session. `TEAMAI_UPVOTE_JUDGE=1`
+reads as that member setting and no longer runs a Stop hook judge.
+`teamai stats` shows each recent session's runs, recalled docs and adopted
+docs. Per agent:
 
 - **Claude Code, Codex (0.134+), CodeBuddy (2.103.1+), WorkBuddy, Qoder,
   OpenCode, OMP**: both a recall the main agent runs and one the

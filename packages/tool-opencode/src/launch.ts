@@ -1,0 +1,35 @@
+import { z } from 'zod';
+import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { readToolMetadata } from '@teamai/tool-core/stdout';
+
+
+const OpenCodeEvent = z.union([
+  z.object({ type: z.literal('text'), part: z.object({ text: z.string() }) }),
+  z.object({ type: z.literal('error'), error: z.object({ message: z.string() }) }),
+]);
+
+/** OpenCode prints the answer as `text` parts and an error as an `error` event; `step_finish` carries the tokens. */
+function readOpenCodeRun({ stdout }: CallOutput): CallReading {
+  const events = jsonLines(stdout).flatMap((line) => {
+    const parsed = OpenCodeEvent.safeParse(line);
+
+    return parsed.success ? [parsed.data] : [];
+  });
+
+  const error = events.flatMap((event) => event.type === 'error' ? [event.error.message] : []).at(-1);
+  const text = events.flatMap((event) => event.type === 'text' ? [event.part.text] : []).join('\n').trim();
+
+  if (error !== undefined || !text) return failed(error);
+
+  return answered(text, readToolMetadata(stdout)?.tokens);
+}
+
+/** How teamai launches OpenCode headless. */
+export const launch = {
+  opencode: {
+    call: { evidence: 'verified', prompt: 'stdin', args: () => ['run', '--format', 'json'], read: readOpenCodeRun },
+    // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
+    step: { evidence: 'verified', unattended: { args: ['--auto'], evidence: 'docs' } },
+    confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
+  },
+} as const satisfies Record<string, LaunchAdapter>;

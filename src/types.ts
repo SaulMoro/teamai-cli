@@ -1,32 +1,21 @@
 import { z } from 'zod';
+import type { TokenSnapshotScope, TokenUsage } from '@teamai/tool-core/tokens';
+import { isJsonObject, JsonValueSchema, type JsonObject } from '@teamai/tool-core/json';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getUserHome, expandHome } from './utils/home.js';
 import { log } from './utils/logger.js';
 import { parseYaml } from './utils/yaml.js';
-import { channelsOf, type ToolId } from './tools.js';
+import { type ToolId } from './tools.js';
+import { channelsOf } from './tool-registry.js';
 import type { WorkspaceChildren } from './workspace-children.js';
 import type { HeadState } from './utils/git.js';
 import type { RunMode } from './launch-context.js';
 import type { OutcomeKind, SessionUsage, WorkOutcome } from './outcomes.js';
 import { AllowSchema } from './workflow/requirements.js';
 
-/** Any value JSON (or YAML read as JSON) can hold: what arbitrary parsed input is before a domain schema narrows it. */
-export const JsonValueSchema = z.json();
-
-export type JsonValue = z.infer<typeof JsonValueSchema>;
-
-/** A JSON object: a document, or a mapping inside one. */
-export type JsonObject = { [key: string]: JsonValue };
-
-/** A JSON object, parsed: a copy that leaves out `__proto__` keys, so check a file that is written back without it. */
-export const JsonObjectSchema = z.record(z.string(), JsonValueSchema) satisfies z.ZodType<JsonObject>;
-
-/** Whether a JSON value is an object, not an array, a primitive or null: JSON and YAML parse every object as an Object instance. */
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return value instanceof Object && !Array.isArray(value);
-}
+export { isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/tool-core/json';
 
 const COPILOT_USER_MCP_CONFIG = 'mcp-config.json';
 const COPILOT_PROJECT_MCP_CONFIG = '.github/mcp.json';
@@ -880,6 +869,11 @@ export const WorkflowToolSchema = z.string().min(1);
  * separate from install metadata: a workspace/self config overlays them at
  * runtime, but never persists the machine value into its own file.
  */
+/** One `workflows.drivers` entry: options per runtime of that definition, which the runtime validates at `init`. */
+export const DriverTuningSchema = z.object({ runtimes: z.record(z.string(), z.record(z.string(), JsonValueSchema)) }).strict();
+
+export type DriverTuning = z.infer<typeof DriverTuningSchema>;
+
 export const MemberWorkflowSettingsSchema = z.object({
   tools: z.record(z.string(), WorkflowToolSchema).default({}),
   /** How many command steps the local driver runs at once. Unset means 1. */
@@ -894,6 +888,11 @@ export const MemberWorkflowSettingsSchema = z.object({
   retention: z.unknown().optional(),
   /** The driver `teamai score`, `teamai score --drain` and the finished-sessions hook start their runs for. Kept as written; `driveByDefault` reads it. */
   driver: z.unknown().optional(),
+  /**
+   * The member's options for the runtimes of a driver definition, by its canonical name and each runtime's `use`, over
+   * those the definition gives, key by key: `{ sandboxed: { runtimes: { sandbox: { max_parallel: 2 } } } }`.
+   */
+  drivers: z.record(z.string(), DriverTuningSchema).optional(),
 });
 
 export type MemberWorkflowSettings = z.infer<typeof MemberWorkflowSettingsSchema>;
@@ -954,6 +953,18 @@ export const MemberSettingsSchema = z.object({
     sessions: z.unknown().optional(),
     /** How many sessions a local day may lease for judging; 0 turns session scoring off. Another value is kept as its text, which sets nothing. */
     daily_limit: z.union([z.number().int().nonnegative(), z.string()]).optional().catch(({ input }) => JSON.stringify(input)),
+    /**
+     * Ask a finished session's judge one routing question per skill it was delivered, over the team's
+     * `scorers/scoring.yaml`; in ~/.teamai/config.yaml below a workspace or self scope, only false applies. Another value
+     * is kept as its text, which sets nothing.
+     */
+    skill_routing: z.union([z.boolean(), z.string()]).optional().catch(({ input }) => JSON.stringify(input)),
+    /**
+     * Ask a finished session's judge whether it adopted each recalled doc it never opened (#1391), over the team's
+     * `scorers/scoring.yaml`; in ~/.teamai/config.yaml below a workspace or self scope, only false applies. Another value
+     * is kept as its text, which sets nothing.
+     */
+    recall_adoption: z.union([z.boolean(), z.string()]).optional().catch(({ input }) => JSON.stringify(input)),
   }).optional(),
 });
 
@@ -1102,6 +1113,11 @@ export type LocalConfig = z.infer<typeof LocalConfigSchema> & {
    * knowledge (skills, rules, agents, docs, instructions, learnings, wiki); hooks, MCP, env and models stay the member's.
    */
   stepRole?: string;
+  /**
+   * The config file a run with no `teamai init` built for itself in a temporary directory (`EphemeralScope`). Runtime-only:
+   * every process of the run gets it as `TEAMAI_EPHEMERAL_CONFIG` and loads this config, never one from its directory.
+   */
+  ephemeralConfig?: string;
 };
 
 /**
@@ -2130,48 +2146,6 @@ export interface UserInterventionStats {
 //
 
 /**
- * Token usage breakdown for a session/user. Claude Code and CodeBuddy usage is
- * summed per request. Codex uses a thread-level cumulative snapshot when available;
- * legacy rollout-scoped snapshots are summed once per transcript. All fields are
- * cumulative token counts; tools without token records leave these at zero.
- */
-export interface TokenUsage {
-  /** Sum of usage.input_tokens. */
-  input: number;
-  /** Sum of usage.output_tokens. */
-  output: number;
-  /** Sum of usage.cache_read_input_tokens. */
-  cacheRead: number;
-  /** Sum of usage.cache_creation_input_tokens. */
-  cacheCreation: number;
-}
-
-/** Scope of a cumulative token snapshot captured from an agent transcript. */
-export type TokenSnapshotScope = 'session' | 'transcript';
-
-/** A fresh zeroed TokenUsage. */
-export function emptyTokenUsage(): TokenUsage {
-  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-}
-
-/** Grand total of all token buckets (input + output + cache read + cache creation). */
-export function totalTokens(t: TokenUsage | undefined): number {
-  if (!t) return 0;
-
-  return t.input + t.output + t.cacheRead + t.cacheCreation;
-}
-
-/** Add two TokenUsage values field-by-field (does not mutate inputs). */
-export function addTokenUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage {
-  return {
-    input: (a?.input ?? 0) + (b?.input ?? 0),
-    output: (a?.output ?? 0) + (b?.output ?? 0),
-    cacheRead: (a?.cacheRead ?? 0) + (b?.cacheRead ?? 0),
-    cacheCreation: (a?.cacheCreation ?? 0) + (b?.cacheCreation ?? 0),
-  };
-}
-
-/**
  * Per-session rolled-up metrics, derived from the dashboard event log.
  * Used by both the live dashboard (rebuildSessions) and the team-stats reporter.
  */
@@ -2425,8 +2399,6 @@ export const CORRECTION_KEYWORDS = [
   '違う', 'ちがう', 'そうじゃな', 'そうではな', 'やり直', 'やりなおし', '間違って', '間違え', '勝手に', '戻して',
 ];
 
-/** Max bytes to scan from a transcript when counting interventions (guards huge files). */
-export const INTERVENTION_SCAN_MAX_BYTES = 50 * 1024 * 1024;
 
 /** Marker that prefixes a user-interrupt entry in the Claude Code transcript. */
 export const TRANSCRIPT_INTERRUPT_PREFIX = '[Request interrupted by user';
@@ -2739,20 +2711,36 @@ export const UserVotesSchema = z.looseObject({
 
 export type UserVotes = z.infer<typeof UserVotesSchema>;
 
-/** Vote entry with dual counters (V2). */
+/** A counter of a vote entry a teamai before #1391 did not write: absent until a delta first moves it. */
+const OptionalCountSchema = z.number().optional().catch(undefined);
+
+/**
+ * Vote entry with dual counters (V2). `upvoted_count` is every upvote, so any reader keeps reading the total; the
+ * adoption estimator (#1391) also reads which of them a judge gave, how many sessions a judge asked about the doc, and
+ * how many sessions recalled it. A counter a later teamai adds is kept as written.
+ */
 const VoteEntryV2Schema = z.looseObject({
   recalled_count: z.number().catch(0),
   upvoted_count: z.number().catch(0),
   last_recalled_at: z.string().catch(''),
   last_upvoted_at: z.string().optional().catch(undefined),
+  judge_upvoted_count: OptionalCountSchema,
+  judged_count: OptionalCountSchema,
+  recalled_session_count: OptionalCountSchema,
 });
 
 export type VoteEntryV2 = z.infer<typeof VoteEntryV2Schema>;
 
-/** Unsynchronized delta for a single document (V2). */
+/**
+ * Unsynchronized delta for a single document (V2): each `<counter>_delta` moves the entry's `<counter>_count` when it
+ * merges, so a counter a later teamai adds travels too.
+ */
 const VoteDeltaSchema = z.looseObject({
   recalled_delta: z.number().catch(0),
   upvoted_delta: z.number().catch(0),
+  judge_upvoted_delta: OptionalCountSchema,
+  judged_delta: OptionalCountSchema,
+  recalled_session_delta: OptionalCountSchema,
 });
 
 export type VoteDelta = z.infer<typeof VoteDeltaSchema>;
@@ -2828,6 +2816,9 @@ export const UserVotesV2Schema = z.looseObject({
   votes: voteTableSchema(VoteEntryV2Schema).nullish().transform((table) => table ?? {}),
   deltas: VoteDeltasSchema.nullish().transform((table) => table ?? {}),
   upvotedSessions: UpvoteLedgerSchema.optional().catch(undefined),
+  // Each identity shares one atomic write with its counters. `pull` forgets both once the recall log stopped naming the session (forgetSessionIdentities).
+  recalledSessions: z.record(z.string(), VoteIdsSchema).optional(),
+  adoptionCredits: z.record(z.string(), VoteIdsSchema).optional(),
   pendingSync: PendingVoteSyncSchema.optional().catch(undefined),
   deliveredSyncIds: VoteIdsSchema.optional().catch(undefined),
 });
@@ -3123,7 +3114,7 @@ export function detectToolRoot(tool: string, env: NodeJS.ProcessEnv = process.en
  * `CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`. Only
  * the variable can be recorded in `toolRoots` — `XDG_CONFIG_HOME` names a parent
  * directory, and `~/.config` itself is refused as a root — so the fallback is
- * read here, where the write happens, exactly as `session-flow/ide-history.ts`
+ * read here, where the write happens, exactly as `@teamai/tool-core/formats/ide-history`
  * reads it for the Cursor IDE.
  */
 export function cursorConfigDir(toolRoots?: Record<string, string>): string {
@@ -3350,30 +3341,35 @@ export function applyToolRoots(
     const newRoot = toolRootSegment(tool, configured, at);
 
     if (!newRoot) continue;
-    // Every root the tool's paths hang off, not just the first one: a team that
-    // customized `toolPaths.claude` field by field may have spread them over
-    // several. A bare file name (`.claude.json`) is not under a root.
-    const oldRoots = new Set<string>();
-
-    for (const field of TOOL_ROOT_FIELDS) {
-      const value = paths[field];
-
-      if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
-    }
-
-    for (const field of USER_SCOPE_ROOT_FIELDS) {
-      const value = paths.userScope?.[field];
-
-      if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
-    }
-
     // Not skipped when the root is unchanged: a bare file name (the MCP
     // companion) still moves inside it (see relocateToolPaths).
     out ??= { ...toolPaths };
-    out[tool] = relocateToolPaths(paths, oldRoots, newRoot);
+    out[tool] = rerootToolPaths(paths, newRoot);
   }
 
   return out ?? toolPaths;
+}
+
+/** `paths` with every root they hang off moved to `newRoot`, and a bare file name moved inside it (`relocateToolPaths`). */
+export function rerootToolPaths(paths: z.infer<typeof ToolPathsSchema>, newRoot: string): z.infer<typeof ToolPathsSchema> {
+  // Every root the tool's paths hang off, not just the first one: a team that
+  // customized `toolPaths.claude` field by field may have spread them over
+  // several. A bare file name (`.claude.json`) is not under a root.
+  const oldRoots = new Set<string>();
+
+  for (const field of TOOL_ROOT_FIELDS) {
+    const value = paths[field];
+
+    if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
+  }
+
+  for (const field of USER_SCOPE_ROOT_FIELDS) {
+    const value = paths.userScope?.[field];
+
+    if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
+  }
+
+  return relocateToolPaths(paths, oldRoots, newRoot);
 }
 
 /**
@@ -3964,34 +3960,6 @@ export interface MRThread {
 export interface MRFetchOptions {
   /** Read the review threads too (default true). */
   discussions?: boolean;
-  /**
-   * The marker `teamai ci extract-mr --comment-marker` posts its comments
-   * with; those are left out of the threads, as comments with the default
-   * `<!-- teamai:` prefix always are.
-   */
-  commentMarker?: string;
-}
-
-/**
- * AI 对单个候选文件的分类结果。
- */
-export interface ClassifiedItem {
-  /** 源文件路径 */
-  sourcePath: string;
-  /** 原始文件内容（前 3000 字） */
-  rawContent: string;
-  /** 知识类型判断 */
-  type: 'rule' | 'doc' | 'learning';
-  /** AI 建议标题 */
-  title: string;
-  /** AI 生成的摘要 */
-  summary: string;
-  /** AI 建议的 tags */
-  tags: string[];
-  /** 分类置信度 0-1 */
-  confidence: number;
-  /** 是否为个人偏好/环境特定配置（true 则过滤，不导入团队库） */
-  isPersonal: boolean;
 }
 
 /**
@@ -4014,66 +3982,6 @@ export interface CodebaseSuggestion {
   action: 'add' | 'update' | 'noop';
   /** 建议写入的 Markdown 内容 */
   content: string;
-}
-
-/**
- * codebase.md lint 检查的单条问题。
- */
-export interface LintIssue {
-  /** 问题严重程度 */
-  severity: 'high' | 'medium' | 'low';
-  /** 问题类型 */
-  category: 'contradiction' | 'outdated' | 'orphan' | 'missing';
-  /** 问题位置（章节名或行号区间） */
-  location: string;
-  /** 问题描述 */
-  description: string;
-  /** 修复建议 */
-  suggestion: string;
-}
-
-/**
- * lintCodebaseMd 的返回结构，包含所有发现的问题与总体摘要。
- */
-export interface LintReport {
-  /** 所有 lint 问题列表 */
-  issues: LintIssue[];
-  /** 一句话总结 */
-  summary: string;
-}
-
-/**
- * 单条 import 会话条目，记录每个候选项的处理状态。
- */
-export interface ImportSessionItem {
-  /** 条目唯一 ID */
-  id: string;
-  /** 来源文件路径（本地文件导入时） */
-  sourcePath?: string;
-  /** MR URL（MR 导入时） */
-  mrUrl?: string;
-  /** 处理状态 */
-  status: 'pending' | 'accepted' | 'skipped' | 'edited';
-  /** AI 生成的 learning 草稿 */
-  learningDraft?: LearningDraft;
-  /** AI 生成的 codebase 变更建议 */
-  codebaseSuggestions?: CodebaseSuggestion[];
-}
-
-/**
- * import 会话的完整状态，持久化到 ~/.teamai/import-session.json 支持 --resume。
- */
-export interface ImportSession {
-  /** 会话唯一 ID */
-  id: string;
-  /** 创建时间（ISO 8601） */
-  createdAt: string;
-  /** 导入模式 */
-  mode: 'local' | 'mr' | 'dir';
-  /** 所有候选条目 */
-  items: ImportSessionItem[];
-  /** 已处理条目数（用于 --resume 进度恢复） */
-  progress: number;
 }
 
 // ─── Webhook types ──────────────────────────────────────

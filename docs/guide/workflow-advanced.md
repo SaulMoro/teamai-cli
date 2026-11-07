@@ -36,15 +36,17 @@ Each call to `next` does this, in order:
 1. It settles the run. If the run has ended, it answers `done`.
 2. It hands back an open lease of this driver that `running` leaves out. A restarted driver sends `"running":[]` and gets its open leases back, one per call.
 3. It leases the first ready step in file order. The steps of a sub-workflow take the place of the step that runs it. A step that needs a workspace mode `driver.can.workspace` does not list, something else `driver.can` does not declare (see [Requirements and limits](#requirements-and-limits)), or a workspace another driver opened, is held back, and the next ready step is leased.
-4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease. When every ready step is held back, `reason` names each one, separated by `; `, and `held` lists them as `{ step, reason, missing }`. `missing` names what the driver lacks, such as `hitl` or `workspace.new`, and is empty when another driver holds the workspace.
+4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease. When every ready step is held back, `reason` names each one, separated by `; `, and `held` lists them as `{ step, reason, missing }`. `missing` names what the driver lacks, such as `hitl` or `workspace.new`. A workspace hold also lists the gaps that would remain if that workspace were available; when only another driver holds the workspace, `missing` is empty.
 
 A driver that sends no `running` gets its open lease back on every call, so it runs one step at a time.
 
 `"canTakeLease":false` issues no new lease but still returns a waiting HITL request to a driver that declares `driver.can.hitl`. The answer is `done`, an open lease that `running` leaves out, `hitl`, or `wait`. When nothing is leased or waiting at a HITL request, the `wait` reason is `canTakeLease is false`. Use it to learn about an end while the driver has no room for another step. That `wait` does not mean that nothing is left to run, so call `next` again once the driver has room. Step 2 can still hand back an open lease that the driver has no room for, so keep a queue of the leases the driver has not started.
 
+List those in `queued` too, such as one waiting for a busy checkout. The step's own timeout of each then counts from this call, so waiting does not use it up, and the answer's `deadlines` gives each its new deadline, for example `"deadlines":{"a0ce8107f":"2026-05-01T10:12:00.000Z"}`. The clock restarts only on a call that lists the attempt, so keep calling `next` while it waits, and send the same `queued` with each `report` and each `respond --json`, since either can time out a lease whose clock has not restarted lately.
+
 Every `data` answer of `next` has `cancelled`. It lists the attempts in `running` that are no longer open leases of this driver. Stop those processes. An `error` answer has no `cancelled`.
 
-A wrong `running` or `canTakeLease` returns `invalid_json` with `running must be an array of attempt ids` or `canTakeLease must be a boolean`. While one driver holds a lease, another driver gets `wait`, and `reason` names that lease.
+A wrong `running`, `queued` or `canTakeLease` returns `invalid_json` with `running must be an array of attempt ids`, `queued must be an array of attempt ids` or `canTakeLease must be a boolean`. While one driver holds a lease, another driver gets `wait`, and `reason` names that lease.
 
 `report` checks each report against the revision of its own lease, not the run's latest revision. Above, `next` handed out both leases at revision 1. A report for `test` with `"revision":1` moves the run to revision 2. A report for `lint` with `"revision":1` is still accepted and moves it to 3. A report with another revision for an open lease returns `stale_revision`:
 
@@ -71,6 +73,34 @@ With `max_parallel` above 1:
 - On Ctrl-C, or on a SIGTERM, SIGQUIT, or SIGHUP, teamai stops every command, waits for them to exit, and exits with that signal.
 
 With 1, the driver runs one step at a time, and a command runs in your terminal, where Ctrl-C reaches it. A SIGTERM or SIGHUP sent to teamai alone stops the command, waits for it, and exits with that signal.
+
+With `max_parallel` unset, the driver still runs one step at a time, except the items of a `for_each` that declares `max_parallel`: they run side by side, up to that number. No other step starts while they run, and a `for_each` with no `max_parallel` runs its items one at a time. A run that has such a `for_each` runs as with `max_parallel` above 1: commands get no terminal, and Ctrl-C stops them all. Answers and command items with no `workspace` share the checkout and run one at a time, even when the fan-out allows more parallel items. Give an answer `workspace: new` to run the items side by side.
+
+```yaml
+schemaVersion: v1alpha1
+name: summarize-modules
+description: Summarize each module, two at a time, then print the summaries.
+inputs:
+  modules: [string]
+steps:
+  - id: summary
+    for_each: { items: inputs.modules, max_parallel: 2 }
+    answer: "Summarize the module {{ item }} in one line."
+    output: { text: string }
+    workspace: new
+  - id: report
+    needs: [summary]
+    command: 'echo "$SUMMARIES" >&2'
+    env: { SUMMARIES: "{{ steps.summary.results }}" }
+```
+
+```text
+$ teamai workflow start summarize-modules --driver local --inputs '{"modules":["api","cli","web"]}'
+ℹ Run rb7a66009e227f202 started. If it stops before it ends, continue it with: teamai workflow resume rb7a66009e227f202
+{"data":{"done":{"run":"rb7a66009e227f202","outcome":"succeeded","progress":[{"step":"report","lines":["[{\"item\":\"api\",\"outcome\":\"success\",\"outputs\":{\"text\":\"HTTP routes and handlers.\"}},{\"item\":\"cli\",\"outcome\":\"success\",\"outputs\":{\"text\":\"Command parsing and output.\"}},{\"item\":\"web\",\"outcome\":\"success\",\"outputs\":{\"text\":\"The dashboard pages.\"}}]"]}],"record":"published"},"cancelled":[]}}
+```
+
+Each answer reads a worktree of its own, so the tool answers `api` and `cli` at the same time, then `web`; `report` starts once all three are done. Other drivers already run ready steps side by side, so this applies to the local driver only.
 
 When an end cancels a running command, the driver sends SIGTERM to it and the processes it started, then SIGKILL 5 seconds later if any still run. A stopping command keeps its slot until its processes exit.
 
@@ -162,6 +192,34 @@ Each instance reads its item as `item` in `prompt`, `env`, and `with`, and in ev
 
 A driver gets each item as an ordinary lease whose `step` is `build[0]`, `build[1]`, and so on. A driver that lists its open leases in `running` gets the next item while the others run. `max_parallel` limits how many items are leased or running at once. At the limit, `next` hands out no other item until one of them settles.
 
+`max_parallel` can also be a template that reads one number input, so whoever starts the run picks the limit. Pull rejects a template that reads anything else, such as a step's outputs or `item`, or that adds text around the `{{ … }}`.
+
+```yaml
+schemaVersion: v1alpha1
+name: describe-modules
+description: Describe each module, as many at once as the member asks for.
+inputs:
+  modules: [string]
+  concurrency: number
+steps:
+  - id: describe
+    for_each: { items: inputs.modules, max_parallel: "{{ inputs.concurrency }}" }
+    command: 'echo "described $MODULE" >&2'
+    env: { MODULE: "{{ item }}" }
+```
+
+```text
+$ teamai workflow start describe-modules --driver local --inputs '{"modules":["api","cli"],"concurrency":2}'
+ℹ Run r3112e07f9a6d93ad started. If it stops before it ends, continue it with: teamai workflow resume r3112e07f9a6d93ad
+{"data":{"done":{"run":"r3112e07f9a6d93ad","outcome":"succeeded","progress":[{"step":"describe[0]","lines":["described api"]},{"step":"describe[1]","lines":["described cli"]}],"record":"published"},"cancelled":[]}}
+```
+
+With `"concurrency":0`, or any value that is not a whole number from 1, the start is refused before the run exists:
+
+```text
+{"error":{"code":"invalid_inputs","message":"Step \"describe\" for_each.max_parallel {{ inputs.concurrency }} renders 0, which is not a whole number from 1. Pass a whole number from 1 for the input it reads."}}
+```
+
 A failed item does not stop the other items. The step settles when every item has settled, and it fails if any item failed. `output` checks the outputs of each item.
 
 `steps.<id>.results` lists how each item went, in item order. Each entry has `item`, `outcome`, and `outputs` when the item has outputs:
@@ -243,6 +301,50 @@ teamai workflow start review-packages --inputs '{"packages":[{"dir":"packages/co
 ```
 
 `review[0]` runs on the model alias `strong`, and `review[1]` on the tool's default, since its model renders empty. When one review fails, `summarize` still runs on the other, and the run succeeds with every entry in `reviews`.
+
+### Fall back on some failures only
+
+`steps.<id>.failure` reads why a step failed: its `code` and its `message`. It is `null` for a step that did not fail. A fallback step reads it to cover the failures it is meant for and leave the others failing:
+
+```yaml
+schemaVersion: v1alpha1
+name: summarize-or-keep
+description: Summarize the notes, and keep them as written when the tool fails for any reason but a tool the member names that cannot run.
+inputs: { notes: string }
+ends: { unconfigured-tool: failed }
+steps:
+  - id: summary
+    answer: "Summarize these notes in five lines: {{ inputs.notes }}"
+    output: { text: string }
+    timeout: 60s
+    continue_on_failure: true
+  - id: keep
+    needs: [summary]
+    if: steps.summary.outcome == 'failed' && steps.summary.failure.code != 'tool_unconfigured'
+    command: 'echo "Kept the notes as written: $WHY" >&2'
+    env: { WHY: "{{ steps.summary.failure.message }}" }
+  - id: stop
+    needs: [summary]
+    if: steps.summary.failure.code == 'tool_unconfigured'
+    end: unconfigured-tool
+```
+
+When the tool times out or exits with an error, `keep` runs and the run succeeds. When `TEAMAI_AI_TOOL` or `ai.tool` names a tool that cannot run, `stop` ends the run `failed`, so the member sees the setting to fix. `continue_on_failure` alone would let the run succeed with nothing done. `failure` reads only the step's current pass. A template that a lease renders, such as `model` or a confined directory, and a `writes` template cannot read it, as they cannot read `outcome`.
+
+A command step that exits 65 (`EX_DATAERR`) fails `input_rejected`: it rejected the input it was given. teamai offers no retry for it, since the same input fails the same way. Any other non-zero status fails `command_failed`, whose message names the status and starts with the command's stderr:
+
+```yaml fragment
+  - id: test
+    command: npm test
+    continue_on_failure: true
+  - id: report
+    needs: [test]
+    if: steps.test.failure.code == 'command_failed'
+    command: 'echo "Tests failed: $WHY" >&2'
+    env: { WHY: "{{ steps.test.failure.message }}" }
+```
+
+When `npm test` exits 1 and prints `2 tests failed`, `report` prints `Tests failed: command exited with status 1: 2 tests failed`.
 
 ## The end reached first wins
 
@@ -547,6 +649,54 @@ teamai workflow start nightly-e2e --driver local --timeout 30m
 
 `--timeout` bounds the run to the shorter of it and the file's `timeout`, with `--driver local` or `--driver skill`. Past it, the run fails `timeout`, and its `finally` steps still run.
 
+## Give an input a default
+
+```yaml
+schemaVersion: v1alpha1
+name: check-package
+description: Lint a package, and test it unless told not to.
+inputs: { package: string, test: boolean, reporters: [string] }
+defaults:
+  inputs: { test: true, reporters: [] }
+steps:
+  - id: lint
+    command: 'echo "lint $PACKAGE" >&2'
+    env: { PACKAGE: "{{ inputs.package }}" }
+  - id: test
+    needs: [lint]
+    if: inputs.test
+    command: 'echo "test $PACKAGE, reporters $REPORTERS" >&2'
+    env: { PACKAGE: "{{ inputs.package }}", REPORTERS: "{{ inputs.reporters }}" }
+```
+
+```text
+$ teamai workflow start check-package --driver local --inputs '{"package":"api"}'
+{"data":{"done":{"run":"rfe89fff7a148ec61","outcome":"succeeded","progress":[{"step":"lint","lines":["lint api"]},{"step":"test","lines":["test api, reporters []"]}]},"cancelled":[]}}
+```
+
+A start with only `{"test":false}` leaves out `package`, which has no default, so no run starts:
+
+```text
+{"error":{"code":"invalid_inputs","message":"inputs.package is missing"}}
+```
+
+`defaults.inputs` gives an input the value a start, or a step's `with`, uses when it leaves that input out. Each value must fit the type the input declares, and name an input the file declares; pull rejects the file otherwise. An input with no default is still required. The run records the value it used, so `steps.<id>.inputs` and the dashboard show the default.
+
+A workflow other teams run can take a new input this way without breaking them: a step that runs it keeps its `with` as it is.
+
+```yaml
+schemaVersion: v1alpha1
+name: release-web
+description: Check the web package, then publish it.
+steps:
+  - id: check
+    workflow: check-package
+    with: { package: web }          # test: true, reporters: []
+  - id: publish
+    needs: [check]
+    command: npm publish -w web
+```
+
 ## Run a workflow a step printed
 
 ```yaml
@@ -574,6 +724,82 @@ steps:
 | `json` | Any JSON value. Expressions cannot read into it; top-level `outputs` can pass it whole. |
 
 `workflow: { from: <step> }` runs the bundle of a step it `needs`. When that step reports, teamai checks the bundle as `workflow start` checks a file, pins it, and keeps it for the run. A bundle it cannot take, one that holds a secret value, a `from` step, a `prompt_file` step or `finally` steps, fails the producing step `invalid_output` with the reason. The producing step runs once, outside any loop or `for_each`. A run with a `from` step is [isolated](#isolated-runs).
+
+## Ask the member's AI tool for an answer
+
+`answer` is a prompt the member's AI tool answers in one call, in the checkout read-only, with no session and no agent. A step that only needs text or a decision from a model uses it:
+
+```yaml
+schemaVersion: v1alpha1
+name: classify-learning
+description: Ask which kind of team knowledge a learning is.
+inputs: { learning: string }
+steps:
+  - id: category
+    answer: "Is this learning a skill, a rule or a doc? Give the category and one sentence why. {{ inputs.learning }}"
+    output: { category: skill | rule | doc, reason: string }
+    timeout: 60s
+outputs: { category: steps.category.outputs.category }
+```
+
+```text
+$ teamai workflow start classify-learning --driver local --inputs '{"learning":"Retry 429 responses with backoff."}'
+{"data":{"done":{"run":"r3f9a1c2b","outcome":"succeeded","outputs":{"category":"rule"}},"cancelled":[]}}
+```
+
+- `output` is required. `{ text: string }` takes the reply as text. Any other output names the JSON the reply holds, and the local driver asks the tool for it.
+- The step names no tool: the driver that runs it answers it. The skill driver gives it to a child agent of the session, and a driver of your own answers it with its own model. The local driver launches the tool teamai's own AI calls use: `TEAMAI_AI_TOOL`, then the project's `ai.tool`, then the machine's, then the first installed tool teamai launches. Pull rejects `tool`, `agent`, `model` and `session` on the step, and any `workspace` but `new`.
+- The launch is marked as teamai's own, so the member's hooks do not capture it.
+- It reserves the checkout until it finishes, so answers and commands using that checkout run one at a time, even
+  across `for_each` items. A change to the checkout fails the answer `read_only_dirty`.
+- With `workspace: new` it answers in a worktree of its own at the commit the run started from, so the items of a
+  `for_each` run side by side, up to its `max_parallel`. That worktree lacks your uncommitted changes and the files a pull delivers to your tools. A change to it
+  fails the answer `read_only_dirty`. teamai removes the worktree once the answer succeeds, and its branch once the run does.
+- In a directory that is no git repository, nothing can check an answer, so on the local driver answers there do
+  not wait for each other, with or without `workspace: new`.
+- A prompt has no default timeout. Give the step one.
+- It fails `tool_unavailable` when no tool is installed, `tool_unconfigured` when the tool the member names cannot run, `tool_failed` when the call fails, and `invalid_output` when the reply holds no JSON.
+
+Another driver gets an answer step as a prompt lease with `answer: true` and no separate workspace, or with
+`workspace: new` a read-only `workspace` contract on a branch of its own. It prepares the lease, answers in `cwd`, and
+reports the outputs; preparation reserves and snapshots the checkout, or that worktree, as for other read-only steps.
+
+## Let a command write in the checkout
+
+A command with no `workspace` runs read-only: a change it leaves in the checkout fails it `read_only_dirty`. `writes` lists the paths, relative to the checkout, where a change is kept instead:
+
+```yaml
+schemaVersion: v1alpha1
+name: refresh-api-docs
+description: Regenerate the API reference of one area beside the code.
+inputs: { area: string }
+steps:
+  - id: generate
+    command: npm run docs:api -- --out "docs/api/$AREA"
+    env: { AREA: "{{ inputs.area }}" }
+    writes: ["docs/api/{{ inputs.area }}/"]
+```
+
+A file the command writes under `docs/api/<area>/` stays in the checkout, and the step succeeds. So does a commit it adds on the branch the checkout is on, when every path the commit changes is under `writes`, as when it publishes what it wrote. A change anywhere else still fails it `read_only_dirty`, and so does any other move of HEAD: a switch, a detach, a reset.
+
+A command that writes into a directory the caller names, which may be outside the checkout, lists the input:
+
+```yaml
+schemaVersion: v1alpha1
+name: render-site
+description: Render the site into the directory the caller names.
+inputs: { out: string }
+steps:
+  - id: render
+    command: npm run site:build -- --out "$OUT"
+    env: { OUT: "{{ inputs.out }}" }
+    writes: ["{{ inputs.out }}"]
+```
+
+`teamai workflow start render-site --inputs '{"out":"/home/alice/site"}'` renders an absolute path. Inside the checkout, a change under it is kept as under a relative path. Outside the checkout, the command writes there freely: nothing it writes there can dirty the checkout.
+
+- Only a command step takes `writes`.
+- Pull rejects an absolute path written in the file, a path that leaves the checkout, and a template that reads anything but `inputs`. A template that renders a relative path leaving the checkout, or nothing, fails the step `invalid_template` before it runs.
 
 ## Clone workspaces
 
@@ -745,6 +971,7 @@ steps:
 | --- | --- |
 | An input | `inputs.issue`, `inputs.issue.labels` |
 | A step's outcome, end, or output | `steps.check.outcome`, `steps.check.end`, `steps.review.outputs.files` |
+| Why a step failed, or `null` | `steps.summary.failure.code`, `steps.summary.failure.message`. See [Fall back on some failures only](#fall-back-on-some-failures-only). |
 | Every pass of a step | `steps.review.passes`, `steps.review.passes[0].outputs.verdict`. See [Read every pass](#read-every-pass). |
 | The results of a `for_each` step | `steps.build.results`, `steps.build.results[0].outcome`, `steps.build.branches` |
 | The pull request a step with `deliver: pr` delivered, or `null` | `steps.fix.pr`, `steps.fix.pr.url`, `steps.build.results[0].pr.url`. See [Deliver a PR](workflow.md#deliver-a-pr). |
@@ -866,7 +1093,7 @@ schemaVersion: v1alpha1
 name: release
 description: Build the package, then review it.
 timeout: 1h
-budget: { tokens: 200000 }
+budget: { tokens: 200000 }       # the run's: counted as each step reports
 setup:
   command: npm ci
   requires: { env: [NPM_TOKEN] }
@@ -892,7 +1119,7 @@ steps:
 | `requires.strict` | `true` makes `isolation` and `network` at this level a floor: every step under it gets at least them, whatever an inner level asks. A strict `isolation: sandbox` also keeps `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `CI_JOB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS` and `SSH_ASKPASS` from every process of the step, and pull refuses a step under it whose `requires.env` names one. With `--driver local`, a start the local driver could never run is refused `requirement_unmet`. | The step waits. A strict sandbox also needs `can.env: true`. |
 | `setup` | The driver runs `command` in each workspace it creates, before the step. Setup gets its `requires.env` keys; a step gets them only if it requires them too. Setup fails the step without running it, and the workspace is removed, when it exits non-zero (`setup_failed`), changes a file git would commit (`setup_dirty`), or leaves the value of one of its keys in a file it wrote, ignored files included (`setup_secret`). The step's `timeout` bounds setup. | Steps with a workspace wait. |
 | `timeout` | `500ms`, `30s`, `10m`, `2h`, or `1d`, on a step or the workflow file. A step past it is stopped and ends with outcome `timeout`. On a workflow step, it stops every step inside. On the workflow file, the run ends `failed` with `timeout`. A retry starts the timeout again. | Not a capability. Every driver gets `expiresAt` on the lease. |
-| `budget` | `{ tokens: N }` on the workflow file, a workflow step, or a prompt step with `on_limit: end_turn`. Input and output tokens of every step under it count from when it starts: the run's from its start, a workflow step's from each time it starts, such as a loop's next pass. A retry starts the budget again. Once they pass `N`, its open steps stop and it fails `budget_exceeded`. | A headless prompt under a budget waits. Its success report without tokens fails `budget_unmeasured`. An interactive prompt runs, since a person drives it; when its report has no tokens, its `unenforced` lists `budget`. |
+| `budget` | `{ tokens: N }` on the workflow file, a workflow step, or a prompt step with `on_limit: end_turn`. Input and output tokens of every step under it count from when it starts: the run's from its start, a workflow step's from each time it starts, such as a loop's next pass. A retry starts the budget again. The budget of a workflow file or a workflow step counts each step's tokens once the step reports them: when they pass `N`, the steps still running under it stop and it fails `budget_exceeded`. A prompt that runs meanwhile is not stopped at `N`, only when another step's report passes it. To stop one prompt while it runs, give the prompt step its own `budget` with `on_limit: end_turn`. | A headless prompt under a budget waits. Its success report without tokens fails `budget_unmeasured`. An interactive prompt runs, since a person drives it; when its report has no tokens, its `unenforced` lists `budget`. |
 | `max_turns` | Caps the agent turns of a prompt step. The local driver passes it to headless Claude only. | The step runs, and its `unenforced` lists `max_turns`. |
 | `permissions` | `unattended` on a prompt step: its tool edits files and runs commands without asking. Only under a strict `isolation: sandbox`, set on the step, a step around it, `defaults`, or the step that runs its workflow: a start without one is refused `unattended_unsandboxed`, and a [workflow a step printed](#run-a-workflow-a-step-printed) without one fails that step `invalid_output`. See [Unattended prompts](#unattended-prompts). | The step waits. A run whose only driver lacks `can.unattended` fails it `tool_unavailable`. |
 | `on_limit` | `end_turn` on a prompt step with `timeout`, `max_turns` or `budget`: reaching one, counted from the tool's launch, ends the agent's turn instead of failing the step. The step succeeds with `limit` set and keeps its work, so the steps after it still run. On a workflow step with `timeout` or `budget`, those are what its prompts may spend together, one turn at a time: once spent, its pending steps are skipped. `fail`, the default, fails the step at the limit. A step handed back keeps the deadline of its first lease. | Without `can.end_turn`, the step runs under `fail`, and its `unenforced` lists `on_limit`. |
@@ -923,6 +1150,7 @@ A driver other than `local` declares what it can do in `driver.can` on each `nex
 | `driver.can` key | The driver |
 |---|---|
 | `hitl` | Lets a person answer HITL requests and work in interactive steps. |
+| `exec` | `false`: runs no command, so a command step, and a step with `setup`, waits for another driver. Unlike the other keys, an omitted `exec` means the driver runs commands. |
 | `workspace` | Takes leases in these workspace modes: `read-only`, `new`, `continue`, `clone`, `team` (a step in [the team workspace](workflow.md#the-team-workspace), such as `teamai-score`'s `publish`). A clone step is leased only through [`next --prepare`](#clone-workspaces-in-your-own-driver). |
 | `env` | `true`: resolves `lease.envScope.provide` itself, removes `lease.envScope.withhold`, and keeps the values from what runs the step. `"commands"`: does that for command steps and setup only, so a prompt step with `requires.env` waits. A driver whose agent runs the step leaves it out, or sends `"commands"` when it starts the commands itself. teamai before 0.28.0 answers `"commands"` with `invalid_json`. |
 | `setup` | Runs `lease.setup.command`, with `lease.setup.envScope`, in each workspace it creates and in one whose setup never finished, and fails the step with the codes above. Every lease with a workspace carries `setup` when the workflow declares it. |
@@ -1074,6 +1302,36 @@ The local driver with nobody at its terminal does not fail a required approval o
 Every decision without HITL and `hitl_required` failure logs a warning to stderr. Set `workflows.auto_approve` beside `workflows.max_parallel` in local config, or pass `--auto-approve` to `start --driver local` or `resume` for that run: the run remembers it on this install, and `resume --no-auto-approve` turns it off. JSON `next` from a driver without HITL cannot set this override. A driver with HITL ignores `workflows.auto_approve`: it sends `autoApprove: true` on `next` when the person chose auto-approve for the run, and the local driver in a terminal does so with `--auto-approve`. Optional approvals and choices with a default are then answered as in the `auto_approve: true` column; required approvals and choices without a default still come back as `hitl`. The local driver declares HITL only in an attended run (see [Attended and unattended runs](workflow.md#attended-and-unattended-runs)) whose stdin and stderr are TTYs. It asks on stderr, accepts a choice followed by an optional note, and keeps polling while the question is open. An answer from elsewhere or a cancellation closes that question. Questions wait while an interactive tool owns the terminal.
 
 `interactive: true` needs `prompt` or `prompt_file`. The step waits for a driver with HITL. Without a terminal, `--driver local` [hands the run to a person](workflow.md#when-a-run-reaches-a-person), who continues it with `resume <run> --claim` from a terminal. The local driver opens the tool here in the workspace with inherited stdio and the prompt as its first message. Repository edits by the person are kept, and the step succeeds. An interactive step that sets `workspace: read-only` is checked like a command: a checkout change fails `read_only_dirty` and the edits stay. Inside a workspace an enclosing step opened, they are kept on `refs/teamai/kept/<attempt>` and removed from the workspace. An interactive step in its own workspace can still change that workspace. Headless prompts remain read-only. Terminal Ctrl-C and Ctrl-\ go to the interactive tool; SIGTERM and SIGHUP stop it and the driver. A result file is optional when the interactive tool exits successfully without outputs. The driver polls every two seconds during prompts and stops a cancelled tool.
+
+### Ask about each item
+
+A choose step cannot carry `for_each`, but the inline workflow a `for_each` runs can hold one, so a person answers once per item. Each result carries the item as `item` and the answer as `outputs.choice` and `outputs.note`:
+
+```yaml
+schemaVersion: v1alpha1
+name: triage-findings
+description: Ask about each finding of a scan, then file the ones a person kept.
+inputs:
+  findings: [{ id: string, title: string, severity: string }]
+steps:
+  - id: review
+    for_each: "filter(inputs.findings, .severity != 'info')"
+    workflow:
+      outputs: { choice: steps.ask.choice, note: steps.ask.note }
+      steps:
+        - id: ask
+          choose:
+            message: |-
+              {{ item.title }} ({{ item.severity }}, {{ item.id }})
+              file opens an issue; rename opens it with your note as its title; skip leaves it out.
+            options: [file, rename, skip]
+  - id: file
+    needs: [review]
+    command: node scripts/file-findings.js "$REVIEWED"
+    env: { REVIEWED: "{{ steps.review.results }}" }
+```
+
+The local driver asks the items one after another. Without a person to answer, the run waits or fails as the table above says for a choice without a default. `teamai import --from-tools` reviews the files it found this way, in `teamai-import-learnings`.
 
 ## Retry, cancel, and resume
 
@@ -1240,6 +1498,506 @@ teamai workflow next <run> --json '{"claim":true,"driver":{"kind":"script","mach
 
 The claim takes the run's offer away, as every claim does. A `next` without `claim` on a run another install claimed answers `not_owner` once this machine's `teamai-reports` checkout shows that claim (after `teamai pull` or `workflow resume`), instead of leasing from the stale copy here. The claim runs before `next` leases anything, and checks a running run's branches on the origin of `driver.workspace`. It then brings each local branch to the commit the run recorded, as `resume` does, and answers `branch_diverged` when it cannot. A run this install already owns stays as it is, but no longer offered. A claim refusal comes back as the `next` error envelope. From an agent session, the claim follows the run's `invoke` as `resume` does: a payload cannot carry the person's yes, so an `ask` run answers `confirm_needed`, and once the person agrees the session continues it with `teamai workflow resume <run> --claim --confirmed`. On `state_moved`, send the claim again. A value other than a boolean answers `invalid_json` with `claim must be a boolean`. A driver whose runs another machine may continue reports full commit ids in `changes` and `read`. `publish` refuses a run with any other commit value as `snapshot_unsupported`, naming the field.
 
+## Driver definitions and step runtimes
+
+A driver definition is a YAML file that `--driver <name>` selects on `workflow start` and `workflow resume`. It names the step runtime that runs each step and, optionally, the tool prompt steps use. A step runtime is a program that opens a place for an attempt, runs its command or tool there, and brings the work back. It is a different thing from a tool's bundled runtime, such as the Node that WorkBuddy unpacks.
+
+```yaml
+# drivers/toy.yaml in the team repo
+schemaVersion: v1alpha1
+name: toy
+description: Run steps on the team's toy runtime.
+tool: claude            # prompt steps run on Claude Code unless the step or --tools names another tool
+runtimes:
+  - use: toy            # runtimes/toy/runtime in the team repo
+    options:
+      state: /var/tmp/toy-state
+```
+
+```sh
+teamai workflow start review --driver toy
+teamai workflow resume r1a2b3c4d                 # resumes on toy, the definition the run was last driven with here
+teamai workflow resume r1a2b3c4d --driver local  # back to plain local; the run remembers that too
+```
+
+teamai looks for `<name>.yaml` in this order and uses the first it finds:
+
+| Where | Notes |
+| --- | --- |
+| `~/.teamai/drivers/` | Yours alone. `resume --next` never reads it. |
+| `drivers/` in the team repo, and `drivers/<namespace>/` | A name two active namespaces define fails `driver_namespace_conflict`. |
+| The user scope's team repo | Only when you start in a project. |
+| Definitions teamai ships | Each one is named `teamai-<name>`. |
+
+`--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `local`, `none`, `skill` and `fleet` are not definition names: a file `drivers/none.yaml` is refused with `driver_invalid`.
+
+A definition lists one runtime or more. teamai offers each step to them in the order listed, and the first that can take it runs it:
+
+```yaml
+# drivers/sandboxed.yaml
+schemaVersion: v1alpha1
+name: sandboxed
+tool: claude
+runtimes:
+  - use: sandbox          # takes every step it can
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      max_parallel: 2
+  - use: local            # takes the rest, such as an interactive step or a required approval
+```
+
+A step that no single runtime can take fails `requirement_unmet`, naming what each one lacks:
+
+```text
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+```
+
+A step that requires strict isolation no runtime of the definition gives is refused at `workflow start`, before the run exists. A step every runtime holds back for a reason of this machine, such as a network your `workflows.allow` refuses, stays pending. An approval or choice waiting for you is still asked meanwhile. Once nothing else runs or waits for an answer, the run stops `busy` with that reason, and the dashboard's run details say which runtime held it back and why.
+
+Every definition keeps a slot on this machine for the steps that stay here: its `local` entry, or, when it lists none, a `host` entry teamai adds last, so no runtime of yours may be named `host`. `host` runs commands with teamai, git and the shell, needs no agent CLI, and never takes a prompt step. The slot takes:
+
+- command and setup steps, when no runtime of the definition runs commands (`"exec": false`);
+- the command steps of every workflow teamai ships, such as `teamai-score` and `teamai-share-session`, which plan, check and write labels on this machine, and of a team file that replaces one under its name;
+- a step with `deliver: publish`, which pushes to a data branch from here;
+- an `answer:` step, which your own AI tool answers on this machine, so it needs that tool installed here. `workflow start` refuses it with `requirement_unmet` under strict `defaults.requires` this machine does not meet.
+
+No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to `local`. So a definition of external runtimes alone runs and judges every workflow with no `answer:` step on a machine with no agent CLI:
+
+```yaml
+# drivers/sandbox-only.yaml
+schemaVersion: v1alpha1
+name: sandbox-only
+tool: claude
+runtimes:
+  - use: sandbox          # prompts and your command steps; teamai's own steps run on the host entry
+```
+
+A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else, when the definition lists `local`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine. Each step's state in the run records the runtime it ran on as `runtime`: the `use` of its entry, or `host`.
+
+`use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
+
+```text
+~/.teamai/runtimes/<name>/runtime          yours
+runtimes/<name>/runtime                    team repo, or runtimes/<namespace>/<name>/runtime
+teamai-runtime-<name>                      shipped in teamai's package, then on PATH
+```
+
+teamai ships these definitions:
+
+| Definition | Runtimes |
+| --- | --- |
+| `teamai-claude`, `teamai-codex`, `teamai-opencode` | `local`, with prompt steps on that tool |
+| `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`), then `local` |
+| `teamai-paseo` | `paseo` (`max_parallel: 4`, at the address your Paseo config names), then `local` |
+| `teamai-sandbox` | `sandbox` (`provider: sbx`, `max_parallel: 4`), then `local` |
+
+### Runtime options
+
+A runtime checks its own `options` at `init`, and a key it does not take fails `bad_option` before any step runs. Two keys are teamai's, and the runtime never sees them:
+
+| Key | Meaning |
+| --- | --- |
+| `max_parallel` | At most this many attempts on this runtime at once. A step it has no room for goes to the next runtime. `workflows.max_parallel` still caps the run. |
+| `credentials` | `codex: login`: the step's Codex uses the login teamai keeps, below. `NAME: env:VARIABLE`: the step's tool gets `NAME`, read from your `VARIABLE` when the run starts, below. |
+
+Change a definition's options on your machine without editing it, in `~/.teamai/config.yaml` or a workspace's own `config.yaml`. Keys merge one by one over the definition's, and the workspace's win:
+
+```yaml
+workflows:
+  drivers:
+    teamai-t3:
+      runtimes:
+        t3:
+          max_parallel: 2
+```
+
+### A Codex login for step runtimes
+
+Codex rejects a refresh token used twice, so a copy of your own login that refreshes in a step would log out your other Codex sessions. `credentials: { codex: login }` uses a login teamai keeps apart instead. The first Codex step that needs it, in a terminal, creates it for you:
+
+```text
+$ teamai workflow start review --driver containers
+ℹ Step "review" signs Codex in on the login teamai keeps apart from your daily one, and /home/me/.teamai/logins/codex has no Codex login yet. Running CODEX_HOME=/home/me/.teamai/logins/codex codex login once to create it.
+```
+
+Codex's own sign-in then runs in your terminal, and the step goes on once it ends. A run with no Codex step never asks. An unattended run does not sign in for you: the step fails with `credential_missing`, naming the command and the retry to run after it. To create the login ahead of time:
+
+```sh
+CODEX_HOME=~/.teamai/logins/codex codex login
+```
+
+teamai copies that `auth.json` into the attempt's tool home, and once the step ends it writes the refreshed file back, for the same account only. One attempt on the machine holds the login at a time. Another one waits, and says for whom:
+
+```text
+ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
+```
+
+When the holder's driver was killed, `teamai workflow cancel` of its run first stops the tool on the step runtime and writes the login back, then releases it. A runtime it cannot reach keeps the login held, and the command says which lock file to delete once the tool stopped.
+
+The login is also kept when the runtime itself stops while Codex runs, or cannot close the place afterwards, because Codex may still be running there. The step fails `runtime_lost`, and teamai says what to do:
+
+```text
+⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
+```
+
+### Credentials from your environment
+
+A tool in a container cannot read a login kept in your keychain. Give it a token from your environment instead: `NAME: env:VARIABLE` sets `NAME` for the step's tool, with the value of your `VARIABLE`.
+
+```yaml
+# drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # from `claude setup-token`
+        NPM_TOKEN: env:ACME_NPM_TOKEN                          # the private registry, under another name in your shell
+  - use: local
+```
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.config/acme/claude-token)
+export ACME_NPM_TOKEN=$(security find-generic-password -s acme-npm -w)
+teamai workflow start review --driver containers
+```
+
+teamai reads each variable once, when the run starts or resumes. One that is unset stops the start before any step runs:
+
+```text
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+```
+
+A runtime entry that declares no credential, neither an `env:` one nor a login, gets the tool sign-in variables set in your environment instead, by name: Claude's `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` (with `ANTHROPIC_BASE_URL`), Codex's `OPENAI_API_KEY` or `CODEX_API_KEY`, and CodeBuddy's `CODEBUDDY_API_KEY` or `CODEBUDDY_AUTH_TOKEN`. So the team's definition can name only the tool, and each member signs it in their own way. Their values are masked like any credential. teamai sends them only to a runtime that runs the tool's process itself and offers `can.env`, and each only to the tool it signs in: with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` both set, a Claude step gets `ANTHROPIC_API_KEY` alone, and a Codex step `OPENAI_API_KEY` alone. A runtime that launches agents its own way signs them in where it runs them, and teamai sends it none; like any runtime, its process still starts with your environment.
+
+Where the values go:
+
+| Gets them | Never gets them |
+| --- | --- |
+| The tool of a prompt step on that runtime | A command step, or setup |
+| A prompt sent to a runtime that launches agents its own way | Another runtime of the definition |
+| | A name the step withholds, such as a forge token in a strict sandbox |
+| | Any file: the run's records, `runtime.json`, logs. A value the tool prints is masked in what teamai keeps |
+| A judge on that runtime, for the names a confined run of its tool reads here: `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` for a Claude judge, and for any judge `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` | A judge, for any other name: a Claude judge never gets `OPENAI_API_KEY` |
+
+Only a runtime that offers `can.env` takes credentials, since it alone decides each process's environment. `local` takes none: your steps already run in your environment. Both are refused with `bad_option` at start.
+
+A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
+
+```text
+Step runtime "toy" comes from the team repo (runtimes/toy) at revision 3f9c0a1b2d4e, which you have not accepted on this machine. It runs as you, with your files. Review /home/me/team/runtimes/toy (runtime) before you accept it.
+Run it? [y/N]
+```
+
+An unattended run does not ask. It fails `runtime_not_accepted` and starts nothing. To accept the revision, run the same command once in a terminal. Accepted revisions are kept in `~/.teamai/trust/runtimes.json`.
+
+What each attempt gets on its runtime:
+
+- The worktree, read-write at its path on the host. The git directories and the `.git` pointer are read-only. teamai commits and pushes on the host with hooks, fsmonitor and ref replacement turned off.
+- `attempts/<attempt>/out/`, read-write. The result file is `out/result.json`.
+- For a prompt, a tool home of its own: `attempts/<attempt>/tool-home/<tool>`, set through `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `CODEBUDDY_CONFIG_DIR`. Prompt steps run on Claude Code, Codex or CodeBuddy only. They run headless, never interactive. Scoring, publishing and a later pass that resumes the session read it from that home. The later pass starts from a copy of it. A new home starts with your own model choices for that tool, and nothing else of your settings: Claude's `model`, `effortLevel` and `modelSettings` from `settings.json`, and Codex's `model` and `model_reasoning_effort` from `config.toml`. A step's own `model` still wins. A [runtime that launches agents its own way](#a-runtime-that-launches-agents-its-own-way) gets no tool home: its tool keeps sessions where `local` does.
+- The env keys its lease provides, the lease's `env`, and the attempt's marker. Keys the lease withholds are removed from the runtime's environment.
+- For a prompt, the [credentials](#credentials-from-your-environment) its runtime declares. A command step gets none.
+
+teamai writes each operation id to `attempts/<attempt>/runtime.json` before it sends the operation. When teamai is killed, `workflow resume` sends the same ids again:
+
+| Killed | On resume |
+| --- | --- |
+| After the runtime accepted `open` | The same handle; no second place |
+| After an exec finished | Its output, session and usage, read from what the runtime kept; the tool does not run again |
+| While an exec ran | It is stopped and the step fails `runtime_interrupted`; its work is kept |
+| After a prompt finished | Its output, session and usage, read from what the runtime kept; no prompt is sent again |
+| While a prompt ran | The same prompt is sent again, which reconnects to the agent; the step goes on |
+
+`workflow cancel` stops the running exec or prompt and every process it started. When the driver was killed, the cancel asks the attempt's runtime to stop it. That works even when the runtime cannot start for new work, for example when its provider is down or its sign-in expired: teamai opens it in `recover` mode, which only stops and closes what it ran.
+
+A runtime that cannot stop the work says why. teamai then keeps the place, its records and the login, and prints the runtime's advice:
+
+```text
+⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
+```
+
+Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it stops the attempt, closes its place, releases the login, and answers with the run and the attempt it closed. With nothing left to stop, it answers `run_settled`:
+
+```text
+ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
+ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
+{"data":{"run":{"id":"r48201aa","status":"cancelled"},"closed":["a3f0c2b1d"]}}
+```
+
+When only the close had failed, the line names the place it closed instead: `Closed the place of attempt a3f0c2b1d of run r48201aa on step runtime "sandbox", which an earlier close had kept.`
+
+A driver that still runs when you cancel, and a `workflow resume` that finds such an exec still running, fail the step `runtime_lost` with the same advice, and keep the place and the login the same way. `teamai workflow cancel` of that run stops it once the runtime can.
+
+### Write a step runtime
+
+A runtime reads one JSON request per line on stdin and answers with JSON lines on stdout, protocol `1`. `src/__tests__/fixtures/runtime-toy/runtime.mjs` is a complete one that runs steps on the host. It imports `@teamai/runtime-protocol`, so the tests bundle it into one file before they run it (`src/__tests__/helpers/toy-runtime.ts`).
+
+teamai reads every reply strictly, the `init` reply included: a key it does not know is a reply it cannot read, and the runtime does not start. Protocol `1` has not been released yet, and teamai ships its runtimes with the engine, so a key a runtime adds lands together with the teamai that reads it, and the protocol stays `1`.
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
+← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
+← {"op":"op-5e0d11cb4777","event":"ready","display":{"label":"toy-r…-a…","url":"https://toy.example.test/places/r…-a…","fields":{"place":"toy-r…-a…"}}}
+→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"credentials":{},"cwd":"/repo"}
+← {"op":"op-83bfffde9ce3","event":"accepted"}
+← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
+← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
+```
+
+A tool you cannot run now, such as one that is not signed in, stays out of `can.tools` and goes in `unavailable` beside `can`, with why and what the person does about it. Your runtime still starts, so command steps run. A prompt step on that tool fails `tool_unavailable` with your reason:
+
+```text
+← {"type":"init","ok":true,"can":{"tools":["codex"]},"unavailable":{"claude":"claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login."}}
+✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
+```
+
+A runtime that drives an app with a default tool of its own reports it as `can.default_tool`, one of its `can.tools`. A prompt step that names no tool runs on the first of: the step's `tool:`, `--tools <agent>=`, `workflows.tools.<agent>`, `--tools default=`, the definition's `tool`, the runtime's `can.default_tool`, then your own default: `TEAMAI_AI_TOOL`, `workflows.tools.default`, `ai.tool`. So `--driver t3` with no tool named runs as your T3 does, and `ai.tool` still picks the tool on `local`. With none of them set, the step fails `tool_unconfigured`; teamai never falls back to the first tool it finds installed:
+
+```text
+← {"type":"init","ok":true,"prompt":true,"can":{"tools":["claude","codex"],"default_tool":"claude"}}
+$ TEAMAI_AI_TOOL=codex teamai workflow start review --driver app          # review names no tool: it runs on claude
+$ teamai workflow start review --driver app --tools default=codex         # --tools wins: codex
+✖ Step "review" failed with tool_unconfigured: This prompt step names no tool, and none is set for it. Name one with the step's tool:, with --tools default=<tool>, or with ai.tool in your teamai config
+```
+
+teamai keeps `max_parallel` and `credentials` for itself: it strips them from the options before `init`, so your runtime never sees them and must not check them. `init` names the credentials instead, never their values, so your runtime can offer only the tools it can sign in, such as a `can.confined` judge:
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
+```
+
+When your runtime's provider keeps its own login for a tool, such as a sandbox signed in to Codex, reply `"ownLogins":["codex"]` beside `can`. teamai then copies none of that login into the attempt's tool home, and sends none of that tool's sign-in variables it found in the member's environment, such as `OPENAI_API_KEY`, nor one the member's own config declares under `workflows.drivers.<name>.runtimes.<runtime>.credentials`. A variable your definition declares still goes.
+
+`init` names the run's checkout too, `"checkout":"/abs/path"`, and teamai starts your runtime in that directory.
+
+`init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. List in `can.tools` the ones your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with its `home.env` set to the attempt's tool home. A step on an instance names it as the `tool` of its `open`, `"tool":"acme-claude"`, and of its prompt's `lease` for a runtime that launches agents: your runtime maps it, through `init.instances`, to the tool it extends. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":".acme-claude","env":"ACME_CLAUDE_CONFIG_DIR"}}]}
+← {"type":"init","ok":true,"can":{"tools":["claude","acme-claude"]}}
+✖ Step "review" failed with tool_unsupported: Step "review" runs on acme-claude, an instance of claude, which runtime sandbox of driver sandboxed cannot launch. Run it with --driver local.
+```
+
+When your runtime lists the instance in `unavailable` instead, with why, every refusal of its step quotes that reason: the step fails `tool_unavailable` with it, and a strict step that no single runtime takes names it beside `tools`, as in `runtime sandbox lacks tools (sandbox: acme-claude runs acme-claude, which is not in the image: …)`.
+
+A runtime whose definition or member config opts a tool into running without permission prompts reports it as `permissions`, beside `can`. teamai never sets that option for you. Outside a sandbox, the run warns once and records its steps' isolation as `none`. A `permissions: unattended` step runs on such a runtime only on a tool it reports there, and still needs `requires: { isolation: sandbox, strict: true }`:
+
+```text
+← {"type":"init","ok":true,"can":{"tools":["claude"]},"permissions":{"claude":"full-access"}}
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine: they run without asking for permission, and teamai cannot prove any isolation. Their isolation is recorded as none.
+```
+
+The values come in the requests, on `open` and on each `exec` or `prompt` that gets them. A prompt's tool exec gets them, and a command step's exec gets `{}`:
+
+```text
+→ {"type":"exec","op":"op-2a7c90e14b3d","handle":"toy-r…-a…","argv":["claude","-p","…"],"env":{"CLAUDE_CONFIG_DIR":"/repo/.teamai/…/tool-home/claude",…},"unset":["GITHUB_TOKEN"],"credentials":{"CLAUDE_CODE_OAUTH_TOKEN":"sk-ant-oat01-…"},"cwd":"/repo"}
+```
+
+Set them over the process's environment only, and never write them to disk or to a log. A teamai that restarts sends them again with the operation it resends, so your runtime needs to keep none.
+
+A workflow's `setup` runs in the step's place on your runtime too, before the step: one `exec` of the shell with setup's own keys and `"credentials":{}`, then a `collect`. teamai then checks on the host what setup left, as on `local`, so a copy of the place is checked once it is back. The place is opened once for both, and every `open` names the step's `tool`:
+
+```text
+→ {"type":"open","op":"op-5d1e…","run":"r…","attempt":"a…","tool":"claude","view":{…},"credentials":{}}
+→ {"type":"exec","op":"op-6f20…","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm ci"],"env":{"NPM_TOKEN":"…",…},"unset":[],"credentials":{},"cwd":"/repo/.teamai/workflow-worktrees/…"}
+→ {"type":"collect","handle":"toy-r…-a…"}
+→ {"type":"exec","op":"op-7a31…","handle":"toy-r…-a…","argv":["claude","-p","…"],…}
+```
+
+The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. A `cancel` of an operation that already ended answers that end again and stops nothing; only `cancel_failed` is replaced (below). teamai logs a warning, with a count, for an end of an operation it no longer waits on. An option it does not take fails `init` with `bad_option` and the key.
+
+Answer `closed` to a `close` of a handle you already closed. Once teamai removes a clone or a team folder of a run, it closes again the last place your runtime closed for that run, so your runtime can see at a `close` that the folder is gone, and remove what it added for it.
+
+A runtime that cannot end a place answers `close` with why. teamai then treats what ran there as still running: the attempt keeps its login, and the run's details show the failure under the step as *Not closed*:
+
+```text
+→ {"type":"close","handle":"teamai-r7-a1"}
+← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
+```
+
+Each `teamai workflow cancel <run>` tries the close again. When the runtime can never confirm it, as for a create its provider refused, check that nothing of the attempt still runs there, then let the attempt go with `teamai workflow cancel <run> --release <attempt>`. teamai tries the stop and the close once more, and sends that close, even after a stop the runtime did not confirm, as `{"type":"close","handle":"…","release":true}`: your runtime forgets the place, whether or not it can end it. What the runtime cannot confirm no longer holds the attempt. teamai writes its login back, frees it, and no longer tries the close. What ran in the place may still be there, whether or not your runtime forgot it:
+
+```text
+ℹ Released attempt a1 of run r7 on step runtime "docker" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "docker" could not close the place of attempt a1, so what ran there may still run (rm_failed): docker rm teamai-r7-a1 failed: the daemon is not running
+```
+
+A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
+
+teamai opens your runtime in `recover` mode whenever it must stop an attempt, as `workflow cancel` does after the driver was killed. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal, so a provider that is down or never answers cannot hold the stop. That process may run beside others of your runtime: one that drives another run, or one that outlived its killed driver while an exec ran. teamai asks about an attempt's place from one of its processes at a time, so keep one journal file per record, written to a temporary path and renamed into place, and let only one process write each record. A runtime that answers `recover` with an error is opened again for new work, and when that fails too, the cancel names both failures:
+
+```text
+→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{}}
+→ {"type":"reattach","handle":"toy-r…-a…"}
+← {"event":"alive","handle":"toy-r…-a…","ops":[{"op":"op-83bfffde9ce3","state":"running"}]}
+→ {"type":"cancel","op":"op-83bfffde9ce3"}
+```
+
+When you cannot stop an operation, end it `failed` with `cancel_failed` and a message that says what to do, and keep reporting that state on `reattach`. teamai then does not bring the place back or close it. A later `cancel` of the same operation tries the stop again: from the moment you read it, report the operation `running` on `reattach` until that stop is confirmed or fails again, since teamai reads the state it gets next as that cancel's outcome. Use no other code for this: teamai reads any other `failed`, even one that follows a `cancel`, as the operation's end, and brings the place back and closes it:
+
+```text
+← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
+```
+
+Answer every request, even one you cannot carry out. A `reattach`, `collect` or `close` you cannot answer, for example because your journal cannot be read or your provider cannot be reached, gets the failure reply for its handle. Never answer `gone` then: the place may still be there.
+
+```text
+→ {"type":"reattach","handle":"teamai-r7-a1"}
+← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
+```
+
+An `{"event":"error"}` line names no request, so teamai fails every request still waiting on your runtime with `runtime_unanswered`: an `open` fails, and an `exec` or `prompt` in flight ends `runtime_lost`, since what it started may still run. It does the same to an `init` (10 min when attended), a `reattach` or a `close` that gets no reply within 15 s, and to an `open`, `exec` or `prompt` you do not answer within 15 s, so send `accepted` before any slow work, such as pulling an image or starting an agent. A `cancel` needs no reply of its own: end the operation with its outcome. An `exec` or `prompt` teamai cancels while it waits on it ends `runtime_lost` the same way when you give no outcome within 15 s. A stop after the driver died reads the outcome on `reattach`, for at most 15 s after its `cancel`. The attempt keeps its place, its records and its login:
+
+```text
+Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
+```
+
+Every request and reply is defined as a zod schema in `packages/runtime-protocol` of the teamai repository: `RuntimeRequestSchema` for what teamai sends, `RuntimeMessageSchema` for what a runtime writes.
+
+`display`, on `ready`, on an exec's or prompt's `accepted` or `display` event, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, accepts the prompt at once, and sends the agent's link once the agent exists, as in the example below. A `display` event neither accepts nor ends its operation: it is not the answer teamai waits 15 s for, nor the outcome of a `cancel`.
+
+To tell the person something without answering a request, write a `notice`: a sign-in page to open, a slow image pull, a problem that does not stop the work. Name the `op` or `handle` it is about, when it is about one. teamai shows it as a warning with the credentials your runtime gets masked, and waits for the request's own answer as before. An attended `init` may wait for the person: send the sign-in link in a notice, then answer `init` once they approved it, within 10 min:
+
+```text
+← {"event":"notice","message":"Open https://acme.example.test/device and enter the code shown there to sign in."}
+← {"event":"notice","op":"op-83bfffde9ce3","message":"Pulling ghcr.io/acme/agent:1 (1.2 GB)."}
+```
+
+```text
+⚠ Step runtime "acme", operation op-83bfffde9ce3: Pulling ghcr.io/acme/agent:1 (1.2 GB).
+```
+
+`open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
+
+A step with a `timeout` that fails it gives its `open` a `deadline`, the latest time its limits allow. The step's own timeout stops its work first; teamai cancels an `exec` or `prompt` of the place still running 15 s past the `deadline`, a reconnected one included, fails the `open` when the place is not `ready` by the `deadline`, and waits for a `collect` 15 s past it at most. A step without a time limit, or whose limit ends the agent's turn (`on_limit: end_turn`), has no `deadline`:
+
+```text
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","deadline":"2026-11-06T15:10:00.000Z","view":{…},"credentials":{}}
+```
+
+#### A runtime that launches agents its own way
+
+A runtime such as a T3 Code or Paseo one starts an agent from a prompt and learns its session when it ends, instead of running the tool's command line. It says so at `init` with `"prompt": true`. With `"exec": false` in `can` it also takes no command, so command steps and steps with `setup` go to the next runtime of the definition. A runtime with `"exec": false` and no `"prompt": true` can run no step, and teamai refuses it at start:
+
+```yaml
+# drivers/threads.yaml
+schemaVersion: v1alpha1
+name: threads
+tool: claude
+runtimes:
+  - use: threads          # prompt steps, each as an agent thread
+  - use: local            # commands, setup, and prompts threads cannot take
+```
+
+teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole prompt, with the agent definition's instructions when the step names one, and the line that says where to write the result. The agent writes `lease.result`; the runtime reads it back and sends it in `finished`, with the tool's session and the tokens it billed:
+
+```text
+→ {"type":"init","protocol":1,"mode":"attended","options":{}}
+← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"hitl":true,"workspace":["read-only","new","continue"],"tools":["claude","codex"]}}
+→ {"type":"open","op":"op-1c9e0f4a2b77","run":"r7a1…","attempt":"a3f0…","tool":"claude","view":{"worktree":"/repo/.teamai/workflow-worktrees/r7a1-review-p1",…},"credentials":{}}
+← {"op":"op-1c9e0f4a2b77","event":"accepted","handle":"threads-r7a1-a3f0"}
+← {"op":"op-1c9e0f4a2b77","event":"ready","display":{"label":"review (thread)","url":"t3://thread/5e1c"}}
+→ {"type":"prompt","op":"op-83bf2a9d01e4","handle":"threads-r7a1-a3f0","cwd":"/repo/.teamai/workflow-worktrees/r7a1-review-p1","env":{"TEAMAI_WORKFLOW_ATTEMPT":"r7a1…/a3f0…",…},"unset":[],
+   "lease":{"step":"review","tool":"claude","model":{"name":"claude-opus-5-5"},"permissions":"approval-required","interactive":false,
+            "prompt":"Review the change.\n\nWrite the workflow result as JSON to /repo/.teamai/…/attempts/a3f0…/out/result.json. …",
+            "result":"/repo/.teamai/…/attempts/a3f0…/out/result.json"}}
+← {"op":"op-83bf2a9d01e4","event":"accepted"}
+← {"op":"op-83bf2a9d01e4","event":"display","display":{"label":"Review the change","url":"t3://thread/5e1c","fields":{"agent":"claude"}}}
+← {"op":"op-83bf2a9d01e4","event":"finished","session":{"tool":"claude","id":"cef86f52-1d0b-4c55-9a40-7e3d3a8b1f02"},"result":{"output":{"verdict":"approve"}},"usage":{"input":18240,"output":2310}}
+```
+
+| `lease` field | Meaning |
+| --- | --- |
+| `step`, `tool` | The step and the tool to start the agent on, one of your `can.tools` |
+| `model` | `name` and optional `effort` to launch on: the step's, or else its agent definition's; absent means the tool's default |
+| `prompt`, `result` | The whole prompt, and the file the agent writes the result to. Let the agent write that one file without asking, as teamai's own launch does: for Claude, `--allowedTools=Edit(/<result>)`. Change no mode for it |
+| `resume` | A session id of the same tool to continue, for a later pass. Say `"resumed":true` in `finished` when the agent continued it. Leave it out, or say `false`, when you started a new session, and teamai does not link the new session to the old one |
+| `permissions` | `approval-required`, or `unattended` when your `can.unattended` took such a step |
+| `interactive` | `true` when a person works in the step; only a runtime with `can.hitl` gets one |
+| `maxTurns` | The agent's turn cap, when your `can.max_turns` offers one |
+
+`env` holds the attempt's markers, such as `TEAMAI_WORKFLOW_ATTEMPT` and `TEAMAI_RUN_DIR`, and the values of the keys the step `requires.env`. `provided` names those keys. A runtime whose tool keeps env in plain text, such as an agent config it saves, drops them and keeps the markers:
+
+```text
+→ {"type":"prompt",…,"env":{"TEAMAI_WORKFLOW_ATTEMPT":"r7a1…/a3f0…","TEAMAI_RUN_DIR":"/home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch","NPM_TOKEN":"npm_…"},"provided":["NPM_TOKEN"],…}
+```
+
+A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavailable`, `agent_unavailable`, `tool_failed` or `usage_limited` for what the step should record as is; teamai records any other code as `runtime_failed`, with your code and message in its message. After `cancel`, it ends `cancelled`. `reattach` reports a finished prompt as `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`, and one still running as `running`; a repeated `prompt` with the same `op` reconnects to its agent and starts no other. teamai keeps the step's `timeout` itself, with `cancel`. It checks a `budget` against `usage` once the prompt ends. The toy runtime's `agent` option runs it this way.
+
+`open` names the `tool` the attempt's prompt runs, so you can make the place for it, such as a sandbox of that agent; a command step's `open` has none. When the tool hit its usage limit, end the prompt `usage_limited`, naming the tool and the reset time when you know it. Never name the run or the step: teamai adds the command that retries it:
+
+```text
+← {"op":"op-83bf2a9d01e4","event":"failed","failure":{"code":"usage_limited","message":"claude hit its usage limit, which resets at 14:00."}}
+```
+
+```text
+✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
+```
+
+A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's or Codex's own error and keeps its text, reset time included:
+
+```text
+✖ Step "review" failed with usage_limited: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r7a1… review
+```
+
+A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed` with the same retry command at the end. So does a confined prompt, such as a judge's. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
+
+```text
+ℹ Stopped attempt a3f0… of run r7a1… on step runtime "sandbox" and closed its place. Then run: teamai workflow retry r7a1… review
+```
+
+When the tool keeps its sessions in a home of its own rather than its default one, such as a T3 provider instance with its own `CLAUDE_CONFIG_DIR`, say where in `finished.session.home`, an absolute path. teamai records it with the attempt, reads the transcript there to score and publish the step, and the next pass asks you to resume that session by id. Leave `home` out for the tool's default home, as a runtime before it did:
+
+```text
+← {"op":"op-83bf2a9d01e4","event":"finished","session":{"tool":"claude","id":"cef86f52-1d0b-4c55-9a40-7e3d3a8b1f02","home":"/Users/al/.claude-work"},"result":{"output":{"verdict":"approve"}}}
+```
+
+#### A runtime that answers confined prompts
+
+A runtime that can run an agent with one directory as its only readable root says so at `init` with `"confinedPrompt": true`, and lists in `can.confined` the tools it confines, at which level and with what access. Without `confinedPrompt`, teamai drops `can.confined` from its offer, so a [step confined to a directory](workflow.md#a-prompt-confined-to-a-directory), such as a scored pass's judge, never reaches it. The `open` for such a step has no `view`, and its `prompt` carries `confined`:
+
+```text
+← {"type":"init","ok":true,"prompt":true,"confinedPrompt":true,"can":{"exec":false,"tools":["claude"],"confined":[{"level":"best-effort","access":"read","tools":["claude"]}]}}
+→ {"type":"open","op":"op-6d2e0b91c4a7","run":"r7a1…","attempt":"a9c4…","credentials":{}}
+→ {"type":"prompt","op":"op-a3d5c18e02f9","handle":"…","cwd":"/…/runs/r7a1…/evidence","lease":{…},"confined":{"dir":"/…/runs/r7a1…/evidence","level":"best-effort","access":"read","schema":{…}},…}
+← {"op":"op-a3d5c18e02f9","event":"finished","session":{…},"result":{"output":{…}},"confined":{"level":"best-effort","access":"read"}}
+```
+
+The agent reads `dir`, read-only, and nothing else of the host. `finished` says the level and access the runtime kept, never more than it enforced. A `finished` without `confined` fails the step `runtime_failed`, a level below the one `dir` asks for fails it `confined_failed`, and a reply that is no JSON value fails it `confined_reply_invalid`. The toy runtime's `judge` option answers this way.
+
+`lease.prompt` and `cwd` name the directory exactly as `dir` spells it. A container that mounts `dir` at the same path shows the agent its parents, empty, but with your home, user name and project in their names. To hide them, mount or copy `dir` at a neutral path and replace `dir` in `cwd` and in the prompt:
+
+```text
+dir     /home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch/a9c4…
+mount   /evidence (read-only)
+prompt  "Read only the files under /home/al/…/scratch/a9c4…: …"  →  "Read only the files under /evidence: …"
+```
+
+| Error | Next step |
+| --- | --- |
+| `driver_not_found` | Add `drivers/<name>.yaml` and run `teamai pull`, or add `~/.teamai/drivers/<name>.yaml` |
+| `driver_invalid` | Fix the file the message names |
+| `driver_namespace_conflict`, `runtime_namespace_conflict` | Keep the name in one namespace, push it, and run `teamai pull` |
+| `runtime_not_found` | Install the runtime in one of the places above |
+| `runtime_not_accepted` | Run the command once attended to review and accept the revision |
+| `credential_missing` | Set the variable the message names, then start or resume again |
+| `bad_option` | Fix the option in the definition, or under `workflows.drivers` in your config |
+| `requirement_unmet` | Give one runtime of the definition everything the step requires, or change the step |
+| `login_missing` | Run `CODEX_HOME=~/.teamai/logins/codex codex login`, then retry the step |
+| `login_not_written_back` | Log in again with that command if Codex refreshed its token, then retry the step |
+| `runtime_failed`, `runtime_interrupted` | Retry the step: `teamai workflow retry <run> <step>` |
+| `runtime_lost` | The runtime stopped while the step ran, so its tool may still run there. Stop it on the runtime, delete the login lock the warning names, if any, then retry the step |
+
 ## Workspaces in your own driver
 
 A driver other than `local` that takes workspace leases keeps the run's commits where another driver or another machine can find them. Every driver follows two rules:
@@ -1320,7 +2078,7 @@ What TeamAI records to prepare an attempt stays on this machine: paths and file 
 teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}},"running":[]}'
 ```
 
-With `--prepare`, teamai makes a [clone step](#clone-workspaces)'s clone on this machine, installs its team assets and runs setup, then answers the lease with `cwd`, the clone. A call can take as long as setup takes. A clone step is held from a driver that does not list `clone` in `workspace` or does not ask with `--prepare`, and `wait.held[].missing` names `workspace.clone` or `prepare`. A clone that runs as a team role also needs `can.role`. A step [confined to a directory](#confined-steps-in-your-own-driver) needs no place: `--prepare` answers its lease with `cwd`, its `confined.dir`, and makes, sets up or snapshots nothing of the checkout for it.
+With `--prepare`, teamai makes a [clone step](#clone-workspaces)'s clone on this machine, installs its team assets and runs setup, then answers the lease with `cwd`, the clone. A call can take as long as setup takes. A clone step is held from a driver that does not list `clone` in `workspace` or does not ask with `--prepare`, and `wait.held[].missing` lists `workspace.clone` when clone support is missing, together with any gaps that providing the clone would not close, such as `prepare`, `isolation` or `env`. A clone that runs as a team role also needs `can.role`. A step [confined to a directory](#confined-steps-in-your-own-driver) needs no place: `--prepare` answers its lease with `cwd`, its `confined.dir`, and makes, sets up or snapshots nothing of the checkout for it.
 
 For each lease the driver:
 

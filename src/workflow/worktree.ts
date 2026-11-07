@@ -118,11 +118,31 @@ export const UNTRUSTED_CONFIG: readonly string[] = ['-c', `core.hooksPath=${os.d
  */
 export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
   return async (cwd, args, options) => {
-    const off = await hooksOff(cwd, env, expiresAt);
+    const off = await commandsOff(cwd, env, expiresAt);
 
-    return 'error' in off ? off.error : spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], boundedBy(options, expiresAt), { ...env, [HOOK_OFF]: 'false' });
+    if ('error' in off) return off.error;
+
+    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
   };
 }
+
+/**
+ * The variables of this process that git and the member's own git setup need: where git and its config are, the
+ * locale, the SSH agent and askpass a push signs in through, proxies and certificates. Nothing else, so a filter or
+ * command a step planted in a copy's config, which `untrustedGit` still starts, reads no token or key of the host.
+ */
+export function hostGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => HOST_GIT_ENV.has(name) || HOST_GIT_ENV.has(name.toUpperCase()) || /^LC_[A-Z]+$/.test(name)));
+}
+
+const HOST_GIT_ENV: ReadonlySet<string> = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LANGUAGE', 'TZ', 'TERM',
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
+  'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+  'GIT_EXEC_PATH', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT',
+  'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_SSH_VARIANT', 'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH',
+  'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+]);
 
 /** `options` with its timeout cut to the time left before `expiresAt`, at least 1 ms: a timeout of 0 never stops git. */
 function boundedBy(options: GitOptions | undefined, expiresAt: string | undefined): GitOptions | undefined {
@@ -136,22 +156,65 @@ function boundedBy(options: GitOptions | undefined, expiresAt: string | undefine
 /** What each `--config-env` that turns a configured hook off reads. */
 const HOOK_OFF = 'TEAMAI_GIT_HOOK_ENABLED';
 
+/** The config scopes a step cannot write: the member's own files, and what this process sets for git. */
+const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
+
+/** What each `--config-env` that sets a credential helper key reads: one variable per value, numbered. */
+const HELPER_VALUE = 'TEAMAI_GIT_CREDENTIAL_HELPER_';
+
 /**
- * The options that turn off each hook the config in `cwd` names, `hook.<name>.command` (Git 2.54 and later), which runs
- * beside the script hooks `core.hooksPath` turns off. `--config-env` reads the key up to its last `=`, which `-c` does
- * not, so a hook whose name holds one is turned off too.
+ * The options that keep what the config in `cwd` names from running, read in one `git config`:
+ * - each hook it names, `hook.<name>.command` (Git 2.54 and later), which runs beside the script hooks
+ *   `core.hooksPath` turns off. `--config-env` reads the key up to its last `=`, which `-c` does not, so a hook whose
+ *   name holds one is turned off too;
+ * - a credential helper the checkout's own config names (`credential.helper` and `credential.<url>.helper` in its local
+ *   or worktree file, which a step could write), while every helper the member's system and global config name still
+ *   runs, in their order: each such key is reset, then given again the member's own values. A push that needs
+ *   credentials then asks the member's helpers only.
  */
-async function hooksOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[] } | { error: GitResult }> {
+async function commandsOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[]; env: Record<string, string> } | { error: GitResult }> {
   // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
-  const listed = await spawnGit(cwd, ['config', '--null', '--get-regexp', '^hook\\..*\\.'], boundedBy(undefined, expiresAt), env);
+  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', '^hook\\..*\\.|^credential\\..*helper$'], boundedBy(undefined, expiresAt), env);
 
   // git config exits 1 when no key matches.
-  if (listed.code === 1) return { args: [] };
+  if (listed.code === 1) return { args: [], env: {} };
 
   if (listed.code !== 0) return { error: listed };
-  const names = new Set(listed.stdout.split('\0').flatMap((entry) => /^hook\.(.+)\.[^.]+$/.exec(entry.split('\n')[0] ?? '')?.[1] ?? []));
+  // --show-scope --null writes each entry as scope NUL key LF value NUL.
+  const fields = listed.stdout.split('\0');
+  const hooks = new Set<string>();
+  const helpers = new Map<string, Array<{ trusted: boolean; value: string }>>();
 
-  return { args: [...names].map((name) => `--config-env=hook.${name}.enabled=${HOOK_OFF}`) };
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const scope = fields[at] ?? '';
+    const entry = fields[at + 1] ?? '';
+    const newline = entry.indexOf('\n');
+    const key = newline === -1 ? entry : entry.slice(0, newline);
+    const value = newline === -1 ? '' : entry.slice(newline + 1);
+    const hook = /^hook\.(.+)\.[^.]+$/.exec(key)?.[1];
+
+    if (key.startsWith('hook.')) {
+      if (hook !== undefined) hooks.add(hook);
+      continue;
+    }
+
+    helpers.set(key, [...helpers.get(key) ?? [], { trusted: TRUSTED_SCOPES.has(scope), value }]);
+  }
+
+  const args = [...hooks].map((name) => `--config-env=hook.${name}.enabled=${HOOK_OFF}`);
+  const values: Record<string, string> = {};
+
+  for (const [key, entries] of helpers) {
+    if (entries.every((entry) => entry.trusted)) continue;
+
+    for (const value of ['', ...entries.filter((entry) => entry.trusted).map((entry) => entry.value)]) {
+      const name = `${HELPER_VALUE}${Object.keys(values).length}`;
+      values[name] = value;
+      args.push(`--config-env=${key}=${name}`);
+    }
+  }
+
+  return { args, env: values };
 }
 
 /**
@@ -225,8 +288,8 @@ export function worktreeCheckout(dir: string): string | undefined {
 }
 
 /** A path git keeps for this checkout. A linked worktree's `.git` is a file, so the path is not `<checkout>/.git`. */
-export async function gitPath(cwd: string, name: string): Promise<string | undefined> {
-  const result = await git(cwd, ['rev-parse', '--git-path', name]);
+export async function gitPath(cwd: string, name: string, runGit: Git = git): Promise<string | undefined> {
+  const result = await runGit(cwd, ['rev-parse', '--git-path', name]);
   const printed = result.code === 0 ? result.stdout.trim() : '';
 
   return printed === '' ? undefined : path.resolve(cwd, printed);
@@ -323,13 +386,16 @@ export async function markSetup(dir: string, state: 'unfinished' | 'finished'): 
   else await fs.rm(marker, { force: true });
 }
 
-/** Where HEAD is, such as `on refs/heads/other` or `detached at <commit>`, when it is not on `branch`. Undefined when it is. */
-export async function offBranch(dir: string, branch: string): Promise<string | undefined> {
-  const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+/**
+ * Where HEAD is, such as `on refs/heads/other` or `detached at <commit>`, when it is not on `branch`. Undefined when it
+ * is. `runGit` runs each git call.
+ */
+export async function offBranch(dir: string, branch: string, runGit: Git = git): Promise<string | undefined> {
+  const head = (await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
 
   if (head === `refs/heads/${branch}`) return undefined;
 
-  return head ? `on ${head}` : `detached at ${(await git(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
+  return head ? `on ${head}` : `detached at ${(await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
 }
 
 /**
@@ -350,9 +416,11 @@ export async function reconcileCopy(main: string, branch: string, expected: stri
   }
 
   const own = worktreePath(main, branch);
+  // An earlier step ran in the branch's copy, so its config may start anything.
+  const copyGit = untrustedGit(hostGitEnv());
 
   if (await fs.stat(own).then((stats) => stats.isDirectory(), () => false)) {
-    const on = await offBranch(own, branch);
+    const on = await offBranch(own, branch, copyGit);
 
     if (on) return { error: `Workspace ${own} is ${on}, not on branch ${branch}, so the run does not continue there. Check out ${branch} in ${own}, then resume the run.` };
   }
@@ -367,7 +435,7 @@ export async function reconcileCopy(main: string, branch: string, expected: stri
       return { error: `Workspace ${dir} was left by a reader and is not back, so the run does not continue there. Put it back as the step found it, then resume the run.` };
     }
 
-    const status = await copyStatus(dir);
+    const status = await copyStatus(dir, copyGit);
 
     if ('error' in status) return status;
 
@@ -384,7 +452,7 @@ export async function reconcileCopy(main: string, branch: string, expected: stri
     return moved.code === 0 ? undefined : { error: `Branch ${branch} could not be moved from ${tip} to ${expected}: ${moved.stderr.trim()}` };
   }
 
-  const merged = await git(dir, ['merge', '--ff-only', '--quiet', expected]);
+  const merged = await copyGit(dir, ['merge', '--ff-only', '--quiet', expected]);
 
   return merged.code === 0 ? undefined : { error: `Workspace ${dir} could not be moved to ${expected}: ${merged.stderr.trim()}` };
 }
@@ -440,24 +508,24 @@ async function lackedCommits(dir: string, commits: string[]): Promise<string[]> 
  * with no unmerged file and no merge in progress, such as unrelated histories or an untracked file in the way, is
  * `failed` with git's message.
  */
-export async function mergeBranch(dir: string, commit: string): Promise<
+export async function mergeBranch(dir: string, commit: string, runGit: Git): Promise<
   { state: 'merged' } | { state: 'conflict'; files: string[] } | { state: 'failed'; error: string }
 > {
-  const contained = await git(dir, ['merge-base', '--is-ancestor', commit, 'HEAD']);
+  const contained = await runGit(dir, ['merge-base', '--is-ancestor', commit, 'HEAD']);
 
   if (contained.code === 0) return { state: 'merged' };
 
-  const merged = await git(dir, [
+  const merged = await runGit(dir, [
     '-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost',
     'merge', '--no-ff', '--no-edit', commit,
   ]);
 
   if (merged.code === 0) return { state: 'merged' };
-  const unmerged = await gitPaths(dir, ['diff', '--name-only', '--diff-filter=U']);
+  const unmerged = await gitPaths(dir, ['diff', '--name-only', '--diff-filter=U'], runGit);
 
   if (unmerged.code !== 0) return { state: 'failed', error: unmerged.stderr.trim() || 'git diff failed' };
   // An earlier attempt that left its merge unfinished resolves it as a conflict, even with every file staged.
-  const unfinished = (await git(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])).code === 0;
+  const unfinished = (await runGit(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])).code === 0;
 
   if (unmerged.paths.length > 0 || unfinished) return { state: 'conflict', files: unmerged.paths };
 
@@ -471,30 +539,30 @@ export async function mergeBranch(dir: string, commit: string): Promise<
  * With `resume`, a `saved` an interrupted run of this left is the branch's copy, and the rest is done again over it.
  */
 export async function applyBaseConfig(
-  dir: string, commit: string, hooks: string, saved: string, options: { resume?: true; paths?: readonly string[] } = {},
+  dir: string, commit: string, hooks: string, saved: string, options: { run: Git; resume?: true; paths?: readonly string[] },
 ): Promise<{ ok: true; saved: string } | { ok: false; message: string }> {
-  await git(dir, ['config', '--worktree', 'core.hooksPath', hooks]);
+  await options.run(dir, ['config', '--worktree', 'core.hooksPath', hooks]);
   const linked = await symlinkedParent(dir);
 
   if (linked) {
     // Every run branch starts from the base, so no step can fix a symlink the base has.
-    const inBase = (await git(dir, ['ls-tree', commit, '--', linked.parent])).stdout.startsWith('120000 ');
+    const inBase = (await options.run(dir, ['ls-tree', commit, '--', linked.parent])).stdout.startsWith('120000 ');
 
     if (inBase) {
       return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} in the run's base commit ${commit}, so it was not reset. Commit ${linked.parent} as a directory on the base branch, then start a new run.` };
     }
 
-    const branch = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim().replace(/^refs\/heads\//, '');
+    const branch = (await options.run(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim().replace(/^refs\/heads\//, '');
 
     return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} on branch ${branch}, so it was not reset. Commit ${linked.parent} as a directory on branch ${branch} in ${dir}, then retry the step.` };
   }
 
   // Listed before anything is removed, so a base git cannot read leaves the branch's agent files in place.
-  const present = await gitPaths(dir, ['ls-tree', '--name-only', commit, '--', ...AGENT_PATHS]);
+  const present = await gitPaths(dir, ['ls-tree', '--name-only', commit, '--', ...AGENT_PATHS], options.run);
 
   if (present.code !== 0) return { ok: false, message: unreadBase(dir, commit, present.stderr) };
   // A failed checkout still stages the base copy, so the index is put back with the files.
-  const indexFile = await gitPath(dir, 'index');
+  const indexFile = await gitPath(dir, 'index', options.run);
   const index = indexFile === undefined ? undefined : await fs.readFile(indexFile).catch(() => undefined);
 
   if (indexFile === undefined || index === undefined) {
@@ -514,7 +582,7 @@ export async function applyBaseConfig(
 
   if (!kept) {
     await fs.mkdir(copying);
-    await fs.writeFile(path.join(copying, '_conflicts'), (await git(dir, ['ls-files', '-u', '-z', '--', ...AGENT_PATHS])).stdout);
+    await fs.writeFile(path.join(copying, '_conflicts'), (await options.run(dir, ['ls-files', '-u', '-z', '--', ...AGENT_PATHS])).stdout);
     await saveConfig(dir, copying, options.paths);
     await fs.rename(copying, saved);
   }
@@ -523,7 +591,7 @@ export async function applyBaseConfig(
   const conflicts = await fs.readFile(path.join(saved, '_conflicts'), 'utf8');
 
   for (const relative of AGENT_PATHS) await fs.rm(path.join(dir, relative), { recursive: true, force: true });
-  const refused = await checkoutBaseConfig(dir, commit, present.paths);
+  const refused = await checkoutBaseConfig(dir, commit, present.paths, options.run);
 
   if (refused) {
     await putBackBranchConfig(dir, saved, { indexFile, index });
@@ -547,16 +615,16 @@ export async function applyBaseConfig(
 }
 
 /** Checks out the base's agent paths `paths` over the removed branch copy. Why the step cannot run, when it cannot. */
-async function checkoutBaseConfig(dir: string, commit: string, paths: string[]): Promise<string | undefined> {
+async function checkoutBaseConfig(dir: string, commit: string, paths: string[], runGit: Git): Promise<string | undefined> {
   if (paths.length > 0) {
-    const restored = await git(dir, ['checkout', commit, '--', ...paths]);
+    const restored = await runGit(dir, ['checkout', commit, '--', ...paths]);
 
     if (restored.code !== 0) {
       return `Agent configuration in ${dir} could not be checked out from the run's base commit ${commit}, so the step did not run and the branch's agent files were left as they were. Git said: ${restored.stderr.trim() || 'no message'}. Fix what git reported, then retry the step.`;
     }
   }
 
-  const extra = await gitPaths(dir, ['diff', '--name-only', commit, '--', ...AGENT_PATHS]);
+  const extra = await gitPaths(dir, ['diff', '--name-only', commit, '--', ...AGENT_PATHS], runGit);
 
   if (extra.code !== 0) return unreadBase(dir, commit, extra.stderr);
 
@@ -611,11 +679,11 @@ async function linkedParent(dir: string, relative: string): Promise<string | und
 }
 
 /** Puts saved conflict stages back after the base checkout cleared them, before the step runs. */
-export async function reopenConfigConflicts(dir: string, saved: string): Promise<void> {
+export async function reopenConfigConflicts(dir: string, saved: string, runGit: Git): Promise<void> {
   const conflicts = await fs.readFile(path.join(saved, '_conflicts'), 'utf8').catch(() => '');
   const paths = conflictPaths(conflicts);
 
-  if (paths.length > 0) await restoreConflictStages(dir, conflicts, paths);
+  if (paths.length > 0) await restoreConflictStages(dir, conflicts, paths, runGit);
 }
 
 /** Where a copy saved with paths beyond AGENT_PATHS lists them, so every later step on it covers the same paths. */
@@ -661,8 +729,8 @@ export async function replaceConfig(dir: string, from: string): Promise<void> {
  * The commit `git add` would record for the gitlink at `relative`, or undefined when that path is not a gitlink.
  * A checkout inside the submodule is that commit. The index commit is the fallback when the checkout cannot be read.
  */
-async function gitlinkCommit(dir: string, relative: string): Promise<string | undefined> {
-  const listed = await git(dir, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', relative]);
+async function gitlinkCommit(dir: string, relative: string, run: Git): Promise<string | undefined> {
+  const listed = await run(dir, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', relative]);
 
   if (listed.code !== 0) return undefined;
 
@@ -677,15 +745,18 @@ async function gitlinkCommit(dir: string, relative: string): Promise<string | un
 
   if (staged === undefined) return undefined;
   const indexSha = staged.slice(0, staged.indexOf('\t')).split(' ')[1] ?? '';
-  const head = await git(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const head = await run(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD']);
   const checked = head.code === 0 ? head.stdout.trim() : '';
 
   return /^[0-9a-f]{40}$/i.test(checked) ? checked : indexSha;
 }
 
-/** The content key of `relative` in `dir`, or `absent` when that path is not there. A gitlink is `gitlink:<commit>`, the commit checked out in it. */
-export async function worktreeContentKey(dir: string, relative: string): Promise<string> {
-  const gitlink = await gitlinkCommit(dir, relative);
+/**
+ * The content key of `relative` in `dir`, or `absent` when that path is not there. A gitlink is `gitlink:<commit>`, the
+ * commit checked out in it. `run` is the git it runs, required so a caller in a place a step controls passes `untrustedGit`.
+ */
+export async function worktreeContentKey(dir: string, relative: string, run: Git): Promise<string> {
+  const gitlink = await gitlinkCommit(dir, relative, run);
 
   if (gitlink !== undefined && gitlink !== '') return `gitlink:${gitlink}`;
   const files = await fileManifest(dir, [relative]);
@@ -740,7 +811,7 @@ export async function unchangedOverlayPaths(dir: string, saved: string, dirty: r
  * worktree's files, nothing is put back, `saved` is kept, and the reason is returned as a clause. `runGit` runs every
  * git call.
  */
-export async function restoreUneditedConfig(dir: string, _commit: string, saved: string, runGit: Git = git): Promise<string | undefined> {
+export async function restoreUneditedConfig(dir: string, _commit: string, saved: string, runGit: Git): Promise<string | undefined> {
   // Listed before anything changes. The index stays as it is until the files are back.
   const paths = await savedConfigPaths(saved);
   const unmergedListed = await gitPaths(dir, ['diff', '--name-only', '--diff-filter=U'], runGit);
@@ -994,15 +1065,15 @@ export async function commitWork(
  * Pushes when `origin` exists and the branch is ahead of the copy `origin` has.
  * A retry that adds no commit still pushes when an earlier attempt left commits unpublished,
  * including a first push that never created the remote branch.
- * No origin is not a failure.
+ * No origin is not a failure. `runGit` runs each git call.
  */
-export async function pushIfOrigin(dir: string, branch: string, commits: string[]): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
-  const origin = await git(dir, ['remote', 'get-url', 'origin']);
+export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: Git = git): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
+  const origin = await runGit(dir, ['remote', 'get-url', 'origin']);
 
   if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';
 
-  if (commits.length === 0 && !await branchNeedsPush(dir, branch)) return 'unchanged';
-  const pushed = await git(dir, ['push', '-u', 'origin', `${branch}:${branch}`]);
+  if (commits.length === 0 && !await branchNeedsPush(dir, branch, runGit)) return 'unchanged';
+  const pushed = await runGit(dir, ['push', '-u', 'origin', `${branch}:${branch}`]);
 
   return pushed.code === 0 ? 'pushed' : { error: (pushed.stderr || pushed.stdout).trim() || 'git push failed' };
 }
@@ -1013,31 +1084,31 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
  * With no tracking refs at all, push when the tip is not already on another local branch:
  * a first push that never landed leaves commits only on this branch.
  */
-async function branchNeedsPush(dir: string, branch: string): Promise<boolean> {
-  const local = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+async function branchNeedsPush(dir: string, branch: string, runGit: Git): Promise<boolean> {
+  const local = await runGit(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
 
   if (local.code !== 0) return false;
   const tip = local.stdout.trim();
   const remote = `refs/remotes/origin/${branch}`;
-  const known = await git(dir, ['rev-parse', '--verify', '--quiet', remote]);
+  const known = await runGit(dir, ['rev-parse', '--verify', '--quiet', remote]);
 
   if (known.code === 0) {
-    const contained = await git(dir, ['merge-base', '--is-ancestor', tip, remote]);
+    const contained = await runGit(dir, ['merge-base', '--is-ancestor', tip, remote]);
 
     return contained.code !== 0;
   }
 
-  const listed = await git(dir, ['for-each-ref', '--format=%(refname)', 'refs/remotes/origin']);
+  const listed = await runGit(dir, ['for-each-ref', '--format=%(refname)', 'refs/remotes/origin']);
 
-  if (listed.stdout.trim() === '') return tipIsOnlyOn(dir, branch, tip);
-  const published = await git(dir, ['branch', '-r', '--contains', tip]);
+  if (listed.stdout.trim() === '') return tipIsOnlyOn(dir, branch, tip, runGit);
+  const published = await runGit(dir, ['branch', '-r', '--contains', tip]);
 
   return published.code === 0 && published.stdout.trim() === '';
 }
 
 /** True when no other local branch already contains this tip. */
-async function tipIsOnlyOn(dir: string, branch: string, tip: string): Promise<boolean> {
-  const holders = await git(dir, ['branch', '--no-color', '--contains', tip]);
+async function tipIsOnlyOn(dir: string, branch: string, tip: string, runGit: Git): Promise<boolean> {
+  const holders = await runGit(dir, ['branch', '--no-color', '--contains', tip]);
 
   if (holders.code !== 0) return true;
   const names = holders.stdout.split('\n').map((line) => line.trim().replace(/^[*+] /, '')).filter((name) => name !== '');
@@ -1196,8 +1267,8 @@ export type UnrestoredMarker = z.infer<typeof UnrestoredMarker>;
 const UNRESTORED_MARKER = 'teamai-unrestored';
 
 /** A copy's status, with every untracked file and submodule change whatever the user's status config hides. */
-async function copyStatus(dir: string): Promise<{ lines: string[] } | { error: string }> {
-  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']);
+async function copyStatus(dir: string, runGit: Git): Promise<{ lines: string[] } | { error: string }> {
+  const status = await runGit(dir, ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']);
 
   if (status.code !== 0) return { error: status.stderr.trim() || 'git status failed' };
 
@@ -1205,14 +1276,14 @@ async function copyStatus(dir: string): Promise<{ lines: string[] } | { error: s
 }
 
 /** Why `dir` is not on `branch` at `commit` with the status `found`, submodules included. Undefined when it is. */
-async function copyLeftOver(dir: string, { branch, commit, found }: { branch: string; commit: string; found: string[] }): Promise<string | undefined> {
-  const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+async function copyLeftOver(dir: string, { branch, commit, found }: { branch: string; commit: string; found: string[] }, runGit: Git): Promise<string | undefined> {
+  const head = (await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
 
   if (head !== `refs/heads/${branch}`) return head ? `HEAD is on ${head}` : 'HEAD is detached';
-  const at = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+  const at = (await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim();
 
   if (at !== commit) return `HEAD is at ${at}`;
-  const status = await copyStatus(dir);
+  const status = await copyStatus(dir, runGit);
 
   if ('error' in status) return status.error;
   const was = new Set(found);
@@ -1228,12 +1299,12 @@ async function copyLeftOver(dir: string, { branch, commit, found }: { branch: st
  * Marks `dir` as left by a reader before the reader changes anything, with the status it has now. Putting the copy back
  * removes the mark, so a driver killed before that leaves the copy refused to later steps until it is back.
  */
-export async function markReadCopy(dir: string, { branch, step }: { branch: string; step: string }): Promise<{ found: string[] } | { error: string }> {
-  const status = await copyStatus(dir);
+export async function markReadCopy(dir: string, { branch, step }: { branch: string; step: string }, runGit: Git): Promise<{ found: string[] } | { error: string }> {
+  const status = await copyStatus(dir, runGit);
 
   if ('error' in status) return status;
-  const head = await git(dir, ['rev-parse', 'HEAD']);
-  const marker = await gitPath(dir, UNRESTORED_MARKER);
+  const head = await runGit(dir, ['rev-parse', 'HEAD']);
+  const marker = await gitPath(dir, UNRESTORED_MARKER, runGit);
 
   if (head.code !== 0 || !marker) return { error: head.stderr.trim() || 'its git directory could not be found' };
   const record: UnrestoredMarker = { branch, commit: head.stdout.trim(), step, reason: 'the reader did not finish', found: status.lines };
@@ -1252,8 +1323,8 @@ export async function releaseReadCopy(dir: string): Promise<void> {
   await clearReadCopyMark(dir);
 }
 
-async function clearReadCopyMark(dir: string): Promise<void> {
-  const marker = await gitPath(dir, UNRESTORED_MARKER);
+async function clearReadCopyMark(dir: string, runGit: Git = git): Promise<void> {
+  const marker = await gitPath(dir, UNRESTORED_MARKER, runGit);
 
   if (marker) await fs.rm(marker, { force: true });
 }
@@ -1287,7 +1358,7 @@ export async function unrestoredCopy(dir: string): Promise<
     return { state: 'unrestored', dir, marker: parsed.data, left: `it had changes when the step started, so teamai cannot tell when it is back; delete ${file} once it is` };
   }
 
-  const left = await copyLeftOver(dir, parsed.data);
+  const left = await copyLeftOver(dir, parsed.data, untrustedGit(hostGitEnv()));
 
   if (left) return { state: 'unrestored', dir, marker: parsed.data, left };
   await fs.rm(file, { force: true });
@@ -1300,8 +1371,8 @@ function gitlinkLines(listed: string): string[] {
 }
 
 /** Each submodule path `commit` records, with the commit it records there. */
-async function treeGitlinks(dir: string, commit: string): Promise<Map<string, string> | { error: string }> {
-  const listed = await git(dir, ['ls-tree', '-r', '-z', commit]);
+async function treeGitlinks(dir: string, commit: string, runGit: Git): Promise<Map<string, string> | { error: string }> {
+  const listed = await runGit(dir, ['ls-tree', '-r', '-z', commit]);
 
   if (listed.code !== 0) return { error: listed.stderr.trim() || `git ls-tree ${commit} failed` };
 
@@ -1313,9 +1384,9 @@ async function treeGitlinks(dir: string, commit: string): Promise<Map<string, st
 }
 
 /** Submodule paths whose commit `to` records and `from` does not, at any depth below `prefix`. */
-async function movedModules(dir: string, from: string | undefined, to: string, prefix: string): Promise<{ path: string; dir: string; commit: string }[] | { error: string }> {
-  const before = from ? await treeGitlinks(dir, from) : new Map<string, string>();
-  const after = await treeGitlinks(dir, to);
+async function movedModules(dir: string, from: string | undefined, to: string, prefix: string, runGit: Git): Promise<{ path: string; dir: string; commit: string }[] | { error: string }> {
+  const before = from ? await treeGitlinks(dir, from, runGit) : new Map<string, string>();
+  const after = await treeGitlinks(dir, to, runGit);
 
   if ('error' in before) return before;
 
@@ -1328,7 +1399,7 @@ async function movedModules(dir: string, from: string | undefined, to: string, p
     if (was === commit) continue;
     const sub = path.join(dir, relative);
     moved.push({ path: `${prefix}${relative}`, dir: sub, commit });
-    const nested = await movedModules(sub, was, commit, `${prefix}${relative}/`);
+    const nested = await movedModules(sub, was, commit, `${prefix}${relative}/`, runGit);
 
     if ('error' in nested) return nested;
     moved.push(...nested);
@@ -1341,13 +1412,13 @@ async function movedModules(dir: string, from: string | undefined, to: string, p
  * Copies each submodule commit `to` records and `from` does not, at any depth, into this repository's own store. A gitlink
  * does not keep its commit reachable, and removing the copy deletes the submodule's store with it.
  */
-async function keepModuleCommits(dir: string, { from, to, attempt }: { from: string; to: string; attempt: string }): Promise<{ modules?: string } | { error: string }> {
-  const moved = await movedModules(dir, from, to, '');
+async function keepModuleCommits(dir: string, { from, to, attempt }: { from: string; to: string; attempt: string }, runGit: Git): Promise<{ modules?: string } | { error: string }> {
+  const moved = await movedModules(dir, from, to, '', runGit);
 
   if ('error' in moved) return moved;
 
   if (moved.length === 0) return {};
-  const common = await git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const common = await runGit(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
 
   if (common.code !== 0) return { error: common.stderr.trim() || 'the git directory could not be found' };
   const modules = `refs/teamai/kept-modules/${attempt}/`;
@@ -1355,7 +1426,7 @@ async function keepModuleCommits(dir: string, { from, to, attempt }: { from: str
   for (const module of moved) {
     // Named by commit: a path need not be a valid ref name, and vendor would clash with vendor/inner. This copy stays
     // local, so the user's push policy and hooks do not apply.
-    const pushed = await git(module.dir, ['push', '-q', '--no-verify', '--no-recurse-submodules', common.stdout.trim(), `${module.commit}:${modules}${module.commit}`]);
+    const pushed = await runGit(module.dir, ['push', '-q', '--no-verify', '--no-recurse-submodules', common.stdout.trim(), `${module.commit}:${modules}${module.commit}`]);
 
     if (pushed.code !== 0) return { error: pushed.stderr.trim() || `the commit in ${module.path} could not be kept` };
   }
@@ -1368,9 +1439,9 @@ async function keepModuleCommits(dir: string, { from, to, attempt }: { from: str
  * or untracked files, or a nested submodule's commit its parent has not recorded. A submodule with no checkout left counts
  * too, since its files may have gone with it.
  */
-async function unkeptRepositories(dir: string, { paths, commit }: { paths: string[]; commit: string }): Promise<{ paths: string[] } | { error: string }> {
-  const recorded = await treeGitlinks(dir, commit);
-  const staged = await git(dir, ['ls-files', '-s', '-z']);
+async function unkeptRepositories(dir: string, { paths, commit }: { paths: string[]; commit: string }, runGit: Git): Promise<{ paths: string[] } | { error: string }> {
+  const recorded = await treeGitlinks(dir, commit, runGit);
+  const staged = await runGit(dir, ['ls-files', '-s', '-z']);
 
   if ('error' in recorded || staged.code !== 0) return { error: 'error' in recorded ? recorded.error : staged.stderr.trim() || 'git ls-files failed' };
   const gitlinks = new Set([...recorded.keys(), ...gitlinkLines(staged.stdout).map((line) => line.slice(line.indexOf('\t') + 1))]);
@@ -1384,7 +1455,7 @@ async function unkeptRepositories(dir: string, { paths, commit }: { paths: strin
 
     if (!gitlinks.has(name) && name === relative) continue;
     const repo = path.join(dir, name);
-    const top = await git(repo, ['rev-parse', '--show-prefix']);
+    const top = await runGit(repo, ['rev-parse', '--show-prefix']);
 
     if (top.code !== 0 || top.stdout.trim() !== '') {
       if (gitlinks.has(name)) unkept.push(name);
@@ -1392,7 +1463,7 @@ async function unkeptRepositories(dir: string, { paths, commit }: { paths: strin
     }
 
     for (const args of [status, ['submodule', '--quiet', 'foreach', '--recursive', `test -z "$(git ${status.join(' ')})" || echo "$displaypath"`]]) {
-      const listed = await git(repo, args);
+      const listed = await runGit(repo, args);
 
       if (listed.code !== 0) return { error: listed.stderr.trim() || `git ${args[0]} failed in ${name}` };
 
@@ -1419,19 +1490,19 @@ export function keptSentence(kept: KeptChanges): string {
  * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back keeps its mark with the reason, so
  * later steps there are refused until it is.
  */
-export async function putBackCopy({ dir, branch, commit, found, changed, attempt, step }: {
-  dir: string; branch: string; commit: string; found: string[]; changed: string[]; attempt: string; step: string;
+export async function putBackCopy({ dir, branch, commit, found, changed, attempt, step, run }: {
+  dir: string; branch: string; commit: string; found: string[]; changed: string[]; attempt: string; step: string; run: Git;
 }): Promise<
   { state: 'untouched' } | { state: 'restored'; kept: KeptChanges } | { state: 'unrestored'; reason: string; kept?: KeptChanges }
 > {
   if (changed.length === 0) {
-    await clearReadCopyMark(dir);
+    await clearReadCopyMark(dir, run);
 
     return { state: 'untouched' };
   }
 
   const unrestored = async (reason: string, kept?: KeptChanges): Promise<{ state: 'unrestored'; reason: string; kept?: KeptChanges }> => {
-    const marker = await gitPath(dir, UNRESTORED_MARKER);
+    const marker = await gitPath(dir, UNRESTORED_MARKER, run);
     const record: UnrestoredMarker = { branch, commit, step, reason, found };
 
     if (marker) await writeJsonAtomic(marker, record);
@@ -1440,25 +1511,25 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   };
 
   // The keep below records a submodule only as its commit, so a submodule update would destroy its files.
-  const dirty = await unkeptRepositories(dir, { paths: changed, commit });
+  const dirty = await unkeptRepositories(dir, { paths: changed, commit }, run);
 
   if ('error' in dirty) return unrestored(dirty.error);
 
   if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
   // A commit of the whole tree, not `git stash`: the stash list is shared by every worktree, and a stash leaves out a submodule's commit.
   const ref = `refs/teamai/kept/${attempt}`;
-  const added = await stageAll(dir);
-  const tree = added.code === 0 ? await git(dir, ['write-tree']) : added;
+  const added = await stageAll(dir, run);
+  const tree = added.code === 0 ? await run(dir, ['write-tree']) : added;
 
   const committed = tree.code === 0
-    ? await git(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', 'HEAD', '-m', `teamai: kept ${step}`])
+    ? await run(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', 'HEAD', '-m', `teamai: kept ${step}`])
     : tree;
 
   if (committed.code !== 0) return unrestored(committed.stderr.trim() || 'its changes could not be kept');
-  const modules = await keepModuleCommits(dir, { from: commit, to: committed.stdout.trim(), attempt });
+  const modules = await keepModuleCommits(dir, { from: commit, to: committed.stdout.trim(), attempt }, run);
 
   if ('error' in modules) return unrestored(modules.error);
-  const recorded = await git(dir, ['update-ref', ref, committed.stdout.trim()]);
+  const recorded = await run(dir, ['update-ref', ref, committed.stdout.trim()]);
 
   // Without the ref, a reset would lose the changes.
   if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
@@ -1467,7 +1538,7 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   // A superproject reset leaves initialized submodules where the step moved them. It must not recurse into a submodule an
   // earlier step left dirty.
   const noRecurse = ['-c', 'submodule.recurse=false'];
-  const gitlinks = await treeGitlinks(dir, commit);
+  const gitlinks = await treeGitlinks(dir, commit, run);
 
   if ('error' in gitlinks) return unrestored(gitlinks.error, kept);
   // Only the submodules the step changed: an update of any other would undo what an earlier step left there.
@@ -1475,16 +1546,16 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   const update = touched.length > 0 ? [['submodule', '--quiet', 'update', '--checkout', '--recursive', '--', ...touched]] : [];
 
   for (const args of [[...noRecurse, 'checkout', '-q', '-f', branch], [...noRecurse, 'reset', '-q', '--hard', commit], ['clean', '-q', '-fd'], ...update]) {
-    const restored = await git(dir, args);
+    const restored = await run(dir, args);
 
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }
 
   // Exit codes are not enough: git clean skips a repository the step created, and a later git add -A commits it.
-  const left = await copyLeftOver(dir, { branch, commit, found });
+  const left = await copyLeftOver(dir, { branch, commit, found }, run);
 
   if (left) return unrestored(left, kept);
-  await clearReadCopyMark(dir);
+  await clearReadCopyMark(dir, run);
 
   return { state: 'restored', kept };
 }

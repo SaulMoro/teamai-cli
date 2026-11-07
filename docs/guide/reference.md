@@ -61,7 +61,7 @@ sharing:
 
 workflows:
   retention: 14d              # how long doctor --fix leaves what a settled run left: a duration such as 14d, or never
-  driver: local                # the driver teamai score, score --drain and a session start start their runs for: local, none, or a driver's name
+  driver: local                # the driver for the runs that teamai score, benchmark run and the other commands that start a workflow, score --drain and a session start begin: local, none, or a driver's name
 
 ```
 
@@ -113,7 +113,7 @@ The member settings are `ai.tool`, `workflows.*`, `recallEnabled`, `contributeHi
 | Recall on for the whole team | `sharing: { recall: { enabled: true } }` | the team's `teamai.yaml` |
 | No judging of the sessions you run by hand, in any workspace | `scoring: { sessions: { attended: off } }` | `~/.teamai/config.yaml` |
 | Keep what workflow runs leave for a week on this machine ([The branches a run leaves](./workflow.md#the-branches-a-run-leaves)) | `workflows: { retention: 7d }` | `~/.teamai/config.yaml` |
-| Leave the runs `teamai score`, `teamai score --drain` and a session start begin to driver `acme-sandbox`, which this machine does not run: each run waits for it. `workflow start` and `resume` do not read it | `workflows: { driver: acme-sandbox }` | the team's `teamai.yaml` |
+| Leave the runs `teamai score`, `teamai benchmark run` and the other commands that start a workflow, `teamai score --drain` and a session start begin to driver `acme-sandbox`, which this machine does not run: each run waits for it. `workflow start` and `resume` do not read it | `workflows: { driver: acme-sandbox }` | the team's `teamai.yaml` |
 
 `teamai doctor` names the file of the workspace it runs in. The dashboard's [Member settings](./dashboard.md#member-settings) panel shows the same for the workspace you select.
 
@@ -182,7 +182,7 @@ A value of the wrong type in `~/.teamai/config.yaml` is skipped with a warning, 
 
 #### AI tool (`ai.tool`)
 
-teamai's own AI calls (enrich, codebase, import, promote, the votes judge) run on the first installed tool that teamai launches: Claude Code and its internal builds first, then Codex and its internal builds, then the other tools [Tool support](./tool-support.md) marks for AI calls. To use another, name a tool id such as `codex`. The first of these that is set wins:
+teamai's own AI calls (enrich, codebase, import, promote) run on the first installed tool that teamai launches: Claude Code and its internal builds first, then Codex and its internal builds, then the other tools [Tool support](./tool-support.md) marks for AI calls. To use another, name a tool id such as `codex`. The first of these that is set wins:
 
 1. `TEAMAI_AI_TOOL`, for one shell.
 2. `ai.tool` in the config of the workspace or self install the command runs in, `~/.teamai/projects/<slug>/config.yaml`.
@@ -246,6 +246,81 @@ teamai webhook list
 teamai webhook test
 teamai webhook test --dry-run
 ```
+
+### Team tools (`tools/`)
+
+A team on an internal build or a fork of a supported tool adds it as an instance of the shipped tool, with no release. An instance sets another command, home and paths. It keeps the tool's launch flags and session, token, hook and MCP formats. An instance with a home of its own keeps sessions of its own; one that keeps the tool's home writes that tool's sessions.
+
+```yaml
+# tools/acme-claude.yaml in the team repo
+schemaVersion: v1alpha1
+name: acme-claude                  # the file's name
+extends: claude                    # the shipped tool it is an instance of
+command: acme-claude               # the name of an executable on PATH, never a path
+home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
+# paths: { skills: .acme-claude/skills }   # optional; without it, claude's paths under .acme-claude/
+```
+
+A member enables it like any tool:
+
+```bash
+teamai init --agent claude,acme-claude
+teamai pull                                        # skills, rules, hooks and MCP go to .acme-claude/
+teamai workflow start review --tools default=acme-claude
+teamai score --session <id> --source acme-claude --scorer review-quality
+```
+
+The step runs `acme-claude`, and its session is read from `$ACME_CLAUDE_CONFIG_DIR/projects/`, else `~/.acme-claude/projects/`. It is recorded, resumed and scored as `acme-claude`'s, never as Claude's.
+
+**Accepting the command.** An instance that sets `command` runs a program a teammate named. Its first run asks in a terminal:
+
+```text
+Tool "acme-claude" comes from the team repo (…/tools/acme-claude.yaml, content 3f9a1c0e7b2d), which you have not accepted on this machine. It runs acme-claude as you, with your files, in place of claude. Review the file before you accept it.
+Run it? [y/N]
+```
+
+The line you type answers this question alone. An approval or choice that waits at the same terminal is asked again once you answer. `teamai workflow cancel` ends the question unanswered, and the command does not run. Ctrl-C stops the run without answering, and `teamai workflow resume` asks again.
+
+An unattended run (`TEAMAI_MODE=unattended`, CI, no terminal) refuses it with `tool_not_accepted` until someone accepts it once in a terminal. The answer is kept in `~/.teamai/trust/tools.json` for that file's content: a commit that leaves the file as it is asks nothing, and an edit asks again. An instance with only `home` or `paths` runs the shipped command and needs no acceptance.
+
+**Adjusting a shipped tool.** An instance named like a shipped tool adjusts it. Its `paths` replace that tool's paths whole, as a `toolPaths` entry does, and win over one:
+
+```yaml
+# tools/claude.yaml
+schemaVersion: v1alpha1
+name: claude
+extends: claude
+paths: { skills: .claude/team-skills, rules: .claude/rules }
+```
+
+`teamai doctor` names each key such `paths` drop: `paths in tools/claude.yaml replaces claude's default entry whole and drops keys the default provides: settings (.claude/settings.json — hook reconciliation silently skips the tool), …`.
+
+**Your own build.** `~/.teamai/tools/<name>.yaml` holds your own instances. teamai reads that directory and never writes it. One there replaces the team's of the same name for you, needs no acceptance, and is ignored by `workflow resume --next`, which runs a teammate's run on the team's tools.
+
+Its `command` is a bare name on PATH too. To run a build you compiled, put its directory on PATH and name the executable:
+
+```yaml
+# ~/.teamai/tools/acme-claude.yaml
+schemaVersion: v1alpha1
+name: acme-claude
+extends: claude
+command: acme-claude-dev           # found in ~/src/acme-claude/bin; ~/src/acme-claude/bin/acme-claude-dev is refused
+home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
+```
+
+```bash
+export PATH="$HOME/src/acme-claude/bin:$PATH"     # in ~/.zshrc or ~/.bashrc
+teamai workflow start review --tools default=acme-claude
+```
+
+**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`, or when `command` is a path such as `./scripts/acme-claude`, or holds `:`, `*` or `?`: the program at a path can change without the file changing, so acceptance would not cover it. teamai looks `command` up in the PATH directories alone, on Windows too, not in the checkout, so a file of that name in the checkout does not run in its place unless the member's PATH holds `.` or an empty entry.
+
+```text
+Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …
+Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
+```
+
+Its own sessions need a tool whose format carries another platform id: Claude Code, Qoder, Codex, JoyCode and Cursor. An instance of another tool launches and receives files, and teamai reads no sessions of it. teamai does not render agents for an instance yet. Instances never appear on the [tool support](./tool-support.md) page.
 
 ---
 

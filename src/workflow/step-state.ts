@@ -3,7 +3,8 @@ import { AgentObservationSchema, ObservedEffortSchema, ObservedModelSchema, Used
 import { DriverSchema } from '../driver-identity.js';
 import { RunModeSchema } from '../launch-context.js';
 import { WorkOutcomeSchema } from '../outcomes.js';
-import { ACCESS_LEVELS, CONFINED_LEVELS, ConfinedUsageSchema, CostSchema } from '../tool-launch/confined-level.js';
+import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
+import { ConfinedUsageSchema, CostSchema } from '../tool-launch/confined-level.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { PrUrlSchema, type PrUrl } from './pr-url.js';
 import { LimitSchema, TurnLimitsSchema, UnenforcedSchema } from './requirements.js';
@@ -55,7 +56,7 @@ const LeasedConfinedSchema = z.object({ level: z.enum(CONFINED_LEVELS), tools: z
 const LeaseSchema: z.ZodType<StepLease> = z.object({
   attempt: z.string(), revision: z.number(), driver: DriverSchema, session: LeaseSessionSchema.optional(),
   unenforced: z.array(UnenforcedSchema).optional(), expiresAt: z.string().optional(), leasedAt: z.string().optional(), runMode: RunModeSchema.optional(),
-  limits: TurnLimitsSchema.optional(),
+  runtime: z.string().optional(), limits: TurnLimitsSchema.optional(),
   confined: LeasedConfinedSchema.optional(),
 });
 
@@ -118,12 +119,16 @@ const report = {
   unenforced: z.array(UnenforcedSchema).optional(),
   /** The run mode of the attempt's lease. Absent on passes settled before it was recorded, or whose driver sent none. */
   runMode: RunModeSchema.optional(),
+  /** The runtime of the driver definition the attempt ran on, or `host`, its host command slot (`StepLease.runtime`). */
+  runtime: z.string().optional(),
   /** What the attempt's own commands appended to its outcome file, such as a learning `contribute` recorded (#1387). */
   outcomes: z.array(WorkOutcomeSchema).optional().catch(undefined),
   /** The limit that ended the prompt's turn under `on_limit: end_turn`. */
   limit: LimitSchema.optional(),
   /** What the run of a step confined to a directory measured. */
   confined: ConfinedRunReportSchema.optional(),
+  /** The lines the step said as it ran, the last ones its report kept, which a shortcut of the run shows. */
+  progress: z.array(z.string()).optional(),
 };
 
 export const OutcomeSchema = z.enum(['success', 'failed', 'timeout', 'skipped', 'cancelled']);

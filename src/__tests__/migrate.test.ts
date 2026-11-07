@@ -7,7 +7,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import YAML from 'yaml';
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

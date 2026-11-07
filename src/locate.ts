@@ -11,12 +11,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { MCP_SERVER_KEY } from './resources/mcp-format.js';
 import { SESSION_PLATFORM_FACTS, type SessionPlatform, type StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import {
-  channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers, TOOLS,
-  type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter,
-  type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads,
-  type RunTimeVia, type ToolId,
-} from './tools.js';
+import { TOOLS, type ToolId } from './tools.js';
+import { type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter, type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads, type RunTimeVia } from '@teamai/tool-core/definition';
+import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers } from './tool-registry.js';
 import {
   CURSOR_CONFIG_TOOL_ID, CURSOR_DATA_TOOL_ID,
   DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, recordedToolRootDir, resolveBaseDir, scopedToolPaths, toolGateRoot,
@@ -1120,7 +1117,7 @@ function mcpKeyOf(channel: Pick<McpUser, 'format' | 'key'>): readonly [string, .
 }
 
 async function mcpFileOf(
-  channel: McpUser | McpProject, scope: Scope, roots: Roots, host: Host,
+  channel: McpUser | McpProject<ToolId>, scope: Scope, roots: Roots, host: Host,
 ): Promise<{ readonly file: string | null; readonly lookup: McpLookup | null }> {
   const configured = roots.configured(scope === 'user' ? 'mcp' : 'mcpProject');
 
@@ -1280,7 +1277,7 @@ async function mcpGatesOf(tool: string, gates: readonly Gate[], own: EntryPlace 
 }
 
 async function mcpFilesOf(
-  channel: McpUser | McpProject, earlierFiles: readonly string[] | undefined, scope: Scope, roots: Roots, host: Host,
+  channel: McpUser | McpProject<ToolId>, earlierFiles: readonly string[] | undefined, scope: Scope, roots: Roots, host: Host,
 ): Promise<{
   readonly key: readonly [string, ...string[]];
   readonly tree: EntryPlace | null;
@@ -1480,26 +1477,37 @@ async function adapterHooksOf(tool: string, channel: HookAdapter, install: Insta
 const PiSessionDirSchema = z.object({ sessionDir: z.string() });
 
 /**
+ * The home a session store is looked up in: the member's, following the tool roots they `recorded`, or one `tool-home`
+ * a step runtime gave an attempt (`attemptToolHome`), which the tool's home variable pointed at.
+ */
+export type SessionStoreRoot =
+  | { kind: 'recorded'; toolRoots: Readonly<Record<string, string>> | undefined }
+  | { kind: 'tool-home'; dir: string };
+
+/**
  * Where `platform`'s sessions sit on `host`. A `tool-home` store follows the member's recorded
  * root first, then its tool's home, as that tool's other files do. A recorded root is checked
  * against `host.home`, the home `teamai init` accepted it under. A default store sits under
- * `host.profileHome`, where the tools write it.
+ * `host.profileHome`, where the tools write it. With a `tool-home` root, the store is its own
+ * directory inside that home, whatever the host env says.
  */
 export function sessionStoreDir(
   platform: StoredSessionPlatform,
-  toolRoots: Readonly<Record<string, string>> | undefined,
+  root: SessionStoreRoot,
   host: Host = realHost(),
 ): string {
+  const { store } = SESSION_PLATFORM_FACTS[platform];
+  const p = host.path;
+
+  if (root.kind === 'tool-home') return p.join(root.dir, store.in === 'tool-home' ? store.dir : store.child);
+
   if ((platform === 'pi' || platform === 'omp') && host.env.PI_CODING_AGENT_SESSION_DIR) {
     return absoluteOn(host.env.PI_CODING_AGENT_SESSION_DIR, host);
   }
 
-  const { store } = SESSION_PLATFORM_FACTS[platform];
-  const p = host.path;
-
   switch (store.in) {
     case 'tool-home': {
-      const dir = recordedToolRootDir('root' in store ? store.root : store.home, toolRoots, host)
+      const dir = recordedToolRootDir('root' in store ? store.root : store.home, root.toolRoots, host)
         ?? toolHome(store.home, { ...host, home: host.profileHome });
 
       if (platform === 'pi') {
@@ -1532,7 +1540,7 @@ async function locateSessions(tool: string, install: Install, host: Host): Promi
   if (!(sessions instanceof Object)) return { channel: sessions, retired: [], gates: [] };
   const [platform] = sessions;
   const { toolRoots } = install.scope === 'user' ? install : await userViewOf(install, host);
-  const own: DirPlace = { kind: 'dir', path: sessionStoreDir(platform, toolRoots, host) };
+  const own: DirPlace = { kind: 'dir', path: sessionStoreDir(platform, { kind: 'recorded', toolRoots }, host) };
 
   return { channel: 'files', own, platform, reads: [{ path: own.path, when: 'always' }], readGates: [], retired: [], gates: [] };
 }

@@ -9,15 +9,19 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const command = path.join(ROOT, 'scripts/check-docs.mjs');
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
-// Each run of the check is a new process that compiles and loads about 320 TypeScript modules: about 2.5 s of one core
-// when the machine is idle, and up to 16 s while the full suite keeps every core busy. A case gets 30 s per run.
+// Each run of the check is a new process that pulls every workflow example of the guide pages into a temporary team
+// repo and runs the lease examples through the engine, with about 120 short git processes: about 4 s of one core when
+// the machine is idle, and several times that while the full suite keeps every core busy. A case gets 30 s per run.
 const RUN_MS = 30_000;
 vi.setConfig({ testTimeout: RUN_MS });
+/** The shipped tool ids check-docs generates for teamai/tool-facts. */
+const TOOL_IDS = 'oxlint-plugin-teamai/tool-ids.generated.json';
 
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
-  for (const name of ['docs', 'skill-data', 'skills', ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  // The shipped driver definitions are checked against the guide blocks that show them.
+  for (const name of ['docs', 'skill-data', 'skills', 'drivers', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
@@ -102,6 +106,28 @@ it('check pulls an unnamed workflow fragment on a page that is not a workflow pa
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
   expect(checked.output).toContain('retries_forever');
 });
+it('check rejects a driver definition example whose runtime options teamai refuses, naming its page and line', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/workflow-advanced.md');
+  const before = fs.readFileSync(page, 'utf8');
+  const kept = '      max_parallel: 2\n';
+  expect(before).toContain(kept);
+  fs.writeFileSync(page, before.replace(kept, `${kept}      credentials: { claude: login }\n`));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toMatch(/docs\/guide\/workflow-advanced\.md:\d+ \(# drivers\/sandboxed\.yaml\)/);
+  expect(checked.output).toContain('credentials.claude');
+});
+it('check reads a driver definition on any guide page, and rejects a key a definition does not take', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntime:\n  - use: sandbox\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('runtime');
+});
 it.each([
   ['teamai codebase --no-such-flag', 'unknown flag "--no-such-flag"'],
   ['teamai skill gett core', 'unknown subcommand "gett"'],
@@ -114,13 +140,13 @@ it.each([
   expect(checked.output).toContain(diagnostic);
 });
 
-it('write changes only its three generated files', () => {
+it('write changes only its generated files', () => {
   const root = checkout();
   const files = fs.readdirSync(root, { recursive: true, encoding: 'utf8' })
     .filter((file) => fs.statSync(path.join(root, file)).isFile());
   const before = new Map(files.map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
   expect(run(root, '--write').status).toBe(0);
-  const generated = new Set(['skill-data/core/references/commands.md', 'docs/guide/tool-support.md', 'docs/guide/zh-CN/tool-support.md']);
+  const generated = new Set(['skill-data/core/references/commands.md', 'docs/guide/tool-support.md', 'docs/guide/zh-CN/tool-support.md', TOOL_IDS]);
   for (const file of files.filter((name) => !generated.has(name.split(path.sep).join('/')))) {
     expect(fs.readFileSync(path.join(root, file), 'utf8'), file).toBe(before.get(file));
   }

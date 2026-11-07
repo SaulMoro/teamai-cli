@@ -127,6 +127,37 @@ describe('prepared places through the workflow client', () => {
     expect(stored).not.toContain('Edit the project.'); expect(stored).not.toContain('Untrusted branch instructions.');
   });
 
+  it.each([
+    { next: 'writer', yaml: undefined },
+    { next: 'reader', yaml: `schemaVersion: v1alpha1\nname: build\ndescription: Write, then read.\nalias: ship\nsteps:\n  - id: change\n    workspace: new\n    workflow:\n      steps:\n        - id: write\n          prompt: Write the code.\n        - id: polish\n          needs: [write]\n          workspace: read-only\n          prompt: Read the code.\n` },
+  ])('runs no fsmonitor a step planted in its reused copy while the next $next step is prepared and finished', async ({ yaml }) => {
+    const f = await fixture(yaml);
+    const first = await next(f);
+    const mark = path.join(path.dirname(f.work), 'fsmonitor-ran');
+    const monitor = path.join(path.dirname(f.work), 'fsmonitor.sh');
+    fs.writeFileSync(monitor, `#!/bin/sh\necho "$@" >> "${mark}"\nexit 1\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(first.cwd, 'code.txt'), 'first\n');
+    git(first.cwd, 'config', '--worktree', 'core.fsmonitor', monitor);
+    expect(await f.client.report(f.runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    const second = await next(f);
+    expect(second.cwd).toBe(first.cwd);
+    expect(await f.client.report(f.runId, { attempt: second.attempt, revision: second.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
+    expect(fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '').toBe('');
+  });
+  it('gives a clean filter a step planted in its copy none of the host\'s secrets while it commits the step\'s work', async () => {
+    const f = await fixture();
+    vi.stubEnv('DEPLOY_TOKEN', 'host-deploy-secret');
+    const lease = await next(f);
+    const mark = path.join(path.dirname(f.work), 'filter-saw');
+    const filter = path.join(path.dirname(f.work), 'filter.sh');
+    fs.writeFileSync(filter, `#!/bin/sh\nif [ -n "$DEPLOY_TOKEN" ]; then echo set >> "${mark}"; else echo unset >> "${mark}"; fi\ncat\n`, { mode: 0o755 });
+    git(lease.cwd, 'config', '--worktree', 'filter.planted.clean', filter);
+    fs.writeFileSync(path.join(lease.cwd, '.gitattributes'), '*.txt filter=planted\n');
+    fs.writeFileSync(path.join(lease.cwd, 'code.txt'), 'work\n');
+    expect(await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    expect(git(f.remote, 'show', `${lease.workspace.branch}:code.txt`)).toBe('work');
+    expect(fs.readFileSync(mark, 'utf8').split('\n').filter(Boolean)).not.toContain('set');
+  });
   it('commits every change in a place TeamAI made, even when the report lists none of them', async () => {
     const f = await fixture();
     const lease = await next(f);
@@ -674,6 +705,19 @@ steps:
       .toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
     expect(git(f.remote, 'show', `${join.workspace.branch}:a.ts`)).toBe('resolved');
     expect(git(f.remote, 'show', `${join.workspace.branch}:b.ts`)).toBe('from right');
+  });
+
+  it('runs no fsmonitor the child planted in the place while it finishes a resolved merge', async () => {
+    const { f, dir, join } = await adoptedJoin('monitored');
+    const mark = path.join(path.dirname(f.work), 'fsmonitor-ran');
+    const monitor = path.join(path.dirname(f.work), 'fsmonitor.sh');
+    fs.writeFileSync(monitor, `#!/bin/sh\necho "$@" >> "${mark}"\nexit 1\n`, { mode: 0o755 });
+    git(dir, 'config', '--worktree', 'core.fsmonitor', monitor);
+    fs.writeFileSync(path.join(dir, 'a.ts'), 'resolved\n');
+    expect(await f.client.report(f.runId, { attempt: join.attempt, revision: join.revision, outcome: 'success', driver: f.driver }, { changed: ['a.ts'] }))
+      .toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
+    expect(fs.existsSync(mark)).toBe(false);
+    expect(git(f.remote, 'show', `${join.workspace.branch}:a.ts`)).toBe('resolved');
   });
 
   it('still rejects a preparation merge file the child changed and did not report', async () => {

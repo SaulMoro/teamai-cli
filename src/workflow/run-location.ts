@@ -47,6 +47,17 @@ export async function partitionConfig(partition: LocalConfig, anchor?: string): 
   return readConfigFrom(dir, anchor ?? partition.projectRoot ?? partition.repo.businessRepoRoot ?? dir, undefined, undefined, { dryRun: true, selfHeal: false }).catch(() => null);
 }
 
+/**
+ * The checkout `run` started in, when it is still a directory: the config is read as there. A run whose checkout was
+ * removed since, such as a worktree, is read with its partition's own project root instead, so it can still be found,
+ * cancelled and retried.
+ */
+export async function existingCheckout(run: RunState | 'corrupt'): Promise<string | undefined> {
+  const checkout = run === 'corrupt' ? undefined : run.checkout;
+
+  return checkout !== undefined && (await fs.stat(checkout).catch(() => undefined))?.isDirectory() === true ? checkout : undefined;
+}
+
 /** Run ids address local state across scopes. A duplicate id never picks a project by cwd. */
 export async function findRunConfig(runId: string, current?: LocalConfig): Promise<{ config: LocalConfig; run: RunState } | { error: WorkflowFailure }> {
   if (!isRunId(runId)) return { error: { code: 'invalid_run', message: 'Run id must look like r followed by 8 or 16 hex digits' } };
@@ -59,7 +70,7 @@ export async function findRunConfig(runId: string, current?: LocalConfig): Promi
     const stored = await readRun(partition, runId);
 
     if (stored === 'missing') continue;
-    const config = await partitionConfig(partition, stored === 'corrupt' ? undefined : stored.checkout);
+    const config = await partitionConfig(partition, await existingCheckout(stored));
 
     if (config) candidates.push(config);
   }
@@ -75,8 +86,10 @@ export async function findRunConfig(runId: string, current?: LocalConfig): Promi
     const run = await readRun(config, runId);
 
     if (run !== 'missing') {
-      const anchored = run !== 'corrupt' && run.checkout && config.scope === 'project'
-        ? await readConfigFrom(home, run.checkout, undefined, undefined, { dryRun: true, selfHeal: false }) : null;
+      const checkout = await existingCheckout(run);
+
+      const anchored = checkout !== undefined && config.scope === 'project'
+        ? await readConfigFrom(home, checkout, undefined, undefined, { dryRun: true, selfHeal: false }) : null;
 
       matches.push({ config: anchored ?? config, run });
     }

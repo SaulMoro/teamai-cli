@@ -1,14 +1,15 @@
 /**
  * A workflow's `setup`, run in a workspace prepare just created, before the step. The local driver and `next --prepare`
- * both reach it through `runPlaceSetup`, so setup's key values stay in the teamai process and never reach whatever runs
- * the step.
+ * both reach it through `runPlaceSetup`, so setup's key values never reach whatever runs the step. On a step runtime
+ * setup is an exec of the step's place of its own, which alone gets them; the checks below read the host folder once
+ * the runtime brought setup's work back.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { commandShell } from '../../command-shell.js';
 import { recordGroup, stopProcess } from '../../tool-launch/process-stop.js';
-import { redact } from '../../utils/redact.js';
+import { redact } from '@teamai/shared/redact';
 import type { WorkflowFailure } from '../types.js';
 import { untrustedGit } from '../worktree.js';
 import { changedPaths, snapshotWorktree } from './worktree-snapshot.js';
@@ -27,7 +28,20 @@ export interface SetupRun {
   expiresAt?: string;
   /** The directory that records setup's process group as it starts, so the group can be stopped once a process killed while running setup is gone. */
   groupDir?: string;
+  /**
+   * Runs setup somewhere other than here, such as on the step's runtime, and brings its work back to `dir` before it
+   * settles. It stops when `signal` aborts.
+   */
+  elsewhere?: SetupElsewhere;
 }
+
+/** How setup's command exited, with the tail of what it printed. */
+export interface SetupExit {
+  code: number;
+  output: string;
+}
+
+export type SetupElsewhere = (signal: AbortSignal | undefined) => Promise<SetupExit | { failure: WorkflowFailure }>;
 
 /** The last characters of setup's output a failure quotes. */
 const OUTPUT_TAIL = 400;
@@ -66,7 +80,7 @@ export async function runSetup({ expiresAt, signal: caller, ...run }: SetupRun):
   }
 }
 
-async function checkedSetup({ command, dir, env, keys, signal, expiresAt, groupDir }: SetupRun): Promise<WorkflowFailure | undefined> {
+async function checkedSetup({ command, dir, env, keys, signal, expiresAt, groupDir, elsewhere }: SetupRun): Promise<WorkflowFailure | undefined> {
   const stopped: WorkflowFailure = { code: 'setup_failed', message: `Setup "${command}" was stopped, so the step did not run.` };
 
   if (signal?.aborted) return stopped;
@@ -78,9 +92,11 @@ async function checkedSetup({ command, dir, env, keys, signal, expiresAt, groupD
 
   // An abort while the workspace was read is not replayed to the listener `runCommand` adds.
   if (signal?.aborted) return stopped;
-  const exit = await runCommand(command, dir, env, signal, groupDir);
+  const exit = elsewhere ? await elsewhere(signal) : await runCommand(command, dir, env, signal, groupDir);
 
   if (signal?.aborted) return stopped;
+
+  if ('failure' in exit) return exit.failure;
 
   const values = keys.flatMap((key) => {
     const value = env[key];
@@ -149,13 +165,13 @@ async function fileStamps(dir: string): Promise<Map<string, FileStamp>> {
 }
 
 /** Runs `command` in a process group of its own, so an abort stops everything it started. */
-async function runCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal | undefined, groupDir: string | undefined): Promise<{ code: number; output: string }> {
+async function runCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal | undefined, groupDir: string | undefined): Promise<SetupExit> {
   const detached = process.platform !== 'win32';
   const child = spawn(command, { cwd, ...commandShell(env), windowsHide: true, detached, stdio: ['ignore', 'pipe', 'pipe'] });
 
   if (detached && groupDir !== undefined) recordGroup(child, groupDir);
 
-  const exit = new Promise<{ code: number; output: string }>((resolve) => {
+  const exit = new Promise<SetupExit>((resolve) => {
     let output = '';
     const keep = (chunk: string): void => { output = (output + chunk).slice(-OUTPUT_TAIL * 2); };
 

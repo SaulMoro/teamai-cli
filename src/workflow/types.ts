@@ -1,5 +1,6 @@
 /** Workflow types for the v1alpha1 local-driver subset. */
 
+import type { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import type { ContractCode, RunOrigin } from '../default-workflows.js';
 import type { RunMode } from '../launch-context.js';
 import type { TeamPin } from './team-pin.js';
@@ -10,6 +11,7 @@ import type { LeaseSession } from './workspace.js';
 import type { ConfinedLease } from './lease-wire.js';
 import type { StepModel } from './step-model.js';
 import type { ClonePlace } from './clone.js';
+import type { JsonValue } from '../types.js';
 import type { DriverName } from './driver-name.js';
 
 /** The driver's lease ownership, independent of its per-request capabilities. */
@@ -68,6 +70,13 @@ export interface WorkflowStep {
   prompt?: string;
   /** Original team-repo-relative source path for a cached prompt. */
   promptFile?: string;
+  /**
+   * A prompt the member's AI tool answers with text, or with JSON that matches `output`, in the checkout read-only: the tool the
+   * member's `ai.tool` names, else the first installed one, on its one-shot call launch.
+   */
+  answer?: string;
+  /** On a command step: the paths, relative to the checkout, under which a change the command makes is kept, not `read_only_dirty`. */
+  writes?: string[];
   /** A person works in the prompt tool; only a driver with HITL can take the lease. */
   interactive?: true;
   /** The question answered before this step's action or end. */
@@ -163,8 +172,11 @@ export interface Budget {
 export interface ForEach {
   /** Expression source that gives the list. */
   items: string;
-  /** At most this many items are started and not yet settled. No limit when absent. */
-  maxParallel?: number;
+  /**
+   * At most this many items are started and not yet settled: a whole number from 1, or the source of a template that
+   * reads one number input, rendered when the step starts its items. No limit when absent.
+   */
+  maxParallel?: number | { template: string };
 }
 
 /**
@@ -190,12 +202,6 @@ export interface StepLoop {
 }
 
 /**
- * Where a step runs: in the checkout as it is, in a new copy, in the copy an enclosing step opened, in a fresh clone
- * teamai prepares, or in a fresh clone of the team repo. A driver lists the ones it provides in `can.workspace`.
- */
-export const WORKSPACE_MODES = ['read-only', 'new', 'continue', 'clone', 'team'] as const;
-
-/**
  * The team repo branch a step commits to, `{ team: { branch } }`: a template that reads only `inputs`, so every run
  * with the same inputs goes on with the same branch and its one pull request. Without `branch`, the run's own.
  */
@@ -215,7 +221,7 @@ export interface ConfinedPlace {
 export type StepWorkspace = Exclude<typeof WORKSPACE_MODES[number], 'clone' | 'team'> | { clone: ClonePlace } | { team: TeamPlace } | ConfinedPlace;
 
 /** The keys that give a step its action, as YAML writes them, each with the definition field it fills. */
-export const STEP_ACTIONS = { command: 'command', prompt: 'prompt', prompt_file: 'promptFile', workflow: 'workflow' } as const satisfies Record<string, keyof WorkflowStep>;
+export const STEP_ACTIONS = { command: 'command', prompt: 'prompt', prompt_file: 'promptFile', answer: 'answer', workflow: 'workflow' } as const satisfies Record<string, keyof WorkflowStep>;
 
 /** Whether a step runs work rather than only a HITL request or end. */
 export function hasAction(step: WorkflowStep): boolean {
@@ -298,6 +304,8 @@ export interface WorkflowDefaults {
   requires?: Requirements;
   /** The role of a step of the file that names none and runs inside no `workflow` step that names one. */
   role?: string;
+  /** The value of each input it names when a start or a step's `with` leaves that input out; of the input's type. */
+  inputs?: Record<string, JsonValue>;
 }
 
 /** `scorers: [a, b]`, or `scorers: { names: [a, b], batch: true }`. Each name is a file in `scorers/`. */
@@ -340,7 +348,7 @@ export interface WorkflowDefinition {
   schemaVersion: 'v1alpha1';
   name: string;
   description: string;
-  /** Values `start --inputs` must pass, each typed with the output shorthand. Every input is required. */
+  /** Values `start --inputs` must pass, each typed with the output shorthand: all but those `defaults.inputs` gives. */
   inputs?: Record<string, OutputSchema>;
   /** Named ends a step can finish this workflow with, each with the run outcome it gives. */
   ends?: Record<string, EndOutcome>;
@@ -419,10 +427,15 @@ export interface StepLease {
   unenforced?: Unenforced[];
   /** When the step's own `timeout` ends this lease, counted from `leasedAt` so a hand-back does not extend it. */
   expiresAt?: string;
-  /** When the attempt was first leased. Absent on a lease issued before teamai recorded it. */
+  /** When the attempt was first leased, or last listed `queued` by its driver. Absent on a lease issued before teamai recorded it. */
   leasedAt?: string;
   /** The run mode the driver runs the lease in, as its `next` reported it, so the pass keeps it however it settles. */
   runMode?: RunMode;
+  /**
+   * The runtime of the driver definition the lease was offered on, as its `use` names it, or `host`, the definition's
+   * host command slot. Absent for a driver that runs no definition.
+   */
+  runtime?: string;
   /** The turn limits the lease carried, for a driver that ends the turn at them. */
   limits?: TurnLimits;
   /** The terms a confined step was last leased with, which its report is checked against. Absent on a lease issued before teamai kept them. */
@@ -589,6 +602,8 @@ export interface DriveOptions {
   /** `false` after `resume --no-auto-approve`, which overrides `workflows.auto_approve` as the flag does. */
   autoApprove?: boolean;
   sandbox?: true;
+  /** The driver definition the run was last driven with, by its canonical name; absent for plain `local`. */
+  driver?: string;
 }
 
 /**

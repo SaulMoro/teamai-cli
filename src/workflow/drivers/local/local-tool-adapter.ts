@@ -6,12 +6,13 @@ import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
 import { launchEnv, type Launch } from '../../../launch-context.js';
 import { opencodeMajorVersion } from '../../../opencode-hooks.js';
-import { resolveCliPath } from '../../../utils/cli-path.js';
+import { resolveCliPath, resolvePathCommand } from '../../../utils/cli-path.js';
 import { log } from '../../../utils/logger.js';
 import type { toolExtrasFor } from '../../../resources/agent-format.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
-import type { LaunchAdapter } from '../../../tool-launch/adapters.js';
+import type { LaunchAdapter } from '@teamai/tool-core/launch';
+import { isUsageLimitText } from '@teamai/runtime-protocol';
 import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { budgeted } from '../../limits.js';
@@ -48,6 +49,8 @@ export interface LocalToolRun {
   timeoutMs?: number;
   /** Launch the tool in its own mode for editing and running commands without asking (`permissions: unattended`). */
   unattended?: true;
+  /** The command that starts the tool, when an instance of it has its own; the tool's own command otherwise. */
+  command?: string;
 }
 
 /**
@@ -71,6 +74,8 @@ export type LocalToolResult =
      * the turn cap, at which headless Claude ends itself with `error_max_turns`.
      */
     stoppedBy?: Limit;
+    /** The run was asked to resume a session, and its runtime started a new one instead. */
+    startedFresh?: true;
     failure?: WorkflowFailure;
   }
   | { started: false; exitCode: number; failure: WorkflowFailure };
@@ -93,6 +98,19 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
     + 'Leave failure out unless the step failed; then add "failure":{"code":"...","message":"..."}.';
 }
 
+/** The step's prompt after the agent definition's instructions, for a launch that hands the definition over in the prompt. */
+function withInstructions(input: LocalToolRun): string {
+  return input.agent?.instructions ? `${input.agent.instructions}\n\n${input.prompt}` : input.prompt;
+}
+
+/**
+ * The whole prompt a runtime that launches agents its own way gets: the agent definition's instructions, which it has
+ * no flag to pass, the step's prompt, and the instruction to write the result file.
+ */
+export function agentPrompt(input: LocalToolRun): string {
+  return resultInstruction(input, withInstructions(input));
+}
+
 /** Codex, and OpenCode 1 for a subagent, which `opencode run --agent` does not start, get the definition's instructions in the prompt. */
 function promptHandoff(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number): boolean {
   const family = launchAdapterIdOf(tool);
@@ -108,17 +126,24 @@ function unattendedArgs(tool: LaunchTool): readonly string[] | 'none' {
   return unattended === 'none' ? 'none' : unattended.args;
 }
 
-function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
+/**
+ * An absolute path as a Claude permission rule matches it, after the `/` that marks a rule absolute: as it is, and on
+ * Windows in the POSIX form Claude matches, so `C:\a\b` is `/c/a/b`.
+ */
+function claudeRulePath(file: string): string {
+  if (process.platform !== 'win32') return file;
+
+  return file.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replaceAll('\\', '/');
+}
+
+/** The argv that launches `tool` for one step: the prompt with its result instruction, then the flags the step's lease sets. */
+export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
   const family = launchAdapterIdOf(tool);
   const modeArgs = input.unattended ? unattendedArgs(tool) : [];
   const unattended = modeArgs === 'none' ? [] : modeArgs;
   const viaPrompt = promptHandoff(tool, input, opencodeMajor);
 
-  const agentPrompt = input.agent?.instructions
-    ? `${input.agent.instructions}\n\n${input.prompt}`
-    : input.prompt;
-
-  const prompt = resultInstruction(input, viaPrompt ? agentPrompt : input.prompt);
+  const prompt = resultInstruction(input, viaPrompt ? withInstructions(input) : input.prompt);
   const agent = input.agent && !viaPrompt ? ['--agent', input.agent.name] : [];
   const model = input.model ? ['--model', input.model.name] : [];
   const effort = input.model?.effort;
@@ -126,11 +151,16 @@ function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
 
   switch (family) {
-    case 'claude':
-      if (interactive) return [...unattended, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
+    case 'claude': {
+      // Claude's default mode asks before any write, so the result file, and only it, is allowed: the mode stays as it is.
+      const result = `--allowedTools=Edit(/${claudeRulePath(input.resultPath)})`;
+
+      if (interactive) return [...unattended, result, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
 
       // Only partial messages state each message's final usage as it ends, which the budget meter counts.
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...unattended, ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
+      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...unattended, result, ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
+    }
+
     case 'codebuddy':
       // Claude's flags, with no --effort.
       if (interactive) return [...unattended, ...agent, ...model, ...resume, prompt];
@@ -181,12 +211,19 @@ async function readResultFile(resultPath: string): Promise<ResultFile | null> {
   }
 }
 
-function redactFailure(result: ResultFile, input: LocalToolRun): void {
-  if (!result.failure) return;
+/** A failure message a tool wrote, without the step's prompt or the agent's instructions it may quote. */
+export function withoutPrompt(message: string, input: LocalToolRun): string {
+  let kept = message;
 
   for (const secret of [input.prompt, input.agent?.instructions]) {
-    if (secret) result.failure.message = result.failure.message.replaceAll(secret, '[prompt omitted]');
+    if (secret) kept = kept.replaceAll(secret, '[prompt omitted]');
   }
+
+  return kept;
+}
+
+function redactFailure(result: ResultFile, input: LocalToolRun): void {
+  if (result.failure) result.failure.message = withoutPrompt(result.failure.message, input);
 }
 
 async function persistFallback(input: LocalToolRun, result: ResultFile): Promise<void> {
@@ -218,20 +255,91 @@ function combineResults(fileResult: ResultFile | null, reported: ToolReport | nu
   return result;
 }
 
+/** What a launched tool process ended with: its exit code and complete stdout, or why it ended without one. */
+export type ToolClosed = { exitCode: number; stdout: string; error?: NodeJS.ErrnoException } | { failure: WorkflowFailure };
+
+/** One launched tool process, as the adapter watches it. */
+export interface ToolProcess {
+  closed: Promise<ToolClosed>;
+  /** Whether the process started: it spawned, or its runtime accepted it. */
+  started(): boolean;
+  /** Stops the process and everything it started; a signal from the person is forwarded to an interactive one. */
+  stop(signal?: NodeJS.Signals): Promise<void>;
+}
+
+/** Starts a tool process: here with `spawn`, or through a step runtime's `exec`. `onStdout` gets each decoded chunk. */
+export type ToolLauncher = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStdout: (text: string) => void }) => ToolProcess;
+
+/** The launcher that spawns the tool on this machine, in a process group of its own unless it is interactive. */
+function spawnLauncher(spawnTool: ToolSpawn): ToolLauncher {
+  return ({ executable, args, cwd, env, interactive, onStdout }) => {
+    let started = false;
+    let childProcess: ChildProcess | undefined;
+
+    const closed = new Promise<ToolClosed>((resolve) => {
+      let child: ChildProcess;
+
+      try {
+        child = spawnTool(executable, args, {
+          cwd,
+          env,
+          // OpenCode waits for the end of a piped stdin before it starts.
+          stdio: interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+          detached: !interactive && process.platform !== 'win32',
+          windowsHide: true,
+        });
+      } catch (error) {
+        resolve({ exitCode: 1, stdout: '', error: error instanceof Error ? error : new Error(String(error)) });
+
+        return;
+      }
+
+      childProcess = child;
+      let stdout = '';
+      const decoder = new StringDecoder('utf8');
+      child.on('spawn', () => { started = true; });
+      child.stdout?.on('data', (chunk: Buffer) => {
+        const text = decoder.write(chunk);
+        stdout += text;
+        onStdout(text);
+      });
+      child.stderr?.resume();
+      child.on('error', (error: NodeJS.ErrnoException) => resolve({ exitCode: 1, stdout, error }));
+      child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: stdout + decoder.end() }));
+    });
+
+    const stop = childProcess && stopProcess(childProcess, closed, !interactive && process.platform !== 'win32');
+
+    return { closed, started: () => started, stop: async (signal) => { await stop?.(signal); } };
+  };
+}
+
 export function createLocalToolAdapter(
   spawnTool: ToolSpawn = crossSpawn,
   resolveTool: ToolResolve = resolveCliPath,
+  // A tool instance's command comes from a config file, so only the PATH directories may hold it.
+  resolveInstanceCommand: ToolResolve = resolvePathCommand,
 ): LocalToolAdapter {
+  return toolAdapter(spawnLauncher(spawnTool), resolveTool, resolveInstanceCommand);
+}
+
+/**
+ * The adapter over `launcher`: everything teamai does around a tool's launch, whatever starts its process. It builds
+ * the argv with `invocation()`, meters the budget from stdout and stops the tool at its limits, reads the result file,
+ * and parses stdout for the session, tokens and cost. `resolveTool` finds the executable, and `resolveInstanceCommand` a tool instance's command, or says it is missing.
+ */
+export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, resolveInstanceCommand: ToolResolve): LocalToolAdapter {
   const launch =
     async (tool: LaunchTool, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
       await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
-      const executable = resolveTool(executableOf(tool));
+      const command = input.command ?? executableOf(tool);
+      const executable = input.command === undefined ? resolveTool(command) : resolveInstanceCommand(command);
 
       if (!executable) {
         return {
           started: false,
           exitCode: 1,
-          failure: { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` },
+          failure: { code: 'tool_unavailable', message: `The ${command === executableOf(tool) ? tool : command} executable is not available on PATH` },
         };
       }
 
@@ -277,104 +385,69 @@ export function createLocalToolAdapter(
 
       const args = invocation(tool, input, opencodeMajor, interactive);
       const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
-      let started = false;
-      let childProcess: ChildProcess | undefined;
       const meter = input.budget !== undefined ? tokenMeter(launchAdapterIdOf(tool)) : undefined;
       let metered: TokenUsage | undefined;
       // The first reason a stop was sent, so a limit crossed while the tool shuts down does not replace it.
       let stopCause: 'timeout' | 'budget' | 'aborted' | undefined;
+      let partial = '';
+      const env: NodeJS.ProcessEnv = { ...input.env ?? process.env };
 
-      const stopAt = (limit: 'timeout' | 'budget'): void => {
-        stopCause ??= limit;
-        void stop?.();
-      };
+      // A model switch hands agy its gateway through a shell function, and this launch runs no shell.
+      if (launchAdapterIdOf(tool) === 'agy') Object.assign(env, agyGatewayEnv(input.env ?? process.env));
 
-      const closed = new Promise<{ exitCode: number; stdout: string; error?: NodeJS.ErrnoException }>((resolve) => {
-        let child: ChildProcess;
+      if (input.launch) Object.assign(env, launchEnv(input.launch));
+      env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
 
-        try {
-          const env: NodeJS.ProcessEnv = { ...input.env ?? process.env };
+      const onStdout = (text: string): void => {
+        if (!meter || input.budget === undefined) return;
+        // A long line arrives over many chunks: only the chunk that ends it is split.
+        const end = text.lastIndexOf('\n');
 
-          // A model switch hands agy its gateway through a shell function, and this launch runs no shell.
-          if (launchAdapterIdOf(tool) === 'agy') Object.assign(env, agyGatewayEnv(input.env ?? process.env));
-
-          if (input.launch) Object.assign(env, launchEnv(input.launch));
-          env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
-          child = spawnTool(executable, args, {
-            cwd: input.cwd,
-            env,
-            // OpenCode waits for the end of a piped stdin before it starts.
-            stdio: interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-            detached: !interactive && process.platform !== 'win32',
-            windowsHide: true,
-          });
-        } catch (error) {
-          resolve({ exitCode: 1, stdout: '', error: error instanceof Error ? error : new Error(String(error)) });
+        if (end === -1) {
+          partial += text;
 
           return;
         }
 
-        childProcess = child;
+        const lines = `${partial}${text.slice(0, end)}`.split('\n');
+        partial = text.slice(end + 1);
 
-        const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_DELAY
-          ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
-          : undefined;
+        for (const line of lines) metered = meter(line);
 
-        let stdout = '';
-        let partial = '';
-        const decoder = new StringDecoder('utf8');
-        child.on('spawn', () => { started = true; });
-        child.stdout?.on('data', (chunk: Buffer) => {
-          const text = decoder.write(chunk);
-          stdout += text;
+        if (budgeted(metered) > input.budget) stopAt('budget');
+      };
 
-          if (!meter || input.budget === undefined) return;
-          // A long line arrives over many chunks: only the chunk that ends it is split.
-          const end = text.lastIndexOf('\n');
+      const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStdout });
 
-          if (end === -1) {
-            partial += text;
+      function stopAt(limit: 'timeout' | 'budget'): void {
+        stopCause ??= limit;
+        void processRun.stop();
+      }
 
-            return;
-          }
-
-          const lines = `${partial}${text.slice(0, end)}`.split('\n');
-          partial = text.slice(end + 1);
-
-          for (const line of lines) metered = meter(line);
-
-          if (budgeted(metered) > input.budget) stopAt('budget');
-        });
-        child.stderr?.resume();
-        child.on('error', (error: NodeJS.ErrnoException) => {
-          clearTimeout(timer);
-          resolve({ exitCode: 1, stdout, error });
-        });
-        child.on('close', (code) => {
-          clearTimeout(timer);
-          resolve({ exitCode: code ?? 1, stdout: stdout + decoder.end() });
-        });
-      });
-
-      const stop = childProcess && stopProcess(childProcess, closed, !interactive && process.platform !== 'win32');
+      const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_DELAY
+        ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
+        : undefined;
 
       const abort = (): void => {
         const reason: unknown = signal?.reason;
         const forwarded = reason === 'SIGINT' || reason === 'SIGQUIT' || reason === 'SIGTERM' || reason === 'SIGHUP' ? reason : undefined;
         stopCause ??= 'aborted';
-        void stop?.(interactive ? forwarded : undefined);
+        void processRun.stop(interactive ? forwarded : undefined);
       };
 
       signal?.addEventListener('abort', abort, { once: true });
 
       if (signal?.aborted) abort();
-      const completed = await closed;
+      const completed = await processRun.closed;
+      clearTimeout(timer);
 
-      if (stopCause !== undefined) await stop?.();
+      if (stopCause !== undefined) await processRun.stop();
       signal?.removeEventListener('abort', abort);
       const stopped = stopCause === 'aborted' ? undefined : stopCause;
 
-      if (!started || completed.error?.code === 'ENOENT') {
+      if ('failure' in completed) return { started: processRun.started(), exitCode: 1, ...applied, failure: completed.failure };
+
+      if (!processRun.started() || completed.error?.code === 'ENOENT') {
         return {
           started: false,
           exitCode: completed.exitCode,
@@ -415,13 +488,22 @@ export function createLocalToolAdapter(
 
       redactFailure(result, input);
 
+      // The tool's own reason, such as a provider's 401, says what the status cannot. It may echo a credential, so it is
+      // never written here: only the result the driver reports carries it, which the driver masks before keeping it.
+      let told: WorkflowFailure | undefined;
+
       if (completed.exitCode !== 0 && !result.failure) {
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
+
+        if (printed?.error !== undefined) {
+          if (isUsageLimitText(printed.error)) result.failure = { code: 'usage_limited', message: `${tool} hit its usage limit` };
+          told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
+        }
       }
 
       if (!fileResult) await persistFallback(input, result);
 
-      return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result };
+      return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result, ...(told && { failure: told }) };
     };
 
   return {

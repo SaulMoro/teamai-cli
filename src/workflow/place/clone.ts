@@ -25,7 +25,7 @@ import { loadTeamConfig, refreshRoleAssignment, saveLocalConfigForScope } from '
 import { stepEnvironment } from '../../env-exec.js';
 import { removeGitHook } from '../../git-hook.js';
 import { createProjectToolRoots } from '../../project-agent-root.js';
-import { homeVariables, isToolId, TOOLS } from '../../tools.js';
+import { homeVariables, TOOL_ORDER } from '../../tool-registry.js';
 import { roleDeclaration } from '../../roles.js';
 import { getDataHome, LocalConfigSchema, type LocalConfig } from '../../types.js';
 import { execCommand } from '../../utils/exec.js';
@@ -41,7 +41,7 @@ import { stepDefinitions } from '../scope.js';
 import { removeStagedEvidence, stageEvidence } from '../../scorers/engine-hooks.js';
 import { settled } from '../step-state.js';
 import { findAttemptRun } from '../run-location.js';
-import { readRun, runsDir, type RunId } from '../store.js';
+import { readRun, RunIdSchema, runsDir, type RunId } from '../store.js';
 import type { Executor } from '../requirements.js';
 import type { RunState, WorkflowFailure } from '../types.js';
 import { cloneBranchOf } from '../workspace.js';
@@ -356,9 +356,11 @@ export function cloneEnv(withhold: readonly string[]): ReturnType<typeof stepEnv
  * runs in it is still to settle. Every step there that settled had its evidence staged then. The evidence a report
  * staged for a pass there that did not succeed goes too, as no judge reads it. The clones of the team repo a run's steps
  * ran in go once it is not running, as a step that failed there kept its own. `runId` limits it to one run. A receipt this teamai cannot read is kept.
+ * Answers the runs whose clone or team folder it removed.
  */
-export async function sweepClones(config: LocalConfig, runId?: string): Promise<void> {
+export async function sweepClones(config: LocalConfig, runId?: string): Promise<RunId[]> {
   const root = runsDir(config);
+  const swept = new Set<string>();
 
   const runs = runId !== undefined
     ? [runId]
@@ -371,7 +373,10 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
     if (await fs.stat(teamClones).then(() => true, () => false)) {
       const read = await readRun(config, id);
 
-      if (read === 'missing' || read === 'corrupt' || read.status !== 'running') await fs.rm(teamClones, { recursive: true, force: true });
+      if (read === 'missing' || read === 'corrupt' || read.status !== 'running') {
+        await fs.rm(teamClones, { recursive: true, force: true });
+        swept.add(id);
+      }
     }
 
     for (const name of (await fs.readdir(dir).catch((): string[] => [])).filter((entry) => entry.endsWith('.json'))) {
@@ -389,10 +394,17 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
 
       if (run?.status === 'running' && run.steps.some((step) => !settled(step) && inClone(step.id))) continue;
       await removeRoot(receipt.root, file);
+      swept.add(id);
 
       if (run) await removeUnjudgedEvidence(config, run, inClone);
     }
   }
+
+  return [...swept].flatMap((id) => {
+    const parsed = RunIdSchema.safeParse(id);
+
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 /**
@@ -480,7 +492,7 @@ export function scratchCloneRoot(): string {
 const DELIVERED = 'delivered';
 
 /** The env variables that move a tool's home away from HOME, which the clone's own pull must not follow. */
-const TOOL_HOME_VARIABLES = [...new Set(Object.keys(TOOLS).filter(isToolId).flatMap(homeVariables))];
+const TOOL_HOME_VARIABLES = [...new Set(TOOL_ORDER.flatMap(homeVariables))];
 
 /** How long the clone's own `teamai pull` may take: it fetches only from the clone's root. */
 const PULL_TIMEOUT_MS = 10 * 60_000;

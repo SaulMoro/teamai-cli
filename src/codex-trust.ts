@@ -3,7 +3,7 @@ import path from 'node:path';
 import crossSpawn from 'cross-spawn';
 import semver from 'semver';
 import { z } from 'zod';
-import { desktopCodexBinaries } from './codex-desktop.js';
+import { desktopCodexBinaries } from '@teamai/tool-core/formats/codex-desktop';
 import { getCurrentVersion } from './package-info.js';
 import type { CodexBuild, CodexBuildSkew, JsonValue } from './types.js';
 import { JsonValueSchema, JsonObjectSchema } from './types.js';

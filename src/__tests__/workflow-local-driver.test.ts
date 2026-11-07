@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { launchEnv, sessionRun } from '../launch-context.js';
 import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutRecordKey, type CheckoutRecord } from '../pull.js';
-import { encodeCwdClaude } from '../session-flow/fs.js';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { type LocalConfig, type TeamaiConfig } from '../types.js';
 import { log } from '../utils/logger.js';
 import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/drivers/local/local-tool-adapter.js';
@@ -410,6 +410,43 @@ model = "gpt-5.4"
       instructions: 'Implement the change.',
       model: 'gpt-5.4',
     });
+  });
+
+  it('launches a step after a from step on the tool its agent maps to, as it did before teamai checked that tool', async () => {
+    const definition = { schemaVersion: 'v1alpha1', name: 'generated', description: 'Say hello.', steps: [{ id: 'hello', command: 'true' }] };
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Run what plan brings, then review.
+steps:
+  - id: plan
+    command: printf '%s' '${JSON.stringify({ definition: { definition }, plan: {} })}'
+    output: { definition: workflow, plan: json }
+  - id: work
+    needs: [plan]
+    workflow: { from: plan }
+  - id: review
+    needs: [work]
+    prompt: Review this project.
+    agent: reviewer
+    output:
+      ok: boolean
+`);
+    config.workflows = { tools: { reviewer: 'codex-internal' } };
+    const agents = path.join(workspace, '.codex-internal/agents');
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, 'reviewer.toml'), 'name = "reviewer"\ndescription = "Reviews changes."\ndeveloper_instructions = "Review the change."\n');
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
+    };
+
+    const ran = await runLocalDriver(config, runId, workspace, {
+      adapter,
+      toolPaths: { ...toolPaths, 'codex-internal': { agents: '.codex-internal/agents' } } as TeamaiConfig['toolPaths'],
+    });
+
+    expect(ran).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(adapter.run).toHaveBeenCalledWith('codex-internal', expect.anything(), expect.any(AbortSignal));
   });
 
   it('loads a user-scope OpenCode agent from the home XDG_CONFIG_HOME moves', async () => {
@@ -846,5 +883,28 @@ steps:
       [2, 'claude-model-2'],
       [3, 'claude-model-3'],
     ]);
+  });
+});
+
+describe('progress lines on the local driver', () => {
+  it('shows each line a command writes to stderr as it writes it, and answers them, masked, with the run\'s end', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Say what it does.
+steps:
+  - id: say
+    command: printf 'Found 2 entries.\\nUsing ' >&2; sleep 0.1; echo "$DEPLOY_TOKEN" >&2
+    requires: { env: [DEPLOY_TOKEN] }
+`);
+    fs.mkdirSync(path.join(config.repo.localPath, 'env'), { recursive: true });
+    fs.writeFileSync(path.join(config.repo.localPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: DEPLOY_TOKEN\n');
+    vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value');
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const shown: string[] = [];
+
+    const done = await runLocalDriver(config, runId, workspace, { hitl: false, progress: (line) => { shown.push(line); } });
+
+    expect(shown).toEqual(['Found 2 entries.', 'Using <REDACTED:DEPLOY_TOKEN>']);
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', progress: [{ step: 'say', lines: shown }] } } });
   });
 });

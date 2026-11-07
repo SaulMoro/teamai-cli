@@ -20,6 +20,8 @@ import {
   getDataHome,
   MemberSettingsSchema,
   MemberWorkflowSettingsSchema,
+  DriverTuningSchema,
+  type DriverTuning,
   WorkflowToolSchema,
   type MemberSettings,
   type MemberWorkflowSettings,
@@ -30,12 +32,14 @@ import {
 import { readFileIfExists, readFileSafe, readJson, writeFileAtomic, writeJsonAtomic, expandHome, pathExists } from './utils/fs.js';
 import { nearestGitEntry, resolveAnchors } from './utils/git.js';
 import { getUserHome } from './utils/home.js';
+import { EPHEMERAL_CONFIG_ENV } from './launch-context.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from './utils/logger.js';
 import { listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { warnOnce } from './utils/warn-once.js';
 import { AllowSchema } from './workflow/requirements.js';
+import { withToolInstances } from './tool-instances.js';
 
 /**
  * Loads that serve a --dry-run write nothing: the legacy role migration, the
@@ -294,7 +298,7 @@ export async function loadTeamConfig(repoPath: string): Promise<TeamaiConfig | n
   try {
     const raw = parseYaml(content);
 
-    return TeamaiConfigSchema.parse(raw);
+    return await withToolInstances(repoPath, TeamaiConfigSchema.parse(raw));
   } catch (e) {
     log.error(`Invalid teamai.yaml: ${describeConfigError(e)}`);
 
@@ -408,6 +412,23 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
     warnOnce(`Ignoring workflows.tools in ${configPath}: expected an object.`);
   }
 
+  const drivers = OptionalMappingSchema.parse(workflow.drivers);
+
+  if (drivers) {
+    const accepted: Record<string, DriverTuning> = {};
+
+    for (const [name, value] of Object.entries(drivers)) {
+      const parsed = DriverTuningSchema.safeParse(value);
+
+      if (parsed.success) accepted[name] = parsed.data;
+      else warnOnce(`Ignoring workflows.drivers.${name} in ${configPath}: ${describeConfigError(parsed.error)}.`);
+    }
+
+    if (Object.keys(accepted).length > 0) settings.drivers = accepted;
+  } else if (Object.prototype.hasOwnProperty.call(workflow, 'drivers')) {
+    warnOnce(`Ignoring workflows.drivers in ${configPath}: expected an object.`);
+  }
+
   const allow = OptionalMappingSchema.parse(workflow.allow);
 
   if (allow) {
@@ -429,6 +450,26 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
   }
 
   return Object.keys(settings).length > 0 ? MemberWorkflowSettingsSchema.parse(settings) : undefined;
+}
+
+/**
+ * `workflows.drivers` of the machine file under the workspace's, merged by driver, then by runtime, then by option key,
+ * so a member who tunes one option of one runtime keeps every other option the machine file sets.
+ */
+function mergeDriverTuning(machine: Record<string, DriverTuning> | undefined, local: Record<string, DriverTuning> | undefined): Record<string, DriverTuning> | undefined {
+  if (!machine && !local) return undefined;
+  const merged: Record<string, DriverTuning> = {};
+
+  for (const name of new Set([...Object.keys(machine ?? {}), ...Object.keys(local ?? {})])) {
+    const below = machine?.[name]?.runtimes ?? {};
+    const above = local?.[name]?.runtimes ?? {};
+    const runtimes: DriverTuning['runtimes'] = {};
+
+    for (const use of new Set([...Object.keys(below), ...Object.keys(above)])) runtimes[use] = { ...below[use], ...above[use] };
+    merged[name] = { runtimes };
+  }
+
+  return merged;
 }
 
 /** Read valid member settings from a machine file, whether or not it is a user-scope install. */
@@ -516,6 +557,7 @@ function applyMachineSettings(config: LocalConfig, machine: MemberSettings): Loc
         ...local.workflows,
         tools: { ...machine.workflows?.tools, ...local.workflows?.tools },
         allow: { ...machine.workflows?.allow, ...local.workflows?.allow },
+        drivers: mergeDriverTuning(machine.workflows?.drivers, local.workflows?.drivers),
       }
     : undefined;
 
@@ -622,6 +664,10 @@ async function readAiSetting(configPath: string): Promise<LocalConfig['ai']> {
  * cannot be used, which is logged.
  */
 export async function loadLocalConfig(options: LoadOptions = {}): Promise<LocalConfig | null> {
+  const ephemeral = process.env[EPHEMERAL_CONFIG_ENV];
+
+  // A process of a run with no teamai init reads the config the run built, whichever loader it calls.
+  if (ephemeral) return readEphemeralConfig(ephemeral, process.cwd());
   const configPath = expandHome(getUserConfigPath());
   const content = await readFileSafe(configPath);
 
@@ -658,7 +704,7 @@ function serializeLocalConfig(config: LocalConfig, carriedSettings?: MemberSetti
   // The overlaid roles are the team's, read fresh on every load. Writing them
   // would leave a stale copy behind once the assignment changes or the file
   // goes, and a stale copy is exactly what a member must not be able to keep.
-  const { dataHome: _dataHome, branchHome: _branchHome, roleUnresolved: _roleUnresolved, children: _children, roleAssignment: _assignment, memberSettingsOverlay: overlay, stepRole: _stepRole, ...persisted } = withLocalRoles(config);
+  const { dataHome: _dataHome, branchHome: _branchHome, roleUnresolved: _roleUnresolved, children: _children, roleAssignment: _assignment, memberSettingsOverlay: overlay, stepRole: _stepRole, ephemeralConfig: _ephemeralConfig, ...persisted } = withLocalRoles(config);
   const localSettings = overlay?.local ?? MemberSettingsSchema.parse(persisted);
 
   const settings = { ...localSettings };
@@ -733,6 +779,11 @@ export class NotInitializedError extends Error {
   readonly name = 'NotInitializedError';
 }
 
+/** The local config names a team repo that has no teamai.yaml: the config loads, its team does not. */
+export class TeamConfigNotFoundError extends Error {
+  readonly name = 'TeamConfigNotFoundError';
+}
+
 /** The local config and the team config it points at, as the init checks return them. */
 export type TeamaiInit = { localConfig: LocalConfig; teamConfig: TeamaiConfig };
 
@@ -752,6 +803,20 @@ export class UnreadableProjectConfigError extends Error {
   constructor(problem: string) {
     super(describeUnreadableConfig(problem));
     this.name = 'UnreadableProjectConfigError';
+  }
+}
+
+/**
+ * Whether no teamai install serves `cwd`: detection finds no config at all, rather than one it cannot read or use. Reads
+ * only: nothing is migrated or self-healed.
+ */
+export async function isUninitialized(cwd?: string): Promise<boolean> {
+  try {
+    await autoDetectInit(cwd, { dryRun: true, selfHeal: false, suppressMigrationNotice: true, children: false });
+
+    return false;
+  } catch (error) {
+    return error instanceof NotInitializedError;
   }
 }
 
@@ -800,7 +865,7 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
   const teamConfigPath = path.join(repoPath, 'teamai.yaml');
 
   if (!(await pathExists(teamConfigPath))) {
-    throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
+    throw new TeamConfigNotFoundError('Team config (teamai.yaml) not found. Check your repo path.');
   }
 
   const content = await readFileSafe(teamConfigPath);
@@ -810,6 +875,15 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
     : 'it is not a valid team config (the error is printed above)';
 
   throw new Error(`The team config at ${teamConfigPath} could not be read: ${why}. Fix it in the team repo, or ask a team admin to.`);
+}
+
+/** The team config (teamai.yaml) in `repoPath`, or null when the team has none; one that cannot be used throws, naming it. */
+export async function loadTeamConfigIfPresent(repoPath: string): Promise<TeamaiConfig | null> {
+  const teamConfig = await loadTeamConfig(repoPath);
+
+  if (teamConfig || !(await pathExists(path.join(repoPath, 'teamai.yaml')))) return teamConfig;
+
+  return throwTeamConfigMissingOrInvalid(repoPath);
 }
 
 // ─── Scope-aware config loading ─────────────────────────
@@ -1070,6 +1144,10 @@ async function findProjectConfig(
   options: LoadOptions,
 ): Promise<LocalConfig | null> {
   const dir = cwd ?? process.cwd();
+  const ephemeral = process.env[EPHEMERAL_CONFIG_ENV];
+
+  // A process of a run with no teamai init reads the config the run built, wherever it runs.
+  if (ephemeral) return readEphemeralConfig(ephemeral, dir);
 
   // Resolve git anchors FIRST so the result never depends on which directory of
   // the repo we run from (issue #374 review): a repo with both a partition and a
@@ -1110,6 +1188,17 @@ async function findProjectConfig(
   // Not a git repo: fall back to a legacy `.teamai` directly at `dir` (also runs
   // the self-heal bootstrap for a freshly-cloned single-repo project).
   return readConfigFrom(path.join(dir, '.teamai'), dir, dir, onUnreadable, options);
+}
+
+/**
+ * The config a run with no `teamai init` built at `file` for itself, as a process of the run in `cwd` reads it: in place
+ * of any config `cwd` has, with the run's checkout or worktree as its workspace. Null once the run removed it.
+ */
+export async function readEphemeralConfig(file: string, cwd: string): Promise<LocalConfig | null> {
+  const anchors = await resolveAnchors(cwd);
+  const config = await readConfigFrom(path.dirname(file), anchors?.workspaceRoot ?? cwd);
+
+  return config && { ...config, ephemeralConfig: file };
 }
 
 /**

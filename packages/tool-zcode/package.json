@@ -1,0 +1,9 @@
+{
+  "name": "@teamai/tool-zcode",
+  "private": true,
+  "type": "module",
+  "description": "ZCode: its descriptor; bundled into teamai-cli.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

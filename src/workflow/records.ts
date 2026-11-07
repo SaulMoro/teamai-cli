@@ -21,9 +21,9 @@ import type { LocalConfig } from '../types.js';
 import { getDataHome, isJsonObject, isUsageReportEnabled, type JsonValue } from '../types.js';
 import { parseJson } from '../utils/json.js';
 import { log } from '../utils/logger.js';
-import { redactJson } from '../utils/redact.js';
+import { redactJson } from '@teamai/shared/redact';
 import { acquireLock, releaseLock } from '../update.js';
-import { isLaunchTool } from '../tool-launch/tools.js';
+import { launchTargetOf } from '../tool-launch/tools.js';
 import type { RunMode } from '../launch-context.js';
 import type { RunOrigin } from '../default-workflows.js';
 import { uniqueOutcomes, type WorkOutcome } from '../outcomes.js';
@@ -44,13 +44,14 @@ import { parseYaml } from '../utils/yaml.js';
  */
 const RECORDED_FAILURES = [
   'cancelled', 'hitl_required',
-  'loop_exhausted', 'invalid_output', 'invalid_template', 'invalid_inputs', 'invalid_items', 'item_cycle',
-  'tool_failed', 'tool_unavailable', 'agent_unavailable', 'model_unavailable', 'read_only_dirty', 'unreported_changes', 'tool_unconfigured', 'tool_unsupported',
+  'loop_exhausted', 'invalid_output', 'invalid_template', 'invalid_inputs', 'invalid_items', 'item_cycle', 'input_rejected', 'command_failed',
+  'tool_failed', 'tool_unavailable', 'agent_unavailable', 'model_unavailable', 'read_only_dirty', 'unreported_changes', 'tool_unconfigured', 'tool_unsupported', 'usage_limited',
   'merge_conflict', 'base_config', 'push_failed', 'workspace_base', 'bad_session',
   ...LIMIT_FAILURES,
   'delivery_failed', 'protected_path',
   'trial_prepare_failed', 'clone_prepare_failed', 'role_unavailable',
   'confined_invalid', 'confined_tool_unavailable', 'confined_failed', 'confined_reply_invalid', 'confined_report_mismatch',
+  'runtime_failed', 'runtime_interrupted', 'runtime_lost', 'requirement_unmet', 'login_missing', 'login_held', 'login_not_written_back',
 ] as const;
 
 type RecordedFailure = (typeof RECORDED_FAILURES)[number];
@@ -258,7 +259,7 @@ export function buildEndRecord(
       answer: reported?.answer ? { choice: reported.answer.choice, channel: reported.answer.channel, agent: reported.answer.agent } : undefined,
       pass: pass ?? 1,
       agent,
-      tool: reported?.tool && isLaunchTool(reported.tool) ? reported.tool : undefined,
+      tool: reported?.tool && launchTargetOf(reported.tool) ? reported.tool : undefined,
       model: reported?.model && isRecordableName(reported.model) ? reported.model : undefined,
       outcome: outcome || undefined,
       tokens: reported?.tokens || undefined,

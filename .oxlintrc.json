@@ -95,12 +95,19 @@
     "teamai/configured-tool-paths": "error",
     "teamai/config-load-options": "error",
     "teamai/launch-env": "error",
+    "teamai/launch-through-workflows": "error",
     "teamai/workflow-boundaries": "error",
     "teamai/no-provider-merge": "error",
     "teamai/windows-tests": "error",
     "teamai/rules-locate": "error",
     "teamai/workflow-failure-codes": "error",
     "teamai/tool-facts": "error",
+    // packages/* never imports src/, src/ never imports a runtime package, and a package is reached only by its name.
+    "teamai/package-boundaries": "error",
+    // TOOLS, LAUNCH_ADAPTERS and ADAPTER_REGISTRY are read only through src/tool-registry.ts.
+    "teamai/tool-registry": "error",
+    // A test mocks a module where it is defined: a mock of a re-export misses package code that imports the module itself.
+    "teamai/mock-source": "error",
     // parseYaml returns JSON values; yaml's own parse can return a Set, Buffer or Date.
     "teamai/yaml-parse": "error",
     // A reducer that copies its accumulator each step is quadratic.
@@ -155,6 +162,31 @@
         "teamai/no-widen-then-assert": "off",
         "teamai/require-readable-spacing": "off",
         "teamai/require-safety-comment-for-type-assertion": "off"
+      }
+    },
+    {
+      // Paseo is a prerequisite the member installs: teamai-runtime-paseo loads its client from that install
+      // (client.ts), so shipped code imports only its types, and the bundle holds none of its code.
+      "files": ["packages/runtime-paseo/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@getpaseo/*", "ws"],
+                "allowTypeImports": true,
+                "message": "Import only types from Paseo's packages: the runtime loads them from the member's Paseo install (client.ts)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/runtime-paseo/src/testing/**", "packages/runtime-paseo/src/**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     },
     {

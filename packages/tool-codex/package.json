@@ -1,0 +1,9 @@
+{
+  "name": "@teamai/tool-codex",
+  "private": true,
+  "type": "module",
+  "description": "Codex, codex-internal and tcodex: their descriptors, launch profile and session platforms; bundled into teamai-cli.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -2,21 +2,23 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describeWorkflow } from '../workflow/describe.js';
+import { parseWorkflow } from '../workflow/parse.js';
 import { z } from 'zod';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import type { LocalConfig } from '../types.js';
 import * as update from '../update.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
-import { leaseNext, parseNextPayload, parseReport, reportAttempt, resumableSessions, SETTLED_ATTEMPTS_LIMIT, startRun, type ReportInput } from '../workflow/engine.js';
+import { leaseNext, parseNextPayload, parseReport, reportable, reportAttempt, resumableSessions, SETTLED_ATTEMPTS_LIMIT, startRun, type ReportInput, type SoleDriver } from '../workflow/engine.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { getCurrentVersion } from '../package-info.js';
 import { expectedOutput, outputMismatch, OutputSchemaSchema } from '../workflow/output.js';
 import { CAN_KEYS, type DriverCan } from '../workflow/requirements.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
-import { cancelRun, retryStep } from '../workflow/run-controls.js';
+import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
-import { readRun, runFilePath, runLockPath, runsDir, updateRun } from '../workflow/store.js';
+import { readRun, runFilePath, runLockPath, runScratchDir, runsDir, updateRun } from '../workflow/store.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { DriverIdentity, OutputSchema, RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -4299,6 +4301,32 @@ describe('for_each', () => {
     expect(cli).toMatchObject({ data: { lease: { step: 'build[2]', env: { TARGET: 'cli' } }, cancelled: [] } });
   });
 
+  it('for a driver that runs one step at a time, leases only the items of a for_each with max_parallel beside each other', async () => {
+    const capped = FAN_PLAN
+      .replace('for_each: steps.plan.outputs.targets', 'for_each: { items: steps.plan.outputs.targets, max_parallel: 2 }')
+      .replace('  - id: ship\n', '  - id: lint\n    needs: [plan]\n    command: node lint.js\n  - id: ship\n');
+    const { config, runId } = await startTree({ fan: capped }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA, { isOneAtATime: true }));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { targets: ['web', 'api', 'cli'] }, driver: driverA });
+
+    const web = leaseIn(await leaseNext(config, runId, driverA, { isOneAtATime: true }));
+    const api = leaseIn(await leaseNext(config, runId, driverA, { running: [web.attempt], isOneAtATime: true }));
+    const full = await leaseNext(config, runId, driverA, { running: [web.attempt, api.attempt], isOneAtATime: true });
+
+    expect([web.step, api.step]).toEqual(['build[0]', 'build[1]']);
+    expect(full).toEqual({ data: { wait: { reason: 'build[0] is leased' }, cancelled: [] } });
+  });
+
+  it('for a driver that runs one step at a time, leases the items of a for_each with no max_parallel one at a time', async () => {
+    const { config, runId } = await startTree({ fan: FAN_PLAN }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA, { isOneAtATime: true }));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { targets: ['web', 'api'] }, driver: driverA });
+
+    const web = leaseIn(await leaseNext(config, runId, driverA, { isOneAtATime: true }));
+
+    expect(await leaseNext(config, runId, driverA, { running: [web.attempt], isOneAtATime: true })).toEqual({ data: { wait: { reason: 'build[0] is leased' }, cancelled: [] } });
+  });
+
   it('hands a restarted driver its item leases back with the same ids, attempts and env, one per call', async () => {
     const { config, runId } = await startTree({ fan: FAN_PLAN }, 'fan');
     const plan = leaseIn(await leaseNext(config, runId, driverA));
@@ -4657,13 +4685,98 @@ describe('the tool a prompt step names', () => {
   it('fails it tool_unavailable in a run its only driver drives, when that driver cannot run the tool, and runs the other steps', async () => {
     const { config, runId } = await startBuild(REVIEW_AND_LINT);
 
-    const lint = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone: true });
+    const lint = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone: { driver: 'local', offers: [{ runtime: 'local', can: { tools: ['claude'] } }] } });
 
     expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
       { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
       { id: 'lint', status: 'leased' },
     ] });
+  });
+});
+
+describe('the tool a driver picks for a prompt step that names none', () => {
+  const REVIEW = graph(`  - id: review
+    prompt: Review it.
+`);
+  const toCodex = (): string => 'codex';
+
+  it('leases it only to a driver that lists that tool in can.tools, and leaves the tool off the lease', async () => {
+    const { config, runId } = await startBuild(REVIEW);
+
+    const held = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, toolFor: toCodex });
+    const review = await leaseNext(config, runId, driverB, { can: { tools: ['codex'] }, toolFor: toCodex });
+
+    expect(held).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['tools'] }] } } });
+    expect(review).toMatchObject({ data: { lease: { step: 'review' } } });
+    expect(review).not.toHaveProperty('data.lease.tool');
+  });
+
+  it('fails it tool_unavailable in a run its only driver drives, when no runtime offers that tool', async () => {
+    const { config, runId } = await startBuild(REVIEW);
+    const alone: SoleDriver = { driver: 'pair', offers: [{ runtime: 'toy', can: { tools: ['claude'] } }, { runtime: 'host', can: { tools: [], prompt: false } }] };
+
+    await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone, toolFor: toCodex });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" names no tool and runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or pick a tool it launches with --tools default=<tool>.' } },
+    ] });
+  });
+
+  it('leaves a confined step to the tools of can.confined, which a judge runs on', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: judge
+    workspace: { confined: evidence }
+    prompt: Judge the evidence.
+    output:
+      verdict: pass | fail
+`));
+    const dir = path.join(runScratchDir(config, runId), 'evidence');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'confined.json'), '{"level":"verified"}');
+
+    const judge = await leaseNext(config, runId, driverA, { can: { tools: [], confined: [{ level: 'verified', access: 'read', tools: ['claude'] }] }, toolFor: toCodex });
+
+    expect(judge).toMatchObject({ data: { lease: { step: 'judge', confined: { tools: ['claude'] } } } });
+  });
+});
+
+describe('a command step of a workflow under the name of one teamai ships', () => {
+  // A team file under a default's name replaces it, and is pinned as the default is.
+  it.each(['teamai-import-rules', 'teamai-promote-learning'])('holds %s\'s command step from a runtime off this host, and leases it on the host', async (name) => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1
+name: ${name}
+description: Bookkeeping on this host.
+steps:
+  - id: record
+    command: node record.js
+`);
+    await syncScorersThenWorkflows(config);
+    const started = await startRun(config, name, {}, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    const remote = await leaseNext(config, runId, driverB, { can: { remote: true } });
+    const host = await leaseNext(config, runId, driverA, {});
+
+    expect(remote).toMatchObject({ data: { wait: { held: [{ step: 'record', missing: ['host'] }] } } });
+    expect(host).toMatchObject({ data: { lease: { step: 'record' } } });
+  });
+
+  it('is held from a runtime off this host by describe too, as next holds it', () => {
+    const parsed = parseWorkflow('teamai-import-rules.yaml', `schemaVersion: v1alpha1
+name: teamai-import-rules
+description: Bookkeeping on this host.
+steps:
+  - id: record
+    command: node record.js
+`);
+    if (!parsed.ok) throw new Error('the workflow does not parse');
+    const none = new Set<string>();
+
+    const { facts } = describeWorkflow({ definition: parsed.definition, source: 'team', workflows: {}, ceiling: 1, can: { remote: true }, allow: {}, env: { declared: none, secrets: none, present: none } });
+
+    expect(facts.held).toEqual([expect.objectContaining({ step: 'record', missing: ['host'] })]);
   });
 });
 
@@ -4696,7 +4809,7 @@ describe('a prompt step with permissions: unattended', () => {
   it('fails it tool_unavailable in a run whose only driver cannot run it unattended, and runs the other steps', async () => {
     const { config, runId } = await startBuild(FIX_AND_LINT);
 
-    const lint = await leaseNext(config, runId, driverA, { can: sandbox, alone: true });
+    const lint = await leaseNext(config, runId, driverA, { can: sandbox, alone: { driver: 'local', offers: [{ runtime: 'local', can: sandbox }] } });
 
     expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
@@ -5214,6 +5327,104 @@ describe('deadlines', () => {
         { id: 'slow', status: 'failed', failure: { code: 'timeout' }, unenforced },
         { id: 'other', status: 'cancelled', unenforced },
       ] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts the timeout of a lease from when its driver last listed it queued', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(at(0)));
+      const { config, runId } = await startBuild(graph(`  - id: slow
+    timeout: 10m
+    command: echo slow
+  - id: other
+    needs: []
+    command: echo other
+`));
+      const slow = leaseIn(await leaseNext(config, runId, driverA));
+      const other = leaseIn(await leaseNext(config, runId, driverA, { running: [slow.attempt] }));
+      const running = [slow.attempt, other.attempt];
+      vi.setSystemTime(new Date(at(8)));
+      expect(await leaseNext(config, runId, driverA, { running, queued: [slow.attempt] })).toMatchObject({ data: { cancelled: [], deadlines: { [slow.attempt]: at(18) } } });
+      vi.setSystemTime(new Date(at(15)));
+      expect(await leaseNext(config, runId, driverA, { running })).toMatchObject({ data: { cancelled: [] } });
+      expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'slow', status: 'leased', lease: { leasedAt: at(8), expiresAt: at(18) } }, { id: 'other' }] });
+      vi.setSystemTime(new Date(at(19)));
+      expect(await leaseNext(config, runId, driverA, { running })).toMatchObject({ data: { cancelled: [slow.attempt] } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts the timeout of a lease from a report of its driver that lists it queued', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(at(0)));
+      const { config, runId } = await startBuild(graph(`  - id: slow
+    timeout: 10m
+    command: echo slow
+  - id: other
+    needs: []
+    command: echo other
+`));
+      const slow = leaseIn(await leaseNext(config, runId, driverA));
+      const other = leaseIn(await leaseNext(config, runId, driverA, { running: [slow.attempt] }));
+      vi.setSystemTime(new Date(at(15)));
+      await reportAttempt(config, runId, { attempt: other.attempt, revision: other.revision, outcome: 'success', driver: driverA, queued: [slow.attempt] });
+      expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'slow', status: 'leased', lease: { leasedAt: at(15), expiresAt: at(25) } }, { id: 'other', status: 'succeeded' }] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts the timeout of a lease from an answer that lists it queued for its driver', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(at(0)));
+      const { config, runId } = await startBuild(graph(`  - id: slow
+    timeout: 10m
+    command: echo slow
+  - id: gate
+    needs: []
+    approve: Go on?
+    command: echo gate
+`));
+      const slow = leaseIn(await leaseNext(config, runId, driverA, { can: { hitl: true } }));
+      expect(await leaseNext(config, runId, driverA, { running: [slow.attempt], queued: [slow.attempt], can: { hitl: true } })).toMatchObject({ data: { hitl: { step: 'gate' } } });
+      vi.setSystemTime(new Date(at(15)));
+      const provenance = respondProvenance({ kind: 'terminal', caller: { tty: true, evidence: { kind: 'none' } } });
+      const answered = await respondToHitl(config, runId, await knownSecrets(config), { step: 'gate', choice: 'yes', pass: 1, provenance, queued: { driver: driverA, attempts: [slow.attempt] } });
+      expect(answered).not.toHaveProperty('error');
+      expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'slow', status: 'leased', lease: { leasedAt: at(15), expiresAt: at(25) } }, { id: 'gate' }] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('takes a report that lists a lease queued as reportable when the report itself takes it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(at(0)));
+      const { config, runId } = await startBuild(graph(`  - id: slow
+    timeout: 10m
+    continue_on_failure: true
+    command: echo slow
+  - id: other
+    needs: []
+    command: echo other
+  - id: stop
+    needs: [slow]
+    if: steps.slow.failure.code == 'timeout'
+    end: stopped
+`, 'ends:\n  stopped: failed\n'));
+      const slow = leaseIn(await leaseNext(config, runId, driverA));
+      const other = leaseIn(await leaseNext(config, runId, driverA, { running: [slow.attempt] }));
+      vi.setSystemTime(new Date(at(15)));
+      const report: ReportInput = { attempt: other.attempt, revision: other.revision, outcome: 'success', driver: driverA, queued: [slow.attempt] };
+      expect(await reportable(config, runId, report)).toBe(true);
+      expect(await reportAttempt(config, runId, report)).toMatchObject({ data: { accepted: true } });
     } finally {
       vi.useRealTimers();
     }
@@ -5822,6 +6033,27 @@ describe('strict requirements', () => {
     expect(leased).not.toHaveProperty('data.lease.envScope');
   });
 
+  it('starts a run whose strict steps each have a runtime of the only driver, though every runtime holds one of them back', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: boxed
+    requires: { isolation: sandbox, strict: true }
+    command: node boxed.js
+  - id: offline
+    needs: [boxed]
+    requires: { network: false, strict: true }
+    command: node offline.js
+`));
+    await syncScorersThenWorkflows(config);
+    const secrets = await knownSecrets(config);
+
+    const started = await startRun(config, 'build', {}, { secrets, alone: { driver: 'split', offers: [
+      { runtime: 'box', can: { isolation: 'sandbox', network: false, env: true } },
+      { runtime: 'air', can: { isolation: 'none', network: true, env: true } },
+    ] } });
+
+    expect(started).toMatchObject({ data: { status: 'running' } });
+  });
+
   it('refuses a start whose only driver could never take a step for its strict requirements, and creates no run', async () => {
     const { config } = testConfig();
     fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: fetch
@@ -5834,8 +6066,8 @@ describe('strict requirements', () => {
     await syncScorersThenWorkflows(config);
     const secrets = await knownSecrets(config);
 
-    const refused = await startRun(config, 'build', {}, { secrets, alone: { isolation: 'sandbox', network: false, env: true } });
-    const started = await startRun(config, 'build', {}, { secrets, alone: { isolation: 'none', network: true, env: true } });
+    const refused = await startRun(config, 'build', {}, { secrets, alone: { driver: 'local', offers: [{ runtime: 'local', can: { isolation: 'sandbox', network: false, env: true } }] } });
+    const started = await startRun(config, 'build', {}, { secrets, alone: { driver: 'local', offers: [{ runtime: 'local', can: { isolation: 'none', network: true, env: true } }] } });
 
     expect(refused).toEqual({ error: { code: 'requirement_unmet', message: 'Step "offline" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.' } });
     expect(started).toMatchObject({ data: { status: 'running' } });
@@ -5885,5 +6117,163 @@ describe('strict requirements', () => {
     expect(await start('loose')).toEqual({ error: { code: 'unattended_unsandboxed', message: `Step "run.work" ${needs}` } });
     for (const name of ['ci', 'own', 'outer', 'sealed']) expect(await start(name)).toMatchObject({ data: { status: 'running' } });
     expect(fs.readdirSync(runsDir(config))).toHaveLength(4);
+  });
+});
+
+describe('a required HITL request in a run whose only driver has several runtimes', () => {
+  const GATED = `schemaVersion: v1alpha1
+name: build
+description: Ship once a person approves.
+steps:
+  - id: ship
+    approve: { message: Ship it?, required: true }
+    command: node ship.js
+`;
+  const alone = { driver: 'showcase', offers: [{ runtime: 'toy', can: { hitl: false } }, { runtime: 'local', can: { hitl: true } }] } satisfies SoleDriver;
+
+  it('waits while a runtime that cannot ask is offered, and is asked once the runtime that can is offered', async () => {
+    const { config, runId } = await startBuild(GATED);
+
+    const onToy = await leaseNext(config, runId, driverA, { can: { hitl: false }, alone });
+    const onLocal = await leaseNext(config, runId, driverA, { can: { hitl: true }, alone });
+
+    expect(onToy).toMatchObject({ data: { wait: {} } });
+    expect(onLocal).toMatchObject({ data: { hitl: { step: 'ship', pass: 1 } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'ship', status: 'waiting' }] });
+  });
+
+  it('still fails it hitl_required when no runtime of the driver can ask', async () => {
+    const { config, runId } = await startBuild(GATED);
+    const none = { driver: 'showcase', offers: [{ runtime: 'toy', can: { hitl: false } }, { runtime: 'local', can: { hitl: false } }] } satisfies SoleDriver;
+
+    await leaseNext(config, runId, driverA, { can: { hitl: false }, alone: none });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'ship', status: 'failed', failure: { code: 'hitl_required' } }] });
+  });
+});
+
+describe('an interactive step in a run whose only driver has several runtimes, none of which can ask', () => {
+  const REVIEW = graph(`  - id: review
+    workspace: new
+    interactive: true
+    tool: claude
+    prompt: Review the repository with a person.
+`);
+  const base = { commit: 'b'.repeat(40) };
+  const local: DriverCan = { workspace: ['read-only', 'new', 'continue'], tools: ['claude'], hitl: false };
+  const toy: DriverCan = { workspace: [], tools: ['claude'], hitl: false };
+  const alone = { driver: 'mixed', offers: [{ runtime: 'local', can: local }, { runtime: 'toy', can: toy }] } satisfies SoleDriver;
+
+  it('holds it for a person on each runtime, also on the one that lacks its workspace, so the driver can hand it to one', async () => {
+    const { config, runId } = await startBuild(REVIEW);
+
+    const onLocal = await leaseNext(config, runId, driverA, { can: local, alone, base });
+    const onToy = await leaseNext(config, runId, driverA, { can: toy, alone, base });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
+    expect(onLocal).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['hitl'] }] } } });
+    expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'hitl'] }] } } });
+  });
+
+  it('fails it tool_unavailable, before a person is asked, when no runtime launches its tool and one of them lacks its workspace', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    workspace: new
+    interactive: true
+    tool: codex
+    prompt: Review the repository with a person.
+`));
+    const bare: DriverCan = { workspace: [], tools: [], hitl: false };
+    const toolless = { driver: 'toolgap', offers: [{ runtime: 'local', can: local }, { runtime: 'toy', can: bare }] } satisfies SoleDriver;
+
+    const onToy = await leaseNext(config, runId, driverA, { can: bare, alone: toolless, base });
+    await leaseNext(config, runId, driverA, { can: local, alone: toolless, base });
+
+    expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'tools', 'hitl'] }] } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
+    ] });
+  });
+});
+
+// A runtime whose plan defers a step on its workspace is judged as if it had that workspace, so adding one to a driver
+// leaves the outcome of every requirement other than the workspace as it was without it.
+describe('a step in a run whose only driver has a runtime that lacks its workspace', () => {
+  const base = { commit: 'b'.repeat(40) };
+  const placeless = (can: DriverCan): DriverCan => ({ ...can, workspace: [] });
+
+  it('holds an interactive step the member\'s policy refuses for that policy on each runtime, never for a person', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    workspace: new
+    interactive: true
+    tool: claude
+    requires: { network: true }
+    prompt: Review the repository with a person.
+`));
+    const refusing: LocalConfig = { ...config, workflows: { tools: {}, allow: { network: false } } };
+    const local: DriverCan = { workspace: ['read-only', 'new', 'continue'], tools: ['claude'], hitl: false };
+    const alone = { driver: 'mixed', offers: [{ runtime: 'local', can: local }, { runtime: 'toy', can: placeless(local) }] } satisfies SoleDriver;
+
+    const onLocal = await leaseNext(refusing, runId, driverA, { can: local, alone, base });
+    const onToy = await leaseNext(refusing, runId, driverA, { can: placeless(local), alone, base });
+
+    expect(onLocal).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['policy.network'] }] } } });
+    expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'policy.network'] }] } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
+  });
+
+  it.each([
+    ['both runtimes give its workspace', false, false],
+    ['the second runtime lacks its workspace', false, true],
+    ['the first runtime lacks its workspace', true, false],
+  ])('leaves a step with a role pending, when no runtime gives a role, as when %s', async (_, firstPlaceless, secondPlaceless) => {
+    const fixture = testConfig();
+    fs.mkdirSync(path.join(fixture.config.repo.localPath, 'manifest'), { recursive: true });
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'manifest', 'roles.yaml'), 'version: 1\nroles:\n  - id: review\n    resources: { knowledge: [], skills: [review] }\n');
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: check
+    workspace: new
+    tool: claude
+    role: review
+    prompt: Review.
+`));
+    await syncScorersThenWorkflows(fixture.config);
+    const started = await startRun(fixture.config, 'build', {}, { secrets: await knownSecrets(fixture.config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const { config } = fixture;
+    const runId = String(started.data.run);
+    const roleless: DriverCan = { workspace: ['read-only', 'new', 'continue'], tools: ['claude'], role: false };
+    const first = firstPlaceless ? placeless(roleless) : roleless;
+    const second = secondPlaceless ? placeless(roleless) : roleless;
+    const alone = { driver: 'mixed', offers: [{ runtime: 'local', can: first }, { runtime: 'toy', can: second }] } satisfies SoleDriver;
+
+    await leaseNext(config, runId, driverA, { can: first, alone, base, prepare: true });
+    await leaseNext(config, runId, driverA, { can: second, alone, base, prepare: true });
+
+    expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: [{ id: 'check', status: 'pending' }] });
+  });
+
+  it.each([
+    ['both runtimes give its workspace', false, false],
+    ['the second runtime lacks its workspace', false, true],
+    ['the first runtime lacks its workspace', true, false],
+  ])('fails an unattended interactive step tool_unavailable, when no runtime runs it unattended, as when %s', async (_, firstPlaceless, secondPlaceless) => {
+    const { config, runId } = await startBuild(graph(`  - id: fix
+    workspace: new
+    interactive: true
+    tool: claude
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+    prompt: Fix it with a person.
+`));
+    const sandbox: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tools: ['claude'], hitl: false, unattended: false };
+    const first = firstPlaceless ? placeless(sandbox) : sandbox;
+    const second = secondPlaceless ? placeless(sandbox) : sandbox;
+    const alone = { driver: 'sandboxes', offers: [{ runtime: 'one', can: first }, { runtime: 'two', can: second }] } satisfies SoleDriver;
+
+    await leaseNext(config, runId, driverA, { can: first, alone, base });
+    await leaseNext(config, runId, driverA, { can: second, alone, base });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'fix', status: 'failed', failure: {
+      code: 'tool_unavailable', message: 'Step "fix" sets permissions: unattended on claude, which the driver of this run cannot run unattended. Run it with a driver that declares can.unattended, or remove permissions from the step.',
+    } }] });
   });
 });

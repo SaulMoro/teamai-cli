@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { CanSchema } from '@teamai/runtime-protocol';
 import { parseReportedAgent, parseReportedUsed, settleObservation, type ReportedAgent, type Used } from '../agent-observation.js';
 import { loadTeamConfig } from '../config.js';
 import { DefaultWorkflows } from '../default-workflows.js';
@@ -33,10 +34,10 @@ import {
   succeed, waitForAnswer, type ConfinedRunReport, type ItemResult, type LeasedStep, type StepRead, type StepState,
 } from './step-state.js';
 import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
-import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
+import { addItems, afterStanding, expandItems, isItem, itemLimit, itemLimitMismatch, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
+import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan, type WorkspaceRequest } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
 } from './pr-delivery.js';
@@ -44,8 +45,8 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, CanSchema, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
-  type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
+  CAN_KEYS, LimitSchema, ReportedUnenforcedSchema, heldFor, isPinnedToHost, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { TeamPin } from './team-pin.js';
@@ -72,8 +73,11 @@ import type {
   WorkflowStep,
 } from './types.js';
 import { hasAction, onlyPersonAnswers, stepWorkflow } from './types.js';
+import { Writes } from './writes.js';
 import { describeWorkflow } from './describe.js';
-import { CONFINED_LEVELS, CostSchema } from '../tool-launch/confined-level.js';
+import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
+import { CostSchema } from '../tool-launch/confined-level.js';
+import { toolOf } from '../tool-registry.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -103,6 +107,8 @@ export interface ReportInput {
   failure?: WorkflowFailure;
   /** The branch this attempt committed, when it ran in a workspace. */
   changes?: { branch: string; base: string; from: string; to: string; commits: string[] };
+  /** As `next`'s `queued`: the driver's other open leases it holds but has not started, whose own timeout counts from this report. */
+  queued?: string[];
   /** `changes.pr_url` as the driver sent it: a pull request it opened itself, kept only once it is sanitized. */
   prUrl?: unknown;
   /** The branch and commit this attempt read, when it ran read-only in a workspace. */
@@ -116,7 +122,12 @@ export interface ReportInput {
   limit?: Limit;
   /** What the run of a step leased with `confined` measured. */
   confined?: ConfinedRunReport;
+  /** The lines the step said as it ran, such as a command's stderr, which a shortcut of the run shows. */
+  progress?: string[];
 }
+
+/** The most progress lines a pass keeps: its last ones, which say how it ended. */
+const PROGRESS_LINES = 200;
 
 /** A protocol rejection that retains its actionable code and message. */
 export function error(code: string, message: string): Extract<WorkflowEnvelope, { error: unknown }> {
@@ -198,8 +209,11 @@ export async function withRun(
 }
 
 interface RenderedLease {
+  /** A prompt step's prompt, or an answer step's `answer`, as its template rendered. */
   prompt?: string;
   env?: Record<string, string>;
+  /** A command step's `writes`, as each template rendered. */
+  writes?: string[];
   /** The step's `model` as its template rendered; an empty one means the tool's default. */
   model?: string;
   /** The `defaults.model` in effect for a prompt step, as written. */
@@ -290,7 +304,13 @@ function renderLease(scope: Scope, states: StepState[], state: StepState, defini
   const env = Object.keys(definition.env ?? {}).map((name) => [name, rendered.get(`env.${name}`) ?? ''] as const);
 
   const texts: RenderedLease = {};
-  const prompt = rendered.get('prompt');
+  const prompt = rendered.get('prompt') ?? rendered.get('answer');
+  const writes = (definition.writes ?? []).map((_, index) => rendered.get(`writes[${index}]`) ?? '');
+  const outside = writes.find((written) => !Writes.isRenderedPath(written));
+
+  if (outside !== undefined) return { code: 'invalid_template', message: `step "${state.id}" writes ${JSON.stringify(outside)}, which is neither a path inside the checkout nor an absolute path; give writes a path relative to the checkout, such as docs/, or an input that names a directory` };
+
+  if (definition.writes) texts.writes = writes;
   const model = rendered.get('model');
   const confined = rendered.get('workspace.confined');
 
@@ -506,6 +526,10 @@ function leaseData(
 
   if (rendered.prompt !== undefined) wire.prompt = rendered.prompt;
 
+  if (definition.answer !== undefined) wire.answer = true;
+
+  if (rendered.writes) wire.writes = rendered.writes;
+
   if (definition.agent !== undefined) wire.agent = definition.agent;
 
   if (definition.tool !== undefined) wire.tool = definition.tool;
@@ -715,8 +739,14 @@ export function runData(run: RunState): RunData {
 
 /** The end `next` answers once the run has settled. */
 type DoneData = {
-  done: { run: string; outcome: RunStatus; end?: string; failure?: WorkflowFailure; prs?: string[]; outputs?: Record<string, JsonValue>; finally?: FinallyStopped[] };
+  done: {
+    run: string; outcome: RunStatus; end?: string; failure?: WorkflowFailure; prs?: string[]; outputs?: Record<string, JsonValue>; finally?: FinallyStopped[];
+    progress?: StepProgress[];
+  };
 };
+
+/** The progress lines a step's latest pass reported. */
+type StepProgress = { step: string; lines: string[] };
 
 function doneData(run: RunState): DoneData {
   const prs = (run.deliveries ?? []).map((receipt) => receipt.url);
@@ -733,6 +763,9 @@ function doneData(run: RunState): DoneData {
   if (outputs) done.outputs = outputs;
 
   if (unfinished.length > 0) done.finally = unfinished;
+  const progress = run.steps.flatMap((step): StepProgress[] => ('progress' in step && step.progress ? [{ step: step.id, lines: step.progress }] : []));
+
+  if (progress.length > 0) done.progress = progress;
 
   return { done };
 }
@@ -977,13 +1010,17 @@ function startWorkflowStep(
     const rendered = renderStrings(step.with ?? {}, contextOf(scope, states, state));
 
     if (!rendered.ok) return withTemplateFailure(state, rendered.error);
-    const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
+    const given = withInputDefaults(child.definition, rendered.value);
+    const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, given ?? rendered.value);
 
     if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
+    const unfit = itemLimitMismatch(child.definition.steps, given);
+
+    if (unfit) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${unfit}` };
 
     // inputsMismatch has checked that the rendered value is an object.
-    if (child.definition.inputs && isRecord(rendered.value)) {
-      inputs = rendered.value;
+    if (child.definition.inputs && given) {
+      inputs = given;
       child.inputs = inputs;
     }
   }
@@ -1110,6 +1147,35 @@ function advanceInstance(
 }
 
 /**
+ * The items `path` runs under that run beside the other items of their step, outermost first: each `<step>[<n>]` on
+ * the way whose `for_each` declares `max_parallel`.
+ */
+function parallelItems(run: RunState, path: string): string[] {
+  const segments = parseStepPath(path);
+
+  return segments.flatMap((segment, index) => {
+    if (segment.index === undefined) return [];
+    const at = segments.slice(0, index + 1).map((part) => (part.index === undefined ? part.id : `${part.id}[${part.index}]`));
+    const fanOut = [...at.slice(0, -1), segment.id].join('.');
+
+    return locateStep(run, fanOut)?.step.forEach?.maxParallel === undefined ? [] : [at.join('.')];
+  });
+}
+
+/**
+ * Whether the step at `path` may run while the one at `other` does, for a driver that runs one step at a time: only
+ * when they run under two items of one `for_each` that declares `max_parallel`, which bounds how many start.
+ */
+function runsBeside(run: RunState, path: string, other: string): boolean {
+  const mine = parallelItems(run, path);
+  const theirs = parallelItems(run, other);
+  const split = mine.findIndex((item, index) => item !== theirs[index]);
+  const fanOut = (item: string | undefined): string | undefined => item?.replace(/\[\d+\]$/u, '');
+
+  return split !== -1 && theirs[split] !== undefined && fanOut(mine[split]) === fanOut(theirs[split]);
+}
+
+/**
  * Settles items at the current revision and returns the leaves available to lease. An item waits for its
  * `after` dependencies and for room under `max_parallel`. A ready leaf does not take room until it is leased, and
  * `next` leases one step per call, so a held-back item leaves its room to the next one.
@@ -1127,6 +1193,18 @@ function settleItems(
     return { outcome: 'failed', failure, settledAt: run.revision };
   }
 
+  // A start checks the template against its inputs, so only a changed run file fails here.
+  const limited = itemLimit(definition, scope.inputs);
+
+  if (!limited.ok) {
+    const failure = { code: 'invalid_inputs', message: limited.message };
+    stopWhere(run, isUnder(state.id), failure, run.revision, now);
+
+    return { outcome: 'failed', failure, settledAt: run.revision };
+  }
+
+  const maxParallel = limited.limit;
+
   for (;;) {
     const items = itemsOf(run, state);
     const after = itemsAfter(state.id, items.map((item) => item.item));
@@ -1136,7 +1214,6 @@ function settleItems(
     const standing = (index: number): ReturnType<typeof afterStanding> => afterStanding(dependencies(index));
     const dependents: number[][] = items.map(() => []);
     after.forEach((others, index) => others.forEach((other) => dependents[other]!.push(index)));
-    const maxParallel = definition.forEach?.maxParallel;
     let started = startedItems(items);
     let changed = false;
     const ready: Ready[] = [];
@@ -1351,7 +1428,16 @@ export function reconcileRun(run: RunState, now: string): Settled {
   return expire(run, now) ?? settleScope(run, run.finalizing ? finallyScope(run) : topScope(run), now);
 }
 
-/** Why `inputs` do not fit what the workflow declares, naming the field, or null when they fit. Every declared input is required. */
+/**
+ * `inputs` with the default of each input they leave out, from `definition.defaults.inputs`; undefined when they are
+ * not an object, which `inputsMismatch` refuses.
+ */
+// oxlint-disable-next-line teamai/no-unknown-parameters -- fills inputs nothing has read yet: a start payload's, or what a step's `with` rendered to
+function withInputDefaults(definition: Pick<WorkflowDefinition, 'defaults'>, inputs: unknown): RunState['inputs'] {
+  return isRecord(inputs) ? { ...definition.defaults?.inputs, ...inputs } : undefined;
+}
+
+/** Why `inputs` do not fit what the workflow declares, naming the field, or null when they fit. Every declared input is required; fill defaults first. */
 // oxlint-disable-next-line teamai/no-unknown-parameters -- validates inputs nothing has read yet: a start payload's, or what a step's `with` rendered to
 function inputsMismatch(name: string, declared: Record<string, OutputSchema> | undefined, inputs: unknown): string | null {
   if (!isRecord(inputs)) return 'inputs must be a JSON object';
@@ -1380,6 +1466,57 @@ function secretMismatch(inputs: RunState['inputs'], secrets: Record<string, stri
   return null;
 }
 
+/** What a start admitted: the run's workflow, as `createRun` takes it. */
+type AdmittedStart = Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'definition' | 'workflows'> & Required<Pick<RunState, 'origin'>>;
+
+/**
+ * Admits workflow `name` for a start with `inputs` from `base`: every check a start makes before it needs the run's
+ * driver. A caller that opens a driver's runtimes calls it first, so a start refused here starts none of them.
+ */
+export async function admitStart(
+  config: LocalConfig,
+  name: string,
+  // oxlint-disable-next-line teamai/no-unknown-parameters -- the parse boundary: start's inputs as the CLI or a driver sent them, checked here first
+  inputs: unknown,
+  { secrets, base }: { secrets: Record<string, string>; base?: RunState['base'] },
+): Promise<{ ok: true; admitted: AdmittedStart } | { ok: false; refused: WorkflowEnvelope }> {
+  const cached = await loadCachedWorkflow(config, name);
+
+  if (!cached) {
+    const conflict = await namespaceConflictOf(config, name);
+
+    if (conflict) return { ok: false, refused: error('workflow_namespace_conflict', conflict) };
+
+    return { ok: false, refused: error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`) };
+  }
+
+  const given = withInputDefaults(cached.definition, inputs);
+  const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, given ?? inputs);
+
+  if (mismatch) return { ok: false, refused: error('invalid_inputs', mismatch) };
+  const tree = await loadWorkflowTree(config, cached);
+
+  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
+  if ('failed' in tree) return { ok: false, refused: error(tree.failed.code, tree.failed.message) };
+  const admission = await admitWorkflow(config, { kind: 'cached', definition: cached.definition, workflows: tree.workflows }, { secrets, base });
+
+  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
+  if ('failure' in admission) return { ok: false, refused: error(admission.failure.code, admission.failure.message) };
+
+  // A run reads an undefined inputs or teamRevision as not given.
+  return {
+    ok: true,
+    admitted: {
+      name: cached.definition.name,
+      inputs: cached.definition.inputs ? given : undefined,
+      sourceHash: tree.sourceHash,
+      teamRevision: tree.teamRevision || undefined,
+      origin: DefaultWorkflows.originOf(cached),
+      ...admission.admitted,
+    },
+  };
+}
+
 /**
  * Creates a run. `inputs` are checked against the declared inputs before the run file exists. `secrets` are what the
  * caller resolved for the operation.
@@ -1389,55 +1526,26 @@ export async function startRun(
   name: string,
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the parse boundary: start's inputs as the CLI or a driver sent them, checked here first
   inputs: unknown,
-  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: DriverCan },
+  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
-  const cached = await loadCachedWorkflow(config, name);
+  const admission = await admitStart(config, name, inputs, { secrets, base: options.base });
 
-  if (!cached) {
-    const conflict = await namespaceConflictOf(config, name);
+  if (!admission.ok) return admission.refused;
 
-    if (conflict) return error('workflow_namespace_conflict', conflict);
-
-    return error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`);
-  }
-
-  const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, inputs);
-
-  if (mismatch) return error('invalid_inputs', mismatch);
-  // inputsMismatch has checked that inputs are an object.
-  const given = isRecord(inputs) ? inputs : undefined;
-  const tree = await loadWorkflowTree(config, cached);
-
-  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
-  if ('failed' in tree) return error(tree.failed.code, tree.failed.message);
-  const admission = await admitWorkflow(config, { kind: 'cached', definition: cached.definition, workflows: tree.workflows }, { secrets, base: options.base });
-
-  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
-  if ('failure' in admission) return error(admission.failure.code, admission.failure.message);
-
-  // createRun reads an undefined inputs or teamRevision as not given.
-  return createRun(config, {
-    name: cached.definition.name,
-    inputs: cached.definition.inputs ? given : undefined,
-    sourceHash: tree.sourceHash,
-    teamRevision: tree.teamRevision || undefined,
-    origin: DefaultWorkflows.originOf(cached),
-    ...admission.admitted,
-    secrets,
-    ...options,
-  });
+  return createRun(config, { ...admission.admitted, secrets, ...options });
 }
 
 /**
  * Creates a run of a definition the caller already built and checked. The run file is written only when it would keep
- * what it was given unmasked. `secrets` are what the caller resolved for the operation. `alone`: what the run's only
- * driver, the local one, gives strict requirements; a start with a step it could never take for them is refused.
- * `driver`: the run's driver from its start, so that driver's first `next` takes it as its own.
+ * what it was given unmasked. `secrets` are what the caller resolved for the operation. `alone`: the run's only
+ * driver, the local loop, with what each of its runtimes gives strict requirements; a start with a step none of them
+ * could ever take for them is refused. `driver`: the run's driver from its start, so that driver's first `next` takes it
+ * as its own.
  */
 export async function createRun(
   config: LocalConfig,
   { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'startedBy' | 'awaits' | 'definition' | 'workflows' | 'base' | 'checkout' | 'timeout'>
-    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: DriverCan },
+    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
   const unmet = alone && strictlyUnmet(input.definition, workflows, alone);
@@ -1446,6 +1554,9 @@ export async function createRun(
   const holdsSecret = secretMismatch(input.inputs, secrets);
 
   if (holdsSecret) return error('invalid_inputs', holdsSecret);
+  const unfit = itemLimitMismatch(input.definition.steps, input.inputs);
+
+  if (unfit) return error('invalid_inputs', unfit);
   const now = new Date().toISOString();
   const alias = await startingAlias(config, input.definition);
   const team = await TeamPin.capture(config);
@@ -1525,6 +1636,20 @@ interface OfferContext {
   prepare: boolean;
   /** The env keys any step of the run requires, read once per request rather than once per offered step. */
   runEnvKeys: Set<string>;
+  toolFor?: ToolFor;
+}
+
+/** How a driver picks the tool of a prompt step that names none, as it would launch it. */
+export type ToolFor = (step: Pick<WorkflowStep, 'agent' | 'tool'>) => string | undefined;
+
+/**
+ * The tool `step` runs on, which a runtime's `can.tools` must list: the one it names, else the one `toolFor` picks for a
+ * prompt step. A confined step takes its tools from `can.confined` instead, and a command step runs none.
+ */
+export function promptTool(step: WorkflowStep, toolFor: ToolFor | undefined): string | undefined {
+  if (step.tool !== undefined || step.prompt === undefined || confinedOf(step) !== undefined) return step.tool;
+
+  return toolFor?.(step);
 }
 
 /** Terms a driver was granted, with the team role the lease carries: absent without one. */
@@ -1575,10 +1700,17 @@ function offerTerms(
     maxTurns: step.maxTurns,
     endTurn,
     setup: plan?.contract && plan.contract.mode !== 'team' ? scope.setup : undefined,
-    tool: step.tool,
+    tool: promptTool(step, context.toolFor),
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
+    pinned: isPinnedToHost({
+      executor: step.command !== undefined ? 'command' : 'prompt',
+      answer: step.answer !== undefined,
+      inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined,
+      publishes: plan?.contract !== undefined && isPublishContract(plan.contract),
+    }),
+    answer: step.answer !== undefined,
     ...role,
   }, context.can, context.allow, context.facts);
 
@@ -1586,9 +1718,29 @@ function offerTerms(
 }
 
 /**
- * The turn limits granted in `terms`, and the deadline of a lease first issued at `since`. The step's own timeout counts
- * from `since`, so a hand-back never extends it. A driver that cannot end the turn gets the `on_limit: fail` lease,
- * whose own timeout is its deadline. One that can gets what is left of it at `now`; with none left, the lease takes the
+ * What a runtime offering `context.can` lacks for step `state`, whose plan for it defers (`defer`). Invariant: these are
+ * exactly `negotiate`'s gaps for the offer, judged as if the runtime had the workspace it lacks, plus that workspace's
+ * own gap. So the member's policy still comes first, and the tool, role, unattended and person gaps hold alike on a
+ * runtime that defers and on one that does not. A plan deferred for a copy another driver owns adds no workspace gap.
+ */
+function deferredGaps(
+  { run, located, state, definition, defer, request }: {
+    run: RunState; located: { scope: Scope; step: WorkflowStep }; state: StepState; definition: WorkflowStep;
+    defer: NonNullable<WorkspacePlan['defer']>; request: Omit<WorkspaceRequest, 'modes'>;
+  },
+  context: OfferContext,
+): Missing[] {
+  const { needs } = defer;
+  const met = needs === undefined ? undefined : planWorkspace(run, located.scope, state, definition, { ...request, modes: [...context.can.workspace ?? [], needs] });
+  const judged = offerTerms(run, state.id, located, met?.defer || met?.fail ? undefined : met, context);
+
+  return [...needs ? [`workspace.${needs}` as const] : [], ...judged.kind === 'hold' ? judged.missing : []];
+}
+
+/**
+ * The turn limits granted in `terms`, and the deadline of a lease issued at `since`, its `leasedAt`. The step's own timeout
+ * counts from `since`, so a hand-back never extends it; only a call that lists the attempt `queued` moves it. A driver
+ * that cannot end the turn gets the `on_limit: fail` lease, whose own timeout is its deadline. One that can gets what is left of it at `now`; with none left, the lease takes the
  * deadline it passed, so `expire` times it out.
  */
 function turnTerms(
@@ -1604,6 +1756,22 @@ function turnTerms(
   return left > 0 ? { limits: { ...limits, timeoutMs: Math.min(limits.timeoutMs ?? left, left) } } : { expiresAt: own, limits };
 }
 
+/** Restarts the own timeout of each open lease of `driver` whose attempt `queued` lists, before anything reconciles the run. */
+export function restartQueued(run: RunState, driver: DriverIdentity, queued: ReadonlySet<string>, now: string): void {
+  for (const step of run.steps) {
+    if (step.status === 'leased' && sameDriver(step.lease.driver, driver) && queued.has(step.lease.attempt)) restartClock(step.lease, now);
+  }
+}
+
+/** Moves the start of `held`'s own timeout to `now`, and its deadline with it. A lease issued before teamai recorded when keeps its deadline. */
+function restartClock(held: StepLease, now: string): void {
+  if (held.leasedAt === undefined) return;
+  const waited = Math.max(0, Date.parse(now) - Date.parse(held.leasedAt));
+
+  if (held.expiresAt !== undefined) held.expiresAt = new Date(Date.parse(held.expiresAt) + waited).toISOString();
+  held.leasedAt = now;
+}
+
 /** A lease's deadline and turn limits, each left out when it has none. */
 function leaseTerms(expiresAt: string | undefined, limits: TurnLimits | undefined): Pick<StepLease, 'expiresAt' | 'limits'> {
   const terms: Pick<StepLease, 'expiresAt' | 'limits'> = {};
@@ -1616,22 +1784,47 @@ function leaseTerms(expiresAt: string | undefined, limits: TurnLimits | undefine
 }
 
 /**
- * Why the local driver, which gives strict requirements `can`, could never take a step of `definition`, as describe
- * holds it: the first step it lacks a strict `isolation` or `network` for.
+ * The run's only driver, the local loop, as `start` and `next` judge what it can never take: the name of its driver
+ * definition (`local` without one), and the complete offer of each of its runtimes, in definition order. Offers are
+ * never merged key by key: a step is beyond the driver only when no single runtime can take it.
  */
-function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): string | undefined {
+export interface SoleDriver {
+  driver: string;
+  offers: [RuntimeOffer, ...RuntimeOffer[]];
+  /** The runtime of `offers` this `next` offers for, which the runtimes before it in the definition came before. */
+  offering?: string;
+}
+
+export interface RuntimeOffer {
+  /** The runtime, as the definition's `use` names it. */
+  runtime: string;
+  can: DriverCan;
+  /** The tools it cannot run now, each with the runtime's reason and next step. */
+  unavailable?: Readonly<Record<string, string>>;
+}
+
+/** Whether `sole` is the plain local driver, which the messages of a refusal name as it always did. */
+function isPlainLocal(sole: SoleDriver): boolean {
+  return sole.driver === 'local' && sole.offers.length === 1;
+}
+
+/**
+ * Each step of `definition` a runtime offering `can` holds back for a strict key, with the first key it lacks, as
+ * describe holds it, or `never` for a step that runtime never takes: one pinned to this host off it, or a prompt step on
+ * the host slot.
+ */
+function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): Map<string, 'isolation' | 'network' | 'never'> {
   const none = new Set<string>();
   const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
+  const held = new Map<string, 'isolation' | 'network' | 'never'>();
 
   for (const { step, missing } of facts.held) {
-    if (missing.includes('isolation')) {
-      return `Step "${step}" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.`;
-    }
-
-    if (missing.includes('network')) return `Step "${step}" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.`;
+    if (missing.includes('isolation')) held.set(step, 'isolation');
+    else if (missing.includes('network')) held.set(step, 'network');
+    else if (missing.includes('host') || missing.includes('prompt')) held.set(step, 'never');
   }
 
-  return undefined;
+  return held;
 }
 
 /** What `can` gets of step `state` confined to the directory `rendered` names; undefined for a step not confined. */
@@ -1647,9 +1840,150 @@ async function confinedFor(
   });
 }
 
-/** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
-function toolUnavailable(step: string, tool: string): WorkflowFailure {
-  return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
+/**
+ * Why the run's only driver could never take a step of `definition` for a strict `isolation` or `network`: every one
+ * of its runtimes lacks it. A step one runtime can take for them is judged at `next`.
+ */
+function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, sole: SoleDriver): string | undefined {
+  const helds = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
+  const [mine = new Map<string, 'isolation' | 'network' | 'never'>(), ...others] = helds;
+  // A step every runtime holds, at least one of them for a strict key: the others may never take it at all.
+  const id = [...mine.keys()].find((step) => others.every((held) => held.has(step)) && helds.some((held) => held.get(step) !== 'never'));
+
+  if (id === undefined) return undefined;
+  const at = sole.offers.findIndex((_, index) => helds[index]?.get(id) !== 'never');
+  const key = helds[at]?.get(id) === 'network' ? 'network' : 'isolation';
+  const first = { step: id, key };
+  const strictOn = sole.offers[at]?.runtime;
+
+  // Pinned to this host, it is judged on this host's slot alone.
+  if (helds.some((held) => held.get(id) === 'never') && (strictOn === 'host' || strictOn === 'local') && !isPlainLocal(sole)) {
+    const here = `runtime ${strictOn} of driver "${sole.driver}"`;
+
+    return key === 'isolation'
+      ? `Step "${id}" requires strict isolation, and it runs only on this machine, on ${here}, which is not a sandbox. Run the workflow in CI or a container with --sandbox.`
+      : `Step "${id}" strictly requires no network, and it runs only on this machine, on ${here}, which cannot deny it. Run the workflow where this machine's runtime declares can.network.`;
+  }
+
+  if (isPlainLocal(sole)) {
+    return first.key === 'isolation'
+      ? `Step "${first.step}" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.`
+      : `Step "${first.step}" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.`;
+  }
+
+  const runtimes = sole.offers.map((offer) => offer.runtime).join(', ');
+
+  return first.key === 'isolation'
+    ? `Step "${first.step}" requires strict isolation, and no runtime of driver "${sole.driver}" is a sandbox (${runtimes}). Add a runtime that is one to the definition, such as sandbox, or run the workflow in CI or a container with --sandbox.`
+    : `Step "${first.step}" strictly requires no network, which no runtime of driver "${sole.driver}" can deny (${runtimes}). Run it with a driver whose runtime declares can.network.`;
+}
+
+/**
+ * Why no runtime of the run's only driver can take step `step`, held on the offer `next` was given: each runtime's
+ * offer holds it too, and either none gives what this offer lacks (`tools`, or `unattended`), or each lacks something
+ * another gives, so the step's requirements are split over runtimes. Undefined while a runtime can take it, or while
+ * it waits for something no runtime gives and that no `alone` judgement covers, such as a strict `network`, the
+ * member's `workflows.allow`, or a place another step still holds.
+ */
+function beyondSoleDriver(
+  sole: SoleDriver,
+  { step, tool, isNamed, missing, missingOn }: { step: string; tool: string | undefined; isNamed: boolean; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+): WorkflowFailure | undefined {
+  const others = sole.offers.length === 1 ? [missing] : sole.offers.map((offer) => missingOn(offer.can));
+
+  // A runtime that takes it, or one the plan does not decide yet, leaves the step pending for its offer.
+  if (others.some((held) => held === undefined || held.length === 0)) return undefined;
+  const helds = others.filter((held): held is readonly Missing[] => held !== undefined);
+
+  if (helds.some((held) => held.some((key) => key.startsWith('policy.')))) return undefined;
+  const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
+
+  // A runtime that cannot run the tool now says why and what to do; every refusal of the step quotes it.
+  const reasons = tool === undefined ? [] : sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
+
+  if (lackedByAll.includes('tools') && tool !== undefined) {
+    // A runtime off this host serves an instance only when it lists it; the member's own machine may launch it.
+    const extended = toolOf(tool)?.instance?.extends;
+    const prompted = sole.offers.filter((offer) => offer.can.prompt !== false);
+
+    if (extended !== undefined && reasons.length === 0 && prompted.length > 0 && prompted.every((offer) => offer.can.remote === true)) {
+      const runtimes = prompted.map((offer) => offer.runtime);
+
+      return {
+        code: 'tool_unsupported',
+        message: `Step "${step}" runs on ${tool}, an instance of ${extended}, which ${runtimes.length === 1 ? 'runtime' : 'runtimes'} ${runtimes.join(', ')} of driver ${sole.driver} cannot launch. Run it with --driver local.`,
+      };
+    }
+
+    return toolUnavailable(step, tool, isNamed, reasons);
+  }
+
+  if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
+
+  if (sole.offers.length === 1 || lackedByAll.length > 0) return undefined;
+
+  const lackedOn = (offer: RuntimeOffer, key: Missing): string => {
+    const reason = key === 'tools' && tool !== undefined ? offer.unavailable?.[tool] : undefined;
+
+    return reason === undefined ? lackedKey(key) : `${lackedKey(key)} (${offer.runtime}: ${reason})`;
+  };
+
+  const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.map((key) => lackedOn(offer, key)).join(', ') ?? 'nothing'}`).join('; ');
+
+  return {
+    code: 'requirement_unmet',
+    message: `Step "${step}" needs what no single runtime of driver "${sole.driver}" offers: ${lacks}. Give one runtime of the definition all of it, or change what the step requires.`,
+  };
+}
+
+/**
+ * The sandbox runtime before the one `sole` offers for, outside a sandbox, that lacks nothing for the step but `tool`,
+ * which it lists as unavailable: its reason, `<runtime>: <reason>`.
+ */
+function unsignedInSandbox(
+  sole: SoleDriver,
+  { tool, can, missingOn }: { tool: string | undefined; can: DriverCan; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+): { tool: string; reason: string } | undefined {
+  if (tool === undefined || can.isolation === 'sandbox') return undefined;
+  const at = sole.offers.findIndex((offer) => offer.runtime === sole.offering);
+
+  for (const offer of sole.offers.slice(0, Math.max(at, 0))) {
+    const reason = offer.unavailable?.[tool];
+
+    if (offer.can.isolation !== 'sandbox' || reason === undefined) continue;
+    const missing = missingOn(offer.can);
+
+    if (missing?.length === 1 && missing[0] === 'tools') return { tool, reason: `${offer.runtime}: ${reason}` };
+  }
+
+  return undefined;
+}
+
+/** A key a runtime lacks, said so that a member can act on it: the keys the local loop sets say why it set them. */
+function lackedKey(key: Missing): string {
+  if (key === 'host') return 'host (the step stays on this machine)';
+
+  if (key === 'prompt') return 'prompt (this entry runs only commands)';
+
+  return key === 'commands' ? 'commands (another runtime of the definition runs them)' : key;
+}
+
+/**
+ * Why a step that runs on `tool`, which it names (`isNamed`) or was picked for it, fails in a run whose only driver cannot
+ * launch it. `reasons` are the runtimes' own, `<runtime>: <reason>`, which replace the install advice.
+ */
+function toolUnavailable(step: string, tool: string, isNamed: boolean, reasons: string[]): WorkflowFailure {
+  if (reasons.length > 0) {
+    const why = reasons.join(' ');
+
+    return isNamed
+      ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here: ${why} Or remove tool from the step.` }
+      : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here: ${why} Or pick a tool it launches with --tools default=<tool>.` };
+  }
+
+  return isNamed
+    ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` }
+    : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or pick a tool it launches with --tools default=<tool>.` };
 }
 
 /** Why a step with `permissions: unattended` fails in a run whose only driver cannot run it unattended. */
@@ -1668,6 +2002,11 @@ export interface NextOptions {
    * The attempts of its open leases the driver is still running. An open lease it does not list is handed back to it.
    */
   running?: string[];
+  /**
+   * The attempts in `running` the driver holds but has not started, such as one waiting for its checkout. The step's own
+   * timeout of each counts from this call, so waiting does not use it up.
+   */
+  queued?: string[];
   /** False to reconcile without issuing a new lease: `next` answers `done`, an unlisted lease, `hitl`, or `wait`. */
   canTakeLease?: boolean;
   /** The checkout the run's workspaces start from. It fixes the run's base only when `workflow start` recorded none. */
@@ -1697,10 +2036,22 @@ export interface NextOptions {
    */
   prepare?: boolean;
   /**
-   * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once. For any other driver it stays pending.
+   * Process-only: the caller is the run's only driver, as the local loop is, with each of its runtimes' offers. A step
+   * that no runtime can take fails at once (`tool_unavailable`, or `requirement_unmet` when its requirements are split
+   * over runtimes). For any other driver it stays pending.
    */
-  alone?: boolean;
+  alone?: SoleDriver;
+  /**
+   * Process-only: the driver runs one lease at a time, except the items of a `for_each` that declares `max_parallel`,
+   * which it runs beside each other up to that limit, as the local driver does when `workflows.max_parallel` is unset.
+   * `next` then leases a step beside the open leases only where `runsBeside` allows.
+   */
+  isOneAtATime?: boolean;
+  /**
+   * Process-only: the tool the driver launches a prompt step on that names none, so a runtime whose `can.tools` leaves it
+   * out is held from the step, as for a step that names its tool. Without it, only a named tool is checked.
+   */
+  toolFor?: ToolFor;
 }
 
 /**
@@ -1709,11 +2060,11 @@ export interface NextOptions {
  * leased. If so, the run lists its request in the same write, so one opened by a process that then stops is looked up,
  * whatever becomes of the step, rather than lost.
  */
-async function markCreating(config: LocalConfig, runId: string, secrets: Record<string, string>, job: DeliveryJob): Promise<'open' | 'refused' | 'busy'> {
+async function markCreating(config: LocalConfig, runId: string, secrets: Record<string, string>, job: DeliveryJob, settle: Settle): Promise<'open' | 'refused' | 'busy'> {
   const marked = await updateRun(config, runId, secrets, async (run): Promise<{ value: 'open' | 'refused' | 'busy'; write?: RunState }> => {
     if (run === 'missing' || run.status !== 'running') return { value: 'refused' };
     const now = new Date().toISOString();
-    const settledRun = reconcileRun(run, now);
+    const settledRun = settle(run, now);
     const step = 'unreadable' in settledRun || 'outcome' in settledRun ? undefined : deliveringStep(run, job.key);
 
     if (!step) return { value: 'refused' };
@@ -1733,13 +2084,16 @@ async function markCreating(config: LocalConfig, runId: string, secrets: Record<
   return marked.status === 'done' ? marked.value : 'busy';
 }
 
+/** How a call reconciles the run at `now`: `reconcileRun`, after what the call itself applies first. */
+type Settle = (run: RunState, now: string) => Settled;
+
 /**
  * Delivers the run's delivering steps one at a time, before `next` answers, whichever driver called it, then looks up
  * each request in `run.creating` once, on an ended run too. The run lock is held to pick a delivery and to apply its
  * outcome, never across git or a provider. While another process of this machine delivers, it holds the delivery lock,
- * and this call leaves the work to it.
+ * and this call leaves the work to it. Each pick and outcome reconciles the run through `settle`.
  */
-async function drainDeliveries(config: LocalConfig, runId: string, secrets: Record<string, string>): Promise<void> {
+async function drainDeliveries(config: LocalConfig, runId: string, secrets: Record<string, string>, settle: Settle): Promise<void> {
   if (!isRunId(runId)) return;
   const loaded = await readRun(config, runId);
 
@@ -1763,7 +2117,7 @@ async function drainDeliveries(config: LocalConfig, runId: string, secrets: Reco
         if (run === 'missing') return { value: undefined };
         const before = JSON.stringify(run);
         const now = new Date().toISOString();
-        const job = nextDelivery(run, (item) => reconcileRun(item, now), branchWriterLeased, waiting, team);
+        const job = nextDelivery(run, (item) => settle(item, now), branchWriterLeased, waiting, team);
         const value = job ? { job } : unresolvedCreate(run, tried, team);
 
         return { value, write: JSON.stringify(run) !== before ? { ...run, updatedAt: now } : undefined };
@@ -1782,7 +2136,7 @@ async function drainDeliveries(config: LocalConfig, runId: string, secrets: Reco
         let outcome: Awaited<ReturnType<typeof deliverPr>>;
 
         try {
-          outcome = await deliverPr(job, () => markCreating(config, runId, secrets, job));
+          outcome = await deliverPr(job, () => markCreating(config, runId, secrets, job, settle));
         } finally {
           if (syncLock !== undefined) await releaseLock(syncLock);
         }
@@ -1791,7 +2145,7 @@ async function drainDeliveries(config: LocalConfig, runId: string, secrets: Reco
         if (outcome === 'busy') return requeued;
 
         if (!outcome.ok && outcome.fault.kind === 'branch_ahead') waiting.push(job.key);
-        apply = (run, now) => completeDelivery(run, job, outcome, (item) => reconcileRun(item, now), branchWriterLeased);
+        apply = (run, now) => completeDelivery(run, job, outcome, (item) => settle(item, now), branchWriterLeased);
       } else {
         const { create, checkout } = picked.value;
         tried.push(create);
@@ -1839,8 +2193,17 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
   // Resolved once, so the env this `next` offers against and the secrets its writes, deliveries' included, mask agree.
   const env = options.env ?? await resolveWorkflowEnv(config);
-  await drainDeliveries(config, runId, env.secrets);
   const running = new Set(options.running);
+  const unstarted = new Set((options.queued ?? []).filter((attempt) => running.has(attempt)));
+
+  // Every reconcile of this call, a delivery's too, first restarts the clocks of the leases the driver lists queued.
+  const settle: Settle = (run, now) => {
+    restartQueued(run, driver, unstarted, now);
+
+    return reconcileRun(run, now);
+  };
+
+  await drainDeliveries(config, runId, env.secrets, settle);
   const can = options.can ?? {};
   const maxParallel = config.workflows?.max_parallel;
   // The end record is queued under the run lock, so the run stores whether it
@@ -1855,21 +2218,28 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
     const context: OfferContext = {
       // The HITL of a driver nobody attends is its agent's, which works in no interactive step: only a person does.
-      can: can.hitl === true && options.handoff !== undefined ? { ...can, hitl: false } : can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true,
+      can: can.hitl === true && options.handoff !== undefined ? { ...can, hitl: false } : can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true, toolFor: options.toolFor,
       // Admitted workflows too: their own steps' keys are withheld from the steps that do not require them.
       runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {}), ...Object.values(run.admitted ?? {}).map(({ definition }) => definition)]),
     };
 
     // Whatever settling changed is saved. `cancelled` is derived after settling: the attempts the driver runs that
-    // are no longer its open leases.
-    const answer = (data: EnvelopeData): RunOperation => ({
-      save: JSON.stringify(run) !== before,
-      envelope: ok({
-        ...data,
-        cancelled: [...running].filter((attempt) => !run.steps.some((step) => step.status === 'leased'
-          && step.lease.attempt === attempt && sameDriver(step.lease.driver, driver))),
-      }),
-    });
+    // are no longer its open leases. `deadlines` gives each queued attempt still open the deadline its restarted clock gives it.
+    const answer = (data: EnvelopeData): RunOperation => {
+      const open = run.steps.filter((step): step is LeasedStep => step.status === 'leased' && sameDriver(step.lease.driver, driver));
+
+      const deadlines = Object.fromEntries(open.flatMap((step) => {
+        const deadline = unstarted.has(step.lease.attempt) ? leaseDeadline(run, step) : undefined;
+
+        return deadline === undefined ? [] : [[step.lease.attempt, deadline]];
+      }));
+
+      const replied: EnvelopeData = { ...data, cancelled: [...running].filter((attempt) => !open.some((step) => step.lease.attempt === attempt)) };
+
+      if (Object.keys(deadlines).length > 0) replied.deadlines = deadlines;
+
+      return { save: JSON.stringify(run) !== before, envelope: ok(replied) };
+    };
 
     // Undefined once the run's `finally` steps start, so the loop hands them out.
     const done = async (result: WorkflowResult): Promise<{ save: boolean; envelope: WorkflowEnvelope } | undefined> => {
@@ -1922,7 +2292,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     for (;;) {
       // Ends reached through reports, and deadlines passed, apply before an open lease is handed back, so a restarted
       // driver does not run again what they already stopped, and a lease past its timeout no longer holds the run.
-      const result = reconcileRun(run, now);
+      const result = settle(run, now);
 
       if ('unreadable' in result) return { save: false, envelope: error('run_unreadable', result.unreadable) };
 
@@ -1942,7 +2312,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       // follows workflows.auto_approve.
       if (can.hitl && options.autoApprove === true && answerOptionalGates(run, now)) continue;
 
-      if (options.canTakeLease !== false && !can.hitl && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
+      // A gate waits for another runtime of the run's only driver that can ask, as the local driver offers each in turn.
+      const asksElsewhere = options.alone?.offers.some((offer) => offer.can.hitl === true) === true;
+
+      if (options.canTakeLease !== false && !can.hitl && !asksElsewhere && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
 
       if (options.canTakeLease !== false && byAgent && handoff?.kind === 'unoffered' && failForPerson(run, handoff.reason)) continue;
       // An open lease the driver does not list is handed back before another lease is issued, as a restarted driver expects.
@@ -1965,8 +2338,18 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         // change what is ready, so the run settles again.
         const held: Held[] = [];
         let settledOne = false;
+        const leasedSteps = run.steps.filter((step): step is LeasedStep => step.status === 'leased');
+        let besideOpen: LeasedStep | undefined;
 
         for (const { lease: state, definition, rendered } of result.ready) {
+          const blocking = options.isOneAtATime ? leasedSteps.find((leasedStep) => !runsBeside(run, state.id, leasedStep.id)) : undefined;
+
+          // A step that may not run beside an open lease waits for it, as it would for a driver with no room.
+          if (blocking) {
+            besideOpen ??= blocking;
+            continue;
+          }
+
           const located = locateStep(run, state.id);
 
           if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${state.id}"`) };
@@ -1990,9 +2373,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               break;
             }
 
-            // A driver that cannot give the step its role is told so too, as it would be held for it once it had the place.
-            const roleGap = stepRole.kind === 'role' && !can.role ? ['role' as const] : [];
-            held.push({ step: state.id, reason: plan.defer.reason, missing: [...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [], ...roleGap] });
+            held.push({
+              step: state.id, reason: plan.defer.reason,
+              missing: deferredGaps({ run, located, state, definition, defer: plan.defer, request: { driver, base: run.base ?? options.base } }, context),
+            });
             continue;
           }
 
@@ -2017,22 +2401,53 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
           const terms = offerTerms(run, state.id, located, plan, context);
 
-          if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
-            failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
-            settledOne = true;
-            break;
-          }
+          // A step whose tool the run's only driver cannot launch fails as that, before a person is asked for it.
+          const lacksTool = options.alone !== undefined && definition.tool !== undefined && terms.kind === 'hold' && terms.missing.includes('tools');
 
-          if (terms.kind === 'hold' && handoff?.kind === 'unoffered' && terms.missing.includes('hitl')) {
+          if (terms.kind === 'hold' && !lacksTool && handoff?.kind === 'unoffered' && terms.missing.includes('hitl')) {
             failStep(state, personRequired(run.id, state.id, handoff.reason), run.revision);
             settledOne = true;
             break;
           }
 
-          if (terms.kind === 'hold' && options.alone && terms.missing.includes('unattended')) {
-            failStep(state, unattendedUnavailable(state.id, definition.tool), run.revision);
+          // What another runtime of the driver lacks for the step, judged as this offer is: its plan, then its terms.
+          const missingOn = (offered: DriverCan): readonly Missing[] | undefined => {
+            const planned = planWorkspace(run, located.scope, state, definition, { driver, modes: offered.workspace, base: run.base ?? options.base });
+
+            if (planned.fail) return undefined;
+
+            // A runtime that lacks the step's place lacks what it would be held for once it had it, too.
+            if (planned.defer) {
+              return planned.defer.needs
+                ? deferredGaps({ run, located, state, definition, defer: planned.defer, request: { driver, base: run.base ?? options.base } }, { ...context, can: offered })
+                : undefined;
+            }
+
+            const judged = offerTerms(run, state.id, located, planned, { ...context, can: offered });
+
+            return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
+          };
+
+          // A step a sandbox before this runtime would take, but for a tool it cannot sign in now, is not run with less
+          // isolation: it fails with the sandbox's reason.
+          const unsigned = terms.kind === 'grant' && options.alone ? unsignedInSandbox(options.alone, { tool: promptTool(definition, context.toolFor), can: context.can, missingOn }) : undefined;
+
+          if (unsigned) {
+            failStep(state, toolUnavailable(state.id, unsigned.tool, definition.tool !== undefined, [unsigned.reason]), run.revision);
             settledOne = true;
             break;
+          }
+
+          if (terms.kind === 'hold' && options.alone) {
+            const tool = promptTool(definition, context.toolFor);
+
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
+
+            if (beyond) {
+              failStep(state, beyond, run.revision);
+              settledOne = true;
+              break;
+            }
           }
 
           if (terms.kind === 'hold') {
@@ -2053,6 +2468,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
           if (options.runMode) granted.runMode = options.runMode;
 
+          // The runtime of a driver definition the step goes to, the host command slot included, is kept with its pass.
+          if (options.alone?.offering !== undefined && options.alone.driver !== 'local') granted.runtime = options.alone.offering;
+
           if (unenforced.length > 0) granted.unenforced = unenforced;
 
           if (confined?.kind === 'grant') granted.confined = { level: confined.lease.level, tools: confined.lease.tools };
@@ -2065,6 +2483,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         }
 
         if (settledOne) continue;
+
+        if (besideOpen && held.length === 0) return wait(besideOpen);
         const holds = [...held, ...personHolds()];
 
         return answer({ wait: { reason: holds.map((item) => item.reason).join('; '), held: holds } });
@@ -2196,7 +2616,7 @@ const NextBaseSchema = z.object({ ref: NonEmptyStringSchema.optional(), commit: 
 const DRIVER_FIELDS = new Set(['kind', 'machine', 'workspace', 'can']);
 
 /** The top-level payload fields `parseNextPayload` reads. */
-const NEXT_PAYLOAD_FIELDS = new Set(['driver', 'running', 'canTakeLease', 'base', 'claim', 'autoApprove', 'runMode']);
+const NEXT_PAYLOAD_FIELDS = new Set(['driver', 'running', 'queued', 'canTakeLease', 'base', 'claim', 'autoApprove', 'runMode']);
 
 /**
  * Where `parseReport` reads each ReportInput field from: the payload field of the same name, `changes.pr_url`, or
@@ -2207,7 +2627,7 @@ const REPORT_FIELD_SOURCES = {
   attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
   tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
   failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload', limit: 'payload',
-  confined: 'payload', prUrl: 'changes.pr_url',
+  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url',
 } as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
 
 /** The top-level payload fields `parseReport` reads. */
@@ -2233,6 +2653,8 @@ function unreadFields(record: { driver?: unknown }, known: ReadonlySet<string>):
 /** The driver UI a `respond --json` payload declares the person answered in, and the payload fields it did not read. */
 export interface ParsedResponsePayload {
   driver: DriverIdentity;
+  /** As `next`'s `queued`: the driver's open leases it has not started, whose own timeout counts from this answer. */
+  queued?: string[];
   ignored: string[];
 }
 
@@ -2242,8 +2664,16 @@ export function parseResponsePayload(value: unknown): ParsedResponsePayload | st
   const driver = PayloadDriverSchema.safeParse(value.driver);
 
   if (!driver.success) return 'driver must include kind, machine, and workspace';
+  const parsed: ParsedResponsePayload = { driver: driver.data, ignored: unreadFields(value, new Set(['driver', 'queued'])) };
 
-  return { driver: driver.data, ignored: unreadFields(value, new Set(['driver'])) };
+  if (value.queued !== undefined) {
+    const queued = z.array(z.string()).safeParse(value.queued);
+
+    if (!queued.success) return 'queued must be an array of attempt ids';
+    parsed.queued = queued.data;
+  }
+
+  return parsed;
 }
 
 /** A parsed report and the payload fields the CLI did not read from it. */
@@ -2301,6 +2731,20 @@ export function parseReport(value: unknown): ParsedReport | string {
 
     if (!message.success) return 'message must be a string';
     report.message = message.data;
+  }
+
+  if (record.queued !== undefined) {
+    const queued = z.array(z.string()).safeParse(record.queued);
+
+    if (!queued.success) return 'queued must be an array of attempt ids';
+    report.queued = queued.data;
+  }
+
+  if (record.progress !== undefined) {
+    const progress = z.array(z.string()).safeParse(record.progress);
+
+    if (!progress.success) return 'progress must be a list of lines';
+    report.progress = progress.data.slice(-PROGRESS_LINES);
   }
 
   for (const field of ['tool', 'model', 'session'] as const) {
@@ -2450,6 +2894,13 @@ export function parseNextPayload(value: unknown): ParsedNextPayload | string {
 
     if (!running.success) return 'running must be an array of attempt ids';
     request.running = running.data;
+  }
+
+  if (record.queued !== undefined) {
+    const queued = z.array(z.string()).safeParse(record.queued);
+
+    if (!queued.success) return 'queued must be an array of attempt ids';
+    request.queued = queued.data;
   }
 
   if (record.canTakeLease !== undefined) {
@@ -2688,11 +3139,13 @@ function countStoppedTokens(run: RunState, report: ReportInput): boolean {
 }
 
 /**
- * The leased step `report` settles, or how the run refuses it once the deadlines passed at `now` apply: the checks
- * `reportAttempt` makes before it reads the report itself. `save` says whether what they changed in `run`, the
- * deadlines or a stopped attempt's late tokens, is saved.
+ * The leased step `report` settles, or how the run refuses it once the clocks of the attempts it lists `queued` restart
+ * and the deadlines passed at `now` apply: the checks `reportAttempt` makes before it reads the report itself. `save`
+ * says whether what they changed in `run`, the deadlines or a stopped attempt's late tokens, is saved.
  */
 function reportedStep(run: RunState, report: ReportInput, now: string): { step: LeasedStep } | { refused: { save: boolean; envelope: WorkflowEnvelope } } {
+  restartQueued(run, report.driver, new Set((report.queued ?? []).filter((attempt) => attempt !== report.attempt)), now);
+
   // Settled membership wins. An old revision of a settled attempt is still repeated_report.
   if (run.settledAttempts.includes(report.attempt)) {
     return { refused: { save: false, envelope: error('repeated_report', `Attempt ${report.attempt} was already reported`) } };
@@ -2943,9 +3396,11 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       used: report.used,
       unenforced: unenforced.length > 0 ? unenforced : undefined,
       runMode: step.lease.runMode,
+      runtime: step.lease.runtime,
       outcomes: outcomes.length > 0 ? outcomes : undefined,
       limit: report.limit,
       confined: report.confined,
+      progress: report.progress,
       installId: install.id,
     };
 
