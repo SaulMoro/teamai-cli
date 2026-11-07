@@ -475,6 +475,61 @@ runtimes:
 - Vercel 上的沙箱连不到这台机器，所以指向 `localhost` 或 `127.0.0.1` 的凭据（例如 `ANTHROPIC_BASE_URL`）会以 `bad_option` 失败。
 - 遗留下来的沙箱会以 `teamai-<home id>-<run>-<attempt>` 的名字出现在 Vercel 控制台（Sandboxes）里。下一个打开的尝试会删除它，或者它的 timeout 到了就会结束它。
 
+## 通过应用运行：`teamai-sandbox-<tool>`
+
+应用的运行时（例如 T3 Code 或 Paseo）通过一个可以设置的可执行文件启动工具：T3 provider instance 的 Binary path，或 Paseo 自定义 provider 的 `command`。把它设成 teamai 的包装器，线程就留在你的应用里，而工具在这次尝试的沙箱里运行。teamai-cli 为每个工具安装一个包装器：
+
+```sh
+command -v teamai-sandbox-claude teamai-sandbox-codex teamai-sandbox-codebuddy
+# /usr/local/bin/teamai-sandbox-claude
+# /usr/local/bin/teamai-sandbox-codex
+# /usr/local/bin/teamai-sandbox-codebuddy
+teamai-sandbox-claude --version          # 主机上工具自己的版本，应用看到的是一个正常的可执行文件
+# 2.1.318 (Claude Code)
+```
+
+团队实例通过以它命名的链接运行，包装器会运行该实例的 `command`，并设置它的 home 变量：
+
+```sh
+ln -s "$(command -v teamai-runtime-sandbox)" ~/.local/bin/teamai-sandbox-acme-claude
+```
+
+沙箱是这个条目的外层运行时。它必须把位置挂载在主机上的同一路径，所以 `sbx`、`docker`、`podman` 和 `bwrap` 可以，`seatbelt` 和 `vercel` 不行。
+
+```yaml
+# drivers/t3-sandboxed.yaml
+schemaVersion: v1alpha1
+name: t3-sandboxed
+runtimes:
+  - use: t3
+    through: sandbox
+    options:
+      t3: { environment: local, runtime_mode: full-access }
+      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
+  - use: local
+```
+
+每个 prompt 步骤的过程：
+
+```text
+teamai  → sandbox   open          创建容器，以及这次尝试自己的 socket（0600，位于结果目录旁一个 0700 的目录里）
+teamai  → T3        open (outer)  内层从 handle 读到 socket 路径，并在那里登记它的 agent
+T3      → teamai-sandbox-claude -p …          在这次尝试的 worktree 里启动（Paseo：PASEO_AGENT_CWD）
+wrapper → socket    ask           得到授权：docker exec -i -w <cwd> -e CLAUDE_CODE_OAUTH_TOKEN -e CLAUDE_CONFIG_DIR <container> claude
+wrapper            运行它           stdin、stdout、退出码和信号原样传递
+```
+
+- 步骤的凭据和这次尝试的工具 home 只按名字（`-e NAME`）传给工具。它们的值只在运行时的内存和那一个 `docker exec` 的环境里：不会出现在任何 argv 里，也不会写到磁盘上，应用自己的环境也不会传到工具。
+- 只为应用的运行时登记的那个 agent 服务。应用在同一个 worktree 里的辅助 agent（生成标题、提交信息）会被拒绝，步骤登记之前启动的包装器也会被拒绝。
+- 在尝试之外，包装器什么都不运行，以 2 退出；只有 `--version` 和 Paseo 的 `codex app-server` 模型列表（没有 agent、在 Paseo 守护进程下）会运行主机上的工具：
+
+```text
+$ teamai-sandbox-claude -p "hello"
+teamai-sandbox-claude runs only inside a teamai attempt; use the plain tool or instance
+$ teamai-sandbox-acme-claude -p "hello"            # 在镜像里没有它的尝试中
+teamai-sandbox-acme-claude (tool_unsupported): acme-claude is not installed in this sandbox (image ghcr.io/acme/agent:1). Add it to the image or template the sandbox starts from, or run the step with --driver local.
+```
+
 ## 限制和预算
 
 步骤的 `timeout`、`max_turns` 和 `budget` 在容器里和在主机上一样生效。到达限制时，teamai 停止工具：运行时重启这次尝试的容器，容器里的所有进程随之结束。
@@ -517,7 +572,7 @@ sbx ls -q
 
 | 错误 | 发生了什么 | 下一步 |
 | --- | --- | --- |
-| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
+| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。`bwrap` 没有安装，或者 AppArmor 不让它创建命名空间（Ubuntu 24.04 及更高版本）；`seatbelt` 运行在低于 14 的 macOS 上；`vercel` 找不到 Vercel 登录。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。bwrap 执行 `sudo apt install bubblewrap`，并按信息里给出的 AppArmor 配置处理；seatbelt 需要 macOS 14；vercel 需要 `VERCEL_TOKEN` 加 `VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）。 |
 | `tool_unavailable` | 步骤的工具在 sandbox 里登录不了 | 执行信息里点名的命令：sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`；容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials` |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 设置信息里点名的变量，或者把它点名的密钥加到 `credentials` |
 | `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
@@ -526,6 +581,9 @@ sbx ls -q
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>`。确认其中已没有任何东西在运行后，`teamai workflow cancel <run> --release <attempt>` 会放开这次尝试：即使运行时无法删除这个位置，也会忘掉它，信息里仍会给出 `rm --force` 命令 |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
+| `isolation_unproven`（来自 `teamai-sandbox-<tool>`） | 包装器是为这次尝试没有登记的 agent 启动的，或者在步骤登记之前、在尝试的 worktree 之外启动的，所以什么都没有运行 | 从 teamai 启动步骤，而不是应用自己的 agent；应用的辅助 agent 按设计会被拒绝 |
+| `credentials_pending`（来自 `teamai-sandbox-<tool>`） | 沙箱运行时重启了，teamai 还没有重新连接这次尝试，所以它没有工具的凭据 | `teamai workflow resume <run>`：teamai 带着凭据重新连接这次尝试，应用下一次启动工具时就会得到授权 |
+| `tool_unsupported`（来自 `teamai-sandbox-<tool>`） | 沙箱不提供这个工具，或者实例的 `command` 没有安装在里面 | 把这个命令加到信息里给出的镜像或模板中，或者用 `--driver local` 运行这个步骤 |
 
 ## 这个版本还不支持
 
