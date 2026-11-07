@@ -211,7 +211,7 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
 }
 
 /** The check of each tool's dedicated login this process runs last, so steps that start together check it in turn. */
-const ensuring = new Map<LoginTool, Promise<unknown>>();
+const lastLoginCheck = new Map<LoginTool, Promise<unknown>>();
 
 /**
  * Makes sure `tool`'s dedicated home holds a login before the step that brings it (`step`) opens its place. Attended at
@@ -220,13 +220,13 @@ const ensuring = new Map<LoginTool, Promise<unknown>>();
  * check in turn, so one that starts while another signs in finds that login.
  */
 export function ensureLogin(tool: LoginTool, input: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
-  const checked = (ensuring.get(tool) ?? Promise.resolve()).then(() => signInOnce(tool, input));
-  ensuring.set(tool, checked.catch(() => undefined));
+  const checked = (lastLoginCheck.get(tool) ?? Promise.resolve()).then(() => signInWhenMissing(tool, input));
+  lastLoginCheck.set(tool, checked.catch(() => undefined));
 
   return checked;
 }
 
-async function signInOnce(tool: LoginTool, { step, canAsk }: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
+async function signInWhenMissing(tool: LoginTool, { step, canAsk }: Parameters<typeof ensureLogin>[1]): Promise<WorkflowFailure | undefined> {
   const file = path.join(loginHome(tool), LOGIN_FILES[tool]);
 
   if (await readRegular(file)) return undefined;

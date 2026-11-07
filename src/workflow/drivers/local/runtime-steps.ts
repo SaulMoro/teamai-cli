@@ -104,7 +104,7 @@ export interface StartedCommand {
 export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; env: Record<string, string>; unset: string[]; setUp: SetUp }): StartedCommand {
   const { run, command, env, unset, setUp } = input;
   // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent.
-  let stopped = false;
+  let isStopRequested = false;
 
   const exit = (async (): Promise<CommandExit | WorkflowFailure> => {
     const view = await input.view();
@@ -115,7 +115,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
     if (unready) return unready;
 
-    if (stopped) return { exitCode: 130, stdout: '', stderr: '', output: '' };
+    if (isStopRequested) return { exitCode: 130, stdout: '', stderr: '', output: '' };
     let stderr = '';
     let output = '';
 
@@ -150,7 +150,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
   })();
 
   return { exit, stop: async () => {
-    stopped = true;
+    isStopRequested = true;
     await run.cancel();
 
     return exit;
