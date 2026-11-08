@@ -6,17 +6,17 @@
  * attempt and waits on it again, and gives up a claim whose member wrote no progress for `stale_after`.
  */
 import { setTimeout as sleep } from 'node:timers/promises';
-import { getRepoIdentity } from '../../../session-flow/sync.js';
-import { readableReportsWorktree } from '../../../utils/reports-branch.js';
-import type { LocalConfig } from '../../../types.js';
-import { leaseContext } from '../../engine.js';
-import { attemptRef, expireClaim, fleetFailure, lastGoneWork, leaseValues, markOffered, offerAttempt, readAttemptRecord, type Claimed, type FleetLease } from '../../fleet.js';
-import { runDefinition } from '../../snapshot.js';
-import { installOwner, readRun, type AttemptId, type RunId } from '../../store.js';
-import type { WorkflowFailure } from '../../types.js';
-import { copyGit } from '../../place/place.js';
-import { git } from '../../worktree.js';
-import type { StartedCommand } from './runtime-steps.js';
+import { getRepoIdentity } from '../../session-flow/sync.js';
+import { readableReportsWorktree } from '../../utils/reports-branch.js';
+import type { LocalConfig } from '../../types.js';
+import { leaseContext } from '../engine.js';
+import { attemptRef, expireClaim, fleetFailure, lastGoneWork, leaseValues, markOffered, offerAttempt, readAttemptRecord, type Claimed, type FleetLease } from './record.js';
+import { runDefinition } from '../snapshot.js';
+import { installOwner, readRun, type AttemptId, type RunId } from '../store.js';
+import type { WorkflowFailure } from '../types.js';
+import { copyGit } from '../place/place.js';
+import { git } from '../worktree.js';
+import type { StartedCommand } from '../drivers/local/runtime-steps.js';
 
 /** How often the owner reads the attempt's record while a member runs it. */
 const RECORD_POLL_MS = 1_000;

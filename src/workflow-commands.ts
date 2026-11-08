@@ -15,7 +15,7 @@ import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Ta
 import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
-import { takeFleetAttempt } from './workflow/drivers/local/fleet-member.js';
+import { takeFleetAttempt } from './workflow/fleet/member.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';

@@ -7,19 +7,19 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { HandoffOwner } from '../../snapshot.js';
-import type { LocalConfig } from '../../../types.js';
-import { log } from '../../../utils/logger.js';
-import { startGroupedCommand } from '../../../tool-launch/process-stop.js';
-import { teamCommitReach } from '../../cache.js';
-import { retryCommand } from '../../engine.js';
-import { attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, listOffers, recordProgress, type Claimed, type FleetResult } from '../../fleet.js';
-import { definitionsOf, type Definitions } from '../../handoff.js';
-import { commandOutputs } from '../../protocol.js';
-import { parseStepPath } from '../../step-path.js';
-import { attemptDir, takeRunLock } from '../../store.js';
-import { workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../../types.js';
-import { git, hostGitEnv, keptOrigin, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../../worktree.js';
+import type { HandoffOwner } from '../snapshot.js';
+import type { LocalConfig } from '../../types.js';
+import { log } from '../../utils/logger.js';
+import { startGroupedCommand } from '../../tool-launch/process-stop.js';
+import { teamCommitReach } from '../cache.js';
+import { retryCommand } from '../engine.js';
+import { attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, listOffers, recordProgress, type Claimed, type FleetResult } from './record.js';
+import { definitionsOf, type Definitions } from '../handoff.js';
+import { commandOutputs } from '../protocol.js';
+import { parseStepPath } from '../step-path.js';
+import { attemptDir, takeRunLock } from '../store.js';
+import { workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
+import { git, hostGitEnv, keptOrigin, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
 /**
  * Takes and runs the oldest attempt pool `pool` offers for `repository` that another member did not claim first, from
