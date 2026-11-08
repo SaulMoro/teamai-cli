@@ -480,13 +480,16 @@ runtimes:
 应用的运行时（例如 T3 Code 或 Paseo）通过一个可以设置的可执行文件启动工具：T3 provider instance 的 Binary path，或 Paseo 自定义 provider 的 `command`。把它设成 teamai 的包装器，线程就留在你的应用里，而工具在这次尝试的沙箱里运行。teamai-cli 为每个工具安装一个包装器：
 
 ```sh
-command -v teamai-sandbox-claude teamai-sandbox-codex teamai-sandbox-codebuddy
+command -v teamai-sandbox-claude teamai-sandbox-codex teamai-sandbox-codebuddy teamai-sandbox-opencode
 # /usr/local/bin/teamai-sandbox-claude
 # /usr/local/bin/teamai-sandbox-codex
 # /usr/local/bin/teamai-sandbox-codebuddy
+# /usr/local/bin/teamai-sandbox-opencode
 teamai-sandbox-claude --version          # 主机上工具自己的版本，应用看到的是一个正常的可执行文件
 # 2.1.318 (Claude Code)
 ```
+
+OpenCode 在那里只运行它的免费模型：teamai 不给它任何登录。
 
 团队实例通过以它命名的链接运行，包装器会运行该实例的 `command`，并设置它的 home 变量：
 
