@@ -114,6 +114,8 @@ function memberZone(): string {
 /** One tool's limit: since when it holds, when the tool said it resets, when the driver tries it again, and what a person answered. */
 interface Limit {
   since: number;
+  /** The last time a step on the tool stopped on it. */
+  hitAt: number;
   resetsAt?: number;
   tryAt: number;
   /** Limits in a row with no reset given, which space the tries apart. */
@@ -131,8 +133,8 @@ export type WhenIdle =
 export interface UsageLimitBook {
   /** A step on `tool` stopped on its usage limit, saying `message`: the tool is held until the limit resets. */
   hit(input: { tool: string; message: string; now: number }): void;
-  /** A step on `tool` ended without its usage limit: the limit is over. */
-  ran(tool: string): void;
+  /** A step on `tool` launched at `startedAt` ended without its usage limit: the limit is over, if it launched after the last hit. */
+  ran(tool: string, startedAt: number): void;
   /** The tools held at `now`, each with why. */
   held(now: number): Record<string, string>;
   /** The tools held at `now` whose wait is within the cap: the ones a fleet member is not offered yet. */
@@ -165,6 +167,12 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
     ? `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock(limit.tryAt, now)}`
     : `${tool} hit its usage limit, which resets at ${clock(limit.resetsAt, now)}`);
 
+  const capText = capMs % 3_600_000 === 0 ? `${capMs / 3_600_000} hour${capMs === 3_600_000 ? '' : 's'}` : `${Math.ceil(capMs / 60_000)} minutes`;
+
+  const pastCapReason = (tool: string, limit: Limit, now: number): string => (limit.resetsAt === undefined
+    ? `${tool} hit its usage limit at ${clock(limit.since, now)} and gave no reset time, and it held for the ${capText} an unattended run waits for it`
+    : `${tool} hit its usage limit, which resets at ${clock(limit.resetsAt, now)}, past the ${capText} an unattended run waits for it`);
+
   const isPastCap = (limit: Limit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
 
   const heldBy = (now: number, keep: (limit: Limit) => boolean): Record<string, string> => Object.fromEntries(
@@ -178,10 +186,12 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
       const tries = resetsAt === undefined ? (earlier?.tries ?? -1) + 1 : 0;
       const tryAt = resetsAt ?? now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
 
-      limits.set(tool, { since: earlier?.since ?? now, tryAt, tries, isWaitChosen: false, ...(resetsAt !== undefined && { resetsAt }) });
+      limits.set(tool, { since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: false, ...(resetsAt !== undefined && { resetsAt }) });
     },
-    ran(tool) {
-      limits.delete(tool);
+    ran(tool, startedAt) {
+      const limit = limits.get(tool);
+
+      if (limit && startedAt > limit.hitAt) limits.delete(tool);
     },
     held(now) {
       return heldBy(now, () => true);
@@ -210,7 +220,7 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
 
       const past = holding.find(({ limit }) => isPastCap(limit, now));
 
-      if (past) return { kind: 'past_cap', tool: past.tool, reason: reasonOf(past.tool, past.limit, now) };
+      if (past) return { kind: 'past_cap', tool: past.tool, reason: pastCapReason(past.tool, past.limit, now) };
 
       return { kind: 'wait', tool: first.tool, until: first.limit.tryAt, reason: reasonOf(first.tool, first.limit, now) };
     },

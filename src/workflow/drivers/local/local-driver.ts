@@ -20,6 +20,7 @@ import { deliveredTeamSkills, usedSkills } from '../../../skill-use.js';
 import { agentEvidence, attemptEnv } from '../../attempt-marker.js';
 import { leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
+import { UsageLimits } from '../../usage-limits.js';
 import { LeaseWireSchema, type LeaseWire } from '../../lease-wire.js';
 import { setsLimit, type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
@@ -39,7 +40,7 @@ import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { ensureLogin, holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../../runtimes/login.js';
 import { credentialsForTool, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
-import { credentialSecrets, newOpId, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
+import { credentialSecrets, newOpId, retryCommand, withRetry, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
@@ -64,6 +65,9 @@ import { git, headCommit } from '../../worktree.js';
 
 /** The signals that stop teamai, which the driver passes on to what it runs before it exits. */
 export const STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP'];
+
+/** The longest the driver sleeps at once while it waits for a usage limit to reset, so it reads the run between. */
+const USAGE_WAIT_STEP_MS = 60_000;
 
 /** How long the driver waits for a command or prompt before asking the run again; half that while a question is open. */
 let pollMs = 2000;
@@ -148,7 +152,7 @@ const HITL = 'hitl' satisfies Missing;
 const WaitReplySchema = z.object({
   delivering: z.array(z.unknown()).optional().catch(undefined),
   reason: z.string().optional().catch(undefined),
-  held: z.array(z.object({ step: z.string(), reason: z.string(), missing: z.array(z.string()) })).optional().catch(undefined),
+  held: z.array(z.object({ step: z.string(), reason: z.string(), missing: z.array(z.string()), limited: z.string().optional().catch(undefined) })).optional().catch(undefined),
 }).catch({});
 
 /** A step a runtime held back, as a wait names it. */
@@ -1402,7 +1406,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const checked = (await git(root, ['rev-parse', '--is-inside-work-tree'])).code === 0;
   const placeOfLease = (lease: Lease): string => (lease.answer && !checked ? lease.attempt : placeOf(lease, root));
   // The prompts that run, by attempt. A prompt that was stopped before its tool started has nothing to report.
-  const prompts = new Map<string, { lease: Lease; controller: AbortController; exit: Promise<ReportBody | undefined> }>();
+  const prompts = new Map<string, { lease: Lease; controller: AbortController; startedAt: number; exit: Promise<ReportBody | undefined> }>();
   let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; hitl: LocalHitl; line?: string }> } | undefined;
   // A headless prompt takes a slot as a command does, so a step in another checkout starts beside it. An interactive one has the terminal.
   const busy = (): number => inFlight.size + dying.size + prompts.size;
@@ -1517,6 +1521,41 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // Nobody answers here, so the driver offers the run to a person; once it could not, the steps only a person can take fail.
   // A run goes to a person only when no runtime of the driver asks one.
   let handoff: PersonHandoff | undefined = slots.some((slot) => slot.can.hitl === true) ? undefined : { kind: 'offers' };
+  // The usage limits this drive met. Every runtime of the driver launches a tool with the member's sign-in, so a limit
+  // holds the tool on each of them; a fleet member signs in with its own, and is offered the step once the wait passes its cap.
+  const limits = UsageLimits.open();
+  // The reset the driver last said it waits for, so it says each once.
+  let waitSaid: string | undefined;
+
+  /** The tool or instance a prompt lease launches, as `next` names it: the account a usage limit holds. */
+  const launchedTool = (lease: Lease): string | undefined => (lease.prompt === undefined || lease.confined
+    ? undefined
+    : lease.tool ?? toolForOn(slotOf.get(lease.attempt)?.can.default_tool)({ agent: lease.agent, tool: lease.tool }));
+
+  const releasedReport = (lease: Lease): ReportBody => ({ attempt: lease.attempt, revision: lease.revision, driver, outcome: 'released' });
+
+  /**
+   * A prompt that stopped on its tool's usage limit is handed back rather than failed, and the tool is held until the
+   * limit resets; the step runs again then. Any other end of a prompt says the tool's limit is over.
+   */
+  const afterUsage = (body: ReportBody, { lease, startedAt }: { lease: Lease; startedAt: number }): ReportBody => {
+    const tool = launchedTool(lease);
+
+    if (tool === undefined) return body;
+
+    if (body.failure?.code !== 'usage_limited') {
+      limits.ran(tool, startedAt);
+
+      return body;
+    }
+
+    // The step does not fail, so the retry a failed step's message ends with does not apply.
+    const said = body.failure.message.replace(` Then run: ${retryCommand({ run: runId, step: lease.step })}`, '').replace(/\.?\s*$/u, '');
+    limits.hit({ tool, message: said, now: Date.now() });
+    log.warn(`Step "${lease.step}" stopped: ${said}. teamai launches no more steps on ${tool} until its limit resets, then runs the step again.`);
+
+    return { ...releasedReport(lease), ...(body.tokens && { tokens: body.tokens }) };
+  };
 
   // A runtime's credential values are masked like the team's secrets, whatever their names look like, each entry's own
   // even when two entries of one runtime give a credential the same name.
@@ -1569,6 +1608,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
         running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, relay, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
+        limited: slot.use === 'fleet' ? limits.heldWithinCap(Date.now()) : limits.held(Date.now()),
       });
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
@@ -1685,6 +1725,18 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         held.push(taken);
       }
 
+      // A prompt leased before its tool hit a usage limit is handed back unlaunched: the step waits for the reset.
+      for (const lease of held.filter((waiting) => {
+        const tool = launchedTool(waiting);
+
+        return tool !== undefined && limits.held(Date.now())[tool] !== undefined;
+      })) {
+        held.splice(held.indexOf(lease), 1);
+        const failed = await report(releasedReport(lease), lease);
+
+        if (failed) return failed;
+      }
+
       const placesBusy = (): Set<string> => new Set([
         ...[...inFlight.values()].map(({ lease }) => placeOfLease(lease)),
         ...[...dying.values()].map(({ lease }) => placeOfLease(lease)),
@@ -1780,7 +1832,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         const controller = new AbortController();
 
         if (!isParallel) handle(STOP_SIGNALS);
-        prompts.set(lease.attempt, { lease, controller, exit: (async () => {
+        prompts.set(lease.attempt, { lease, controller, startedAt: Date.now(), exit: (async () => {
           const { confined: place, prompt } = lease;
 
           if (lease.answer && prompt !== undefined) {
@@ -1885,6 +1937,36 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           continue;
         }
 
+        // Only usage limits hold the steps left: wait for the reset.
+        const limitedTools = [...new Set((offered.heldByAll ?? wait.held ?? []).flatMap(({ limited }) => (limited === undefined ? [] : [limited])))];
+        const idle = limitedTools.length > 0 ? limits.whenIdle(Date.now(), limitedTools) : undefined;
+
+        if (idle?.kind === 'wait') {
+          if (waitSaid !== idle.reason) {
+            waitSaid = idle.reason;
+            log.info(`Run ${runId} waits: ${idle.reason}. Then it runs the steps that limit holds. To go on elsewhere instead, stop it (Ctrl-C) and run: teamai workflow publish ${runId}`);
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(idle.until - Date.now(), USAGE_WAIT_STEP_MS))));
+          continue;
+        }
+
+        // Past the wait, or for a reset after it, the run moves on: it is offered on teamai-reports, as for a person.
+        if (idle?.kind === 'past_cap') {
+          const steps = [...new Set((offered.heldByAll ?? wait.held ?? []).flatMap(({ step, limited }) => (limited === idle.tool ? [step] : [])))];
+          const unoffered = await offerToPerson(config, runId, cwd);
+
+          if (unoffered !== undefined) {
+            return { error: { code: 'usage_limited', message: `Run ${runId} waits: ${idle.reason}, and it could not be offered on teamai-reports: ${unoffered}. Continue it here once the limit resets: teamai workflow resume ${runId}, or publish it from here for another machine: teamai workflow publish ${runId}` } };
+          }
+
+          const resume = `teamai workflow resume ${runId} --claim`;
+          const quoted = steps.map((step) => `"${step}"`).join(', ');
+          log.info(`${steps.length > 1 ? `Steps ${quoted} wait` : `Step ${quoted} waits`}: ${idle.reason}. So run ${runId} is offered on teamai-reports: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`);
+
+          return { data: { handoff: { run: runId, steps, resume } } };
+        }
+
         // What the member can change comes first: a step the policy holds on one runtime is held on every runtime that
         // has its workspace, so the policy is named whichever runtime was offered last. Only a negotiated policy hold
         // puts policy first in `missing`; a runtime that defers the step on its workspace puts that first.
@@ -1950,7 +2032,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         prompts.delete(exited.attempt);
 
         if (!isParallel) handle([]);
-        const failed = exited.body && ended && await report(exited.body, ended.lease);
+        const failed = exited.body && ended && await report(afterUsage(exited.body, ended), ended.lease);
 
         if (failed) return failed;
         continue;
