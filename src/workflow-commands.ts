@@ -10,7 +10,7 @@ import { Subject } from './scorers/subject.js';
 import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from './utils/logger.js';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, retryCommand, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
-import { claimOffered, publishRun, resumeRun } from './workflow/handoff.js';
+import { claimOffered, publishRun, resumeRun, takeoverFor } from './workflow/handoff.js';
 import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Taker } from './workflow-published-runs.js';
 import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
@@ -1477,7 +1477,7 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
 
   const { tools } = parsedTools;
   const caller = invokeCaller(options.confirmed);
-  const refused = await sessionDrivesRun(loaded.config, run.data) ? undefined : await resumeRefusal(loaded.config, run.data, caller, { published: true });
+  const refused = await sessionDrivesRun(loaded.config, run.data) ? undefined : await resumeRefusal(loaded.config, run.data, caller, { published: true, claim: options.claim === true });
 
   if (refused) {
     writeEnvelope({ error: refused }, secrets);
@@ -1495,19 +1495,19 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
   }
 
   try {
-    await resumeDriven(loaded, run.data, { tools, options, opened: defined.opened });
+    await resumeDriven(loaded, run.data, { tools, options, caller, opened: defined.opened });
   } finally {
     await closeDriver(defined.opened);
   }
 }
 
 /** Resumes run `runId` and drives it here, with the local loop or on the definition `opened`. */
-async function resumeDriven(loaded: Ready, runId: RunId, { tools, options, opened }: { tools: Record<string, string>; options: ResumeOptions; opened: OpenedDriver | undefined }): Promise<void> {
+async function resumeDriven(loaded: Ready, runId: RunId, { tools, options, caller, opened }: { tools: Record<string, string>; options: ResumeOptions; caller: InvokeCaller; opened: OpenedDriver | undefined }): Promise<void> {
   const { secrets } = loaded;
 
   // Claimed under the driver lock, so a driver of this run already running here never drives the claimed run.
   await writeDriven(loaded.config, await withDriverLock(loaded.config, runId, async (drive) => {
-    const resumed = await resumeRun(loaded.config, runId, { claim: options.claim === true, checkout: process.cwd() });
+    const resumed = await resumeRun(loaded.config, runId, { claim: options.claim === true, checkout: process.cwd(), takeover: takeoverFor(caller) });
 
     if (!resumed.ok) return { error: resumed.error };
     const stored = await readRun(loaded.config, runId);

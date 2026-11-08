@@ -418,7 +418,8 @@ describe('a run taken back on the machine that worked on it', () => {
     const wrote = await work(alice, runId, 'write.txt');
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     await claimRun(bob.config, runId, { checkout: bob.checkout });
-    expect(await claimRun(alice.config, runId, { checkout: alice.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    // Bob claimed it a moment ago and may drive it, so taking it back needs the person's yes.
+    expect(await claimRun(alice.config, runId, { checkout: alice.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     const dir = worktreePath(alice.checkout, wrote.branch);
     expect(git(alice.checkout, 'rev-parse', wrote.branch)).toBe(wrote.commit);
     fs.writeFileSync(path.join(dir, 'abandoned.txt'), 'left by an attempt that never reported\n');

@@ -1615,7 +1615,8 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       });
       expect(await back.call({ kind: 'resume', run, claim: 'lacking', confirmed: false, answers: {}, tool: 'claude' }))
         .toMatchObject({ error: { code: 'not_owner', next: `teamai workflow resume ${run} --driver skill --tools default=claude --claim` } });
-      expect(await turnOf(await back.call({ kind: 'resume', run, claim: 'any', confirmed: false, answers: {} }))).toMatchObject({ run, status: 'driving', actions: [{ kind: 'choose', about: 'host' }] });
+      // The member claimed it a moment ago and may drive it, so taking it back needs the person's yes.
+      expect(await turnOf(await back.call({ kind: 'resume', run, claim: 'any', confirmed: true, answers: {} }))).toMatchObject({ run, status: 'driving', actions: [{ kind: 'choose', about: 'host' }] });
       return [...member.rows, ...back.rows];
     },
   },

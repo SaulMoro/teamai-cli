@@ -70,7 +70,8 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
-    expect(await claimRun(alice.config, runId, { checkout: alice.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    // Bob claimed it a moment ago and may drive it, so taking it back needs the person's yes.
+    expect(await claimRun(alice.config, runId, { checkout: alice.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     await runStep(alice, runId);
     await runStep(alice, runId);
     await settle(alice, runId);
@@ -110,10 +111,14 @@ describe('workflow handoff through teamai-reports', () => {
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     await takeBack(alice, runId);
-    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout });
+    // Alice leases `two` before the claim: until she reads teamai-reports on origin again, her copy says she owns the run.
+    const next = await leaseNext(alice.config, runId, alice.driver);
+    if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
+    const lease = next.data.lease as { attempt: string; revision: number };
+    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' });
     if (!claimed.ok) throw new Error(claimed.error.message);
     const claim = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
-    expect(await runStep(alice, runId)).toBe('two');
+    await reportAttempt(alice.config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: alice.driver });
 
     expect(await leaseNext(alice.config, runId, alice.driver)).toMatchObject({
       data: {
@@ -134,12 +139,16 @@ describe('workflow handoff through teamai-reports', () => {
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     await takeBack(alice, runId);
-    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    // Alice leases `two` before the claim: until she reads teamai-reports on origin again, her copy says she owns the run.
+    const next = await leaseNext(alice.config, runId, alice.driver);
+    if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
+    const lease = next.data.lease as { attempt: string; revision: number };
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     expect(await runStep(bob, runId)).toBe('two');
     await settle(bob, runId);
     const record = originFile(acme.origin, `workflows/runs/${runId}.json`);
     expect(JSON.parse(record ?? '{}')).toMatchObject({ username: 'bob', status: 'succeeded' });
-    expect(await runStep(alice, runId)).toBe('two');
+    await reportAttempt(alice.config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: alice.driver });
 
     const ended = await leaseNext(alice.config, runId, alice.driver);
     expect(ended).toMatchObject({

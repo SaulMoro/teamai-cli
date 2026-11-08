@@ -7,14 +7,14 @@ import { parseReportedAgent, parseReportedUsed, settleObservation, type Reported
 import { loadTeamConfig } from '../config.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { DriverSchema, sameDriver } from '../driver-identity.js';
-import { RunModeSchema, type RunMode } from '../launch-context.js';
+import { resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
 import { log } from '../utils/logger.js';
 import { execCommand } from '../utils/exec.js';
 import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
 import { getDataHome, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias } from './cache.js';
-import { claimRun, leaseRefusal, publishRunEnd, reconcileTakenCopies, type HandoffError } from './handoff.js';
+import { claimRun, leaseRefusal, publishRunEnd, reconcileTakenCopies, takeoverFor, type HandoffError } from './handoff.js';
 import {
   evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, pathValue, resolvePath,
   type Expression, type ExpressionPath,
@@ -2216,7 +2216,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   let offeredHere: HandoffError | undefined;
 
   if (options.claim) {
-    const claimed = await claimRun(config, runId, { checkout: driver.workspace });
+    // A next payload cannot carry the person's yes, so a takeover of a run its owner may still drive is never confirmed here.
+    const claimed = await claimRun(config, runId, { checkout: driver.workspace, takeover: takeoverFor({ mode: options.runMode ?? resolveRunMode(process.env), confirmed: false }) });
 
     if (!claimed.ok) return { error: claimed.error };
     // As a resume does, before anything is leased: the branches of a run taken back go to the commits it recorded.
@@ -2225,7 +2226,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     if (unreconciled) return { error: unreconciled };
   } else {
     // A run another install claimed moved on there, so this machine's copy of it leases nothing.
-    const elsewhere = await leaseRefusal(config, runId);
+    const elsewhere = await leaseRefusal(config, runId, { throttled: true });
 
     if (elsewhere && elsewhere.code !== 'run_offered') return { error: elsewhere };
     offeredHere = elsewhere;
