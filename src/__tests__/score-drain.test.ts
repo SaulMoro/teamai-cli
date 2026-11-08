@@ -32,7 +32,8 @@ import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import * as cliPaths from '../utils/cli-path.js';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { projectRun } from '../workflow/snapshot.js';
-import { readRun, readRuns } from '../workflow/store.js';
+import { runPasses } from '../workflow/loop.js';
+import { attemptsDir, readRun, readRuns, RunIdSchema } from '../workflow/store.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 import { runShortcut, workflowResume, workflowStart } from '../workflow-commands.js';
 
@@ -419,6 +420,35 @@ describe('teamai score --drain', () => {
     const again = await drain();
 
     expect(again).toEqual({ code: 0, lines: ['✔ Nothing left to do here'] });
+  });
+
+  it('archives beside a step session the evidence its step left in out/: the text masked, an image listed only', async () => {
+    const { origin, config } = await team({ 'workflows/review.yaml': WORKFLOW.replace('    scorers: [quality]\n', '') });
+    claudeSession(STEP_SESSION, 'Reviewed it.');
+    const runId = await settledRun(config, 'unattended', { tool: 'claude', session: STEP_SESSION });
+    const run = await readRun(config, runId);
+    if (run === 'missing' || run === 'corrupt') throw new Error(`run ${runId} is ${run}`);
+    const [pass, ...others] = runPasses(run);
+    expect(others).toEqual([]);
+    const out = path.join(attemptsDir(config, RunIdSchema.parse(runId)), String(pass?.attempt), 'out');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'deploy.log'), `deployed with ${TOKEN}\n`);
+    fs.writeFileSync(path.join(out, 'screen.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    fs.writeFileSync(path.join(out, 'result.json'), '{"output":{}}');
+    vi.stubEnv('CI', 'true');
+
+    const drained = await drain();
+
+    expect(drained.code, drained.lines.join('\n')).toBe(0);
+    const [file, ...more] = onReports(origin, 'sessions').filter((name) => name.endsWith('.evidence.json'));
+    expect(more).toEqual([]);
+    const text = readOnReports(origin, String(file));
+    expect(text).not.toContain(TOKEN);
+    expect(JSON.parse(text)).toMatchObject({ version: 1, files: [
+      { kind: 'text', path: 'deploy.log', text: expect.stringMatching(/^deployed with <REDACTED:/) },
+      { kind: 'listed', path: 'screen.png', type: 'image/png', size: 4 },
+    ] });
+    expect(JSON.parse(text).files).toHaveLength(2);
   });
 
   it('says the step sessions of one run it cannot find here in one line, whichever sessions they are', async () => {
