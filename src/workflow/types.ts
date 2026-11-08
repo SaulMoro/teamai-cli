@@ -56,7 +56,19 @@ export interface StepHitl {
  * answers is skipped instead.
  */
 export function onlyPersonAnswers(hitl: Pick<StepHitl, 'kind' | 'required' | 'default'>, { autoApprove }: { autoApprove: boolean }): boolean {
-  return hitl.required || (hitl.kind === 'choose' && !(autoApprove && hitl.default !== undefined));
+  return unattendedChoice(hitl, { autoApprove }) === undefined;
+}
+
+/**
+ * The choice a driver nobody attends answers `hitl` with: `yes` or `no` to an optional approval, as `autoApprove` says,
+ * and an optional choice's default under `autoApprove`. Undefined when only a person can answer it.
+ */
+export function unattendedChoice(hitl: Pick<StepHitl, 'kind' | 'required' | 'default'>, { autoApprove }: { autoApprove: boolean }): string | undefined {
+  if (hitl.required) return undefined;
+
+  if (hitl.kind === 'approve') return autoApprove ? 'yes' : 'no';
+
+  return autoApprove ? hitl.default : undefined;
 }
 
 export interface WorkflowStep {
