@@ -601,6 +601,12 @@ describe('teamai-runtime-t3', () => {
 
       const outer = (): string => JSON.stringify({ place: SANDBOX, socket: path.join(socketDir, 'attempt.sock') });
 
+      const settingsNow = (): unknown => {
+        const file = path.join(t3.t3Home, 'userdata', 'settings.json');
+
+        return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+      };
+
       const throughSandbox = async (env: Record<string, string> = {}): Promise<Connection> => {
         const runtime = start({ PATH: [bin, t3.bin, PATH_WITHOUT_T3].join(path.delimiter), ...env });
         runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
@@ -622,7 +628,7 @@ describe('teamai-runtime-t3', () => {
 
         expect(await openThrough(runtime)).toMatchObject({ event: 'ready' });
         await expect.poll(() => lines).toEqual(['{"register":{"agent":null}}']);
-        expect(JSON.parse(fs.readFileSync(path.join(t3.t3Home, 'userdata', 'settings.json'), 'utf8'))).toMatchObject({
+        expect(settingsNow()).toMatchObject({
           providerInstances: { 'teamai-sandbox-claude': { driver: 'claudeAgent', displayName: 'teamai-sandbox-claude', enabled: true, config: { binaryPath: path.join(bin, 'teamai-sandbox-claude') } } },
         });
 
@@ -645,13 +651,14 @@ describe('teamai-runtime-t3', () => {
         await expect.poll(() => lines).toEqual(['{"register":{"agent":null}}', '{"register":{"agent":null}}']);
       });
 
-      it('fails the open, naming the fix, when the outer runtime gives no attempt socket to register on', async () => {
+      it('fails the open, naming the fix and adding no provider instance, when the outer runtime gives no attempt socket to register on', async () => {
         const runtime = await throughSandbox();
 
         expect(await openThrough(runtime, SANDBOX)).toMatchObject({
           event: 'failed',
-          failure: { code: 'open_failed', message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one (docker, podman, sbx, bwrap or seatbelt).` },
+          failure: { code: 'open_failed', message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.` },
         });
+        expect(settingsNow()).not.toHaveProperty(['providerInstances', 'teamai-sandbox-claude']);
       });
 
       it('fails the open, naming the command, when teamai\'s wrapper for the tool is not on PATH', async () => {

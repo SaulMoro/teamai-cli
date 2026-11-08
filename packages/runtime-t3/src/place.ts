@@ -104,7 +104,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   /** Why an open through a sandbox fails when the step's tool could not be registered on its attempt socket. */
   const unregistered = (why: string): RuntimeFailure => ({
     code: 'open_failed',
-    message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (${why.replace(/\.$/, '')}), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one (docker, podman, sbx, bwrap or seatbelt).`,
+    message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (${why.replace(/\.$/, '')}), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.`,
   });
 
   const open = async (request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> => {
@@ -133,11 +133,18 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       }
     }
 
-    // Through a sandbox, T3 starts teamai's wrapper in place of the step's tool, and the wrapper asks the sandbox to.
+    // Through a sandbox, T3 starts teamai's wrapper in place of the step's tool, and the wrapper asks the sandbox to,
+    // which starts only the tool registered on its attempt socket. Registered first, so a sandbox that serves no socket
+    // leaves T3 with no provider instance for nothing; registered before the app can start the tool, so the sandbox
+    // grants the wrapper its first ask.
     if (request.outer !== undefined && request.tool !== undefined) {
+      const why = await register(handle, request.outer);
+
+      if (why !== undefined) return fail(request.op, unregistered(why));
       const wrapped = await adder.wrapperFor(session, request.tool, { op: request.op });
 
       if (!wrapped.ok) {
+        unregister(handle);
         fail(request.op, { code: 'open_failed', message: adder.notAdded(`teamai-sandbox-${request.tool}`, undefined, wrapped) });
 
         return;
@@ -154,9 +161,6 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     }
 
     if (known.kind === 'found') {
-      const why = request.outer === undefined ? undefined : await register(handle, request.outer);
-
-      if (why !== undefined) return fail(request.op, unregistered(why));
       write({ op: request.op, event: 'ready', display: placeDisplay(known.place, session.environment) });
 
       return;
@@ -265,11 +269,6 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       ...(settle !== undefined && { settleScript: settle }), settingsProjectId: checkout.project.id, ops: {}, threads: {}, launches: {},
       ...(request.outer !== undefined && { through: { outer: request.outer, toolHome: view.toolHome } }),
     };
-
-    // Before the app can start the tool, so the sandbox grants the wrapper its first ask.
-    const why = request.outer === undefined ? undefined : await register(handle, request.outer);
-
-    if (why !== undefined) return fail(request.op, unregistered(why));
 
     if (places.isReleased(handle)) {
       unregister(handle);
