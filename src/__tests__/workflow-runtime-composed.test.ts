@@ -133,6 +133,16 @@ describe('a toy through a toy, over stdio', () => {
     expect(asked().slice(2)).toEqual([{ toy: 'inner', type: 'prompt', credentials: ['INNER_TOKEN'] }, { toy: 'outer', type: 'exec', credentials: [] }]);
   });
 
+  it('reports the session in the attempt\'s tool home, where the tool ran in the outer\'s place, not the home the inner names', async () => {
+    const runtime = await start({ agent: { output: { ok: true }, home: path.join(dir, 'app-claude') } });
+    const toolHome = path.join(dir, 'attempt-home');
+    const view = { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: { CLAUDE_CONFIG_DIR: toolHome } };
+    const opened = await runtime.open({ ...openRequest(), view }, async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+
+    expect(await runtime.prompt(promptRequest(opened.handle), {})).toMatchObject({ kind: 'finished', session: { tool: 'claude', home: toolHome } });
+  });
+
   it('cancels a prompt on the inner, then collects and closes the inner before the outer', async () => {
     const release = path.join(dir, 'release');
     const runtime = await start({ agent: { output: { ok: true }, release } });
