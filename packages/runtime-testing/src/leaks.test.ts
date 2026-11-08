@@ -85,4 +85,31 @@ describe('the check that a test left nothing running', () => {
       fs.rmSync(elsewhere, { recursive: true, force: true });
     }
   });
+
+  it('accepts only a whole kept name or a path under it, and names a leak whose name or path merely starts with one', async () => {
+    const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-testing-bundle-')));
+    const keptDir = path.join(dir, 'teamai-r1-a1');
+    const strayDir = path.join(dir, 'teamai-r1-a1-other');
+    fs.mkdirSync(keptDir);
+    fs.mkdirSync(strayDir);
+    const inKept = strayIn(keptDir);
+    const besideKept = strayIn(strayDir);
+
+    try {
+      const executable = path.join(elsewhere, 'runtime.mjs');
+      const answer = { event: 'close_failed', handle: 'h-1', failure: { code: 'sandbox_failed', message: 'remove it' }, kept: ['teamai-r1-a1', keptDir] };
+      fs.writeFileSync(executable, `process.stdout.write(${JSON.stringify(JSON.stringify(answer))} + "\\n");\n`);
+      const runtime = connectRuntime({ executable, env: {} });
+      await runtime.next((line) => line['event'] === 'close_failed');
+      await runtime.close();
+
+      const left = expectNothingLeft({ dir, connections: [runtime], left: () => ['container teamai-r1-a1', 'container teamai-r1-a10'] });
+
+      await expect(left).rejects.toThrow(`The test left behind:\nprocess: ${besideKept.pid} ${process.execPath} ${path.join(strayDir, 'stray.mjs')}\nleft: container teamai-r1-a10`);
+    } finally {
+      await inKept.kill();
+      await besideKept.kill();
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
 });

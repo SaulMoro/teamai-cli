@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import type { Connection } from './connect.js';
 
@@ -35,10 +36,25 @@ function keptBy(connections: readonly Connection[]): string[] {
   return connections.flatMap(({ lines }) => lines.flatMap((line) => KeptSchema.safeParse(line).data?.kept ?? []));
 }
 
+/**
+ * Whether `thing` names `name` whole, between spaces or the ends, or a path under it: never a name that merely starts
+ * with it, as teamai-r1-a10 does with teamai-r1-a1.
+ */
+function namesWhole(thing: string, name: string): boolean {
+  for (let at = thing.indexOf(name); at !== -1; at = thing.indexOf(name, at + 1)) {
+    const before = thing.charAt(at - 1);
+    const after = thing.charAt(at + name.length);
+
+    if ((at === 0 || /\s/.test(before)) && (after === '' || /\s/.test(after) || after === path.sep)) return true;
+  }
+
+  return false;
+}
+
 /** What `connections`, `dir` and `left` still hold, as `<kind>: <what>`, but what a runtime said it keeps. */
 function leftRunning({ dir, connections, left }: Scope): string[] {
   const kept = keptBy(connections);
-  const isKept = (thing: string): boolean => kept.some((name) => thing.includes(name));
+  const isKept = (thing: string): boolean => kept.some((name) => namesWhole(thing, name));
   const runtimes = connections.flatMap(({ child }) => (child.pid !== undefined && child.exitCode === null && child.signalCode === null && isAlive(child.pid) ? [`runtime: ${child.pid} ${child.spawnargs.join(' ')}`] : []));
 
   return [...runtimes, ...processesUnder(dir).filter((line) => !isKept(line)).map((line) => `process: ${line}`), ...left().filter((thing) => !isKept(thing)).map((thing) => `left: ${thing}`)];
