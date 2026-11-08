@@ -201,6 +201,16 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
   }
 }
 
+/**
+ * Stops what attempt `attempt` of run `run` left on its step runtime, as `workflow cancel` does for a cancelled attempt,
+ * from `checkout`: undefined once nothing of it runs there, else why it may still run.
+ */
+export async function stopLeftAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, checkout: string): Promise<string | undefined> {
+  const stopped = await stopAttempt(config, run, attempt, { isReleased: false, checkout });
+
+  return stopped.ended === 'running' ? stopped.why : undefined;
+}
+
 /** Writes back the login attempt `attempt` holds, when it holds one; `isCollected` says its tool home came back. */
 async function writeHeldLoginBack(run: RunId, attempt: AttemptId, record: AttemptRuntimeRecord, { isCollected }: { isCollected: boolean }): Promise<void> {
   const tool = LOGIN_TOOLS.find((one) => one === record.toolHome?.tool);

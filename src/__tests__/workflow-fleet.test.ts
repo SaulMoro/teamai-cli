@@ -7,7 +7,9 @@ import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
-import { takeFleetAttempt } from '../workflow/fleet/member.js';
+import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
+import { localStepRuntime } from '../workflow/runtimes/local.js';
+import type { StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
@@ -90,7 +92,7 @@ describe('fleet attempts on teamai-reports', () => {
     await readableReportsWorktree(bob.config);
     const member = await installOwner(bob.config);
 
-    const taken = await takeRunLock(bob.config, RUN, async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member, secrets: {} }), { waitMs: 0 });
+    const taken = await takeRunLock(bob.config, RUN, async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member, secrets: {}, place: { kind: 'here' } }), { waitMs: 0 });
 
     expect(taken).toMatchObject({ kind: 'held', value: { data: { idle: { offered: 1 } } } });
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered' } });
@@ -140,7 +142,7 @@ steps:
  * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
  * takes it. Answers what Bob's take answered, and the record Alice reads then.
  */
-async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow = MARK) {
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow = MARK, place: MemberPlace = { kind: 'here' }) {
   const acme = team({ mark: workflow });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await before?.({ alice, bob });
@@ -164,10 +166,10 @@ async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1
   if (!offered.ok) throw new Error(offered.error.message);
   await readableReportsWorktree(bob.config);
 
-  const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+  const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place });
   const record = await readAttemptRecord(alice.config, run, ATTEMPT);
 
-  return { taken, record: record.ok && record.value !== 'absent' ? record.value : undefined };
+  return { taken, record: record.ok && record.value !== 'absent' ? record.value : undefined, alice };
 }
 
 describe('a member taking an attempt', () => {
@@ -176,6 +178,24 @@ describe('a member taking an attempt', () => {
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, to: expect.any(String) } });
+  });
+
+  it('runs the step on the step runtime of the member\'s own driver, with the step\'s env alone, and pushes what it wrote there', async () => {
+    const local = localStepRuntime({ exec: true });
+    const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
+    const runtime: StepRuntime = { ...local, exec: (request, events) => {
+      execs.push({ argv: request.argv, env: request.env, cwd: request.cwd });
+
+      return local.exec(request, events);
+    } };
+
+    const { taken, record, alice } = await takeForged(() => undefined, undefined, MARK, { kind: 'runtime', driver: 'bobs', use: 'box', runtime });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+    expect(execs).toEqual([{ argv: expect.arrayContaining(['echo written > "$MARK"']), env: { MARK: 'made.txt' }, cwd: expect.stringMatching(/work$/) }]);
+    const to = record?.state === 'finished' ? record.result.to ?? '' : '';
+    git(alice.checkout, 'fetch', '-q', 'origin', to);
+    expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
   });
 
   it('refuses an offer whose command is not the one the team\'s workflow defines for the step, and runs nothing', async () => {
@@ -340,14 +360,14 @@ describe('cancelling an attempt through its record', () => {
 
     expect(await cancelAttempt(alice.config, offered)).toMatchObject({ ok: true, value: { state: 'withdrawn' } });
     await readableReportsWorktree(bob.config);
-    expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} }))
+    expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } }))
       .toEqual({ data: { idle: { offered: 0 } } });
     expect(await recordOf(alice, run)).toMatchObject({ state: 'withdrawn' });
   });
 
   it('stops the member\'s step, which pushes its work and answers cancelled', async () => {
     const { alice, bob, run, startCommit } = await offerSlow(3_000);
-    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
     // The member's first beat pushed the file the step wrote.
     const running = await eventually(async () => {
       const record = await recordOf(alice, run);
@@ -397,7 +417,7 @@ describe('a restarted member', () => {
     git(bob.checkout, 'worktree', 'remove', '--force', work);
     await readableReportsWorktree(bob.config);
 
-    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
 
     expect(await recordOf(alice, run)).toMatchObject({ state: 'finished', result: { exitCode: 0, to: left } });
   });
@@ -423,7 +443,7 @@ describe('a restarted member', () => {
     await readableReportsWorktree(bob.config);
 
     try {
-      const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+      const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
 
       expect(isLeftRunning).toBe(false);
       expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
@@ -453,7 +473,7 @@ describe('a member\'s own checkout', () => {
   it('keeps no git config the step wrote where it ran', async () => {
     const { bob, run } = await offerSlow(60_000, { definition: PLANT, command: 'git config teamai.planted yes && echo planted > planted.txt' });
 
-    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
 
     expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
     expect(fs.readFileSync(path.join(bob.checkout, '.git', 'config'), 'utf8')).not.toContain('planted');
@@ -462,7 +482,7 @@ describe('a member\'s own checkout', () => {
   it('gives the step the origin its checkout names, as the checkout would', async () => {
     const { alice, bob, run } = await offerSlow(60_000, { definition: PLANT.replace('git config teamai.planted yes && echo planted > planted.txt', 'git remote get-url origin > origin.txt'), command: 'git remote get-url origin > origin.txt' });
 
-    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
 
     const finished = await recordOf(alice, run);
     const to = finished?.state === 'finished' ? finished.result.to : undefined;
@@ -509,7 +529,7 @@ const OTHER = AttemptIdSchema.parse('a4567cdef');
 describe('a member\'s claim among writes it did not see land', () => {
   it('goes on running when a write of its own claim landed though it could not tell', async () => {
     const { alice, bob, run, startCommit } = await offerSlow(3_000, { definition: BRIEF, command: BRIEF_COMMAND });
-    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
     const claimed = await eventually(async () => {
       const record = await recordOf(alice, run);
 
@@ -533,7 +553,7 @@ describe('a member\'s claim among writes it did not see land', () => {
     // The mirror takes no object until the first save reached origin.
     const objects = path.join(mirror, 'objects');
     fs.chmodSync(objects, 0o555);
-    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } });
     const ref = `refs/heads/teamai/attempts/${run}/${ATTEMPT}`;
     const startTip = git(origin, 'rev-parse', ref);
 
@@ -558,7 +578,7 @@ describe('a member\'s claim among writes it did not see land', () => {
     expect(await claimAttempt(alice.config, other.value, await installOwner(bob.config))).toMatchObject({ ok: true });
     await readableReportsWorktree(bob.config);
 
-    expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} }))
+    expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'here' } }))
       .toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
   }, 60_000);
 });

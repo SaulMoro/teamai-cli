@@ -15,7 +15,7 @@ import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Ta
 import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
-import { takeFleetAttempt } from './workflow/fleet/member.js';
+import { memberPlace, takeFleetAttempt } from './workflow/fleet/member.js';
 import { DEFAULT_FLEET_POOL } from './workflow/fleet/record.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
@@ -1590,7 +1590,7 @@ async function resumeOffered(runId: string | undefined, options: ResumeOptions, 
   }
 
   if (options.pool !== undefined) {
-    await takeFleetNext(loaded, options.pool === true ? DEFAULT_FLEET_POOL : options.pool);
+    await takeFleetNext(loaded, options.pool === true ? DEFAULT_FLEET_POOL : options.pool, options.driver);
 
     return;
   }
@@ -1634,7 +1634,7 @@ function resumeOfferedRefusal(runId: string | undefined, options: ResumeOptions,
  * Takes and runs the oldest attempt fleet pool `pool` offers for this checkout's business repository that another
  * member did not take first, or answers `idle` with the count of offered attempts it left.
  */
-async function takeFleetNext({ config, secrets }: Ready, pool: string): Promise<void> {
+async function takeFleetNext({ config, secrets }: Ready, pool: string, driver: string | undefined): Promise<void> {
   const root = process.cwd();
   const repository = getRepoIdentity(root);
 
@@ -1658,7 +1658,28 @@ async function takeFleetNext({ config, secrets }: Ready, pool: string): Promise<
     return;
   }
 
-  writeEnvelope(await takeFleetAttempt(config, { pool, repository, root, member: await installOwner(config), secrets }), secrets);
+  // A member runs an attempt on its own driver, with its own tools and logins, as it runs its own steps.
+  const defined = await openNamedDriver(config, driver, { personal: true });
+
+  if (!defined.ok) {
+    refuse({ error: defined.failure });
+
+    return;
+  }
+
+  try {
+    const place = memberPlace(defined.opened);
+
+    if ('refused' in place) {
+      refuse({ error: { code: 'driver_invalid', message: place.refused } });
+
+      return;
+    }
+
+    writeEnvelope(await takeFleetAttempt(config, { pool, repository, root, member: await installOwner(config), secrets, place }), secrets);
+  } finally {
+    await closeDriver(defined.opened);
+  }
 }
 
 /**

@@ -1728,7 +1728,7 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     await owner.record();
     await readableReportsWorktree(owner.bob.config);
 
-    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {} });
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { kind: 'here' } });
 
     expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: '{"made":1}' });
