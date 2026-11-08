@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import path from 'node:path';
 import { z } from 'zod';
 import type { Connection } from './connect.js';
 
@@ -37,15 +36,15 @@ function keptBy(connections: readonly Connection[]): string[] {
 }
 
 /**
- * Whether `thing` names `name` whole, between spaces or the ends, or a path under it: never a name that merely starts
- * with it, as teamai-r1-a10 does with teamai-r1-a1.
+ * Whether `thing` names `name` whole, between spaces or the ends: never a name that merely starts with it, as
+ * teamai-r1-a10 does with teamai-r1-a1, nor a path under it, as a process left in a kept directory runs from.
  */
 function namesWhole(thing: string, name: string): boolean {
   for (let at = thing.indexOf(name); at !== -1; at = thing.indexOf(name, at + 1)) {
     const before = thing.charAt(at - 1);
     const after = thing.charAt(at + name.length);
 
-    if ((at === 0 || /\s/.test(before)) && (after === '' || /\s/.test(after) || after === path.sep)) return true;
+    if ((at === 0 || /\s/.test(before)) && (after === '' || /\s/.test(after))) return true;
   }
 
   return false;
