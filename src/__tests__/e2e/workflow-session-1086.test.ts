@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { waitForDetachedChildren } from '../helpers/detached-processes.js';
+import { leftSkillRunners, stopLeftSkillRunners } from '../helpers/skill-runners.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 
 const cli = fileURLToPath(new URL('../../../dist/index.js', import.meta.url));
@@ -100,7 +101,12 @@ steps:
       const pairReport = call(['workflow', 'report', pairId, '--json', JSON.stringify({ driver, attempt: pairLease.attempt, revision: pairLease.revision, outcome: 'success' })]);
       expect(envelope(pairReport.stdout)).toMatchObject({ data: { step: { status: 'succeeded' } } });
       expect(fs.readFileSync(path.join(repo, 'pair.txt'), 'utf8')).toBe('human edits\n');
-    } finally { await waitForDetachedChildren(); fs.rmSync(root, { recursive: true, force: true }); }
+    } finally {
+      const left = stopLeftSkillRunners(root);
+      await waitForDetachedChildren();
+      fs.rmSync(root, { recursive: true, force: true });
+      expect(left, leftSkillRunners(left)).toEqual([]);
+    }
   });
 
   it('judges a scored step of a skill run in the background with the session tool\'s confined judge, and the poll after done returns judged', async () => {
@@ -159,6 +165,11 @@ console.log(JSON.stringify({ type: 'result', structured_output: at >= 0 && JSON.
         then: { kind: 'poll' } });
       const judged = literal(done.then.run, 120_000).data.turn;
       expect(judged).toEqual({ run: turn.run, status: 'done', running: [], events: [{ kind: 'judged', step: 'review', scorer: 'review-quality', label: 'thorough' }], actions: [{ kind: 'done', outcome: 'succeeded', prs: [] }] });
-    } finally { await waitForDetachedChildren(); fs.rmSync(root, { recursive: true, force: true }); }
+    } finally {
+      const left = stopLeftSkillRunners(root);
+      await waitForDetachedChildren();
+      fs.rmSync(root, { recursive: true, force: true });
+      expect(left, leftSkillRunners(left)).toEqual([]);
+    }
   });
 });
