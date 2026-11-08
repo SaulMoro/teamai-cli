@@ -27,6 +27,10 @@ export interface PlaceKey {
   attempt: string;
 }
 
+/** A run's id and an attempt's, as teamai makes them. */
+export const RUN_ID = /^r[0-9a-f]{8}(?:[0-9a-f]{8})?$/;
+export const ATTEMPT_ID = /^a[0-9a-f]{8}$/;
+
 /** An attempt's handle, `teamai-<run>-<attempt>`, which also names its container (sbx adds its journal: providers/sbx.ts). */
 export function handleOf({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
@@ -154,3 +158,8 @@ export type Provider = Sandboxing & (
   | { family: 'bind'; collect?: never }
   | { family: 'copy'; collect(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> }
 );
+
+/** The place's sandbox: the id the journal kept, or the one its labels find when a runtime died before keeping it. */
+export async function sandboxOf(place: PlaceKey & { id?: string }, provider: Provider): ReturnType<Provider['find']> {
+  return place.id === undefined ? provider.find(place) : { ok: true, id: place.id };
+}
