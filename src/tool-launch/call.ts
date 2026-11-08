@@ -184,7 +184,8 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
         const reading = call.read({ stdout: run.stdout, lastMessage });
 
         if (run.code !== 0 || !reading.ok) {
-          const reason = (reading.ok ? undefined : reading.message) || run.stderr.trim() || run.stdout.trim() || `exit code ${run.code}`;
+          // A streamed call's stdout is its transcript, files it read included, so only a plain one stands for a reason.
+          const reason = (reading.ok ? undefined : reading.message) || run.stderr.trim() || (streaming ? '' : run.stdout.trim()) || `exit code ${run.code}`;
           throw new CallError('call_failed', `AI call failed (tool: ${tool}): ${reason}`);
         }
 

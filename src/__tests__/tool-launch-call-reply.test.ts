@@ -46,6 +46,19 @@ const PLAIN_COPILOT: FakeAgentRecording = {
 `,
 };
 
+/** A `claude` that streams a tool result holding a secret, then ends as Claude does on its turn limit: no reason. */
+const CLAUDE_OUT_OF_TURNS: FakeAgentRecording = {
+  executable: 'claude',
+  version: '2.1.319',
+  data: {},
+  script: String.raw`
+  await say(JSON.stringify({ type: 'system', subtype: 'init', session_id: 's-1' }));
+  await say(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'API_KEY=hunter2' }] } }));
+  await say(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, session_id: 's-1' }));
+  process.exit(1);
+`,
+};
+
 describe('a call that must reply with a value', () => {
   it('asks again in the same session when the reply holds no valid value, and returns the corrected one', async () => {
     const { root, agent, caller } = only(claudeFake, { answers: [{ when: 'Retries remaining', answer: '{"color":"blue"}' }], answer: 'Sure, the color is blue.' });
@@ -126,6 +139,15 @@ describe('a call with an idle limit', () => {
 
     await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 1000 })).resolves.toMatchObject({ text: 'still here' });
     expect(agent.calls()[0]?.args).toEqual(['-p', '--output-format', 'stream-json', '--verbose']);
+  });
+
+  it('names how a streamed Claude call ended when it gives no reason, and never quotes the transcript it streamed', async () => {
+    const { root, caller } = only(CLAUDE_OUT_OF_TURNS);
+
+    const failure = caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 1000 });
+
+    await expect(failure).rejects.toMatchObject({ kind: 'call_failed', message: 'AI call failed (tool: claude): it ended with error_max_turns' });
+    await expect(failure).rejects.not.toThrow('hunter2');
   });
 
   it('calls Claude for its json output when no idle limit is set', async () => {

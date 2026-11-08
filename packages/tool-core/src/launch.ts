@@ -149,6 +149,7 @@ export function reportedTokens(counts: TokenUsage): TokenUsage | undefined {
 
 const ClaudeResult = z.object({
   type: z.literal('result'),
+  subtype: z.string().optional(),
   is_error: z.boolean().optional(),
   result: z.string().optional(),
   session_id: z.string().optional(),
@@ -166,7 +167,8 @@ export function readClaudeResult({ stdout }: CallOutput): CallReading {
   if (!record) return { ok: false };
 
   // An error exits 1 with the reason in `result`; stderr carries only a tag such as `[claude-code:unrecognized_model]`.
-  if (record.is_error || record.result === undefined) return failed(record.result || undefined);
+  // An end with no reason, as on the turn limit, is named by its subtype.
+  if (record.is_error || record.result === undefined) return failed(record.result || (record.subtype === undefined ? undefined : `it ended with ${record.subtype}`));
   const usage = record.usage;
 
   return answered(record.result.trim(), reportedTokens({ input: usage?.input_tokens, output: usage?.output_tokens, cachedInput: usage?.cache_read_input_tokens }), record.session_id);
