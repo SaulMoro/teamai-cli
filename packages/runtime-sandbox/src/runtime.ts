@@ -3,8 +3,9 @@ import type { Readable } from 'node:stream';
 import { opLedger } from '@teamai/runtime-kit/ledger';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
 import { redact, redactJson } from '@teamai/shared/redact';
-import { CANCEL_FAILED, PromptResultSchema, type Can, type ExecRequestSchema, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { boundedStdout, CANCEL_FAILED, EXITED_STDOUT_CHARS, PromptResultSchema, type Can, type ExecRequestSchema, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
+import { boundedTail } from './bounded-tail.js';
 import { listen, placeOf, socketPathOf, type Answering, type AttemptSocket, type OuterHandle } from './attempt-socket.js';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, noJudgeCredential, offersSignedIn } from './judge.js';
@@ -131,6 +132,31 @@ async function hostUnreachable(credentials: Record<string, string>, { provider, 
 }
 
 /**
+ * Masks a stream with `masks` as if it were one text: each chunk's last characters, as many as the longest mask, wait
+ * for the next chunk or the end, so a value the stream splits across chunks is masked whole, and what it gives out
+ * joined is the text masked.
+ */
+function maskedStream(masks: Record<string, string>) {
+  const held = Math.max(0, ...Object.values(masks).map((value) => value.length));
+  let rest = '';
+
+  return {
+    push(chunk: string): string {
+      const masked = redact(`${rest}${chunk}`, { envSecrets: masks, patterns: false });
+      rest = masked.slice(Math.max(0, masked.length - held));
+
+      return masked.slice(0, masked.length - rest.length);
+    },
+    flush(): string {
+      const last = rest;
+      rest = '';
+
+      return last;
+    },
+  };
+}
+
+/**
  * Serves runtime protocol 1 on `input` through the runtime kit, and resolves to the exit status once teamai closes it:
  * an exec still running keeps the process alive, and records its end.
  */
@@ -217,6 +243,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * provider confirmed ends it.
    */
   const stateOf = (exec: Journaled): OpState => (exec.outcome ? { op: exec.op, ...exec.outcome } : { op: exec.op, state: 'running' });
+
+  /** An op's state as `alive` reports it: an exec's stdout within protocol 1's bound, as its end carries it. */
+  const reported = (state: OpState): OpState => (state.state === 'exited' ? { ...state, stdout: boundedStdout(state.stdout) } : state);
 
   /** `credentials` as a sandbox gets them: a URL on this machine itself at the name `host` gives it there. */
   const inSandbox = (credentials: Record<string, string>, host: HostRoute): Record<string, string> => (host.ok ? toAlias(credentials, host.alias) : credentials);
@@ -638,17 +667,25 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // teamai masks what the step prints with the values it gave. A URL on this machine itself reached the step as the
     // sandbox names it, which teamai cannot know, so that value is masked here first.
     const rewritten = rewrittenMasks(request.credentials, scoped);
-    const unrewritten = (text: string): string => redact(text, { envSecrets: rewritten, patterns: false });
-    let stdout = '';
+    const streams = { stdout: maskedStream(rewritten), stderr: maskedStream(rewritten) };
+    // The stdout the exec ends with is what it streamed, joined: past protocol 1's bound, its end, which the ledger
+    // marks as cut, so teamai gives the step what it streamed. Two characters over the bound tell a cut apart.
+    const stdout = boundedTail(EXITED_STDOUT_CHARS + 2);
 
-    const ran = await provider.exec(id, { argv: request.argv, env: { ...scoped, ...request.env }, unset: request.unset, cwd: request.cwd }, (stream, data) => {
-      if (stream === 'stdout') stdout += data;
-      write({ op, event: 'output', stream, data: unrewritten(data) });
-    });
+    const stream = (name: 'stdout' | 'stderr', data: string): void => {
+      if (data === '') return;
 
-    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : ran.kind === 'failed' ? { state: 'failed', failure: ran.failure } : { state: 'exited', code: ran.code, stdout: unrewritten(stdout) };
-    // teamai gets the complete stdout and masks it itself; the journal never holds a credential the tool printed, so a
-    // repeated id is answered with it masked.
+      if (name === 'stdout') stdout.push(data);
+      write({ op, event: 'output', stream: name, data });
+    };
+
+    const ran = await provider.exec(id, { argv: request.argv, env: { ...scoped, ...request.env }, unset: request.unset, cwd: request.cwd }, (name, data) => stream(name, streams[name].push(data)));
+    stream('stdout', streams.stdout.flush());
+    stream('stderr', streams.stderr.flush());
+
+    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : ran.kind === 'failed' ? { state: 'failed', failure: ran.failure } : { state: 'exited', code: ran.code, stdout: stdout.text() };
+    // teamai masks the stdout itself; the journal never holds a credential the tool printed, so a repeated id is
+    // answered with it masked.
     finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(outcome.stdout, { envSecrets: maskedAsGiven(request.credentials, scoped), patterns: false }) } : outcome);
   };
 
@@ -951,7 +988,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       if (!served.ok) warn(`teamai-runtime-sandbox: warning: ${served.failure.message}. The step's tool cannot start in its sandbox until it can.`);
     }
 
-    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => ledger.unkept(op) ?? stateOf({ op, ...record })), display: provider.display(place) });
+    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => reported(ledger.unkept(op) ?? stateOf({ op, ...record }))), display: provider.display(place) });
   };
 
   /** Removes the place's sandbox, and a judge's filter and network: ok once the provider confirmed they are gone. */
