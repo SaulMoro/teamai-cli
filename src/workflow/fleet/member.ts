@@ -11,7 +11,7 @@ import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../tool-launch/process-stop.js';
-import { attemptRun } from '../runtimes/attempt.js';
+import { attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
 import { stopLeftAttempt } from '../runtimes/cancelled.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '../runtimes/step-runtime.js';
@@ -108,6 +108,8 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       const stillRuns = await stopLeftAttempt(config, record.run, record.attempt, root);
 
       if (stillRuns !== undefined) return { error: { code: 'runtime_lost', message: `The step it ran on a step runtime may still run there: ${stillRuns}` } };
+      // Its place there is closed: a run of the attempt starts again with a place and an exec of its own.
+      await fs.rm(attemptRuntimePath(config, record.run, record.attempt), { force: true });
 
       if (record.state !== 'claimed' && record.state !== 'cancelling') return undefined;
       const ref = attemptRef(record.run, record.attempt);

@@ -12,7 +12,8 @@ import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.j
 import { shadowedFleetEntries } from '../workflow/fleet/owner.js';
 import { RuntimeOptionsSchema } from '@teamai/runtime-protocol';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
-import type { StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { attemptRuntimePath } from '../workflow/runtimes/attempt.js';
 import { readableReportsWorktree, updateReports } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
@@ -486,6 +487,37 @@ describe('a restarted member', () => {
     } finally {
       await left.stop();
     }
+  }, 60_000);
+
+  it('runs the step again on its step runtime, once the place its killed run left there is closed', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN, command: 'test -f left.txt && echo again > again.txt' });
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const ref = `refs/heads/teamai/attempts/${run}/${ATTEMPT}`;
+    git(bob.checkout, 'fetch', '-q', 'origin', ref);
+    const work = path.join(path.dirname(bob.checkout), 'bob-left');
+    git(bob.checkout, 'worktree', 'add', '-q', '--detach', work, 'FETCH_HEAD');
+    fs.writeFileSync(path.join(work, 'left.txt'), 'kept\n');
+    git(work, 'add', '-A');
+    git(work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'left');
+    git(work, 'push', '-q', 'origin', `HEAD:${ref}`);
+    git(bob.checkout, 'worktree', 'remove', '--force', work);
+    // What the killed run left on the runtime, once stopped: a closed place, and the exec it had sent there, whose id the
+    // runtime answers with how that exec ended, as an id sent again reconnects to its exec.
+    const stoppedExec = newOpId();
+    const local = localStepRuntime({ exec: true });
+    const runtime: StepRuntime = { ...local, exec: async (request, events) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events)) };
+    fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
+    fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
+    await readableReportsWorktree(bob.config);
+
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+
+    expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+    const finished = await recordOf(alice, run);
+    if (finished?.state !== 'finished' || finished.result.to === undefined) throw new Error(`not finished: ${JSON.stringify(finished)}`);
+    git(alice.checkout, 'fetch', '-q', 'origin', ref);
+    expect(git(alice.checkout, 'show', `${finished.result.to}:again.txt`)).toBe('again');
   }, 60_000);
 });
 
