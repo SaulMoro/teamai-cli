@@ -68,16 +68,19 @@ describe('usage limits of one drive', () => {
     expect(limits.held(now)).toEqual({ claude: 'claude hit its usage limit, which resets at 15:00 (Europe/Madrid)' });
   });
 
-  it('asks a person who attends once per limit, and waits past the cap once they chose to', () => {
+  it('asks a person who attends once per row of limits, and waits past the cap once they chose to', () => {
     const limits = UsageLimits.open({ capMs: hour, zone });
     const message = 'claude hit its usage limit: API Error: Request rejected (429)';
     limits.hit({ tool: 'claude', message, now });
 
     expect(limits.whenIdle(now, ['claude'], { attended: true })).toMatchObject({ kind: 'ask', tool: 'claude', until: now + 60_000 });
-    limits.answered('claude', 'wait');
+    limits.choseWait('claude');
     expect(limits.whenIdle(now + 2 * hour, ['claude'], { attended: true })).toMatchObject({ kind: 'wait', tool: 'claude' });
     limits.hit({ tool: 'claude', message, now: now + 2 * hour });
-    expect(limits.whenIdle(now + 2 * hour, ['claude'], { attended: true })).toMatchObject({ kind: 'ask', tool: 'claude' });
+    expect(limits.whenIdle(now + 2 * hour, ['claude'], { attended: true })).toMatchObject({ kind: 'wait', tool: 'claude' });
+    limits.ran('claude', now + 3 * hour);
+    limits.hit({ tool: 'claude', message, now: now + 4 * hour });
+    expect(limits.whenIdle(now + 4 * hour, ['claude'], { attended: true })).toMatchObject({ kind: 'ask', tool: 'claude' });
   });
 
   it('starts the cap again once a launch on the tool ends without the limit', () => {

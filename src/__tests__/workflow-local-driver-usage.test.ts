@@ -70,18 +70,31 @@ describe('a usage limit across the parallel steps of a run, under the local driv
     const { config, workspace, runId } = await parallelFixture(threePrompts, 2);
     const resetsAt = Math.ceil((Date.now() + 2000) / 1000) * 1000;
     const launches: Array<{ step: string; at: number }> = [];
-    let hitAt: number | undefined;
+    // Both slots launch before the limit lands, and the second step finishes only once the driver read it,
+    // so every launch past those two is one the driver made after the limit.
+    let secondLaunched = (): void => undefined;
+    const secondRunning = new Promise<void>((resolve) => { secondLaunched = resolve; });
+    let limitRead = (): void => undefined;
+    const limitWasRead = new Promise<void>((resolve) => { limitRead = resolve; });
+    const warn = log.warn.bind(log);
+    vi.spyOn(log, 'warn').mockImplementation((message: string) => {
+      if (message.includes('hit its usage limit')) limitRead();
+      warn(message);
+    });
 
     const adapter: LocalToolAdapter = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
         const step = input.prompt.includes('first') ? 'one' : input.prompt.includes('second') ? 'two' : 'three';
         launches.push({ step, at: Date.now() });
-
-        if (hitAt === undefined) {
-          hitAt = Date.now();
+        if (launches.length === 1) {
+          await secondRunning;
 
           return claudeLimit(resetsAt);
+        }
+        if (launches.length === 2) {
+          secondLaunched();
+          await limitWasRead;
         }
 
         return { started: true as const, exitCode: 0 };
@@ -92,9 +105,11 @@ describe('a usage limit across the parallel steps of a run, under the local driv
 
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'one', status: 'succeeded' }, { id: 'two', status: 'succeeded' }, { id: 'three', status: 'succeeded' }] });
-    // The step beside the one that hit the limit had already launched; every later launch waited for the reset.
-    const later = launches.filter(({ at }) => hitAt !== undefined && at > hitAt + 50);
-    expect(later.length).toBeGreaterThan(0);
+    // The step that hit the limit runs again, and the step that never launched runs, both after the reset.
+    const [limited, beside] = launches.map(({ step }) => step);
+    const later = launches.slice(2);
+    expect(later.map(({ step }) => step).sort()).toEqual(['one', 'two', 'three'].filter((step) => step !== beside).sort());
+    expect(later.map(({ step }) => step)).toContain(limited);
     expect(later.every(({ at }) => at >= resetsAt)).toBe(true);
   }, 20_000);
 
@@ -135,7 +150,7 @@ steps:
 
     const stopped = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
-    expect(stopped).toEqual({ error: { code: 'usage_limited', message: expect.stringMatching(new RegExp(`^Run ${runId} waits: claude hit its usage limit, which resets at .+, past the 6 hours an unattended run waits for it, and it could not be offered on teamai-reports: .+\\. Continue it here once the limit resets: teamai workflow resume ${runId}, or publish it from here for another machine: teamai workflow publish ${runId}$`)) } });
+    expect(stopped).toEqual({ error: { code: 'usage_limited', message: expect.stringMatching(new RegExp(`^Run ${runId} waits: claude hit its usage limit, which resets at .+, past the 6 hours an unattended run waits for it, and it could not be offered on teamai-reports: .+\\. Once the limit resets, continue it here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}$`)) } });
     expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: [{ id: 'fix', status: 'pending' }] });
   });
 
@@ -185,7 +200,7 @@ steps:
 
     expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toEqual({ error: {
       code: 'interrupted',
-      message: `The question on the usage limit closed without an answer. Continue run ${runId} here once the limit resets: teamai workflow resume ${runId}, or publish it for another machine: teamai workflow publish ${runId}`,
+      message: `The question on the usage limit closed without an answer. Once the limit resets, continue run ${runId} here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}`,
     } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'fix', status: 'pending' }] });
   });

@@ -19,6 +19,11 @@ export function retryCommand({ run, step }: { run: string; step: string }): stri
   return `teamai workflow retry ${run} ${step}`;
 }
 
+/** The two ways on for a run this machine stops driving: resume it here, or publish it for another machine to take. */
+export function resumeOrPublish(run: string): string {
+  return `here with: teamai workflow resume ${run}, or hand it to another machine with: teamai workflow publish ${run}`;
+}
+
 /** The failure codes of a step that a retry fixes as it is: the usage limit reset, or the runtime's daemon is back. */
 const RETRIED_CODES: ReadonlySet<string> = new Set(['usage_limited', 'daemon_restarted']);
 
