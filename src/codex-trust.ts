@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
-import crossSpawn from 'cross-spawn';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import semver from 'semver';
 import { z } from 'zod';
 import { desktopCodexBinaries } from '@teamai/tool-core/formats/codex-desktop';
@@ -88,7 +88,7 @@ function canonical(file: string): string {
 
 /** A Codex binary that exists, with the command that starts it and its stat identity. */
 interface CodexCandidate {
-  /** Bare `codex` for the PATH hit, so cross-spawn resolves the Windows `codex.cmd` shim. */
+  /** Bare `codex` for the PATH hit, so spawnCommand resolves the Windows `codex.cmd` shim. */
   command: string;
   path: string;
   identity: string;
@@ -240,7 +240,7 @@ class AppServerError extends Error {
 }
 
 async function openAppServer(codexHome: string, command: string): Promise<AppServer> {
-  const child = crossSpawn(command, ['app-server'], {
+  const child = spawnCommand(command, ['app-server'], {
     env: { ...process.env, CODEX_HOME: codexHome },
     stdio: ['pipe', 'pipe', 'ignore'],
     windowsHide: true,

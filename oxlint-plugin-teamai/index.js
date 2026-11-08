@@ -25,6 +25,7 @@ import toolRegistry from './rules/tool-registry.js';
 import mockSource from './rules/mock-source.js';
 import untrustedFinishGit from './rules/untrusted-finish-git.js';
 import gitExitCode from './rules/git-exit-code.js';
+import spawnCommand from './rules/spawn-command.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -60,6 +61,7 @@ export default definePlugin({
     'mock-source': mockSource,
     'untrusted-finish-git': untrustedFinishGit,
     'git-exit-code': gitExitCode,
+    'spawn-command': spawnCommand,
     ...antiSlopRules,
   },
 });

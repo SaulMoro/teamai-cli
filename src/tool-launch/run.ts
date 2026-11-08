@@ -1,6 +1,5 @@
-import { spawn, type SpawnOptions } from 'node:child_process';
-import crossSpawn from 'cross-spawn';
-import { batchLaunchOf } from '@teamai/tool-core/exec';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import { recordGroup, stopProcess } from './process-stop.js';
 import { MAX_TIMER_MS } from '../utils/timer.js';
 
@@ -18,15 +17,16 @@ export interface ToolRun {
  * no Ctrl-C from the terminal: only a run nobody waits on in the foreground detaches.
  */
 export async function runTool(input: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; idleTimeoutMs?: number; detached: boolean; group?: string; signal?: AbortSignal }): Promise<ToolRun> {
-  // cmd.exe by the parent's absolute path: a confined run's env has no ComSpec, and a bare name is looked up in the cwd first.
-  const comspec = process.env.ComSpec ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`;
-  const batch = process.platform === 'win32' ? batchLaunchOf(input.executable, input.args, comspec) : undefined;
-
-  if (batch?.ok === false) return { stdout: '', stderr: batch.message, code: 1 };
   const detached = input.detached && process.platform !== 'win32';
   const options: SpawnOptions = { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true };
-  // A batch file gets the command line escaped here, as cross-spawn escapes only one under node_modules/.bin twice.
-  const child = batch ? spawn(batch.command, batch.args, { ...options, windowsVerbatimArguments: true }) : crossSpawn(input.executable, input.args, options);
+  let child: ChildProcess;
+
+  try {
+    child = spawnCommand(input.executable, input.args, options);
+  } catch (error) {
+    // cmd.exe cannot carry these arguments to a batch file: nothing was started.
+    return { stdout: '', stderr: error instanceof Error ? error.message : String(error), code: 1 };
+  }
 
   if (detached && input.group !== undefined) recordGroup(child, input.group);
   const stdout: string[] = [];

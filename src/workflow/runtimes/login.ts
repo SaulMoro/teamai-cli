@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import crossSpawn from 'cross-spawn';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import { z } from 'zod';
 import { getTeamaiHomeDir } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
@@ -286,7 +286,7 @@ async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof e
   await fs.mkdir(loginHome(tool), { recursive: true });
 
   const ended = await new Promise<{ code: number } | { error: string }>((resolve) => {
-    const child = crossSpawn(tool, ['login'], { env: { ...process.env, [HOME_VARIABLES[tool]]: loginHome(tool) }, stdio: 'inherit' });
+    const child = spawnCommand(tool, ['login'], { env: { ...process.env, [HOME_VARIABLES[tool]]: loginHome(tool) }, stdio: 'inherit' });
     child.on('error', (error) => resolve({ error: error.message }));
     child.on('close', (exit, signal) => resolve({ code: exit ?? (signal ? 128 : 1) }));
   });

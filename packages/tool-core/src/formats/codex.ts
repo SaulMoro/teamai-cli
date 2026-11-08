@@ -38,7 +38,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import crossSpawn from 'cross-spawn';
+import { spawnCommand } from '../exec.js';
 import { z } from 'zod';
 import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '../sessions/base.js';
 import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../sessions/ir.js';
@@ -315,7 +315,7 @@ function pushItemCompleted(records: CodexWrittenLine[], args: ItemCompletedArgs)
 
 /**
  * The codex CLI that runs: `codex` on PATH (npm / brew install), else the one bundled with
- * Codex Desktop. Probed and later started through cross-spawn, which resolves the npm
+ * Codex Desktop. Probed and later started through spawnCommand, which resolves the npm
  * `codex.cmd` shim on Windows that a plain PATH join and `spawn` miss.
  */
 async function findCodexCli(): Promise<string | null> {
@@ -1180,7 +1180,7 @@ export class CodexAdapter extends AgentAdapter {
       let child: ChildProcess;
 
       try {
-        child = crossSpawn(bin, ['app-server'], {
+        child = spawnCommand(bin, ['app-server'], {
           env: { ...process.env, CODEX_HOME: codexHome, RUST_LOG: 'error' },
           stdio: ['pipe', 'pipe', 'ignore'],
           windowsHide: true,

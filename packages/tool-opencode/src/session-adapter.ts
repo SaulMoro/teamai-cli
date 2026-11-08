@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { createServer } from 'node:net';
 import * as path from 'node:path';
-import crossSpawn from 'cross-spawn';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
@@ -77,7 +77,7 @@ async function startChildServer(env: NodeJS.ProcessEnv): Promise<ChildServer> {
   const port = await freePort();
   const password = randomBytes(16).toString('hex');
 
-  const child = crossSpawn('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
+  const child = spawnCommand('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
     env: { ...env, OPENCODE_SERVER_PASSWORD: password },
     stdio: 'ignore',
     windowsHide: true,

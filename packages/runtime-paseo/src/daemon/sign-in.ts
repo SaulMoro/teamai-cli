@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import spawn from 'cross-spawn';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import { z } from 'zod';
 
 // ─── A tool's sign-in on the daemon's host ───────────────
@@ -52,12 +52,12 @@ export function signInStep({ runsIn, command, login }: { runsIn: RunsIn | undefi
 /**
  * `<codex> login status`, killed whole when it does not answer in time: an npm `codex` is a shim that starts the native
  * binary, and killing the shim alone leaves that running. On POSIX it runs in a process group of its own; on Windows,
- * where cross-spawn runs a `.cmd` through cmd.exe, taskkill ends the tree under the process it started.
+ * where spawnCommand runs a `.cmd` through cmd.exe, taskkill ends the tree under the process it started.
  */
 export function codexLoginStatus(codex: string, env?: NodeJS.ProcessEnv): Promise<{ code: number; answer: string }> {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
-    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: !isWindows, windowsHide: true, ...(env && { env }) });
+    const child = spawnCommand(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: !isWindows, windowsHide: true, ...(env && { env }) });
     let answer = '';
 
     const timer = setTimeout(() => {

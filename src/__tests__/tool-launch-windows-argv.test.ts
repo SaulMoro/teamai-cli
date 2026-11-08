@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { batchLaunchOf, spawnCommand } from '@teamai/tool-core/exec';
+import { batchLaunchOf, spawnCommand, spawnCommandSync } from '@teamai/tool-core/exec';
 import { runTool } from '../tool-launch/run.js';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../tool-launch/tools.js';
 
@@ -171,6 +171,30 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
 
     expect(code).toBe(0);
     expect(Printed.parse(JSON.parse(stdout))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
+  });
+
+  it('runs a tool named by its bare name through the .cmd shim on the child\'s PATH, past npm\'s extensionless sh shim', async () => {
+    const bin = path.join(dir, 'npm-global-run');
+
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'claude'), 'npm\'s sh shim, which cmd.exe cannot start\n');
+    fs.writeFileSync(path.join(bin, 'claude.cmd'), NPM_CMD_SHIM);
+
+    const run = await runTool({ executable: 'claude', args: [PROMPT, ...NASTY_ARGS], cwd: dir, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ''}` }, stdin: '', timeoutMs: 30_000, detached: false });
+
+    expect(run).toMatchObject({ code: 0, stderr: '' });
+    expect(Printed.parse(JSON.parse(run.stdout))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
+  });
+
+  it('delivers a command run to its end through spawnCommandSync its arguments verbatim, and refuses a newline as a failed spawn', () => {
+    const shim = path.join(dir, 'gh.cmd');
+
+    fs.writeFileSync(shim, NPM_CMD_SHIM);
+    const ran = spawnCommandSync(shim, [PROMPT, ...NASTY_ARGS], { cwd: dir, env: process.env, encoding: 'utf8', input: '', windowsHide: true });
+
+    expect(ran.status).toBe(0);
+    expect(Printed.parse(JSON.parse(String(ran.stdout)))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
+    expect(spawnCommandSync(shim, ['-p', MULTILINE], { cwd: dir })).toMatchObject({ status: null, stderr: expect.stringContaining('cannot pass an argument containing a newline') });
   });
 
   it('throws the refusal from spawnCommand, as a failed spawn, when an argument holds a newline', () => {

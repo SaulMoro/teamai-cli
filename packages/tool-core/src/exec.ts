@@ -1,5 +1,5 @@
 import spawn from 'cross-spawn';
-import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
 import { Socket } from 'node:net';
 import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
@@ -233,6 +233,13 @@ function onChildPath(executable: string, env: NodeJS.ProcessEnv | undefined): st
   return pickWindowsCommand(found.join('\n')) ?? executable;
 }
 
+/** How `executable` starts here: under cmd.exe when it is a Windows batch file, or why cmd.exe cannot carry `args`. */
+function windowsBatchOf(executable: string, args: readonly string[], env: NodeJS.ProcessEnv | undefined): BatchLaunch | undefined {
+  const comspec = process.env.ComSpec ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`;
+
+  return process.platform === 'win32' ? batchLaunchOf(onChildPath(executable, env), args, comspec) : undefined;
+}
+
 /**
  * Starts `executable` with `args`: on Windows, a batch file (an npm `.cmd` shim) under the system cmd.exe with its
  * arguments escaped as `batchLaunchOf` escapes them, anything else through cross-spawn. cmd.exe is found from this
@@ -241,10 +248,21 @@ function onChildPath(executable: string, env: NodeJS.ProcessEnv | undefined): st
  * Throws, as a failed spawn does, when cmd.exe cannot carry the arguments.
  */
 export function spawnCommand(executable: string, args: readonly string[], options: SpawnOptions): ChildProcess {
-  const comspec = process.env.ComSpec ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`;
-  const batch = process.platform === 'win32' ? batchLaunchOf(onChildPath(executable, options.env), args, comspec) : undefined;
+  const batch = windowsBatchOf(executable, args, options.env);
 
   if (batch?.ok === false) throw new Error(batch.message);
 
   return batch ? nodeSpawn(batch.command, [...batch.args], { ...options, windowsVerbatimArguments: true }) : spawn(executable, [...args], options);
+}
+
+/**
+ * Runs `executable` with `args` to its end, launched as `spawnCommand` launches it. When cmd.exe cannot carry the
+ * arguments, it answers as a spawn that failed: no status, and the reason as `error` and `stderr`.
+ */
+export function spawnCommandSync(executable: string, args: readonly string[], options: SpawnSyncOptions): SpawnSyncReturns<string | Buffer> {
+  const batch = windowsBatchOf(executable, args, options.env);
+
+  if (batch?.ok === false) return { pid: 0, output: [], stdout: '', stderr: batch.message, status: null, signal: null, error: new Error(batch.message) };
+
+  return batch ? nodeSpawnSync(batch.command, [...batch.args], { ...options, windowsVerbatimArguments: true }) : spawn.sync(executable, [...args], options);
 }
