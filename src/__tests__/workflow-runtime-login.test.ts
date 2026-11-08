@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
@@ -380,6 +382,50 @@ describe('the first login of a tool teamai keeps one for', () => {
 
     expect(ended).toEqual([undefined, undefined]);
     expect(fs.readFileSync(logins, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+});
+
+describe('the first login across teamai processes on one machine', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  /** Another teamai process, as a second run started in another terminal is, that checks the login as a step does. */
+  const otherProcess = (env: NodeJS.ProcessEnv): Promise<string> => {
+    const script = path.join(root, 'other.mjs');
+    fs.writeFileSync(script, `import { register } from 'node:module';
+register(${JSON.stringify(pathToFileURL(path.join(repo, 'scripts', 'typescript-loader.mjs')).href)});
+const { ensureLogin } = await import(${JSON.stringify(pathToFileURL(path.join(repo, 'src', 'workflow', 'runtimes', 'login.ts')).href)});
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(path.join(root, 'other.json'))}, JSON.stringify(await ensureLogin('codex', { step: { run: 'r0123abcd', id: 'other' }, canAsk: true }) ?? null));
+`);
+
+    return new Promise((resolve, reject) => {
+      execFile(process.execPath, [script], { env, cwd: root }, (error) => (error ? reject(error) : resolve(fs.readFileSync(path.join(root, 'other.json'), 'utf8'))));
+    });
+  };
+
+  it('runs the tool\'s login once when two teamai processes need it at the same time', async () => {
+    const bin = path.join(root, 'bin');
+    const logins = path.join(root, 'logins.txt');
+    fs.mkdirSync(bin);
+    // A codex whose login takes a moment, writes the login file, and counts how often it ran.
+    fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\necho login >> "${logins}"\nsleep 1\nmkdir -p "$CODEX_HOME"\nprintf '%s' '${auth('r1')}' > "$CODEX_HOME/auth.json"\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const [here, other] = await Promise.all([
+      ensureLogin('codex', { step: { run: RUN, id: 'here' }, canAsk: true }),
+      otherProcess({ ...process.env }),
+    ]);
+
+    expect({ here, other }).toEqual({ here: undefined, other: 'null' });
+    expect(fs.readFileSync(logins, 'utf8').trim().split('\n')).toHaveLength(1);
+  }, 30_000);
+
+  it('takes a login file that is empty, as one a login still writes leaves it, as no login', async () => {
+    fs.mkdirSync(path.dirname(dedicated()), { recursive: true });
+    fs.writeFileSync(dedicated(), '', { mode: 0o600 });
+
+    expect(await ensureLogin('codex', { step: { run: RUN, id: 'review' }, canAsk: false })).toMatchObject({ code: 'credential_missing' });
   });
 });
 
