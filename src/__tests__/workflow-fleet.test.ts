@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { answerCancel, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { answerCancel, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -148,6 +148,26 @@ describe('fleet attempts on teamai-reports', () => {
 
     expect(taken).toEqual({ data: { idle: { offered: 0 } } });
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered', labels: ['computer-use'] } });
+  });
+
+  it('lists the attempts out for a business repository, with who claimed each and when it last wrote, and none that ended', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const claimed = await claimAttempt(bob.config, offered.value, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    await readableReportsWorktree(alice.config);
+
+    expect(await listOpenAttempts(alice.config, 'github.com/acme/business')).toEqual([
+      expect.objectContaining({ run: RUN, attempt: ATTEMPT, state: 'claimed', pool: 'default', lease: expect.objectContaining({ step: 'build' }), member: expect.objectContaining({ user: 'bob' }), claimedAt: expect.any(String), progressAt: expect.any(String) }),
+    ]);
+    expect(await listOpenAttempts(alice.config, 'github.com/acme/other')).toEqual([]);
+
+    await finishAttempt(bob.config, claimed.value, { exitCode: 0, stderr: '' }, {});
+    await readableReportsWorktree(alice.config);
+
+    expect(await listOpenAttempts(alice.config, 'github.com/acme/business')).toEqual([]);
   });
 
   it('leaves an offer for another member while this machine already drives its run', async () => {
