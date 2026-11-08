@@ -4,8 +4,9 @@
  * agent may not, and where the steps of a run appear.
  */
 export const SESSION_APPS = [
-  { variable: 'T3CODE_THREAD_ID', driver: 't3', terminal: 'this thread\'s T3 terminal', steps: 'Each prompt step appears in T3 Code as a thread under this thread.' },
+  // First: a Paseo daemon started from a T3 thread's terminal gives its agents that thread's variable too.
   { variable: 'PASEO_AGENT_ID', driver: 'paseo', terminal: 'a terminal on this machine', steps: 'Each prompt step appears in Paseo as an agent of its own.' },
+  { variable: 'T3CODE_THREAD_ID', driver: 't3', terminal: 'this thread\'s T3 terminal', steps: 'Each prompt step appears in T3 Code as a thread under this thread.' },
 ] as const;
 
 export type SessionApp = (typeof SESSION_APPS)[number];

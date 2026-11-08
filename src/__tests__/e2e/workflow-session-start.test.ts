@@ -213,6 +213,16 @@ steps:
     expect(waiting, started.stderr).toMatchObject({ resume: `teamai workflow resume ${waiting?.run ?? ''} --driver paseo` });
   });
 
+  // A Paseo daemon started from a T3 thread's terminal hands that thread's variable to every agent it launches.
+  it('offers the start on Paseo\'s driver in a Paseo agent that a T3 thread\'s variable also reaches', async () => {
+    writeT3();
+    writeApp('paseo');
+
+    const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, { ...thread, ...paseoAgent });
+
+    expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: { kind: 'background', start: 'teamai workflow start review --driver paseo' } } } });
+  });
+
   it('decides the gate as before on the local driver, which no person reaches from the session', async () => {
     const started = await runCLI(['workflow', 'start', 'shipit', '--driver', 'local'], repo, thread);
 
