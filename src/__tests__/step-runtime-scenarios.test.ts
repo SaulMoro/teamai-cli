@@ -30,6 +30,13 @@ interface Subject {
   retains: boolean;
   /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
   display?: RuntimeDisplay;
+  /** The directories the runtime keeps its records of `state` in, when it keeps any. */
+  journal?(state: string): string[];
+  /**
+   * How the runtime still answers an op whose end it cannot journal, where that is not its true end: the scenario then
+   * fails, as the record of a gap the runtime's owner closes.
+   */
+  unjournaledEnd?: string;
 }
 
 const [docker, sbx] = await Promise.all([sandboxOnFake('docker'), sandboxOnFake('sbx')]);
@@ -40,6 +47,7 @@ const SUBJECTS: Subject[] = [
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
     options: (state) => ({ state }),
     retains: true,
+    journal: (state) => [path.join(state, 'ops')],
   },
   {
     name: 'toy through toy over stdio',
@@ -50,6 +58,7 @@ const SUBJECTS: Subject[] = [
     }),
     options: (state) => ({ outertoy: { state: path.join(state, 'outer') }, innertoy: { state: path.join(state, 'inner') } }),
     retains: true,
+    journal: (state) => [path.join(state, 'outer', 'ops'), path.join(state, 'inner', 'ops')],
   },
   { name: 'local', start: () => localStepRuntime(), options: () => ({}), retains: false },
   {
@@ -57,6 +66,8 @@ const SUBJECTS: Subject[] = [
     start: (state) => stdioStepRuntime({ name: 'sandbox', command: docker.command, args: docker.args(state) }),
     options: () => docker.options,
     retains: true,
+    journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox')],
+    unjournaledEnd: 'failed runtime_failed',
     display: { label: 'teamai-r0123abcd-a0123abcd (docker)', fields: { container: 'teamai-r0123abcd-a0123abcd', image: 'scenario/agent:1' } },
   },
   {
@@ -64,6 +75,8 @@ const SUBJECTS: Subject[] = [
     start: (state) => stdioStepRuntime({ name: 'sandbox', command: sbx.command, args: sbx.args(state) }),
     options: () => sbx.options,
     retains: true,
+    journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox')],
+    unjournaledEnd: 'failed runtime_failed',
     // An sbx sandbox's name starts with its journal's id, which follows the subject's HOME.
     display: { label: expect.stringMatching(/^teamai-[0-9a-f]{16}-r0123abcd-a0123abcd \(sbx\)$/), fields: { sandbox: expect.stringMatching(/^teamai-[0-9a-f]{16}-r0123abcd-a0123abcd$/), agent: 'claude' } },
   },
@@ -76,6 +89,16 @@ function pidAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Sets the mode of `root` and of every directory under it: 0o500 keeps a runtime from writing a record there. */
+function setDirModes(root: string, mode: number): void {
+  if (!fs.existsSync(root)) return;
+  fs.chmodSync(root, mode);
+
+  for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (entry.isDirectory()) fs.chmodSync(path.join(entry.parentPath, entry.name), mode);
   }
 }
 
@@ -283,6 +306,31 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     expect(await runtime.close(opened.handle)).toEqual({ ok: true });
   });
 
+  // A runtime answers the true end of an op whose end it cannot journal, since teamai keeps that end as soon as it reads
+  // it, and remembers it for reattach until the place closes.
+  (subject.journal === undefined ? it.skip : subject.unjournaledEnd === undefined ? it : it.fails)('answers the true end of an exec whose end it cannot journal, says so, and reports it on reattach until close', async () => {
+    const warned = vi.spyOn(log, 'warn');
+    const runtime = await start();
+    const opened = await runtime.open(openRequest(), async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+    const request = execRequest(opened.handle, ['/bin/sh', '-c', 'echo started; while [ ! -f release ]; do sleep 0.05; done; echo done']);
+    let isRunning = false;
+    const ended = runtime.exec(request, { onOutput: (stream, data) => { if (stream === 'stdout' && data.includes('started')) isRunning = true; } });
+    expect(await until(() => isRunning)).toBe(true);
+    const journal = subject.journal?.(state) ?? [];
+
+    try {
+      for (const root of journal) setDirModes(root, 0o500);
+      fs.writeFileSync(path.join(worktree, 'release'), '');
+
+      expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: 'started\ndone\n' });
+      expect(warned).toHaveBeenCalledWith(expect.stringContaining(`operation ${request.op}`));
+      expect(await runtime.reattach(opened.handle)).toEqual(alive([{ op: request.op, state: 'exited', code: 0, stdout: 'started\ndone\n' }]));
+    } finally {
+      for (const root of journal) setDirModes(root, 0o700);
+    }
+  });
+
   it.runIf(subject.retains)('reattaches after its own restart with a finished exec and its complete stdout', async () => {
     const first = await start();
     const opened = await first.open(openRequest(), async () => {});
@@ -372,6 +420,10 @@ interface PromptSubject {
   reportsUsage?: false;
   /** The failure a prompt ends with when its agent fails with `failure`; absent: that failure as it is. */
   failure?(failure: RuntimeFailure): RuntimeFailure;
+  /** The directories the runtime keeps its records of `state` in. */
+  journal(state: string): string[];
+  /** How the runtime still answers a prompt whose end it cannot journal, where that is not its true end. */
+  unjournaledEnd?: string;
 }
 
 const T3 = await t3OnFakeServer();
@@ -382,6 +434,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     name: 'toy over stdio, prompt only',
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
     options: (state, agent) => ({ state, agent }),
+    journal: (state) => [path.join(state, 'ops')],
   },
   {
     name: 't3 over stdio, on a fake T3 Code server',
@@ -398,6 +451,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     // T3 reports no usage, and a thread whose run fails names T3's status, not the agent's own failure.
     reportsUsage: false,
     failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
+    journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 't3')],
   },
   {
     name: 'paseo over stdio, on a fake Paseo daemon',
@@ -412,6 +466,8 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     display: expect.objectContaining({ label: 'teamai review · r0123abcd', url: expect.stringMatching(/^paseo:\/\/h\/srv_fake0001\/agent\//) }),
     reportsUsage: false,
     failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
+    journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
+    unjournaledEnd: 'failed cancel_failed',
   },
 ];
 
@@ -549,6 +605,29 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
 
     expect(end).toMatchObject({ kind: 'failed', failure: { code: 'exec_unsupported' } });
     expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
+  });
+
+  (subject.unjournaledEnd === undefined ? it : it.fails)('answers the true end of a prompt whose end it cannot journal, says so, and reports it on reattach until close', async () => {
+    const warned = vi.spyOn(log, 'warn');
+    const release = path.join(dir, 'release');
+    const runtime = await start({ release, output: { verdict: 'approve' } });
+    const handle = await opened(runtime);
+    const request = promptRequest(handle);
+    let accepted = false;
+    const ended = runtime.prompt(request, { onAccepted: () => { accepted = true; } });
+    expect(await until(() => accepted)).toBe(true);
+    const journal = subject.journal(state);
+
+    try {
+      for (const root of journal) setDirModes(root, 0o500);
+      fs.writeFileSync(release, '');
+
+      expect(await ended).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
+      expect(warned).toHaveBeenCalledWith(expect.stringContaining(`operation ${request.op}`));
+      expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive', ops: [{ op: request.op, state: 'finished', result: { output: { verdict: 'approve' } } }] });
+    } finally {
+      for (const root of journal) setDirModes(root, 0o700);
+    }
   });
 
   it('reattaches after its own restart with a finished prompt, and a repeated prompt reads the same outcome', async () => {

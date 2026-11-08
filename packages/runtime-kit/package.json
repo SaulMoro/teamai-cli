@@ -4,6 +4,7 @@
   "type": "module",
   "description": "What every step runtime process runs of runtime protocol 1: the request loop and each operation's one end; bundled into each runtime's executable, never imported by teamai-cli.",
   "exports": {
+    "./journal": "./src/journal.ts",
     "./ledger": "./src/ledger.ts",
     "./serve": "./src/serve.ts"
   }

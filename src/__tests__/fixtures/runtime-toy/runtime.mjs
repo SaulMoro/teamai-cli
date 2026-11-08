@@ -96,6 +96,26 @@ function writeJson(at, value) {
 
 const opPath = (op) => file('ops', `${op}.json`);
 
+/** The ends the toy answered and could not record, by op, until their place closes: they stand in for the records. */
+const unkept = new Map();
+
+/** What the toy keeps of `op`: the end it could not record, else its record. */
+const readOp = (op) => unkept.get(op) ?? readJson(opPath(op), undefined);
+
+/**
+ * Records `record`, how `op` ended. One its journal cannot write is kept in memory and named in a notice: the op still
+ * ends as it did, since teamai keeps that end as soon as it reads it.
+ */
+function keepEnd(op, record) {
+  try {
+    writeJson(opPath(op), record);
+    unkept.delete(op);
+  } catch (error) {
+    unkept.set(op, record);
+    send({ event: 'notice', op, message: `The toy could not record how ${op} ended (${error instanceof Error ? error.message : String(error)}), so only this toy remembers that end, until the place closes.` });
+  }
+}
+
 /** The toy's journal of handles. One it cannot read fails the request, never reads as no handle. */
 function readHandles() {
   try {
@@ -283,7 +303,7 @@ function exec(request) {
     return;
   }
 
-  const record = readJson(opPath(request.op), undefined);
+  const record = readOp(request.op);
 
   if (record?.outcome) {
     replay(request.op, record);
@@ -355,7 +375,7 @@ function exec(request) {
     running.delete(request.op);
     const cancelled = fs.existsSync(file('cancel', request.op));
     const outcome = cancelled ? { state: 'cancelled' } : { state: 'exited', code: code ?? 1, stdout };
-    writeJson(opPath(request.op), { kind: 'exec', handle: request.handle, outcome });
+    keepEnd(request.op, { kind: 'exec', handle: request.handle, outcome });
 
     if (!cancelled && dieAt('exec-exited')) return;
     send(cancelled ? { op: request.op, event: 'cancelled' } : { op: request.op, event: 'exited', code: outcome.code, stdout });
@@ -409,7 +429,7 @@ function promptEnded(op, outcome) {
 
 /** Records how the prompt's agent ended and says so, or waits for it. */
 function settlePrompt(op) {
-  const record = readJson(opPath(op), undefined);
+  const record = readOp(op);
   const outcome = agentOutcome(record);
 
   if (outcome === undefined) {
@@ -421,7 +441,7 @@ function settlePrompt(op) {
   working.delete(op);
 
   if (!record.outcome) fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op, ended: outcome.state })}\n`);
-  writeJson(opPath(op), { ...record, outcome });
+  keepEnd(op, { ...record, outcome });
 
   if (outcome.state === 'finished' && dieAt('prompt-finished')) return;
   send(promptEnded(op, outcome));
@@ -467,7 +487,7 @@ function prompt(request) {
     return;
   }
 
-  const record = readJson(opPath(request.op), undefined);
+  const record = readOp(request.op);
 
   if (options.agent === undefined) {
     send({ op: request.op, event: 'failed', failure: { code: 'prompt_unsupported', message: 'The toy runs a prompt\'s tool as an exec; start it with the agent option to take prompts.' } });
@@ -493,7 +513,7 @@ function prompt(request) {
 }
 
 function cancel(request) {
-  const found = readJson(opPath(request.op), undefined);
+  const found = readOp(request.op);
 
   if (!found) return;
 
@@ -573,7 +593,7 @@ function opsOf(handle) {
 
   try { names = fs.readdirSync(file('ops')); } catch { names = []; }
 
-  return names.filter((name) => name.endsWith('.json')).map((name) => ({ op: name.slice(0, -5), record: readJson(file('ops', name), undefined) }))
+  return names.filter((name) => name.endsWith('.json')).map((name) => ({ op: name.slice(0, -5), record: readOp(name.slice(0, -5)) }))
     .filter(({ record }) => (record?.kind === 'exec' || record?.kind === 'prompt') && record.handle === handle);
 }
 
@@ -638,7 +658,11 @@ function close(request) {
 
   forget(request.handle);
 
-  for (const { op } of opsOf(request.handle)) fs.rmSync(opPath(op), { force: true });
+  for (const { op } of opsOf(request.handle)) {
+    fs.rmSync(opPath(op), { force: true });
+    unkept.delete(op);
+  }
+
   send({ event: 'closed', handle: request.handle });
 }
 

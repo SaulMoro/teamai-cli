@@ -3038,7 +3038,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     // A prompt whose end goes unanswered is one teamai waits on for good.
-    it('answers a prompt that ends while its record cannot be written, once, and says on stderr that it was not recorded', async () => {
+    it('answers a prompt that ends while its record cannot be written, once, and says in a notice that it was not recorded', async () => {
       const release = path.join(dir, 'release');
       t3.config({ agent: { release, output: {} } });
       const { runtime, handle } = await opened();
@@ -3050,10 +3050,12 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-0000007a')).toMatchObject({ op: 'op-0000007a', event: 'finished' });
       fs.chmodSync(places, 0o700);
-      expect(runtime.stderr()).toMatch(/^Runtime t3 could not record how op-0000007a ended, so only this process reports that end: .*EACCES/m);
+      expect(runtime.lines.find((line) => line['op'] === 'op-0000007a' && line['event'] === 'notice')).toEqual({
+        op: 'op-0000007a', event: 'notice', message: expect.stringMatching(/^Runtime t3 could not record how op-0000007a ended \(.*EACCES.*\), so only this runtime process remembers that end, until the place closes\.$/),
+      });
       runtime.send({ type: 'close', handle });
       await runtime.next((line) => line['event'] === 'closed');
-      expect(runtime.lines.filter((line) => line['op'] === 'op-0000007a').map((line) => line['event'])).toEqual(['accepted', 'display', 'finished']);
+      expect(runtime.lines.filter((line) => line['op'] === 'op-0000007a').map((line) => line['event'])).toEqual(['accepted', 'display', 'notice', 'finished']);
     });
 
     it('reports the end of a prompt it could not record to a reattach, a cancel and a repeated prompt in the same process, never another end', async () => {

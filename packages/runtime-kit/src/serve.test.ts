@@ -14,7 +14,7 @@ function served(make: (write: (message: RuntimeMessage) => void) => Partial<Runt
   const written: RuntimeMessage[] = [];
   const debugged: string[] = [];
   const nothing = async (): Promise<void> => {};
-  const ledger = opLedger((message) => { written.push(RuntimeMessageSchema.parse(message)); });
+  const ledger = opLedger({ name: 'fake', write: (message) => { written.push(RuntimeMessageSchema.parse(message)); } });
   const { write } = ledger;
 
   const done = serveRuntime({
