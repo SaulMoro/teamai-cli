@@ -9,3 +9,6 @@ export const SYSTEM_BIN = '/usr/bin';
 
 /** The operating system the runtime runs on. */
 export const PLATFORM: NodeJS.Platform = process.platform;
+
+/** Where Linux names its distribution, the first that exists. */
+export const OS_RELEASE = ['/etc/os-release', '/usr/lib/os-release'];

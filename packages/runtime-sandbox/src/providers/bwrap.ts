@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
+import { OS_RELEASE } from '../this-machine.js';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
 
 // ─── bwrap: Linux namespaces, through bubblewrap ───
@@ -24,7 +26,31 @@ const SYSTEM = ['/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/etc'];
 
 const OPTIONS = ['--die-with-parent', '--new-session', '--unshare-all', '--share-net'];
 
-const NOT_INSTALLED = 'bwrap is not installed here, or not on PATH. Install bubblewrap (`sudo apt install bubblewrap`, or `sudo dnf install bubblewrap`), and start again. On macOS, use provider: seatbelt';
+/** The command that installs bubblewrap, by the os-release IDs of the distributions that use it (sandcastle's). */
+const INSTALL = [
+  { ids: ['debian', 'ubuntu'], command: 'sudo apt install bubblewrap' },
+  { ids: ['fedora', 'rhel', 'centos', 'rocky', 'almalinux', 'amzn'], command: 'sudo dnf install bubblewrap' },
+  { ids: ['arch', 'manjaro', 'endeavouros'], command: 'sudo pacman -S bubblewrap' },
+  { ids: ['alpine'], command: 'sudo apk add bubblewrap' },
+  { ids: ['opensuse', 'suse', 'sles', 'opensuse-leap', 'opensuse-tumbleweed'], command: 'sudo zypper install bubblewrap' },
+];
+
+/** This distribution's os-release IDs: its `ID`, then each it is like (`ID_LIKE`). */
+function distributionIds(): string[] {
+  const file = OS_RELEASE.find((at) => fs.existsSync(at));
+  const text = file === undefined ? '' : fs.readFileSync(file, 'utf8');
+  const field = (name: string): string => (new RegExp(`^${name}=(.*)$`, 'm').exec(text)?.[1] ?? '').replaceAll(/["']/g, '').trim();
+
+  return [field('ID'), ...field('ID_LIKE').split(/\s+/)].flatMap((id) => (id === '' ? [] : [id.toLowerCase()]));
+}
+
+/** Why bwrap is missing, with the one command that installs it here, or each command when this distribution is not known. */
+function notInstalled(): string {
+  const command = distributionIds().map((id) => INSTALL.find(({ ids }) => ids.includes(id))?.command).find((found) => found !== undefined);
+  const how = command === undefined ? `Install bubblewrap with your distribution's package manager (${INSTALL.map((install) => `\`${install.command}\``).join(', ')})` : `Install it with \`${command}\``;
+
+  return `bwrap is not installed here, or not on PATH. ${how}, and start again. On macOS, use provider: seatbelt`;
+}
 
 /**
  * Each folder between a read-only path and the writable path that holds it, bound onto itself: a mount point cannot be
@@ -62,7 +88,7 @@ export const bwrap: NativeSandbox = {
   async preflight(env) {
     const executable = onPath('bwrap', env.PATH);
 
-    if (executable === undefined) return { ok: false, message: NOT_INSTALLED };
+    if (executable === undefined) return { ok: false, message: notInstalled() };
 
     // The options every exec takes, on the host's root: what AppArmor or a kernel without user namespaces refuses.
     const refused = await new Promise<string | undefined>((resolve) => {

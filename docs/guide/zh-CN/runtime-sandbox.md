@@ -442,7 +442,7 @@ runtimes:
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
 - `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号或列出它们，不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
 
-当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行：
+当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行。`bwrap` 没有安装时，修复方法是 `/etc/os-release` 所写发行版的安装命令（Ubuntu 或 Debian 上）：
 
 ```sh
 sudo apt install bubblewrap
@@ -579,7 +579,7 @@ sbx ls -q
 
 | 错误 | 发生了什么 | 下一步 |
 | --- | --- | --- |
-| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。`bwrap` 没有安装，或者 AppArmor 不让它创建命名空间（Ubuntu 24.04 及更高版本）；`seatbelt` 运行在低于 14 的 macOS 上；`vercel` 找不到 Vercel 登录。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。bwrap 执行 `sudo apt install bubblewrap`，并按信息里给出的 AppArmor 配置处理；seatbelt 需要 macOS 14；vercel 需要 `VERCEL_TOKEN` 加 `VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）。 |
+| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。`bwrap` 没有安装，或者 AppArmor 不让它创建命名空间（Ubuntu 24.04 及更高版本）；`seatbelt` 运行在低于 14 的 macOS 上，或者运行在另一个 macOS 沙箱里（macOS 不支持沙箱嵌套）；`vercel` 找不到 Vercel 登录。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。bwrap 执行信息里给出的、适用于你的发行版的安装命令，并按信息里给出的 AppArmor 配置处理；seatbelt 需要 macOS 14，或者从该沙箱所属的应用或工具之外的终端启动 teamai；vercel 需要 `VERCEL_TOKEN` 加 `VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）。 |
 | `tool_unavailable` | 步骤的工具在 sandbox 里登录不了 | 执行信息里点名的命令：sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`；容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials` |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 设置信息里点名的变量，或者把它点名的密钥加到 `credentials` |
 | `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |

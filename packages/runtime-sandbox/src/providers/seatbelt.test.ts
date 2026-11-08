@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
-import { exec, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
+import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 
 // The seatbelt provider through the runtime's stdio entry point: on a stand-in sandbox-exec that records the profile and
@@ -83,6 +83,17 @@ describe('seatbelt: init', () => {
 
     expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
     expect(String((reply.error as Message).message)).toContain('macOS 14');
+  });
+
+  it('fails sandbox_unavailable saying macOS does not nest sandboxes when sandbox-exec is not permitted to start one', async () => {
+    failStandIn(host, 'sandbox-exec', 'sandbox-exec: sandbox_apply: Operation not permitted');
+    const reply = await init(start(), { provider: 'seatbelt' });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+    const message = String((reply.error as Message).message);
+
+    expect(message).toContain('sandbox_apply: Operation not permitted');
+    expect(message).toContain('already runs inside a macOS sandbox');
   });
 
   it('fails sandbox_unavailable off macOS, naming bwrap', async () => {

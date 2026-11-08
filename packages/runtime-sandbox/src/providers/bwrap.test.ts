@@ -67,6 +67,37 @@ describe('bwrap: init', () => {
     expect(String((reply.error as Message).message)).toContain('sudo apt install bubblewrap');
   });
 
+  /** init's message on a machine whose os-release reads `osRelease` and that has no bwrap. */
+  async function missingOn(osRelease: string): Promise<string> {
+    fs.rmSync(path.join(host.fakes, 'bwrap'));
+    const file = path.join(host.dir, 'os-release');
+    fs.writeFileSync(file, osRelease);
+    const reply = await init(start({ PATH: [host.fakes, host.tools].join(path.delimiter), SANDBOX_TEST_OS_RELEASE: file }), { provider: 'bwrap' });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+
+    return String((reply.error as Message).message);
+  }
+
+  it.each([
+    ['Fedora', 'NAME="Fedora Linux"\nID=fedora\n', 'sudo dnf install bubblewrap'],
+    ['Arch', 'ID=arch\n', 'sudo pacman -S bubblewrap'],
+    ['Alpine', 'ID=alpine\n', 'sudo apk add bubblewrap'],
+    ['openSUSE', 'ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n', 'sudo zypper install bubblewrap'],
+    ['Linux Mint, by the distribution it is like', 'ID=linuxmint\nID_LIKE="ubuntu debian"\n', 'sudo apt install bubblewrap'],
+  ])('names the one command that installs bwrap on %s', async (_distro, osRelease, command) => {
+    const message = await missingOn(osRelease);
+
+    expect(message).toContain(command);
+    expect(['sudo apt install', 'sudo dnf install', 'sudo pacman -S', 'sudo apk add', 'sudo zypper install'].filter((install) => message.includes(install))).toHaveLength(1);
+  });
+
+  it('names the command of each distribution it knows when it does not know this one', async () => {
+    const message = await missingOn('ID=nixos\n');
+
+    for (const command of ['sudo apt install bubblewrap', 'sudo dnf install bubblewrap', 'sudo pacman -S bubblewrap', 'sudo apk add bubblewrap', 'sudo zypper install bubblewrap']) expect(message).toContain(command);
+  });
+
   it('fails sandbox_unavailable naming the AppArmor fix when the kernel refuses its namespaces', async () => {
     failStandIn(host, 'bwrap', 'bwrap: setting up uid map: Permission denied');
     const reply = await init(start(), { provider: 'bwrap' });
