@@ -3,6 +3,9 @@ import crossSpawn from 'cross-spawn';
 import { batchLaunchOf } from '@teamai/tool-core/exec';
 import { recordGroup, stopProcess } from './process-stop.js';
 
+/** The longest delay a Node timer waits; it fires a longer one at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 export interface ToolRun {
   stdout: string;
   stderr: string;
@@ -33,9 +36,10 @@ export async function runTool(input: { executable: string; args: string[]; cwd: 
   let stopped: ToolRun['stopped'];
   let idleTimer: NodeJS.Timeout | undefined;
 
-  // Each line the tool prints restarts the idle limit, so a tool that streams lives and a silent one is stopped.
+  // Each line the tool prints restarts the idle limit, so a tool that streams lives and a silent one is stopped. A limit
+  // longer than a timer can wait (about 24.8 days) is none: Node would fire the timer at once.
   const active = (): void => {
-    if (input.idleTimeoutMs === undefined) return;
+    if (input.idleTimeoutMs === undefined || input.idleTimeoutMs > MAX_TIMER_MS) return;
 
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => { if (!input.signal?.aborted) stopped ??= 'idle'; void stop(); }, input.idleTimeoutMs);
