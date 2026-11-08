@@ -68,11 +68,17 @@ describe('arguments for an npm .cmd shim', () => {
     expect(refusalOf('C:\\npm\\copilot.cmd', ['-p', '%'.repeat(2100)])).toMatch(/^The command line for copilot\.cmd is too long for cmd\.exe: \d+ characters once escaped, over its 8191-character limit\./);
   });
 
-  it('starts a batch file through cmd.exe, and leaves an .exe to cross-spawn', () => {
+  it('starts a batch file through cmd.exe with delayed expansion off, and leaves an .exe to cross-spawn', () => {
     expect({
       shim: batchLaunchOf('C:\\npm\\claude.cmd', ['-p'], 'C:\\Windows\\system32\\cmd.exe'),
       exe: batchLaunchOf('C:\\tools\\claude.exe', [MULTILINE, 'x'.repeat(9000)], 'cmd.exe'),
-    }).toEqual({ shim: { ok: true, command: 'C:\\Windows\\system32\\cmd.exe', args: ['/d', '/s', '/c', expect.stringMatching(/^"C:\\npm\\claude\.cmd .*-p.*"$/)] }, exe: undefined });
+    }).toEqual({ shim: { ok: true, command: 'C:\\Windows\\system32\\cmd.exe', args: ['/d', '/v:off', '/s', '/c', expect.stringMatching(/^"C:\\npm\\claude\.cmd .*-p.*"$/)] }, exe: undefined });
+  });
+
+  it('writes the batch file with backslashes, as cmd.exe needs them', () => {
+    const launch = batchLaunchOf('C:/npm/claude.cmd', ['-p'], 'cmd.exe');
+
+    expect(launch?.ok && launch.args.at(-1)).toMatch(/^"C:\\npm\\claude\.cmd /);
   });
 });
 
@@ -122,6 +128,17 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
 
     expect(run).toMatchObject({ code: 0, stderr: '' });
     expect(Printed.parse(JSON.parse(run.stdout))).toEqual({ argv, stdin: takes === 'stdin' ? MULTILINE : '' });
+  });
+
+  it('starts the shim with the system cmd.exe when the tool runs with an environment that has no ComSpec', async () => {
+    const shim = path.join(dir, 'claude.cmd');
+
+    fs.writeFileSync(shim, NPM_CMD_SHIM);
+    const { ComSpec: _comspec, COMSPEC: _upper, ...confined } = process.env;
+
+    const run = await runTool({ executable: shim, args: ['-p'], cwd: dir, env: confined, stdin: '', timeoutMs: 30_000, detached: false });
+
+    expect(Printed.parse(JSON.parse(run.stdout))).toEqual({ argv: ['-p'], stdin: '' });
   });
 
   it('refuses before starting the shim when a prompt argument holds a newline', async () => {

@@ -197,17 +197,19 @@ export type BatchLaunch =
 export function batchLaunchOf(executable: string, args: readonly string[], comspec: string): BatchLaunch | undefined {
   if (!/\.(cmd|bat)$/i.test(executable)) return undefined;
 
-  const name = executable.split(/[\\/]/).at(-1) ?? executable;
+  const file = executable.replaceAll('/', '\\');
+  const name = file.split('\\').at(-1) ?? file;
 
   if (args.some((arg) => /[\r\n]/.test(arg))) {
     return { ok: false, message: `${name} is a batch file, which runs under cmd.exe, and cmd.exe cannot pass an argument containing a newline. Pass that text on stdin, or run the tool's .exe instead of its npm shim.` };
   }
 
-  const line = [escapeCmdMeta(executable), ...args.map(escapeBatchArgument)].join(' ');
+  const line = [escapeCmdMeta(file), ...args.map(escapeBatchArgument)].join(' ');
 
   if (line.length > CMD_MAX_COMMAND_LINE) {
     return { ok: false, message: `The command line for ${name} is too long for cmd.exe: ${line.length} characters once escaped, over its ${CMD_MAX_COMMAND_LINE}-character limit. Pass long text on stdin, or run the tool's .exe instead of its npm shim.` };
   }
 
-  return { ok: true, command: comspec, args: ['/d', '/s', '/c', `"${line}"`] };
+  // Delayed expansion off: a member who turned it on in the registry would otherwise see `!` change.
+  return { ok: true, command: comspec, args: ['/d', '/v:off', '/s', '/c', `"${line}"`] };
 }
