@@ -17,6 +17,7 @@ import { sandboxOnFake } from './helpers/sandbox-runtime.js';
 import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
+import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -444,6 +445,8 @@ interface PromptSubject {
   journal(state: string): string[];
   /** How the runtime still answers a prompt whose end it cannot journal (`<kind> <failure code>`), where that is not its true end. */
   unjournaledEnd?: string;
+  /** Stops what the subject's fakes run for `state` beside the runtime, such as an app's server, before the leak check. */
+  stop?(state: string): Promise<void>;
 }
 
 const T3 = await t3OnFakeServer();
@@ -472,6 +475,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     reportsUsage: false,
     failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 't3')],
+    stop: (state) => T3.stop(state),
   },
   {
     name: 'paseo over stdio, on a fake Paseo daemon',
@@ -536,7 +540,14 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
 
   afterEach(async () => {
     await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
-    fs.rmSync(dir, { recursive: true, force: true });
+
+    try {
+      await subject.stop?.(state);
+      // The runtime, and what it or the subject's fakes started, all name the test's directory.
+      await expectNothingLeft({ dir });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('accepts a prompt, then ends finished with the tool\'s session, the result the agent wrote and its usage', async () => {

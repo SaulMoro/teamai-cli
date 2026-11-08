@@ -24,14 +24,16 @@ const ToyAgentSchema = z.object({
  * teamai-runtime-t3 built as it ships, against a fake T3 Code server (packages/runtime-t3/src/testing/fake-t3.mjs) over
  * `state`. `options(state, agent)` lays out what a T3 run needs beside the scenario's worktree, `<state>/../worktree`
  * (the worktree as a git checkout the fake lists as a T3 project, and the fake's agent playing the scenario's toy
- * agent), then gives the runtime's options. `ready(state)` starts the fake once per state and signs the member in. The
- * fake server stops by itself once `state` is removed.
+ * agent), then gives the runtime's options. `ready(state)` starts the fake once per state and signs the member in;
+ * `stop(state)` stops it, and it stops by itself once `state` is removed. Its command line names `state`, so a leak check
+ * of the test's directory sees it.
  */
 export async function t3OnFakeServer(): Promise<{
   command: string;
   args: (state: string) => string[];
   options: (state: string, agent: JsonValue) => RuntimeOptions;
   ready: (state: string) => Promise<void>;
+  stop: (state: string) => Promise<void>;
 }> {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-t3-runtime-')));
   const executable = path.join(dir, 'teamai-runtime-t3.mjs');
@@ -39,13 +41,17 @@ export async function t3OnFakeServer(): Promise<{
   await bundleRuntime({ entry: path.join(PACKAGE, 'main.ts'), outfile: executable });
 
   const servers = new Map<string, Promise<void>>();
+  const exits = new Map<string, { stop: () => void; exited: Promise<void> }>();
 
   const serve = async (state: string): Promise<void> => {
     const runtimeFile = path.join(state, 't3-home', 'userdata', 'server-runtime.json');
-    spawn(process.execPath, [FAKE_T3], {
+    const server = spawn(process.execPath, [FAKE_T3, path.join(state, 't3-state')], {
       env: { ...process.env, FAKE_T3_STATE: path.join(state, 't3-state'), T3CODE_HOME: path.join(state, 't3-home'), FAKE_T3_HOME: path.join(state, 'home') },
       stdio: 'ignore', detached: false,
-    }).unref();
+    });
+    const exited = new Promise<void>((resolve) => { server.once('exit', () => resolve()); });
+    exits.set(state, { stop: () => server.kill('SIGTERM'), exited });
+    server.unref();
 
     for (const deadline = Date.now() + 10_000; !fs.existsSync(runtimeFile);) {
       if (Date.now() > deadline) throw new Error('The fake T3 server did not start.');
@@ -81,6 +87,15 @@ export async function t3OnFakeServer(): Promise<{
       const server = servers.get(state) ?? serve(state);
       servers.set(state, server);
       await server;
+    },
+    async stop(state) {
+      const server = exits.get(state);
+
+      if (!server) return;
+      exits.delete(state);
+      servers.delete(state);
+      server.stop();
+      await server.exited;
     },
   };
 }
