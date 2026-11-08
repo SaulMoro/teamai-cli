@@ -1693,6 +1693,8 @@ A member runs the step in a clone of its checkout, so nothing the step writes in
 
 Each record names the teamai that wrote it. A teamai that finds a record in a newer format skips that attempt, as a member, or fails the step `fleet_record_newer`, as its owner, and names the version to upgrade to. While an attempt is out, your driver reads its record every second, then less often while it does not change, up to every 30 seconds.
 
+**Upgrading a pool.** Upgrade your install and every member of the pool together. Records are now in format 2, which an older teamai does not read, and this teamai reads no record an older one wrote: a member skips it, and an owner fails the step `fleet_record_unreadable`, naming the teamai that wrote it. A fleet entry that took only command steps before also takes prompt steps now, on the tools its `can.tools` lists, or on every tool teamai launches when it lists none. A member takes a prompt attempt only when its setup has the step's tool, found as the local driver finds it: the step's own `tool`, else `workflows.tools` and your AI tool, then on PATH, or among the tools of the runtime of its `--driver` that runs the step. Any other member leaves it and logs why, such as `Left attempt a2f0a5441 of run rf03e08d02eec400b for another member: its prompt step runs on claude, which is not on PATH here.` To keep prompt steps off a pool, list the tools it has under `can.tools`, or set `can.prompt: false`.
+
 `teamai workflow publish` refuses a run with an attempt out (`fleet_attempts_out`): a claim releases every lease, and the attempt's work comes back into a place on your machine only. Wait for it with `teamai workflow resume <run>`, then publish.
 
 ### A Codex login for step runtimes

@@ -1687,6 +1687,8 @@ while :; do teamai workflow resume --next --pool build; sleep 60; done
 
 每条记录都写明写入它的 teamai 版本。teamai 遇到更新格式的记录时：作为成员会跳过这个尝试，作为所有者会让步骤以 `fleet_record_newer` 失败，并说明要升级到哪个版本。尝试在外时，你的驱动每秒读一次它的记录；记录没有变化时读得越来越少，最慢每 30 秒一次。
 
+**升级一个池。** 请把你的安装和池里的每个成员一起升级。记录现在是格式 2，旧版 teamai 读不了；这个 teamai 也不读旧版写的记录：成员会跳过它，所有者会让步骤以 `fleet_record_unreadable` 失败，并写明写入它的 teamai。以前只接命令步骤的 fleet 条目，现在也接提示词步骤，用它 `can.tools` 列出的工具；没有列出时，就是 teamai 能启动的所有工具。成员只有在自己的环境里有该步骤的工具时才接提示词尝试，查找方式和本地驱动一样：先看步骤自己的 `tool`，再看 `workflows.tools` 和你的 AI 工具，然后在 PATH 上找；或者在它 `--driver` 中运行该步骤的运行时的工具里找。其他成员会跳过它并记录原因，例如 `Left attempt a2f0a5441 of run rf03e08d02eec400b for another member: its prompt step runs on claude, which is not on PATH here.`。要让提示词步骤不交给某个池，就在 `can.tools` 下列出它拥有的工具，或者设置 `can.prompt: false`。
+
 有尝试在外的运行，`teamai workflow publish` 会拒绝（`fleet_attempts_out`）：认领会释放所有租约，而尝试的产出只会回到你机器上的位置。先用 `teamai workflow resume <run>` 等它完成，再发布。
 
 ### 步骤运行时的 Codex 登录

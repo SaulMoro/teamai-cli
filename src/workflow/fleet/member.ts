@@ -34,9 +34,11 @@ import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
-import { envScopeOf, lackedLabels, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
+import { envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
-import { runPromptStep, type StagedLease } from '../steps/prompt.js';
+import { launchToolFor, runPromptStep, type StagedLease } from '../steps/prompt.js';
+import { memberTools } from '../../tool-launch/member-tools.js';
+import { launchExecutableOf } from '../../tool-launch/tools.js';
 import { driverIdentity } from '../../driver-identity.js';
 import { stepEnvironment, withRunningCli } from '../../env-exec.js';
 import { resolveRunMode } from '../../launch-context.js';
@@ -56,7 +58,7 @@ const ANSWER_READ_MS = 1_000;
 const STDERR_KEPT = 4_000;
 
 /** Where a member runs a step: here, as `--driver local` does, or on a step runtime of its own driver. */
-type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime; labels?: readonly string[] };
+type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime; labels?: readonly string[]; tools?: string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
 type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true };
@@ -100,7 +102,10 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
     }
 
     if (entry.use === 'fleet') continue;
-    const runtime: RuntimePlace = { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime, ...(entry.can.labels && { labels: entry.can.labels }) };
+
+    const runtime: RuntimePlace = {
+      kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime, ...(entry.can.labels && { labels: entry.can.labels }), ...(entry.can.tools && { tools: entry.can.tools }),
+    };
 
     // A runtime runs commands, and prompts, unless it says it does not.
     if (entry.can.exec !== false) place.command ??= runtime;
@@ -138,16 +143,39 @@ function declaredLabels(config: LocalConfig, at: NonNullable<MemberPlace[keyof M
 }
 
 /**
- * The `requires.labels` of the step `offer` leases, as this member's copy of the team's workflows defines it, never as
- * the record says. None when the member finds no definition: claiming the attempt refuses it then, saying why.
+ * What keeps this member from the step `offer` leases where `at` would run it, as its own copy of the team's workflows
+ * defines the step, never as the record says: a label not declared there, or for a prompt step, a tool its setup does not
+ * have. Undefined when nothing does, also when the member finds no definition: claiming the attempt refuses it then.
  */
-async function requiredLabels(config: LocalConfig, offer: Offered): Promise<string[]> {
+async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<MemberPlace[keyof MemberPlace]>): Promise<string | undefined> {
   const found = await teamDefinitions(config, offer);
 
-  if ('refused' in found) return [];
+  if ('refused' in found) return undefined;
   const defined = definedStep(found.definitions, offer.lease.step);
 
-  return defined.kind === 'step' ? defined.requires.labels ?? [] : [];
+  if (defined.kind !== 'step') return undefined;
+  const declared = declaredLabels(config, at);
+  const lacked = lackedLabels(defined.requires, declared.labels);
+
+  if (lacked.length > 0) return `its step requires labels ${lacked.join(', ')}, which ${declared.where} does not declare`;
+
+  return 'prompt' in offer.lease && (at.kind === 'here' || at.kind === 'runtime') ? promptToolLack(config, defined.step, at) : undefined;
+}
+
+/**
+ * Why the member's setup has no tool for prompt step `step` where `at` runs it, as the local driver locates the tool:
+ * the step's own `tool`, else `workflows.tools` and the member's AI tool, then on PATH here, or among the tools runtime
+ * `at` offers. Undefined when it has one.
+ */
+async function promptToolLack(config: LocalConfig, step: Pick<WorkflowStep, 'agent' | 'tool'>, at: { kind: 'here' } | RuntimePlace | PromptRuntimePlace): Promise<string | undefined> {
+  const choice = launchToolFor(step, config, {}, await memberTools(config), 'defaultTool' in at ? at.defaultTool : undefined);
+
+  if (!choice.ok) return `its prompt step has no tool here: ${choice.failure.message.replace(/\.$/, '')}`;
+  const { name } = choice.target;
+
+  if (at.kind === 'here') return launchExecutableOf(choice.target) === null ? `its prompt step runs on ${name}, which is not on PATH here` : undefined;
+
+  return lacksTool(name, { tools: at.tools }) ? `its prompt step runs on ${name}, which runtime ${at.use} of driver ${at.driver} does not offer` : undefined;
 }
 
 /**
@@ -170,11 +198,10 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
     const at = place[leaseKind(offer.lease)];
 
     if (offer.owner.id === member.id || at === undefined) continue;
-    const declared = declaredLabels(config, at);
-    const lacked = lackedLabels({ labels: await requiredLabels(config, offer) }, declared.labels);
+    const lacks = await lackedFor(config, offer, at);
 
-    if (lacked.length > 0) {
-      log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: its step requires labels ${lacked.join(', ')}, which ${declared.where} does not declare.`);
+    if (lacks !== undefined) {
+      log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: ${lacks}.`);
       continue;
     }
 

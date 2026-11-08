@@ -1894,6 +1894,31 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     }
   }, 60_000);
 
+  it('leaves a prompt attempt whose tool this member does not have for another member, saying why', async () => {
+    const owner = await ownerOf({ workflow: PROMPTED, tools: ['claude'] });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    // Only the system's own programs, so no claude this machine has installed is found.
+    vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(path.delimiter));
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
+    const { prompt } = await owner.open();
+
+    try {
+      void prompt(newOpId());
+      await owner.record();
+      await readableReportsWorktree(owner.bob.config);
+
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } });
+
+      expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+      expect(await owner.record()).toMatchObject({ state: 'offered' });
+      expect(infos).toHaveBeenCalledWith(`Left attempt ${owner.attempt} of run ${owner.run} for another member: its prompt step runs on claude, which is not on PATH here.`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 60_000);
+
   it('offers the step\'s command, and leaves the attempt out for a later resume when its teamai stops', async () => {
     const owner = await ownerOf();
     const { runtime, exec } = await owner.open();
