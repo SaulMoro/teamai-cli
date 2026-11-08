@@ -4,6 +4,7 @@
   "type": "module",
   "description": "OpenCode: its descriptor, launch profile, session platform and token format; bundled into teamai-cli.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
   }
 }
