@@ -112,7 +112,7 @@ const answers = ['invalid_json', 'driver_running', 'invalid_run', 'repeated_resp
       // Refusals of a --driver definition, and why a step runtime could not do what it was asked: answered at start or
       // resume, or carried in the message of an attempt that records runtime_failed.
       'driver_not_found', 'driver_invalid', 'driver_namespace_conflict', 'runtime_not_found', 'runtime_namespace_conflict', 'runtime_not_accepted',
-      'bad_option', 'credential_missing', 'runtime_exited', 'runtime_unanswered', 'runtime_protocol', 'runtime_gone', 'exec_failed',
+      'bad_option', 'credential_missing', 'runtime_exited', 'runtime_not_sent', 'runtime_unanswered', 'runtime_protocol', 'runtime_gone', 'exec_failed',
       // Why a scorer got no label from a judge attempt: kept with its mark under scores/, never on a run.
       ...literalStrings('src/scorers/label.ts', 'JUDGE_FAILURES')];
 

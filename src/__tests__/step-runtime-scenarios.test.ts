@@ -802,6 +802,17 @@ describe('a runtime that cannot close a place, over stdio', () => {
     expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'runtime_exited' } });
   });
 
+  it('fails an open sent once the runtime has stopped as runtime_not_sent, since the runtime never got it', async () => {
+    const { runtime, handle } = await opened({ exit_at: 'exec-accepted' });
+    await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {});
+    const op = newOpId();
+    let isAccepted = false;
+
+    expect(await runtime.open({ op, run: 'r0123abcd', attempt: 'a0123abce', credentials: {} }, async () => { isAccepted = true; }))
+      .toMatchObject({ kind: 'failed', failure: { code: 'runtime_not_sent', message: expect.stringContaining(`teamai did not send open ${op}`) } });
+    expect(isAccepted).toBe(false);
+  });
+
   it('reads the failure reply for a handle as that request\'s failure, for reattach, collect and close', async () => {
     const { runtime, handle } = await opened({ answer: { reattach: 'failed', collect: 'failed', close: 'failed' } });
     const failure = (type: string) => ({ code: 'toy_refused', message: `The toy refuses ${type} of ${handle}: answer.${type} is set.` });

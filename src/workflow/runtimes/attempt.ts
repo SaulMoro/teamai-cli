@@ -689,10 +689,10 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       if (!before || before.phase === 'closed') return undefined;
       const handle = before.open.handle;
 
-      // A teamai stopped after it sent the open and before it recorded the handle: the runtime may have made a place
-      // that no request teamai can send names, so it is not said to be closed.
+      // An open sent whose handle teamai never recorded, as when teamai or the runtime stopped in between: the runtime
+      // may have made a place that no request teamai can send names, so it is not said to be closed.
       if (handle === undefined) {
-        return runtimeFailure(runtime.name, `may hold a place for attempt ${attempt} that teamai cannot close: teamai was stopped after it asked for the place (${before.open.op}) and before it recorded the place's handle. Close it in ${runtime.name} yourself if it is there.`);
+        return runtimeFailure(runtime.name, `may hold a place for attempt ${attempt} that teamai cannot close: teamai asked for the place (${before.open.op}) and never recorded its handle, since teamai or the runtime stopped in between. Close it in ${runtime.name} yourself if it is there.`);
       }
 
       const elsewhere = placeElsewhere(before);

@@ -309,6 +309,15 @@ describe('an open that failed, or that a killed teamai left unanswered', () => {
     expect(runtime.closes).toEqual(['h1']);
   });
 
+  it('closes the record of an open teamai never sent to a runtime that had stopped, which holds no place', async () => {
+    const runtime = runtimeOpening(async () => ({ kind: 'failed', failure: { code: 'runtime_not_sent', message: 'Step runtime "fake" stopped: it exited with status 70. teamai did not send open.' } }));
+    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+
+    expect(await run.open(view())).toMatchObject({ ok: false });
+    expect(await run.close()).toBeUndefined();
+    expect(await readAttemptRuntime(config(), RUN, FIRST)).toMatchObject({ phase: 'closed' });
+  });
+
   it('keeps an open a killed teamai left with no handle when the restarted open is refused, since the first may have made a place', async () => {
     const left = runtimeOpening(() => new Promise(() => {}));
     void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime: left, driver: 'd' }).open(view());

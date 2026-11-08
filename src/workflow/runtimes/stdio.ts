@@ -346,7 +346,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     },
 
     open(request, onAccepted) {
-      if (dead) return Promise.resolve<Opened>({ kind: 'failed', failure: dead });
+      // A runtime that stopped before the open was sent made no place for it: unlike an open it stopped while it ran.
+      if (dead) return Promise.resolve<Opened>({ kind: 'failed', failure: { code: 'runtime_not_sent', message: `${dead.message} teamai did not send open ${request.op}.` } });
 
       const inFlight = opening.get(request.op);
 
