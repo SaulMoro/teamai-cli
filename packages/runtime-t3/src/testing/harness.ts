@@ -97,6 +97,11 @@ export interface FakeT3Config {
   projectsMs?: number;
   /** How long the environment read takes to answer, in ms. */
   environmentMs?: number;
+  /**
+   * The tool home a thread keeps its session in when its provider instance runs teamai's sandbox wrapper
+   * (`teamai-sandbox-<tool>`): the attempt's, which the sandbox's grant gives the tool.
+   */
+  wrappedHome?: string;
   /** T3 refuses every sign-in decision, as it does a pairing code it does not accept. */
   decisionRefused?: boolean;
   /** The access the person picks in T3's sign-in page: Auto unless set. */

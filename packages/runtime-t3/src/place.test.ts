@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { PATH_WITHOUT_T3, type Connection, type Line } from './testing/harness.js';
 import { checkout, dir, ended, initialized, isNotice, linkTo, noticesOf, OPEN, opened, openOn, prompt, result, RUN, scriptsInProject1, start, t3, usePromptStep, useT3Runtime, worktree } from './testing/suite.js';
 
 describe('teamai-runtime-t3', () => {
@@ -561,6 +563,106 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'reattach', handle });
 
       expect(await runtime.next((line) => line['event'] === 'gone')).toEqual({ event: 'gone', handle });
+    });
+
+    describe('through a sandbox', () => {
+      const SANDBOX = 'sandbox-r7f3a91c2';
+      let bin: string;
+      let toolHome: string;
+      let socketDir: string;
+      let server: net.Server;
+      let lines: string[];
+      const clients = new Set<net.Socket>();
+
+      beforeEach(async () => {
+        // teamai's wrapper on the member's PATH, which T3 starts in place of the tool.
+        bin = path.join(dir, 'teamai-bin');
+        fs.mkdirSync(bin);
+        fs.writeFileSync(path.join(bin, 'teamai-sandbox-claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        toolHome = path.join(dir, 'attempt', 'tool-home', 'claude');
+        fs.mkdirSync(toolHome, { recursive: true });
+        t3.config({ wrappedHome: toolHome });
+        // The sandbox's attempt socket. A unix socket's path must stay short: macOS's own temporary folder is too deep.
+        socketDir = fs.mkdtempSync('/tmp/teamai-t3-outer-');
+        lines = [];
+        server = net.createServer((client) => {
+          clients.add(client);
+          client.on('close', () => clients.delete(client));
+          client.setEncoding('utf8').on('data', (data: string) => lines.push(...data.split('\n').filter(Boolean)));
+        });
+        await new Promise<void>((resolve) => server.listen(path.join(socketDir, 'attempt.sock'), resolve));
+      });
+
+      afterEach(async () => {
+        for (const client of clients) client.destroy();
+        await new Promise((resolve) => server.close(resolve));
+        fs.rmSync(socketDir, { recursive: true, force: true });
+      });
+
+      const outer = (): string => JSON.stringify({ place: SANDBOX, socket: path.join(socketDir, 'attempt.sock') });
+
+      const throughSandbox = async (env: Record<string, string> = {}): Promise<Connection> => {
+        const runtime = start({ PATH: [bin, t3.bin, PATH_WITHOUT_T3].join(path.delimiter), ...env });
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+
+        return runtime;
+      };
+
+      /** Opens the step's place with the sandbox's handle as its outer, and answers how the open ended. */
+      const openThrough = async (runtime: Connection, handle: string = outer()): Promise<Line> => {
+        runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', tool: 'claude', credentials: {}, outer: handle, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: { CLAUDE_CONFIG_DIR: toolHome } } });
+        await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
+
+        return runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted' && !isNotice(line), 30_000);
+      };
+
+      it('registers the step\'s tool on the attempt socket before it runs, through teamai\'s wrapper, and finds the session in the attempt\'s tool home', async () => {
+        const runtime = await throughSandbox();
+
+        expect(await openThrough(runtime)).toMatchObject({ event: 'ready' });
+        await expect.poll(() => lines).toEqual(['{"register":{"agent":null}}']);
+        expect(JSON.parse(fs.readFileSync(path.join(t3.t3Home, 'userdata', 'settings.json'), 'utf8'))).toMatchObject({
+          providerInstances: { 'teamai-sandbox-claude': { driver: 'claudeAgent', displayName: 'teamai-sandbox-claude', enabled: true, config: { binaryPath: path.join(bin, 'teamai-sandbox-claude') } } },
+        });
+
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b'));
+
+        expect(await ended(runtime, 'op-0000000b')).toMatchObject({ event: 'finished', session: { tool: 'claude', home: toolHome } });
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toMatchObject({ instanceId: 'teamai-sandbox-claude' });
+      });
+
+      it('registers the step\'s tool again when a runtime started after its own restart reattaches the place', async () => {
+        const first = await throughSandbox();
+        expect(await openThrough(first)).toMatchObject({ event: 'ready' });
+        await expect.poll(() => lines).toHaveLength(1);
+        await first.close();
+
+        const second = await throughSandbox();
+        second.send({ type: 'reattach', handle: `t3-${RUN}-a1b2c3d4` });
+
+        expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ handle: `t3-${RUN}-a1b2c3d4` });
+        await expect.poll(() => lines).toEqual(['{"register":{"agent":null}}', '{"register":{"agent":null}}']);
+      });
+
+      it('fails the open, naming the fix, when the outer runtime gives no attempt socket to register on', async () => {
+        const runtime = await throughSandbox();
+
+        expect(await openThrough(runtime, SANDBOX)).toMatchObject({
+          event: 'failed',
+          failure: { code: 'open_failed', message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one (docker, podman, sbx, bwrap or seatbelt).` },
+        });
+      });
+
+      it('fails the open, naming the command, when teamai\'s wrapper for the tool is not on PATH', async () => {
+        fs.rmSync(path.join(bin, 'teamai-sandbox-claude'));
+        const runtime = await throughSandbox();
+
+        expect(await openThrough(runtime)).toMatchObject({
+          event: 'failed',
+          failure: { code: 'open_failed', message: expect.stringContaining('teamai-sandbox-claude is not on PATH here') },
+        });
+      });
     });
   });
 });

@@ -383,7 +383,14 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
    * Waits for the thread until the step is done, stopped or failed, and returns how it ended, and whether the runtime
    * saw the thread stop on the way: only then does the thread end with the op.
    */
-  const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord, state: Running): Promise<{ state: OpEnd; threadEnded: boolean } | undefined> => {
+  const follow = async ({ s, request, thread, state, toolHomes }: {
+    s: Session;
+    request: PromptRequest;
+    thread: ThreadRecord;
+    state: Running;
+    /** Through a sandbox, the attempt's tool homes by the variable each tool reads: the tool keeps its session there. */
+    toolHomes: Record<string, string> | undefined;
+  }): Promise<{ state: OpEnd; threadEnded: boolean } | undefined> => {
     const where = `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}")`;
     const stopped = (ended: OpEnd) => ({ state: ended, threadEnded: true });
     let errors = 0;
@@ -458,9 +465,10 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       const cwd = thread.copy ?? request.cwd;
       const served = s.instances.get(thread.tool);
       const driver = served ? driverOfProvider(served) : driverOf(thread.tool);
-      // The session is in the tool home of the instance the thread runs on, which is the scoring and resume store.
+      // The session is in the tool home of the instance the thread runs on, or through a sandbox in the attempt's, which is
+      // the scoring and resume store.
       const instanceId = instanceIdOf(s, thread);
-      const toolHome = driver && instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined;
+      const toolHome = driver && (toolHomes?.[DRIVERS[driver].homeEnv] ?? (instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined));
       const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt }) : undefined;
 
       if (!driver || toolHome === undefined || !id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.` } });
@@ -561,7 +569,17 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       return;
     }
 
-    const instance = s.instances.get(lease.tool);
+    const through = opened.kind === 'worktree' ? opened.through : undefined;
+    // Through a sandbox, the tool runs on the provider instance whose Binary path is teamai's wrapper.
+    const wrapped = through && await adder.wrapperFor(s, lease.tool, { op: request.op });
+
+    if (wrapped && !wrapped.ok) {
+      await refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: adder.notAdded(`teamai-sandbox-${lease.tool}`, undefined, wrapped) } });
+
+      return;
+    }
+
+    const instance = wrapped ? wrapped.provider : s.instances.get(lease.tool);
 
     if (!instance) {
       await refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: `T3 Code ${s.environment.label} runs ${[...s.instances.keys()].join(', ') || 'no tool this runtime runs'} here, not ${lease.tool}.` } });
@@ -700,7 +718,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     }
 
     try {
-      const followed = await follow(s, request, thread, state);
+      const followed = await follow({ s, request, thread, state, toolHomes: through?.toolHome });
 
       if (followed) await finish(followed.state, followed.threadEnded);
     } catch (error) {

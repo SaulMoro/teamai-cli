@@ -4,9 +4,9 @@ import { fitReason, type OpId } from '@teamai/runtime-protocol';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstance } from './add-instance.js';
 import type { ServeOptions, Serving, Session } from './runtime.js';
-import { DRIVERS } from './sessions.js';
+import { DRIVERS, driverOf } from './sessions.js';
 import type { readSettings } from './settings.js';
-import { tilde, type ServedInstances } from './tool-instances.js';
+import { driverOfProvider, tilde, type ServedInstances } from './tool-instances.js';
 import type { Provider } from './t3.js';
 import { sleep } from './within.js';
 
@@ -22,7 +22,10 @@ import { sleep } from './within.js';
  */
 export type NotAdded = { ok: false; kind: 'not-added'; why: string } | { ok: false; kind: 'not-ready'; id: string; why: string };
 
-/** Adds the provider instances init offered to add, as `options` says, telling the person through `notice`. */
+/** A provider instance T3 can run now, once teamai added it or found it there. */
+type Added = { ok: true; provider: Provider };
+
+/** Adds the provider instances a run needs, the ones init offered to add and the wrapper's, telling the person through `notice`. */
 export function instanceAdder({ options, notice }: { options: ServeOptions; notice: Serving['notice'] }) {
   /**
    * The provider instance teamai adds for each of `missing` on the first open that runs it: named after the instance,
@@ -61,13 +64,13 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
   };
 
   /** The adding of each instance under way, by name, so the opens of parallel steps add it once. */
-  const adding = new Map<string, Promise<NotAdded | { ok: true }>>();
+  const adding = new Map<string, Promise<NotAdded | Added>>();
 
   /** How long T3 gets to list an instance it was given, from its settings changing to its own check of it. */
   const ADD_WAIT_MS = 20_000;
 
-  /** Adds the provider instance of `name` teamai offered to add, then waits until T3 can run it. */
-  const addInstance = async (s: Session, name: string, instance: NewInstance, about: { op: OpId }): Promise<NotAdded | { ok: true }> => {
+  /** Adds the provider instance of `name`, then waits until T3 can run it. */
+  const addInstance = async (s: Session, name: string, instance: NewInstance, about: { op: OpId }): Promise<NotAdded | Added> => {
     const added = await addProviderInstance({ t3Home: options.t3Home, lockFile: options.settingsLock, userHome: options.t3UserHome, instance });
 
     switch (added.kind) {
@@ -104,18 +107,11 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
       return { ok: false, kind: 'not-ready', id: added.id, why: listed ? (listed.constraints ?? []).join(' ') : `it has not listed it within ${ADD_WAIT_MS / 1_000} s` };
     }
 
-    s.instances.set(name, listed);
-    s.pending.delete(name);
-
-    return { ok: true };
+    return { ok: true, provider: listed };
   };
 
-  /** The provider instance of `name` exists once this settles, when teamai offered to add it; a failure says why. */
-  const instanceFor = (s: Session, name: string, about: { op: OpId }): Promise<NotAdded | { ok: true }> | undefined => {
-    const instance = s.pending.get(name);
-
-    if (!instance) return adding.get(name);
-
+  /** Adds the provider instance of `name` once, however many opens of parallel steps ask for it. */
+  const addOnce = (s: Session, name: string, instance: NewInstance, about: { op: OpId }): Promise<NotAdded | Added> => {
     // A failure nobody expected still answers the open, and leaves nothing for the process to die of.
     const going = adding.get(name) ?? addInstance(s, name, instance, about).catch((error) => ({
       ok: false, kind: 'not-added', why: error instanceof Error ? error.message : String(error),
@@ -126,6 +122,41 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
     void going.then((done) => { if (!done.ok && adding.get(name) === going) adding.delete(name); });
 
     return going;
+  };
+
+  /** The provider instance of `name` exists once this settles, when teamai offered to add it; a failure says why. */
+  const instanceFor = (s: Session, name: string, about: { op: OpId }): Promise<NotAdded | Added> | undefined => {
+    const instance = s.pending.get(name);
+
+    if (!instance) return adding.get(name);
+
+    return addOnce(s, name, instance, about).then((done) => {
+      if (done.ok) {
+        s.instances.set(name, done.provider);
+        s.pending.delete(name);
+      }
+
+      return done;
+    });
+  };
+
+  /**
+   * The provider instance that runs `tool` through a sandbox: one whose Binary path is teamai's wrapper,
+   * `teamai-sandbox-<tool>`, which asks the sandbox to start the tool. teamai adds it on the first open through a
+   * sandbox that runs the tool, as it adds a tool instance's.
+   */
+  const wrapperFor = (s: Session, tool: string, about: { op: OpId }): Promise<NotAdded | Added> => {
+    const command = `teamai-sandbox-${tool}`;
+    const served = s.instances.get(tool);
+    const driver = (served && driverOfProvider(served)) ?? driverOf(tool);
+
+    if (driver === undefined) return Promise.resolve({ ok: false, kind: 'not-added', why: `T3 Code runs no ${tool} here, so teamai cannot tell which provider driver its wrapper needs` });
+    const found = findOnPath(command);
+
+    if (found === null) return Promise.resolve({ ok: false, kind: 'not-added', why: `${command} is not on PATH here. It comes with teamai: install teamai-cli on this machine, so its commands are on PATH` });
+
+    // A PATH folder named relatively finds it relative to this folder, which T3 does not run in.
+    return addOnce(s, command, { id: command, driver, displayName: command, command, binaryPath: path.resolve(found) }, about);
   };
 
   /** What a step whose instance cannot run is told: why, and what the person does about it. */
@@ -147,7 +178,7 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
     }
   };
 
-  return { toBeAdded, instanceFor, notAdded };
+  return { toBeAdded, instanceFor, wrapperFor, notAdded };
 }
 
 export type InstanceAdder = ReturnType<typeof instanceAdder>;

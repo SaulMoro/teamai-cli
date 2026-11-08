@@ -15,6 +15,7 @@
 //                               it launched; launchReplyLost: a launch launches, then its reply never comes (an MCP error, not a refusal)
 //                               launchInvalid: a new launch's check refuses every launch, a repeated one too, with invalid_request
 //                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
+//                               wrappedHome: the tool home of a thread whose instance runs teamai's sandbox wrapper, as its grant sets it
 //                               decisionRefused: T3 refuses every sign-in decision; decisionNoCode: a decision redirects with no code
 //                               decisionMs: a sign-in decision answers this long after it was posted
 //                               addedInstanceConstraints: the constraints T3 reports for a provider instance the settings add
@@ -205,6 +206,9 @@ const expandHome = (value) => path.resolve(value === '~' ? HOME : value.startsWi
  */
 function toolHomeOf(thread) {
   const instance = settings().providerInstances?.[thread.instanceId]?.config ?? {};
+
+  // teamai's wrapper starts the tool in the sandbox with the tool home the sandbox grants it, not the instance's.
+  if (config().wrappedHome && path.basename(instance.binaryPath ?? '').startsWith('teamai-sandbox-')) return config().wrappedHome;
   const own = instance.homePath?.trim() ?? '';
   const shared = own === '' ? path.join(HOME, thread.provider === 'codex' ? '.codex' : '.claude') : expandHome(own);
 

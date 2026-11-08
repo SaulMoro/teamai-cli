@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeRequest } from '@teamai/runtime-protocol';
+import { registerThrough } from '@teamai/runtime-kit/outer';
 import { endedIn, stillRuns, STOP_WAIT_MS, tasksOf, TERMINAL, threadDisplay, threadLink, whyNotStopped, type Conversations } from './conversation.js';
 import type { InstanceAdder } from './instances.js';
 import { unreadableFailure, type LaunchRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
@@ -81,6 +82,31 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   const { options, journal, ledger, places, write, notice, fail } = serving;
   const { journalOp, stopRunning, resolveLaunch } = conversations;
 
+  /** The registration on a sandbox's attempt socket that each place through one holds in this process, by handle. */
+  const registrations = new Map<string, { close(): void }>();
+
+  /** Registers the step's tool of `handle` on the attempt socket `outer` names, once in this process; or says why not. */
+  const register = async (handle: string, outer: string): Promise<string | undefined> => {
+    if (registrations.has(handle)) return undefined;
+    const registered = await registerThrough({ outer, agent: null });
+
+    if (!registered.ok) return registered.why;
+    registrations.set(handle, registered);
+
+    return undefined;
+  };
+
+  const unregister = (handle: string): void => {
+    registrations.get(handle)?.close();
+    registrations.delete(handle);
+  };
+
+  /** Why an open through a sandbox fails when the step's tool could not be registered on its attempt socket. */
+  const unregistered = (why: string): RuntimeFailure => ({
+    code: 'open_failed',
+    message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (${why.replace(/\.$/, '')}), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one (docker, podman, sbx, bwrap or seatbelt).`,
+  });
+
   const open = async (request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> => {
     const session = serving.session();
     const handle = handleFor(request);
@@ -107,6 +133,17 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       }
     }
 
+    // Through a sandbox, T3 starts teamai's wrapper in place of the step's tool, and the wrapper asks the sandbox to.
+    if (request.outer !== undefined && request.tool !== undefined) {
+      const wrapped = await adder.wrapperFor(session, request.tool, { op: request.op });
+
+      if (!wrapped.ok) {
+        fail(request.op, { code: 'open_failed', message: adder.notAdded(`teamai-sandbox-${request.tool}`, undefined, wrapped) });
+
+        return;
+      }
+    }
+
     const known = journal.read(handle);
 
     // Opening it afresh would forget the threads it holds.
@@ -117,6 +154,9 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     }
 
     if (known.kind === 'found') {
+      const why = request.outer === undefined ? undefined : await register(handle, request.outer);
+
+      if (why !== undefined) return fail(request.op, unregistered(why));
       write({ op: request.op, event: 'ready', display: placeDisplay(known.place, session.environment) });
 
       return;
@@ -223,9 +263,16 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     const opened: PlaceRecord = {
       kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, binding,
       ...(settle !== undefined && { settleScript: settle }), settingsProjectId: checkout.project.id, ops: {}, threads: {}, launches: {},
+      ...(request.outer !== undefined && { through: { outer: request.outer, toolHome: view.toolHome } }),
     };
 
+    // Before the app can start the tool, so the sandbox grants the wrapper its first ask.
+    const why = request.outer === undefined ? undefined : await register(handle, request.outer);
+
+    if (why !== undefined) return fail(request.op, unregistered(why));
+
     if (places.isReleased(handle)) {
+      unregister(handle);
       fail(request.op, { code: 'open_failed', message: `teamai released ${handle} while T3 Code was still opening it, so the runtime does not keep it.` });
 
       return;
@@ -444,6 +491,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     removeCopies(known);
     await removeGoneProjects(handle, deadline);
     journal.remove(handle);
+    unregister(handle);
 
     for (const { op } of Object.values(known?.ops ?? {})) ledger.forget(op);
     write({ event: 'closed', handle });
@@ -455,6 +503,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     places.release(handle);
     removeCopies(known);
     journal.remove(handle);
+    unregister(handle);
 
     for (const { op } of Object.values(known?.ops ?? {})) ledger.forget(op);
   };
@@ -494,6 +543,11 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
 
     const known = read.place;
     const session = serving.session();
+    // A restarted runtime registers the step's tool again: the sandbox's runtime may have restarted too, and forgotten it.
+    const through = known.kind === 'worktree' ? known.through : undefined;
+    const why = through && await register(request.handle, through.outer);
+
+    if (why !== undefined) notice(`teamai could not register the step's tool of ${request.handle} again on the sandbox's attempt socket (${why.replace(/\.$/, '')}), so the sandbox refuses to start that tool until the place is opened again.`, { handle: request.handle });
 
     const latest = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt)[0];
     const display = session && (latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment));
