@@ -1658,8 +1658,9 @@ async function takeFleetNext({ config, secrets }: Ready, pool: string, driver: s
     return;
   }
 
-  // A member runs an attempt on its own driver, with its own tools and logins, as it runs its own steps.
-  const defined = await openNamedDriver(config, driver, { personal: true });
+  // A member runs an attempt on the team's or a shipped definition it names, never on one of its own (D4), so where the
+  // step runs does not depend on what this machine defines.
+  const defined = await openNamedDriver(config, driver, { personal: false });
 
   if (!defined.ok) {
     refuse({ error: defined.failure });
