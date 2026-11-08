@@ -127,6 +127,17 @@ describe('vercel: init', () => {
     expect(String((reply.error as Message).message)).toMatch(/VERCEL_TOKEN.*VERCEL_TEAM_ID.*VERCEL_PROJECT_ID.*VERCEL_OIDC_TOKEN/s);
   });
 
+  it('names the variables a token lacks when VERCEL_TOKEN is set without its team or project', async () => {
+    const neither = await init(start({ VERCEL_TOKEN: 'vercel-token-value' }));
+
+    expect(neither).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable', message: expect.stringMatching(/VERCEL_TOKEN is set, but not VERCEL_TEAM_ID and VERCEL_PROJECT_ID/) } });
+
+    const noProject = await init(start({ VERCEL_TOKEN: 'vercel-token-value', VERCEL_TEAM_ID: 'team_acme' }));
+
+    expect(noProject).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable', message: expect.stringMatching(/VERCEL_TOKEN is set, but not VERCEL_PROJECT_ID\b/) } });
+    expect(JSON.stringify(noProject)).not.toContain('vercel-token-value');
+  });
+
   it('reads the provider auth a definition names, from another variable or a file', async () => {
     fs.writeFileSync(path.join(dir, 'token'), 'vercel-token-from-file\n');
     const reply = await init(start({ ACME_VERCEL_TEAM: 'team_acme', VERCEL_PROJECT_ID: 'prj_acme' }), { provider: 'vercel', provider_auth: { VERCEL_TOKEN: `file:${path.join(dir, 'token')}`, VERCEL_TEAM_ID: 'env:ACME_VERCEL_TEAM' } });
@@ -271,6 +282,42 @@ describe('vercel: an attempt', () => {
     expect(await collect(second)).toMatchObject({ event: 'collected' });
     expect(fs.readFileSync(path.join(at.worktree, 'README.md'), 'utf8')).toBe('add(a, b) returns a - b.\n');
     expect(fs.readFileSync(path.join(at.worktree, 'obsolete.txt'), 'utf8')).toBe('old\n');
+  });
+
+  it('fails the open naming the copy that failed, even when the sandbox cannot be deleted either, and the next open deletes it', async () => {
+    const fails = path.join(dir, 'tar.fails');
+    fs.writeFileSync(path.join(imageDir, 'tar'), `#!/bin/sh\nif [ -f '${fails}' ]; then echo 'tar: connection reset' >&2; exit 1; fi\nexec /usr/bin/tar "$@"\n`, { mode: 0o755 });
+    fs.writeFileSync(fails, '');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'delete.fails'), 'Vercel API: 503 Service Unavailable');
+    const first = start();
+    await init(first);
+    const at = preparedPlace();
+    const { ready } = await openPlace(first, at);
+    const [left = ''] = sandboxNames();
+
+    expect(ready).toMatchObject({ event: 'failed', failure: { message: expect.stringContaining('tar: connection reset') } });
+    expect(String((ready.failure as Message).message)).toContain(`Vercel could not delete sandbox ${left}: Vercel API: 503 Service Unavailable`);
+    fs.rmSync(fails);
+    fs.rmSync(path.join(stateDir, 'delete.fails'));
+    const second = start();
+    await init(second);
+
+    expect((await openPlace(second, at)).ready).toMatchObject({ event: 'ready' });
+    expect(calls().filter((call) => call.call === 'delete')).toHaveLength(2);
+    expect(sandboxNames()).toEqual([left]);
+  });
+
+  it('streams a last line that has no newline, once', async () => {
+    const connection = start();
+    await init(connection);
+    const at = preparedPlace();
+    await openPlace(connection, at);
+
+    const { end, output } = await exec(connection, { argv: ['/bin/sh', '-c', "printf 'first\\nlast'"], cwd: at.worktree });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(output).toBe('first\nlast');
   });
 
   it('answers collect_failed, naming the sandbox, when Vercel no longer has it, and changes nothing on the host', async () => {
