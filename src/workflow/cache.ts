@@ -884,7 +884,7 @@ export async function withTeamRevision<T>(
 ): Promise<T | { failed: string }> {
   const repoRoot = isSelfMode(config) ? getBusinessRoot(config) : config.repo.localPath;
   const git = createGit(repoRoot);
-  const present = (): Promise<boolean> => git.raw(['cat-file', '-e', `${revision}^{commit}`]).then(() => true, () => false);
+  const present = (): Promise<boolean> => gitAt(repoRoot, ['cat-file', '-e', `${revision}^{commit}`]).then(({ code }) => code === 0, () => false);
 
   if (!await present()) {
     const fetched = await git.fetch(['origin']).then(() => '', (cause: unknown) => (cause instanceof Error ? cause.message.trim() : String(cause)));

@@ -24,6 +24,7 @@ import testSeams from './rules/test-seams.js';
 import toolRegistry from './rules/tool-registry.js';
 import mockSource from './rules/mock-source.js';
 import untrustedFinishGit from './rules/untrusted-finish-git.js';
+import gitExitCode from './rules/git-exit-code.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -58,6 +59,7 @@ export default definePlugin({
     'tool-registry': toolRegistry,
     'mock-source': mockSource,
     'untrusted-finish-git': untrustedFinishGit,
+    'git-exit-code': gitExitCode,
     ...antiSlopRules,
   },
 });
