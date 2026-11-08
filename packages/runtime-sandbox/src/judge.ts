@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { JsonValueSchema } from '@teamai/tool-core/json';
 import { jsonLines, reportedTokens, type ConfinedAccess } from '@teamai/tool-core/launch';
+import { extractReply } from '@teamai/tool-core/reply';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
 import type { ConfinedOffer, ConfinedPrompt, PromptLease, PromptResult, RuntimeFailure } from '@teamai/runtime-protocol';
 import { SIGN_IN } from './sign-in.js';
@@ -67,25 +69,12 @@ function linesOf<TLine>(stdout: string, schema: z.ZodType<TLine>): TLine[] {
   });
 }
 
-const Reply = z.json();
-
-/** A reply the tool wrote as text: JSON, maybe fenced. */
-function replyOf(text: string): z.infer<typeof Reply> | undefined {
-  try {
-    const parsed = Reply.safeParse(JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')));
-
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const ClaudeResult = z.object({
   type: z.literal('result'),
   is_error: z.boolean().optional(),
   session_id: z.string().min(1),
   result: z.string().optional(),
-  structured_output: Reply.optional(),
+  structured_output: JsonValueSchema.optional(),
   usage: z.object({ input_tokens: z.number().optional(), output_tokens: z.number().optional(), cache_read_input_tokens: z.number().optional() }).optional(),
 });
 
@@ -123,7 +112,7 @@ const JUDGE_TOOLS = {
       if (!result) return { ok: false, message: 'Claude printed no result.' };
 
       if (result.is_error) return { ok: false, message: `Claude reported an error: ${result.result ?? 'no reason given'}` };
-      const output = result.structured_output ?? replyOf(result.result ?? '');
+      const output = result.structured_output ?? extractReply(result.result ?? '', JsonValueSchema);
       const usage = reportedTokens({ input: result.usage?.input_tokens, output: result.usage?.output_tokens, cachedInput: result.usage?.cache_read_input_tokens });
 
       return { ok: true, session: result.session_id, result: output === undefined ? { failure: { code: 'reply_invalid', message: 'Claude did not reply with JSON.' } } : { output }, ...(usage && { usage }) };
@@ -190,7 +179,7 @@ const JUDGE_TOOLS = {
       if (error !== undefined) return { ok: false, message: `Codex reported an error: ${error}` };
 
       if (session === undefined) return { ok: false, message: 'Codex started no thread.' };
-      const output = text === undefined ? undefined : replyOf(text);
+      const output = text === undefined ? undefined : extractReply(text, JsonValueSchema);
 
       return { ok: true, session, result: output === undefined ? { failure: { code: 'reply_invalid', message: 'Codex did not reply with JSON.' } } : { output }, ...(usage && { usage }) };
     },

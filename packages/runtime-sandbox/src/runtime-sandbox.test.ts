@@ -1544,7 +1544,9 @@ const JUDGE_CODEX = `${SEES} ${NAMES}
 const schema = require('node:fs').readFileSync(process.argv[process.argv.indexOf('--output-schema') + 1], 'utf8');
 const argv = process.argv.slice(2);
 const retried = argv.at(-1).includes('flaky network') ? [{ type: 'error', message: 'Reconnecting... 1/5' }] : [];
-for (const line of [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: { label: 'bad', reasoning: JSON.stringify({ sees, names, given, schema, argv }) } }) } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }]) console.log(JSON.stringify(line));`;
+const answer = JSON.stringify({ answer: { label: 'bad', reasoning: JSON.stringify({ sees, names, given, schema, argv }) } });
+const text = argv.at(-1).includes('explain yourself') ? 'I read the evidence.\\n\\n\`\`\`json\\n' + answer + '\\n\`\`\`\\n\\nThe work misses a test.' : answer;
+for (const line of [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }]) console.log(JSON.stringify(line));`;
 
 describe('a judge (a confined prompt) in a container of its own', () => {
   const SCHEMA = { type: 'object', properties: { answer: { type: 'object' } }, required: ['answer'] };
@@ -1628,6 +1630,14 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     await openJudge(connection, { CODEX_API_KEY: 'judge-key-3' });
 
     expect(reasoning(await judge(connection, { tool: 'codex', credentials: { CODEX_API_KEY: 'judge-key-3' } })).names).toEqual(['CODEX_API_KEY', 'HTTPS_PROXY']);
+  });
+
+  it('reads the JSON answer of a codex judge that explains itself around it', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { OPENAI_API_KEY: 'judge-key-2' });
+
+    expect(await judge(connection, { tool: 'codex', credentials: { OPENAI_API_KEY: 'judge-key-2' }, lease: { prompt: 'Judge it, and explain yourself.' } })).toMatchObject({ event: 'finished', result: { output: { answer: { label: 'bad' } } } });
   });
 
   it('accepts a codex reply after Codex reconnected on its way there', async () => {
