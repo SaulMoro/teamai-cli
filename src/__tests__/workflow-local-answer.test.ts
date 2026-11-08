@@ -107,7 +107,7 @@ describe('answer steps on the local driver', () => {
 
   it.each([{ names: 'TEAMAI_AI_TOOL' }, { names: "the project's ai.tool" }])('answers on the tool $names names, over the first installed', async ({ names }) => {
     const { config, workspace, runId, bin } = await answering(COLOR);
-    fakeTool(bin, 'claude', { stdout: claudeReply('blue') });
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'blue' });
     const hermes = fakeTool(bin, 'hermes', { stdout: 'red\n' });
 
     if (names === 'TEAMAI_AI_TOOL') vi.stubEnv('TEAMAI_AI_TOOL', 'hermes');
@@ -129,12 +129,12 @@ steps:
     output: { color: string }
 outputs: { color: steps.ask.outputs.color }
 `);
-    const claude = fakeTool(bin, 'claude', { stdout: claudeReply('```json\n{"color":"blue"}\n```') });
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: '```json\n{"color":"blue"}\n```' });
 
     const done = await runLocalDriver(config, runId, workspace);
 
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { color: 'blue' } } } });
-    expect(claude().stdin).toBe('Name one color.\n\nReply with only a JSON value, with no other text: a value that matches this JSON Schema: `{"type":"object","properties":{"color":{"type":"string"}},"required":["color"]}`');
+    expect(claude.calls()[0]?.prompt).toBe('Name one color.\n\nReply with only a JSON value, with no other text: a value that matches this JSON Schema: `{"type":"object","properties":{"color":{"type":"string"}},"required":["color"]}`');
   });
 
   it('asks once more in the same session when the reply holds no JSON, and reports the value it then gives', async () => {
@@ -202,7 +202,7 @@ steps:
     output: { color: string }
 outputs: { color: steps.ask.outputs.color }
 `);
-    fakeTool(bin, 'claude', { stdout: claudeReply('Here is the result:\n```json\n{"color":"blue"}\n```\nLet me know if you need more.') });
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'Here is the result:\n```json\n{"color":"blue"}\n```\nLet me know if you need more.' });
 
     const done = await runLocalDriver(config, runId, workspace);
 
@@ -211,7 +211,7 @@ outputs: { color: steps.ask.outputs.color }
 
   it('fails the step tool_failed with the reason the tool gave', async () => {
     const { config, workspace, runId, bin } = await answering(COLOR);
-    fakeTool(bin, 'claude', { stdout: '', exitCode: 2, before: "process.stderr.write('Authentication failed\\n');" });
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { before: "process.stderr.write('Authentication failed\\n'); process.exit(2);" });
 
     const done = await runLocalDriver(config, runId, workspace);
 
@@ -223,7 +223,7 @@ outputs: { color: steps.ask.outputs.color }
 
   it('fails an answer that modifies the checkout', async () => {
     const { config, workspace, runId, bin } = await answering(COLOR);
-    fakeTool(bin, 'claude', { stdout: claudeReply('blue'), before: "fs.writeFileSync('unexpected.md', 'changed');" });
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'blue', before: "fs.writeFileSync('unexpected.md', 'changed');" });
 
     const done = await runLocalDriver(config, runId, workspace);
 
@@ -235,7 +235,7 @@ outputs: { color: steps.ask.outputs.color }
 
   it('fails an answer that modifies its own worktree, and leaves the checkout as it was', async () => {
     const { config, workspace, runId, bin } = await answering(COLOR.replace('    timeout: 600s\n', '    workspace: new\n'));
-    const claude = fakeTool(bin, 'claude', { stdout: claudeReply('blue'), before: "fs.writeFileSync('unexpected.md', 'changed');" });
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'blue', before: "fs.writeFileSync('unexpected.md', 'changed');" });
 
     const done = await runLocalDriver(config, runId, workspace);
 
@@ -243,17 +243,17 @@ outputs: { color: steps.ask.outputs.color }
     expect(await readRun(config, z.string().parse(runId))).toMatchObject({
       steps: [{ id: 'ask', status: 'failed', failure: { code: 'read_only_dirty' } }],
     });
-    expect(fs.realpathSync(claude().cwd)).not.toBe(fs.realpathSync(workspace));
+    expect(fs.realpathSync(claude.calls()[0]?.cwd ?? '')).not.toBe(fs.realpathSync(workspace));
     expect(fs.existsSync(path.join(workspace, 'unexpected.md'))).toBe(false);
   });
 
   it('answers with workspace: new in the directory it runs in when that is no git repository, which it cannot copy', async () => {
     const { config, workspace, runId, bin } = await answering(COLOR.replace('    timeout: 600s\n', '    workspace: new\n'));
     fs.rmSync(path.join(workspace, '.git'), { recursive: true, force: true });
-    const claude = fakeTool(bin, 'claude', { stdout: claudeReply('blue') });
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'blue' });
 
     expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { text: 'blue' } } } });
-    expect(fs.realpathSync(claude().cwd)).toBe(fs.realpathSync(workspace));
+    expect(fs.realpathSync(claude.calls()[0]?.cwd ?? '')).toBe(fs.realpathSync(workspace));
   });
 
   it('waits for a command using the checkout before answering', async () => {
@@ -276,7 +276,7 @@ fs.appendFileSync(${JSON.stringify(log)}, 'command start\\n');
 setTimeout(() => fs.appendFileSync(${JSON.stringify(log)}, 'command end\\n'), 200);`);
     execFileSync('git', ['add', 'serial.js'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'scripts'], { cwd: workspace });
-    fakeTool(bin, 'claude', { stdout: claudeReply('blue'), before: `fs.appendFileSync(${JSON.stringify(log)}, 'answer\\n');` });
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'blue', before: `fs.appendFileSync(${JSON.stringify(log)}, 'answer\\n');` });
 
     expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(fs.readFileSync(log, 'utf8').trim().split('\n')).toEqual(['command start', 'command end', 'answer']);
@@ -290,8 +290,8 @@ setTimeout(() => fs.appendFileSync(${JSON.stringify(log)}, 'command end\\n'), 20
  */
 function describingTool(bin: string, waitMs: number): () => string[] {
   const log = path.join(bin, 'answers.log');
-  fakeTool(bin, 'claude', { stdout: claudeReply('described'), before: `
-  const me = /Describe (\\w+)/.exec(stdin)[1];
+  claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'described', before: `
+  const me = /Describe (\\w+)/.exec(prompt)[1];
   const lines = () => fs.existsSync(${JSON.stringify(log)}) ? fs.readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n') : [];
   fs.appendFileSync(${JSON.stringify(log)}, 'start ' + me + ' ' + Date.now() + '\\n');
   const deadline = Date.now() + ${waitMs};
@@ -361,7 +361,7 @@ steps:
           timeout: 3s
 `);
     if (maxParallel !== undefined) config.workflows = { tools: {}, max_parallel: maxParallel };
-    fakeTool(bin, 'claude', { stdout: claudeReply('described'), before: 'await new Promise((resolve) => setTimeout(resolve, 2000));' });
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'described', before: 'await new Promise((resolve) => setTimeout(resolve, 2000));' });
 
     expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
