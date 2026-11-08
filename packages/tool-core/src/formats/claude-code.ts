@@ -617,7 +617,8 @@ export class ClaudeCodeAdapter extends AgentAdapter {
   }
 
   async readSession(ref: SessionReadRef): Promise<Session> {
-    const jsonlPath = ref.filePath ?? this.findSessionFile(ref.sessionId, ref.projectPath);
+    // A session id is unique across the store, so one not under the encoded cwd is looked for by id alone.
+    const jsonlPath = ref.filePath ?? this.findSessionFile(ref.sessionId, ref.projectPath) ?? this.findSessionFile(ref.sessionId);
 
     if (!jsonlPath) {
       throw new Error(
@@ -634,7 +635,7 @@ export class ClaudeCodeAdapter extends AgentAdapter {
    * call started it, in call order; one whose call is not found goes last.
    */
   async readSubagents(session: Session, ref: SessionReadRef): Promise<SubagentsRead> {
-    const jsonlPath = ref.filePath ?? this.findSessionFile(session.sessionId, ref.projectPath);
+    const jsonlPath = ref.filePath ?? this.findSessionFile(session.sessionId, ref.projectPath) ?? this.findSessionFile(session.sessionId);
 
     if (!jsonlPath) return { status: 'unread', reason: `The transcript of session ${session.sessionId} was not found again` };
     const dir = path.join(path.dirname(jsonlPath), path.basename(jsonlPath, '.jsonl'), 'subagents');
