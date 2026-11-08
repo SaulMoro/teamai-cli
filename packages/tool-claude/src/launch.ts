@@ -3,6 +3,7 @@ import { readClaudeResult, type LaunchAdapter } from '@teamai/tool-core/launch';
 /** How teamai launches Claude Code and its variants headless; each variant starts its own command. */
 export const launch = {
   claude: {
+    signIn: { variables: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'], gateway: { url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' } },
     call: {
       evidence: 'verified',
       prompt: 'stdin',

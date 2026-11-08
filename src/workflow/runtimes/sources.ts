@@ -14,13 +14,15 @@ import { durationMs } from '../parse.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import { CanSchema, SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CanSchema, type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { credentialSecrets, type StepRuntime } from './step-runtime.js';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
+import type { SignInVariables } from '@teamai/tool-core/launch';
+import { launchAdapterOf } from '../../tool-launch/tools.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -274,12 +276,16 @@ function valuesSet(credentials: EnvCredential[], env: NodeJS.ProcessEnv): Record
   return Object.fromEntries(credentials.flatMap(({ name, variable }) => (env[variable] ? [[name, env[variable]]] : [])));
 }
 
-/** The sign-in variables of each tool an exec runtime launches: the protocol must name every one. */
-const SIGN_INS: Readonly<Record<ExecRuntimeTool, SignInVariables>> = SIGN_IN_VARIABLES;
+/** The sign-in variables of each tool an exec runtime launches: its launch must name every one. */
+const SIGN_INS: Readonly<Record<ExecRuntimeTool, SignInVariables>> = {
+  claude: launchAdapterOf('claude').signIn,
+  codex: launchAdapterOf('codex').signIn,
+  codebuddy: launchAdapterOf('codebuddy').signIn,
+};
 
 /** A tool's sign-in variables and those that go with them. */
-function variablesOf({ signIn, alongside = [] }: SignInVariables): string[] {
-  return [...signIn, ...alongside];
+function variablesOf({ variables, alongside = [] }: SignInVariables): string[] {
+  return [...variables, ...alongside];
 }
 
 /**
@@ -297,7 +303,7 @@ export function credentialsForTool(credentials: Record<string, string>, found: r
 /** The values of the tools' sign-in variables set in `env`, by name, with those that go with a sign-in found. */
 function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
   const isSet = (name: string): boolean => (env[name] ?? '') !== '';
-  const names = Object.values(SIGN_INS).flatMap((variables) => (variables.signIn.some(isSet) ? variablesOf(variables) : []));
+  const names = Object.values(SIGN_INS).flatMap((variables) => (variables.variables.some(isSet) ? variablesOf(variables) : []));
 
   return Object.fromEntries(names.filter(isSet).sort().map((name) => [name, env[name] ?? '']));
 }

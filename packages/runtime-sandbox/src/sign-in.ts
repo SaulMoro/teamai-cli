@@ -1,4 +1,6 @@
-import { fitReason, SIGN_IN_VARIABLES, type GatewayVariables, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
+import { fitReason, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
+import type { GatewayVariables } from '@teamai/tool-core/launch';
+import { SIGN_INS } from '@teamai/tool-definitions';
 import type { Unavailable } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
 
@@ -26,7 +28,7 @@ export type SignInProvider = 'sbx' | 'docker' | 'podman' | 'seatbelt' | 'bwrap' 
  */
 type SignIn = { by: 'free' } | {
   by: 'credentials';
-  /** The variables the tool signs in with, as teamai finds them (`SIGN_IN_VARIABLES`). */
+  /** The variables the tool signs in with, as teamai finds them (the tool launch's `signIn`). */
   env: readonly string[];
   /** The sbx service whose stored login sbx's proxy injects for it, when sbx keeps one. */
   sbx?: string;
@@ -52,9 +54,9 @@ const CODEBUDDY = 'add CODEBUDDY_API_KEY: env:CODEBUDDY_API_KEY to the sandbox\'
 export const SIGN_IN = {
   claude: {
     by: 'credentials',
-    env: SIGN_IN_VARIABLES.claude.signIn,
+    env: SIGN_INS.claude.variables,
     sbx: 'anthropic',
-    gateway: SIGN_IN_VARIABLES.claude.gateway,
+    gateway: SIGN_INS.claude.gateway,
     hint: {
       sbx: `sign Claude in once with sbx: run \`sbx run claude <any dir>\`, then \`/login\` in Claude Code, and every new sandbox reuses that login (an API key instead: \`sbx secret set anthropic\`); or ${CLAUDE_TOKEN}`,
       docker: CLAUDE_IN_A_CONTAINER,
@@ -66,7 +68,7 @@ export const SIGN_IN = {
   },
   codex: {
     by: 'credentials',
-    env: SIGN_IN_VARIABLES.codex.signIn,
+    env: SIGN_INS.codex.variables,
     sbx: 'openai',
     hint: {
       sbx: 'sign Codex in once with sbx, `sbx secret set openai --oauth` (or store an API key with `sbx secret set openai`), or add OPENAI_API_KEY: env:OPENAI_API_KEY to the sandbox\'s credentials',
@@ -77,7 +79,7 @@ export const SIGN_IN = {
       vercel: CODEX_IN_A_CONTAINER,
     },
   },
-  codebuddy: { by: 'credentials', env: SIGN_IN_VARIABLES.codebuddy.signIn, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY, seatbelt: CODEBUDDY, bwrap: CODEBUDDY, vercel: CODEBUDDY } },
+  codebuddy: { by: 'credentials', env: SIGN_INS.codebuddy.variables, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY, seatbelt: CODEBUDDY, bwrap: CODEBUDDY, vercel: CODEBUDDY } },
   // teamai gives OpenCode no sign-in variable, so in a sandbox it runs its free models.
   opencode: { by: 'free' },
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;

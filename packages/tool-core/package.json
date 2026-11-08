@@ -20,6 +20,7 @@
     "./reply": "./src/reply.ts",
     "./sessions/*": "./src/sessions/*.ts",
     "./stdout": "./src/stdout.ts",
-    "./tokens": "./src/tokens.ts"
+    "./tokens": "./src/tokens.ts",
+    "./usage-limit": "./src/usage-limit.ts"
   }
 }

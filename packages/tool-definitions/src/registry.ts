@@ -19,3 +19,7 @@ import { family as cursor } from '@teamai/tool-cursor';
 
 /** Every built-in tool family. The app reads tools only through these, never by importing a family. */
 export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy, kiro, trae, zcode, openclaw, hermes, dsh, muse, copilot, opencode, agy, cursor } as const satisfies Readonly<Record<string, ToolFamily>>;
+
+/** The sign-in variables of each built-in tool a step runtime launches on the member's own sign-in, by launch adapter id. */
+// oxlint-disable-next-line teamai/tool-facts -- read from each launch adapter's own signIn, keyed by launch adapter id as LAUNCH_ADAPTERS is
+export const SIGN_INS = { claude: claude.launch.claude.signIn, codex: codex.launch.codex.signIn, codebuddy: codebuddy.launch.codebuddy.signIn } as const;

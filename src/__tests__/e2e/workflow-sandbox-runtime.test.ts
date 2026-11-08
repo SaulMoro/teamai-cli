@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SIGN_IN_VARIABLES } from '@teamai/runtime-protocol';
+import { LAUNCH_ADAPTERS } from '../../tool-launch/adapters.js';
+import type { LaunchAdapter } from '@teamai/tool-core/launch';
 import { stringify } from 'yaml';
 import { z } from 'zod';
 import { resolveProjectDataHome } from '../../config.js';
@@ -22,7 +23,7 @@ let engineLog: string;
 let engineEnv: NodeJS.ProcessEnv;
 let dataHome: string;
 /** The member's sign-in variables, kept out of every run here and put back after. */
-const signIns = Object.values(SIGN_IN_VARIABLES).flatMap(({ signIn, alongside = [] }) => [...signIn, ...alongside]);
+const signIns = Object.values(LAUNCH_ADAPTERS).flatMap((adapter: LaunchAdapter) => [...(adapter.signIn?.variables ?? []), ...(adapter.signIn?.alongside ?? [])]);
 const savedSignIns = Object.fromEntries(signIns.map((name) => [name, process.env[name]]));
 
 const writeFlow = (name: string, setup: string): void => {

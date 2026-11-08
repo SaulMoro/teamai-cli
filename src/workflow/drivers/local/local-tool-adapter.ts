@@ -12,7 +12,7 @@ import type { toolExtrasFor } from '../../../resources/agent-format.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
-import { isUsageLimitText } from '@teamai/runtime-protocol';
+import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { budgeted } from '../../limits.js';

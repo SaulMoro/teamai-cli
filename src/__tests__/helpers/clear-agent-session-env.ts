@@ -8,7 +8,8 @@ import { homeVariables, isToolId } from '../../tool-registry.js';
 import { GIT_REPOSITORY_ENV } from '../../utils/git-env.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 import { SESSION_APPS } from '../../workflow/session-apps.js';
-import { SIGN_IN_VARIABLES } from '@teamai/runtime-protocol';
+import { LAUNCH_ADAPTERS } from '../../tool-launch/adapters.js';
+import type { LaunchAdapter } from '@teamai/tool-core/launch';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),
 // and recall, contribute and session save read that id through
@@ -47,7 +48,7 @@ for (const name of GIT_REPOSITORY_ENV) {
 // A step runtime that declares no credential gets the tools' sign-in variables
 // found in the member's environment, by name, so the developer's own would
 // reach every runtime a test starts. A test that needs one sets it.
-for (const name of Object.values(SIGN_IN_VARIABLES).flatMap(({ signIn, alongside = [] }) => [...signIn, ...alongside])) {
+for (const name of Object.values(LAUNCH_ADAPTERS).flatMap((adapter: LaunchAdapter) => [...(adapter.signIn?.variables ?? []), ...(adapter.signIn?.alongside ?? [])])) {
   delete process.env[name];
 }
 

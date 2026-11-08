@@ -27,6 +27,7 @@ function readCodexExec({ stdout, lastMessage }: CallOutput): CallReading {
 /** How teamai launches Codex and its variants headless; each variant starts its own command. */
 export const launch = {
   codex: {
+    signIn: { variables: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
     call: { evidence: 'verified', prompt: 'stdin', args: ({ lastMessageFile }) => ['exec', '--json', '--skip-git-repo-check', '-o', lastMessageFile, '-'], read: readCodexExec },
     // `codex exec --help` of codex-cli 0.165.0: "Intended solely for running in environments that are externally sandboxed".
     step: { evidence: 'verified', unattended: { args: ['--dangerously-bypass-approvals-and-sandbox'], evidence: 'docs' } },

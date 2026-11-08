@@ -113,30 +113,6 @@ export function fitReason(reason: string): string {
   return reason.length > UNAVAILABLE_REASON_MAX ? `${reason.slice(0, UNAVAILABLE_REASON_MAX - 1)}…` : reason;
 }
 
-/**
- * The environment variables each tool a step runtime launches signs in with (`signIn`), and those that go with a sign-in
- * (`alongside`), by tool. teamai finds them by name in the member's environment and gives each tool only its own; a
- * runtime that checks whether a tool can sign in reads the same names.
- */
-export interface SignInVariables {
-  signIn: readonly string[];
-  alongside?: readonly string[];
-  /** The variable that points the tool at a model gateway, and the one that holds the token it signs in to it with. */
-  gateway?: GatewayVariables;
-}
-
-/** A tool's gateway variables: `url`, its base URL, and `token`, what signs the tool in to it. */
-export interface GatewayVariables {
-  url: string;
-  token: string;
-}
-
-export const SIGN_IN_VARIABLES: Readonly<Record<'claude' | 'codex' | 'codebuddy', SignInVariables>> = {
-  claude: { signIn: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'], alongside: ['ANTHROPIC_BASE_URL'], gateway: { url: 'ANTHROPIC_BASE_URL', token: 'ANTHROPIC_AUTH_TOKEN' } },
-  codex: { signIn: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
-  codebuddy: { signIn: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN'] },
-};
-
 /** A runtime's options, as a driver definition gives them; the runtime validates them at `init`. */
 export const RuntimeOptionsSchema = z.record(z.string(), z.json());
 
@@ -473,19 +449,6 @@ export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
  * code as `runtime_failed`, naming it in the message.
  */
 export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed', 'usage_limited'] as const;
-
-/**
- * Whether `text`, a tool's own error or last message, says it stopped on its usage limit: Claude Code's "You've hit your
- * limit · resets 3pm (Europe/Madrid)", "5-hour limit reached ∙ resets 2pm" or older "Claude AI usage limit
- * reached|<time>", and Codex's "You've hit your usage limit. … try again at 3:04 PM.". A rate limit the model's API
- * answered is one too, retried the same way: Claude Code's "API Error: Request rejected (429) · …" or "API Error: 429
- * {… rate_limit_error …}", Codex's "exceeded retry limit, last status: 429 Too Many Requests", and "Rate limit reached
- * for …". The tool's line starts the text, so a reply that only mentions a limit is not one. Such a failure is
- * `usage_limited`.
- */
-export function isUsageLimitText(text: string): boolean {
-  return /^(?:you(?:'|’)ve hit your (?:(?:usage|session|weekly|daily|monthly|5-hour) )?limit\b|claude ai usage limit reached\b|(?:5-hour|session|weekly|daily|monthly) limit reached\b|rate limit reached for\b|api error:[^\n]*(?:\b429\b|rate_limit_error)|exceeded retry limit, last status: 429\b)/i.test(text.trim());
-}
 
 /** What a runtime kept of a confined prompt: the level it enforced, and what the agent could do in the directory. */
 export const ConfinedKeptSchema = z.object({ level: ConfinedLevelSchema, access: z.enum(ACCESS_LEVELS) });

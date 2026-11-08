@@ -70,9 +70,29 @@ export interface ConfinedLaunch {
   readonly access: ConfinedAccess;
 }
 
+/** A tool's gateway variables: `url`, its base URL, and `token`, what signs the tool in to it. */
+export interface GatewayVariables {
+  readonly url: string;
+  readonly token: string;
+}
+
+/**
+ * The environment variables a tool signs in with (`variables`), and those that go with a sign-in (`alongside`). teamai
+ * finds them by name in the member's environment and gives each tool only its own; a step runtime that checks whether
+ * a tool can sign in reads the same names.
+ */
+export interface SignInVariables {
+  readonly variables: readonly string[];
+  readonly alongside?: readonly string[];
+  /** The variable that points the tool at a model gateway, and the one that holds the token it signs in to it with. */
+  readonly gateway?: GatewayVariables;
+}
+
 export interface LaunchAdapter {
   /** The command that starts the tool, when it is not the tool's id. */
   readonly executable?: string;
+  /** The variables the tool signs in with, for a tool a step runtime launches with the member's sign-in. */
+  readonly signIn?: SignInVariables;
   readonly call: CallLaunch;
   readonly step?: StepLaunch;
   readonly confined?: ConfinedLaunch;
