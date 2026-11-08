@@ -118,8 +118,8 @@ function socketOf(handle: string): string {
   return HandleSchema.parse(JSON.parse(handle)).socket;
 }
 
-/** Registers `agent` on the attempt socket, as an inner runtime does, and resolves with each answer it gets. */
-async function register(handle: string, agent: string | null): Promise<{ answers: Message[]; next: () => Promise<Message> }> {
+/** Registers `agent` on the attempt socket, as an inner runtime does: each answer it gets, and how it ends the connection. */
+async function register(handle: string, agent: string | null): Promise<{ answers: Message[]; next: () => Promise<Message>; close: () => Promise<void> }> {
   const socket = net.connect(socketOf(handle));
   registered.push(socket);
   await new Promise<void>((resolve, reject) => socket.once('connect', resolve).once('error', reject));
@@ -134,6 +134,10 @@ async function register(handle: string, agent: string | null): Promise<{ answers
 
   return {
     answers,
+    close: () => new Promise((resolve) => {
+      socket.once('close', () => resolve());
+      socket.end();
+    }),
     next: () => new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`no answer on the socket; got ${JSON.stringify(answers)}`)), 10_000);
 
@@ -401,6 +405,41 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(unregistered).toMatchObject({ code: 2, stdout: '' });
     expect(withAgent).toMatchObject({ code: 2, stdout: '' });
     expect(execsIn()).toEqual([]);
+  });
+
+  it('refuses a wrapper once the connection its step registered on closed, and serves it again after the step registers anew', async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at);
+    await (await register(handle, null)).close();
+    const afterClose = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+
+    expect(afterClose).toMatchObject({ code: 2, stdout: '' });
+    expect(afterClose.stderr).toContain('isolation_unproven');
+    expect(execsIn()).toEqual([]);
+    await register(handle, null);
+
+    expect(await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' })).toMatchObject({ code: 0 });
+    expect(execsIn()).toHaveLength(1);
+  });
+
+  it("tells a step that registers anew its wrapper connected only once that step's own wrapper has", async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at);
+    const first = await register(handle, null);
+    await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+    expect(await first.next()).toEqual({ connected: { agent: null } });
+    await first.close();
+    const second = await register(handle, null);
+
+    expect(await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' })).toMatchObject({ code: 0 });
+    expect(await second.next()).toEqual({ connected: { agent: null } });
+    // Settled past the wrapper's own word, so an earlier word would be in by now.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(second.answers).toEqual([{ connected: { agent: null } }]);
   });
 
   it("runs codex app-server in the attempt's sandbox, not on the host, even under a Paseo daemon", async () => {

@@ -107,8 +107,8 @@ function isServed(socketPath: string): Promise<boolean> {
 
 /**
  * Listens on `socketPath` for the inner runtime's registration and the wrapper's asks. Only the registered agent is
- * served: an ask before any registration, or from another agent (an app's helper agents in the same worktree), is
- * refused. A socket another runtime still serves (one teamai started to stop the run reattaches too) stays that
+ * served, while the connection it registered on stays open: an ask before any registration, after that connection
+ * closed, or from another agent (an app's helper agents in the same worktree), is refused. A socket another runtime still serves (one teamai started to stop the run reattaches too) stays that
  * runtime's. Never keeps this process alive on its own.
  */
 export async function listen(socketPath: string, answer: Answering): Promise<{ ok: true; socket: AttemptSocket } | { ok: false; failure: RuntimeFailure }> {
@@ -139,9 +139,11 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
     return { ok: false, failure: { code: 'sandbox_failed', message: `The attempt socket ${socketPath} a stopped runtime left cannot be removed: ${error instanceof Error ? error.message : String(error)}` } };
   }
 
-  /** The agent the inner runtime registered, once it did: a string, or null for an app that gives its tool no id. */
-  let registered: { agent: string | null } | undefined;
-  const registrations = new Set<net.Socket>();
+  /**
+   * The agent each open connection registered, in the order they registered: a string, or null for an app that gives
+   * its tool no id. A registration ends with its connection, and the latest one still open is the one served.
+   */
+  const registrations = new Map<net.Socket, string | null>();
   /** Every connection open now: a close ends them all, since the server closes only once none is left. */
   const clients = new Set<net.Socket>();
   const granted = new Set<string | null>();
@@ -151,7 +153,7 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
   };
 
   const connected = (agent: string | null): void => {
-    for (const client of registrations) say(client, { connected: { agent } });
+    for (const client of registrations.keys()) say(client, { connected: { agent } });
   };
 
   const server = net.createServer((client) => {
@@ -159,7 +161,11 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
     client.on('error', () => client.destroy());
     client.on('close', () => {
       clients.delete(client);
+      const agent = registrations.get(client);
       registrations.delete(client);
+
+      // A wrapper connected for a registration that ended says nothing to the next one of its agent.
+      if (agent !== undefined && ![...registrations.values()].includes(agent)) granted.delete(agent);
     });
     readline.createInterface({ input: client }).on('line', (line) => {
       void (async () => {
@@ -180,8 +186,9 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
         const request = parsed.data;
 
         if ('register' in request) {
-          registered = { agent: request.register.agent };
-          registrations.add(client);
+          // A registration again on the same connection is the latest one.
+          registrations.delete(client);
+          registrations.set(client, request.register.agent);
 
           if (granted.has(request.register.agent)) say(client, { connected: { agent: request.register.agent } });
 
@@ -189,16 +196,17 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
         }
 
         const { ask } = request;
+        const registered = [...registrations.values()].at(-1);
 
         if (registered === undefined) {
-          say(client, { refused: { code: 'isolation_unproven', message: 'No step on this attempt has registered for its tool yet, so this sandbox runs nothing for it.' } });
+          say(client, { refused: { code: 'isolation_unproven', message: 'No step on this attempt is registered for its tool: none registered yet, or the connection it registered on closed. So this sandbox runs nothing for it.' } });
 
           return;
         }
 
-        if (registered.agent !== ask.agent) {
+        if (registered !== ask.agent) {
           const asked = ask.agent === null ? 'with no agent id' : `for agent ${ask.agent}`;
-          const step = registered.agent === null ? "the step's own tool, which has no agent id" : `the tool of agent ${registered.agent}`;
+          const step = registered === null ? "the step's own tool, which has no agent id" : `the tool of agent ${registered}`;
           say(client, { refused: { code: 'isolation_unproven', message: `This attempt's sandbox runs only ${step}, and this one was started ${asked}.` } });
 
           return;
