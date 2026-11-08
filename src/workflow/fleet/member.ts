@@ -46,7 +46,8 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
   for (const entry of opened.runtimes) {
     if (entry.kind === 'local') return { kind: 'here' };
 
-    if (entry.use !== 'fleet' && entry.can.exec === true) return { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime };
+    // A runtime runs commands unless it says it does not.
+    if (entry.use !== 'fleet' && entry.can.exec !== false) return { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime };
   }
 
   return { refused: `Driver ${opened.asked} has no runtime that runs command steps, so this member can take no attempt on it. Use a driver with one, such as --driver local.` };
