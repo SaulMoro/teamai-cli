@@ -53,6 +53,8 @@ export interface Sandboxed {
   /** The step's own home and temp directory. */
   home: string;
   tmp: string;
+  /** Whether the command starts detached, as an exec does: leading a process group and a session of its own, with no terminal. */
+  isDetached: boolean;
 }
 
 /** The variables of the runtime's own environment a step's process keeps: what a shell and a locale need, no secret. */
@@ -70,8 +72,9 @@ const SIGTERM_GRACE_MS = 2_000;
  *
  * One kill of a group misses a child macOS forks meanwhile, which then outlives it, so the watcher kills the group until
  * none of it is left, from a group of its own (`set -m`) so it outlives its own kills; for at most five seconds. A shell
- * with no job control here (dash) keeps it in the group, killed with the first kill, as bwrap's pid namespace makes
- * enough.
+ * with no job control here (dash) keeps it in the group, killed with the first kill. On bwrap the step's pid namespace,
+ * its init included, stays in the group, as an exec goes without --new-session (bwrap.ts), so the group's kill ends it
+ * however early it comes.
  */
 const LAUNCH = 'set -m 2>/dev/null\n{ read -r _ || :; n=0; while kill -9 -$$ 2>/dev/null && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; } <&3 >/dev/null 2>&1 &\nset +m 2>/dev/null\nexec 3<&-\nexec "$@"';
 
@@ -225,7 +228,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
    * step sets), and the whole environment it runs with: only what a shell needs, the step's own home and temp
    * directory, and the spec's names, less those it withholds.
    */
-  const launchOf = (id: string, spec: ExecSpec): { ok: true; command: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; failure: RuntimeFailure } => {
+  const launchOf = (id: string, spec: ExecSpec, { isDetached }: Pick<Sandboxed, 'isDetached'>): { ok: true; command: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; failure: RuntimeFailure } => {
     const view = viewOf(id);
 
     if (view === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
@@ -246,6 +249,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       memberHome: realOf(home),
       home: own.home,
       tmp: own.tmp,
+      isDetached,
     });
 
     return { ok: true, command: onPath(command, env.PATH) ?? command, args, env: childEnv };
@@ -299,14 +303,15 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
 
     ...(sandbox.isolation === 'sandbox' && {
       client(id: string, spec: ExecSpec) {
-        const launch = launchOf(id, spec);
+        // An app's runtime may start the tool on a terminal.
+        const launch = launchOf(id, spec, { isDetached: false });
 
         return launch.ok ? { ok: true as const, argv: [launch.command, ...launch.args], env: definedOnly(launch.env) } : launch;
       },
     }),
 
     async exec(id, spec: ExecSpec, onOutput): Promise<ExecEnd> {
-      const launch = launchOf(id, spec);
+      const launch = launchOf(id, spec, { isDetached: true });
 
       if (!launch.ok) return { kind: 'failed', failure: launch.failure };
       const { command, args, env: childEnv } = launch;
