@@ -89,6 +89,8 @@ rule.invalid("rejects production code importing a family's test-only recordings"
   expect(output).toContain("@teamai/tool-claude/testing is test-only");
 }, inWorkspace('src/tools.ts'));
 
+rule.invalid("rejects a family's test importing another family's recordings", `import { codexFake } from '@teamai/tool-codex/testing';`, undefined, inWorkspace('packages/tool-claude/src/testing/fake-agent.test.ts'));
+
 rule.invalid('still rejects a test importing the rest of a family', `import { family } from '@teamai/tool-claude';`, undefined, inWorkspace('src/__tests__/e2e/codebase-enrich-workflow.test.ts'));
 
 rule.valid('allows a package importing its own files', `import { definition } from './definition.js';`, inWorkspace('packages/tool-core/src/sessions.ts'));
