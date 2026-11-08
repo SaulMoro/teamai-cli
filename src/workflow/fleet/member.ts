@@ -197,7 +197,8 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
     // writing skips the next, and the result waits for it, so each write replaces the one before. Between beats further
     // apart than CANCEL_READ_MS, the member reads the record for a cancel.
     const beatMs = Math.max(1_000, Math.floor(claim.staleAfterMs / 3));
-    const tickMs = Math.min(beatMs, CANCEL_READ_MS);
+    // Ticks divide a beat evenly, so beats come every beatMs, not at the next whole tick after it.
+    const tickMs = Math.ceil(beatMs / Math.ceil(beatMs / CANCEL_READ_MS));
     let sinceBeat = 0;
 
     const beat = setInterval(() => {
@@ -242,7 +243,8 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
 
     if ('error' in saved) return finish({ ...ran, exitCode: ran.exitCode === 0 ? 1 : ran.exitCode, stderr: saved.error });
 
-    return finish(saved.to === from ? ran : { ...ran, to: saved.to });
+    // A restarted member goes on from work its killed run pushed, which is the step's work even when this run adds none.
+    return finish(saved.to === claim.start ? ran : { ...ran, to: saved.to });
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }

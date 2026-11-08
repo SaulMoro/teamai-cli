@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseValues, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -416,6 +416,27 @@ describe('the owner\'s driver', () => {
 });
 
 describe('a restarted member', () => {
+  it('finishes with the work its killed run pushed when the step adds nothing to it', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'test -f left.txt'), command: 'test -f left.txt' });
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const ref = `refs/heads/teamai/attempts/${run}/${ATTEMPT}`;
+    git(bob.checkout, 'fetch', '-q', 'origin', ref);
+    const work = path.join(path.dirname(bob.checkout), 'bob-left');
+    git(bob.checkout, 'worktree', 'add', '-q', '--detach', work, 'FETCH_HEAD');
+    fs.writeFileSync(path.join(work, 'left.txt'), 'kept\n');
+    git(work, 'add', '-A');
+    git(work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'left');
+    git(work, 'push', '-q', 'origin', `HEAD:${ref}`);
+    const left = git(work, 'rev-parse', 'HEAD');
+    git(bob.checkout, 'worktree', 'remove', '--force', work);
+    await readableReportsWorktree(bob.config);
+
+    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'finished', result: { exitCode: 0, to: left } });
+  });
+
   it('stops the command it left running, and finishes the claim it held from the work it pushed', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN, command: 'test -f left.txt && echo again > again.txt' });
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
@@ -498,5 +519,14 @@ describe('the values an offer carries', () => {
     );
 
     expect(read).toEqual({ values: { inputs: { config: { target: 'web' } }, outputs: { plan: { commit: { sha: 'abc' } } }, item: { name: 'one' } } });
+  });
+
+  it('carries an item whose field the env reads is missing, so the member renders the env as the owner did', () => {
+    const step = { id: 'part', env: { PART: '{{ item.name }}' } };
+    const read = leaseValues(step, { inputs: {}, steps: {}, run: { id: 'r0123abcd' }, item: { path: '/Users/alice/one' } });
+    if (!('values' in read)) throw new Error(read.error);
+
+    // As the owner renders it, from the whole item.
+    expect(leaseEnv(step, read.values, RUN)).toEqual(leaseEnv(step, { item: { path: '/Users/alice/one' } }, RUN));
   });
 });
