@@ -758,6 +758,12 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 - In a directory that is no git repository, nothing can check an answer, so on the local driver answers there do
   not wait for each other, with or without `workspace: new`.
 - A prompt has no default timeout. Give the step one.
+- `workflows.idle_timeout`, a duration in `~/.teamai/config.yaml` or a workspace's `config.yaml`, stops a tool that prints nothing for that long and fails the step `tool_failed`; a value that is no duration fails it `tool_unconfigured`. Claude prints its answer only when the call ends, so give it more than its longest answer takes:
+
+  ```yaml
+  workflows:
+    idle_timeout: 5m
+  ```
 - It fails `tool_unavailable` when no tool is installed, `tool_unconfigured` when the tool the member names cannot run, `tool_failed` when the call fails, and `invalid_output` when the reply holds no JSON its `output` takes. A tool whose call can continue its session (Claude, OpenCode) is first asked once more in that session, within the step's timeout, with its reply quoted back.
 
 Another driver gets an answer step as a prompt lease with `answer: true` and no separate workspace, or with

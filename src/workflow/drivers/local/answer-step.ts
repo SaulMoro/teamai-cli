@@ -7,7 +7,8 @@ import { createToolCaller, type CallOptions, type ToolCallerDeps } from '../../.
 import { JsonValueSchema, type JsonValue, type LocalConfig } from '../../../types.js';
 import type { ReportInput } from '../../engine.js';
 import { expectedOutput, outputMismatch } from '../../output.js';
-import type { z } from 'zod';
+import { durationMs } from '../../parse.js';
+import { z } from 'zod';
 import type { OutputSchema, WorkflowFailure } from '../../types.js';
 
 export type AnswerReport = Pick<ReportInput, 'outcome' | 'outputs' | 'tool' | 'tokens' | 'durationMs' | 'message' | 'failure'>;
@@ -55,6 +56,19 @@ export async function runAnswerStep({ config, prompt, output, cwd, expiresAt, si
 }): Promise<AnswerReport> {
   const caller = createToolCaller(resolveTool ? { resolveTool } : {});
   const options: CallOptions = { launchedBy: 'answer', scope: config, cwd, signal };
+
+  const idle = config.workflows?.idle_timeout;
+
+  if (idle !== undefined) {
+    const text = z.string().safeParse(idle);
+    const ms = text.success ? durationMs(text.data) : undefined;
+
+    if (ms === undefined) {
+      return failed({ code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` });
+    }
+
+    options.idleTimeout = ms;
+  }
 
   // The lease expires at the step's timeout, which the call then keeps.
   if (expiresAt !== undefined) options.timeout = Math.max(1, Date.parse(expiresAt) - Date.now());
