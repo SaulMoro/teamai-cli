@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
+import { durationMs as parsedDuration } from '../../parse.js';
 import { toolExtrasFor, type AgentSpec } from '../../../resources/agent-format.js';
 import { observeLaunch, type ToolLaunch, type Used } from '../../../agent-observation.js';
 import { detectProjectConfig } from '../../../config.js';
@@ -553,6 +554,21 @@ async function outerToolHome({ dir, tool, variable, memberHome }: { dir: string;
   return { variable, dir };
 }
 
+/** `workflows.idle_timeout` in milliseconds, unset when the member set none; a value that is no duration fails the step. */
+function idleLimit(config: LocalConfig): { ms?: number } | { failure: WorkflowFailure } {
+  const idle = config.workflows?.idle_timeout;
+
+  if (idle === undefined) return {};
+  const text = z.string().safeParse(idle);
+  const ms = text.success ? parsedDuration(text.data) : undefined;
+
+  if (ms === undefined) {
+    return { failure: { code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` } };
+  }
+
+  return { ms };
+}
+
 async function promptReport(
   config: LocalConfig,
   lock: RunLock,
@@ -589,6 +605,9 @@ async function promptReport(
   // The name the step runs its tool by, an instance's own: its report, delivery and sessions are credited to it.
   const { target } = choice;
   const launched = target.name;
+  const idle = idleLimit(config);
+
+  if ('failure' in idle) return giveUp(idle.failure, launched);
 
   // A team instance's own command runs only once a person accepted it here.
   if (target.instance) {
@@ -805,6 +824,8 @@ async function promptReport(
   if (budget !== undefined) input.budget = budget;
 
   if (limits?.timeoutMs !== undefined) input.timeoutMs = limits.timeoutMs;
+
+  if (idle.ms !== undefined) input.idleTimeoutMs = idle.ms;
 
   if (lease.permissions === 'unattended') input.unattended = true;
 

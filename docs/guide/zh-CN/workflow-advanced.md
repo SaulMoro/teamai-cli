@@ -64,6 +64,8 @@ workflows:
   auto_approve: false
 ```
 
+`workflows.idle_timeout` 是一个时长，例如 `5m`：提示词步骤启动的 Claude 若这么久没有任何输出，就会被停止，步骤以 `tool_failed` 失败；不是时长的值会让步骤以 `tool_unconfigured` 失败。它只作用于没有终端时为提示词步骤启动的 Claude，这种 Claude 会逐条输出消息。只在结束时才输出的工具总会达到这个限制，所以其他工具以及在终端里运行的 Claude 都没有这个限制。
+
 当前检出目录里的提示词要等该目录空闲后才启动，结束前该目录里不会再启动别的步骤。只读检查比较的是这个检出目录在提示词前后的状态。`workspace: new` 的提示词在自己的 worktree 里运行，因此可以和其他 worktree 里的步骤重叠，上限是 `max_parallel`。没有 `workspace` 的命令共用检出目录，并且和那里的其他步骤一次只运行一个。
 
 `max_parallel` 大于 1 时：

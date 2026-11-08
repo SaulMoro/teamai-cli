@@ -47,6 +47,12 @@ export interface LocalToolRun {
   budget?: number;
   /** How long the tool may run from its spawn before it is stopped. */
   timeoutMs?: number;
+  /**
+   * How long the tool may print nothing before it is stopped. Only a launch known to stream its output takes it: headless
+   * Claude, whose `stream-json` prints each message as it comes. A launch that prints only once it ends would always reach
+   * the limit, so every other launch has none.
+   */
+  idleTimeoutMs?: number;
   /** Launch the tool in its own mode for editing and running commands without asking (`permissions: unattended`). */
   unattended?: true;
   /** The command that starts the tool, when an instance of it has its own; the tool's own command otherwise. */
@@ -389,7 +395,7 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       const meter = input.budget !== undefined ? tokenMeter(launchAdapterIdOf(tool)) : undefined;
       let metered: TokenUsage | undefined;
       // The first reason a stop was sent, so a limit crossed while the tool shuts down does not replace it.
-      let stopCause: 'timeout' | 'budget' | 'aborted' | undefined;
+      let stopCause: 'timeout' | 'budget' | 'idle' | 'aborted' | undefined;
       let partial = '';
       const env: NodeJS.ProcessEnv = { ...input.env ?? process.env };
 
@@ -399,7 +405,19 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       if (input.launch) Object.assign(env, launchEnv(input.launch));
       env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
 
+      // Each chunk the tool prints restarts the idle limit, so a tool that streams lives and a silent one is stopped.
+      const idleMs = !interactive && launchAdapterIdOf(tool) === 'claude' && input.idleTimeoutMs !== undefined && input.idleTimeoutMs <= MAX_TIMER_DELAY ? input.idleTimeoutMs : undefined;
+      let idleTimer: NodeJS.Timeout | undefined;
+
+      const active = (): void => {
+        if (idleMs === undefined) return;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => stopAt('idle'), idleMs);
+      };
+
       const onStdout = (text: string): void => {
+        active();
+
         if (!meter || input.budget === undefined) return;
         // A long line arrives over many chunks: only the chunk that ends it is split.
         const end = text.lastIndexOf('\n');
@@ -420,7 +438,7 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
 
       const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStdout });
 
-      function stopAt(limit: 'timeout' | 'budget'): void {
+      function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {
         stopCause ??= limit;
         void processRun.stop();
       }
@@ -428,6 +446,8 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_DELAY
         ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
         : undefined;
+
+      active();
 
       const abort = (): void => {
         const reason: unknown = signal?.reason;
@@ -441,10 +461,19 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       if (signal?.aborted) abort();
       const completed = await processRun.closed;
       clearTimeout(timer);
+      clearTimeout(idleTimer);
 
       if (stopCause !== undefined) await processRun.stop();
       signal?.removeEventListener('abort', abort);
-      const stopped = stopCause === 'aborted' ? undefined : stopCause;
+
+      if (stopCause === 'idle' && idleMs !== undefined) {
+        return {
+          started: processRun.started(), exitCode: 'exitCode' in completed ? completed.exitCode : 1, ...applied,
+          failure: { code: 'tool_failed', message: `${tool} printed nothing for ${idleMs / 1000}s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.` },
+        };
+      }
+
+      const stopped = stopCause === 'aborted' || stopCause === 'idle' ? undefined : stopCause;
 
       if ('failure' in completed) return { started: processRun.started(), exitCode: 1, ...applied, failure: completed.failure };
 
