@@ -4,6 +4,7 @@ import {
   type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
+import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import type { InstanceAdder } from './instances.js';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
 import { JUDGE_KEPT, JudgeCopyFailed, JudgeReleased, judged, launchJudge } from './judge.js';
@@ -574,7 +575,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     const wrapped = through && await adder.wrapperFor(s, lease.tool, { op: request.op });
 
     if (wrapped && !wrapped.ok) {
-      await refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: adder.notAdded(`teamai-sandbox-${lease.tool}`, undefined, wrapped) } });
+      await refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: adder.notAdded(`${WRAPPER_PREFIX}${lease.tool}`, undefined, wrapped) } });
 
       return;
     }

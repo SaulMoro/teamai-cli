@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import readline from 'node:readline';
+import { OuterHandleSchema, RegisterSchema, WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { z } from 'zod';
 
 // ─── Test support: the sandbox side of a place that runs through one ───
@@ -13,7 +14,7 @@ import { z } from 'zod';
 //
 
 const LineSchema = z.union([
-  z.object({ register: z.object({ agent: z.string().nullable() }) }),
+  RegisterSchema,
   z.object({ ask: z.object({ tool: z.string(), agent: z.string().nullable(), cwd: z.string() }) }),
 ]);
 
@@ -102,7 +103,7 @@ export async function serveAttemptSocket({ grants = true, holdUntil }: { grants?
 
   return {
     socket,
-    handle: JSON.stringify({ place: 'teamai-sandbox-place', socket }),
+    handle: JSON.stringify(OuterHandleSchema.parse({ place: 'teamai-sandbox-place', socket })),
     lines,
     close: async () => {
       for (const client of registrations) client.destroy();
@@ -118,7 +119,7 @@ export async function serveAttemptSocket({ grants = true, holdUntil }: { grants?
  */
 export function writeFakeWrapper({ bin, tool, socket }: { bin: string; tool: string; socket: string }): string {
   fs.mkdirSync(bin, { recursive: true });
-  const file = path.join(bin, `teamai-sandbox-${tool}`);
+  const file = path.join(bin, `${WRAPPER_PREFIX}${tool}`);
   fs.writeFileSync(file, `#!${process.execPath}
 const net = require('node:net');
 const client = net.connect(${JSON.stringify(socket)});

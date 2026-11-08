@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeRequest } from '@teamai/runtime-protocol';
-import { registerThrough } from '@teamai/runtime-kit/outer';
+import { registerThrough, WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { endedIn, stillRuns, STOP_WAIT_MS, tasksOf, TERMINAL, threadDisplay, threadLink, whyNotStopped, type Conversations } from './conversation.js';
 import type { InstanceAdder } from './instances.js';
 import { unreadableFailure, type LaunchRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
@@ -148,7 +148,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       const wrapped = await adder.wrapperFor(session, request.tool, { op: request.op });
 
       if (!wrapped.ok) {
-        fail(request.op, { code: 'open_failed', message: adder.notAdded(`teamai-sandbox-${request.tool}`, undefined, wrapped) });
+        fail(request.op, { code: 'open_failed', message: adder.notAdded(`${WRAPPER_PREFIX}${request.tool}`, undefined, wrapped) });
 
         return;
       }

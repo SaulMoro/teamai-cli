@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fitReason, type OpId } from '@teamai/runtime-protocol';
+import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstance } from './add-instance.js';
 import type { ServeOptions, Serving, Session } from './runtime.js';
@@ -153,7 +154,7 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
   };
 
   const wrapperFor = (s: Session, tool: string, about: { op: OpId }): Promise<NotAdded | Added> => {
-    const command = `teamai-sandbox-${tool}`;
+    const command = `${WRAPPER_PREFIX}${tool}`;
     const driver = driverFor(s, tool);
 
     if (driver === undefined) return Promise.resolve({ ok: false, kind: 'not-added', why: `T3 Code runs no ${tool} here, so teamai cannot tell which provider driver its wrapper needs` });

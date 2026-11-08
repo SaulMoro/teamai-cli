@@ -1,5 +1,5 @@
 import { CANCEL_FAILED, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
-import { socketOf, type Registration } from '@teamai/runtime-kit/outer';
+import { socketOf, WRAPPER_PREFIX, type Registration } from '@teamai/runtime-kit/outer';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import type { Daemon, Target } from './daemon/connect.js';
 import type { AgentPrompt, Place } from './journal.js';
@@ -9,7 +9,7 @@ import { addedNotice, homeVariableOf } from './providers.js';
 // ─── A place that runs through a sandbox ─────────────────
 //
 //  When a step runs `through: sandbox`, teamai opens its place in the sandbox runtime first and gives that handle here
-//  as `outer`. Paseo then runs the step's tool as teamai's wrapper, `teamai-sandbox-<tool>`, on a provider of its own,
+//  as `outer`. Paseo then runs the step's tool as teamai's wrapper, `WRAPPER_PREFIX` and the tool's name, on a provider of its own,
 //  and the wrapper asks the sandbox, over the attempt socket, how to start the tool there. A prompt's agent is
 //  registered on that socket before Paseo starts it, created with no prompt, and sent the prompt only once the sandbox
 //  says its wrapper connected, so the prompt never reaches a tool that runs outside the sandbox:
@@ -46,7 +46,7 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
   }
 
   if (target.tool === 'opencode') return cannot('Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step\'s agent from another; run OpenCode steps through the sandbox on another runtime');
-  const id = `teamai-sandbox-${target.name}`;
+  const id = `${WRAPPER_PREFIX}${target.name}`;
   let release: () => void;
 
   try {
@@ -148,6 +148,6 @@ export async function handOver(live: Daemon, { record, provider, registration, s
 
   return {
     code: 'isolation_unproven',
-    message: `The ${record.tool} agent ${agentId} started on Paseo provider ${provider}, but its wrapper did not connect to the attempt's sandbox (${outcome}), so teamai never sent it the prompt, and ${removal}. Check that the provider runs teamai-sandbox-${record.tool}, and that the daemon starts it with the HOME teamai runs with, where it finds the attempt; the Paseo daemon's log says why it stopped. Then run the step again.`,
+    message: `The ${record.tool} agent ${agentId} started on Paseo provider ${provider}, but its wrapper did not connect to the attempt's sandbox (${outcome}), so teamai never sent it the prompt, and ${removal}. Check that the provider runs ${WRAPPER_PREFIX}${record.tool}, and that the daemon starts it with the HOME teamai runs with, where it finds the attempt; the Paseo daemon's log says why it stopped. Then run the step again.`,
   };
 }
