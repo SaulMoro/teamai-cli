@@ -16,7 +16,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import crossSpawn from 'cross-spawn';
+import type { ChildProcess } from 'node:child_process';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { resolveConfigForDir } from './config.js';
 import { reportMissingSecrets } from './env-advisories.js';
@@ -380,8 +381,19 @@ function run(
   const { forwarded, ignored } = commandSignalPolicy(reachesCommand);
 
   return new Promise((resolve) => {
-    // cross-spawn: on Windows, npm installs CLIs as .cmd shims spawn can't start.
-    const child = crossSpawn(file, [...args], { cwd, env, stdio: 'inherit' });
+    // On Windows, npm installs CLIs as .cmd shims, whose arguments spawnCommand escapes for cmd.exe twice.
+    let child: ChildProcess;
+
+    try {
+      child = spawnCommand(file, args, { cwd, env, stdio: 'inherit' });
+    } catch (cause) {
+      // cmd.exe cannot carry the arguments: told as a command that could not start is.
+      log.error(`Could not run ${file}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      resolve({ kind: 'exited', code: 127 });
+
+      return;
+    }
+
     const forward = (signal: NodeJS.Signals): void => { child.kill(signal); };
     const ignore = (): void => {};
 
