@@ -616,8 +616,8 @@ describe('teamai-runtime-t3', () => {
       };
 
       /** Opens the step's place with the sandbox's handle as its outer, and answers how the open ended. */
-      const openThrough = async (runtime: Connection, handle: string = outer()): Promise<Line> => {
-        runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', tool: 'claude', credentials: {}, outer: handle, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: { CLAUDE_CONFIG_DIR: toolHome } } });
+      const openThrough = async (runtime: Connection, handle: string = outer(), tool = 'claude'): Promise<Line> => {
+        runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', tool, credentials: {}, outer: handle, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: { CLAUDE_CONFIG_DIR: toolHome } } });
         await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
 
         return runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted' && !isNotice(line), 30_000);
@@ -668,6 +668,18 @@ describe('teamai-runtime-t3', () => {
         expect(await openThrough(runtime)).toMatchObject({ event: 'failed', failure: { code: 'not_a_t3_project' } });
         await expect.poll(() => lines).toHaveLength(1);
         await expect.poll(() => clients.size).toBe(0);
+      });
+
+      it('refuses Codex before registering anything or adding a provider instance, since T3 cannot run it through a sandbox', async () => {
+        fs.writeFileSync(path.join(bin, 'teamai-sandbox-codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        const runtime = await throughSandbox();
+
+        expect(await openThrough(runtime, outer(), 'codex')).toMatchObject({
+          event: 'failed',
+          failure: { code: 'open_failed', message: 'Runtime t3 runs only Claude through a sandbox: T3 Code starts Codex as an app server outside the step\'s folder, and teamai\'s wrapper cannot yet tell which attempt it belongs to. Run this step on T3 without through: sandbox, or on the sandbox runtime alone.' },
+        });
+        expect(lines).toEqual([]);
+        expect(settingsNow()).not.toHaveProperty(['providerInstances', 'teamai-sandbox-codex']);
       });
 
       it('fails the open, naming the command, when teamai\'s wrapper for the tool is not on PATH', async () => {

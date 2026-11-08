@@ -138,6 +138,10 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     // leaves T3 with no provider instance for nothing; registered before the app can start the tool, so the sandbox
     // grants the wrapper its first ask.
     if (request.outer !== undefined && request.tool !== undefined) {
+      if (adder.driverFor(session, request.tool) === 'codex') {
+        return fail(request.op, { code: 'open_failed', message: `Runtime t3 runs only Claude through a sandbox: T3 Code starts Codex as an app server outside the step's folder, and teamai's wrapper cannot yet tell which attempt it belongs to. Run this step on T3 without through: sandbox, or on the sandbox runtime alone.` });
+      }
+
       const why = await register(handle, request.outer);
 
       if (why !== undefined) return fail(request.op, unregistered(why));

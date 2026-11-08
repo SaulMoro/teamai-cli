@@ -4,7 +4,7 @@ import { fitReason, type OpId } from '@teamai/runtime-protocol';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstance } from './add-instance.js';
 import type { ServeOptions, Serving, Session } from './runtime.js';
-import { DRIVERS, driverOf } from './sessions.js';
+import { DRIVERS, driverOf, type Driver } from './sessions.js';
 import type { readSettings } from './settings.js';
 import { driverOfProvider, tilde, type ServedInstances } from './tool-instances.js';
 import type { Provider } from './t3.js';
@@ -145,10 +145,16 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
    * `teamai-sandbox-<tool>`, which asks the sandbox to start the tool. teamai adds it on the first open through a
    * sandbox that runs the tool, as it adds a tool instance's.
    */
+  /** The provider driver T3 runs `tool` with: its served instance's, else the one its name says. */
+  const driverFor = (s: Session, tool: string): Driver | undefined => {
+    const served = s.instances.get(tool);
+
+    return (served && driverOfProvider(served)) ?? driverOf(tool);
+  };
+
   const wrapperFor = (s: Session, tool: string, about: { op: OpId }): Promise<NotAdded | Added> => {
     const command = `teamai-sandbox-${tool}`;
-    const served = s.instances.get(tool);
-    const driver = (served && driverOfProvider(served)) ?? driverOf(tool);
+    const driver = driverFor(s, tool);
 
     if (driver === undefined) return Promise.resolve({ ok: false, kind: 'not-added', why: `T3 Code runs no ${tool} here, so teamai cannot tell which provider driver its wrapper needs` });
     const found = findOnPath(command);
@@ -178,7 +184,7 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
     }
   };
 
-  return { toBeAdded, instanceFor, wrapperFor, notAdded };
+  return { toBeAdded, instanceFor, driverFor, wrapperFor, notAdded };
 }
 
 export type InstanceAdder = ReturnType<typeof instanceAdder>;
