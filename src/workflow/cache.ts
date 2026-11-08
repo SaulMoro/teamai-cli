@@ -25,6 +25,7 @@ import { stepWorkflow, type CachedWorkflow, type OutputSchema, type ResolvedWork
 import { DefaultWorkflows } from '../default-workflows.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 import { createGit, getDefaultBranch } from '../utils/git.js';
+import { failureReason } from '../utils/branch-worktree.js';
 import { git as gitAt } from './worktree.js';
 import {
   remotelyReachableRevision, revisionHoldsSources, withoutStaleTeamRevision, type ReachableRevision,
@@ -857,19 +858,33 @@ export async function loadWorkflowBundleAt(config: LocalConfig, name: string, re
 }
 
 /**
- * Where team commit `revision` is, for a member about to read workflows at it: `member` when the member would run it
- * itself, as its team checkout or the team's default branch on origin holds it; `elsewhere` when only another ref has it,
- * such as a side branch or teamai-reports, whose commits come from whoever can push there; `missing` when the team repo
- * lacks it even after fetching origin, which `withTeamRevision` then reports with the fetch's own error.
+ * Where team commit `revision` is, for a member about to read workflows at it, from `checkout`, the repository that
+ * holds the team's files (the business repository in self mode): `member` when the member would run it itself, as
+ * `checkout`'s HEAD or the team's default branch on origin holds it; `elsewhere` when only another ref has it, such as a
+ * side branch or teamai-reports, whose commits come from whoever can push there; `missing` when `checkout` lacks it
+ * even after fetching origin, with `fetchError`, the fetch's own error, when the fetch failed.
  */
-export async function teamCommitReach(config: LocalConfig, revision: string): Promise<'member' | 'elsewhere' | 'missing'> {
-  const repoRoot = isSelfMode(config) ? getBusinessRoot(config) : config.repo.localPath;
-  const present = async (): Promise<boolean> => (await gitAt(repoRoot, ['cat-file', '-e', `${revision}^{commit}`])).code === 0;
+export type TeamCommitReach =
+  | { kind: 'member' }
+  | { kind: 'elsewhere'; checkout: string; selfMode: boolean }
+  | { kind: 'missing'; checkout: string; fetchError: string | undefined };
 
-  if (!await present() && ((await gitAt(repoRoot, ['fetch', '--quiet', 'origin'])).code !== 0 || !await present())) return 'missing';
-  const reaches = async (tip: string): Promise<boolean> => (await gitAt(repoRoot, ['merge-base', '--is-ancestor', revision, tip])).code === 0;
+export async function teamCommitReach(config: LocalConfig, revision: string): Promise<TeamCommitReach> {
+  const selfMode = isSelfMode(config);
+  const checkout = selfMode ? getBusinessRoot(config) : config.repo.localPath;
+  const present = async (): Promise<boolean> => (await gitAt(checkout, ['cat-file', '-e', `${revision}^{commit}`])).code === 0;
 
-  return await reaches('HEAD') || await reaches(`refs/remotes/origin/${await getDefaultBranch(repoRoot)}`) ? 'member' : 'elsewhere';
+  if (!await present()) {
+    const fetched = await gitAt(checkout, ['fetch', '--quiet', 'origin']);
+
+    if (fetched.code !== 0) return { kind: 'missing', checkout, fetchError: failureReason(fetched.stderr) || `git fetch exited with code ${fetched.code}` };
+
+    if (!await present()) return { kind: 'missing', checkout, fetchError: undefined };
+  }
+
+  const reaches = async (tip: string): Promise<boolean> => (await gitAt(checkout, ['merge-base', '--is-ancestor', revision, tip])).code === 0;
+
+  return await reaches('HEAD') || await reaches(`refs/remotes/origin/${await getDefaultBranch(checkout)}`) ? { kind: 'member' } : { kind: 'elsewhere', checkout, selfMode };
 }
 
 /**

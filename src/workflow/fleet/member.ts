@@ -389,7 +389,7 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
   const { run, lease, definition, values } = claim;
   const { teamRevision, ...named } = definition;
   // A team commit the member would not run itself names no definitions: without it, only its own copy can match.
-  const isTrusted = teamRevision !== undefined && await teamCommitReach(config, teamRevision) === 'member';
+  const isTrusted = teamRevision !== undefined && (await teamCommitReach(config, teamRevision)).kind === 'member';
   const found = await definitionsOf(config, { run, ...named, ...(isTrusted && { teamRevision }) });
 
   if (!found.ok && teamRevision !== undefined && !isTrusted) {

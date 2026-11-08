@@ -839,6 +839,27 @@ steps:
     expect(JSON.parse(originFile(acme.origin, `workflows/runs/${runId}/state.json`) ?? '{}')).toMatchObject({ stateRevision: 1 });
   });
 
+  it('refuses a claim with the fetch\'s own error when the team repo lacks the commit the run ran at and cannot fetch it', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const bob = await acme.member('bob');
+    const before = git(bob.config.repo.localPath, 'rev-parse', 'HEAD');
+    const changed = acme.change({ 'workflows/build.yaml': BUILD.replace('echo two', 'echo second') });
+    await pull(alice);
+    const runId = await start(alice);
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    git(path.dirname(acme.origin), '--git-dir', acme.origin, 'update-ref', 'refs/heads/main', before);
+    // A ref under origin/main's name stops the fetch from updating origin/main.
+    git(bob.config.repo.localPath, 'update-ref', '-d', 'refs/remotes/origin/main');
+    git(bob.config.repo.localPath, 'update-ref', 'refs/remotes/origin/main/stuck', 'HEAD');
+
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({
+      ok: false,
+      error: { code: 'definition_mismatch', teamRevision: changed, message: expect.stringMatching(new RegExp(`the team repo at ${bob.config.repo.localPath} does not have it, and fetching origin failed \\(error: some local refs could not be updated; `)) },
+    });
+    expect(await readRun(bob.config, runId)).toBe('missing');
+  });
+
   it('refuses a claim, telling to pull, when no team commit holds the workflows the run ran and this machine has others', async () => {
     const acme = team();
     const alice = await acme.member('alice');
@@ -906,7 +927,8 @@ steps:
     expect(await readRun(bob.config, older)).toBe('missing');
   });
 
-  it('claims a run of a team that keeps its workflows in the business repository, as the commit it ran at holds them', async () => {
+  /** A team that keeps its workflows in the business repository, `seed`, pushed to `origin`, and a member's clone of it. */
+  function selfModeTeam(): { seed: string; origin: string; member: (name: string) => Promise<Member> } {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-handoff-self-')));
     dirs.push(root);
     const seed = path.join(root, 'seed');
@@ -931,6 +953,11 @@ steps:
       await syncScorersThenWorkflows(config);
       return { config, checkout, driver: { kind: 'local', machine: name, workspace: checkout } };
     };
+    return { seed, origin, member };
+  }
+
+  it('claims a run of a team that keeps its workflows in the business repository, as the commit it ran at holds them', async () => {
+    const { seed, origin, member } = selfModeTeam();
     const alice = await member('alice');
     const bob = await member('bob');
     const runId = await start(alice);
@@ -944,6 +971,30 @@ steps:
 
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     expect(await leaseNext(bob.config, runId, bob.driver)).toMatchObject({ data: { lease: { step: 'two', command: 'echo two' } } });
+  });
+
+  it('names the business checkout when a run ran at a feature branch of it, and claims once that checkout is on the branch', async () => {
+    const { member } = selfModeTeam();
+    const alice = await member('alice');
+    const bob = await member('bob');
+    git(alice.checkout, 'checkout', '-qb', 'feature');
+    fs.writeFileSync(path.join(alice.checkout, '.teamai', 'workflows', 'build.yaml'), BUILD.replace('echo two', 'echo second'));
+    git(alice.checkout, '-c', 'user.name=A', '-c', 'user.email=a@a', 'commit', '-qam', 'change build');
+    git(alice.checkout, 'push', '-q', 'origin', 'feature');
+    await syncScorersThenWorkflows(alice.config);
+    const runId = await start(alice);
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({
+      ok: false,
+      error: { code: 'definition_mismatch', message: expect.stringContaining(`which neither this machine's checkout at ${bob.checkout} nor the team's default branch on origin holds`) },
+    });
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({
+      error: { message: expect.stringContaining(`; or, if you trust a branch that holds it, check that branch out in ${bob.checkout}, then claim again.`) },
+    });
+
+    git(bob.checkout, 'checkout', '-q', 'feature');
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
   });
 
   /** alice writes in the copy and publishes, bob claims and writes more and publishes, and alice claims the run back. */
