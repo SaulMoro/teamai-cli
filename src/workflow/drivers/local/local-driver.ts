@@ -83,8 +83,11 @@ type StagedResult = { kind: 'ran'; result: CommandExit } | { kind: 'unstaged'; f
 
 interface StagedCommand {
   exit: Promise<StagedResult>;
-  /** Aborts staging and setup, or stops the command once it runs. Settles once the attempt is over; a second call changes nothing. */
-  stop(): Promise<StagedResult>;
+  /**
+   * Aborts staging and setup, or stops the command once it runs: `cancel` when the run cancelled the step, rather than this
+   * driver stopping. Settles once the attempt is over.
+   */
+  stop(why?: 'cancel'): Promise<StagedResult>;
 }
 
 /** Whether a staged lease may start its command or tool: nothing stopped it, and its deadline has not passed. */
@@ -112,9 +115,9 @@ function stageThenStart(lease: Lease, stage: (signal: AbortSignal) => Promise<Wo
     return 'exitCode' in ended ? { kind: 'ran', result: ended } : { kind: 'unstaged', failure: ended };
   })();
 
-  return { exit, stop: async () => {
+  return { exit, stop: async (why) => {
     controller.abort();
-    await command?.stop();
+    await (why === 'cancel' && command?.cancel ? command.cancel() : command?.stop());
 
     return exit;
   } };
@@ -1393,7 +1396,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const interactiveRuns = (): boolean => [...prompts.values()].some(({ lease }) => lease.interactive);
   const room = (): boolean => !interactiveRuns() && busy() + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
 
-  const cancel = (attempt: string): void => {
+  /** Stops `attempt`'s step: `cancel` when the run cancelled it, rather than this driver stopping. */
+  const cancel = (attempt: string, why?: 'cancel'): void => {
     prompts.get(attempt)?.controller.abort();
     const index = held.findIndex((lease) => lease.attempt === attempt);
 
@@ -1403,7 +1407,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (!running) return;
     inFlight.delete(attempt);
     dying.set(attempt, { step: running.lease.step, lease: running.lease, command: running.command });
-    void running.command.stop();
+    void running.command.stop(why);
   };
 
   let wake = (): void => {};
@@ -1622,7 +1626,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         if (deadline !== undefined) held[index] = { ...lease, expiresAt: deadline };
       }
 
-      for (const attempt of cancelled.success ? cancelled.data : []) cancel(attempt);
+      for (const attempt of cancelled.success ? cancelled.data : []) cancel(attempt, 'cancel');
 
       // A step taken, or the run ended: nothing is held back any more. A gate asked beside a held step leaves it held.
       if (!('wait' in next.data) && !offered.held) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: [] });

@@ -12,7 +12,7 @@ import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './step-runtime.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
 import { stopRecordedGroup } from '../../tool-launch/process-stop.js';
-import { cancelOffer } from '../fleet/owner.js';
+import { cancelFleetAttempt } from '../fleet/owner.js';
 import { offeredPool } from '../fleet/record.js';
 
 // ─── What cancelled attempts left on their step runtimes ─
@@ -52,7 +52,11 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   for (const attempt of cancelled) {
     await stopRecordedGroup(attemptDir(config, run, attempt));
 
-    if (await offeredPool(config, run, attempt) !== undefined) log.info(await cancelOffer(config, run, attempt));
+    if (await offeredPool(config, run, attempt) === undefined) continue;
+    const asked = await cancelFleetAttempt(config, run, attempt);
+
+    if (asked.ok) log.info(asked.message);
+    else log.warn(asked.message);
   }
 
   const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)]);

@@ -95,6 +95,8 @@ export interface StartedCommand {
   exit: Promise<CommandExit | WorkflowFailure>;
   /** Stops it and what it started, then settles with how it ended once they are gone. */
   stop: () => Promise<CommandExit | WorkflowFailure>;
+  /** Stops it because the run cancelled the step, for a command that runs elsewhere (the fleet) and passes that on. Absent: `stop`. */
+  cancel?: () => Promise<CommandExit | WorkflowFailure>;
 }
 
 /**

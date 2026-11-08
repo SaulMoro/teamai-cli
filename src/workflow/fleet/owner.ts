@@ -32,20 +32,30 @@ type FleetInput = {
  * the offer may not carry.
  */
 export function fleetCommand(input: FleetInput): StartedCommand {
-  const stopping = new AbortController();
-  const exit = offerAndWait(input, stopping.signal);
+  const cancelling = new AbortController();
+  const leaving = new AbortController();
+  const exit = offerAndWait(input, { cancel: cancelling.signal, leave: leaving.signal });
 
   return {
     exit,
     stop: async () => {
-      stopping.abort();
+      leaving.abort();
+
+      return exit;
+    },
+    cancel: async () => {
+      cancelling.abort();
 
       return exit;
     },
   };
 }
 
-async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awaited<StartedCommand['exit']>> {
+/**
+ * The loop of `fleetCommand`. `cancel`: the run cancelled the step, which the owner writes into the record and waits for
+ * the member to answer. `leave`: this driver stops, and the attempt stays out for a later `workflow resume <run>`.
+ */
+async function offerAndWait(input: FleetInput, { cancel, leave }: { cancel: AbortSignal; leave: AbortSignal }): Promise<Awaited<StartedCommand['exit']>> {
   const { config, run, attempt, pool, staleAfterMs, lease, root, dir, secrets } = input;
   const ref = attemptRef(run, attempt);
   const earlier = await readAttemptRecord(config, run, attempt);
@@ -79,11 +89,13 @@ async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awa
   }
 
   // Staleness counts on this machine's clock, from when it last saw the record change: a member's clock may be off. A
-  // stop cancels the attempt through its record, and waits for the member's answer as long as for its progress.
+  // cancel goes through the record, and waits for the member's answer as long as for its progress.
   let seen: { write: string; at: number } | undefined;
   let isCancelWritten = false;
+  const woken = AbortSignal.any([cancel, leave]);
 
   for (;;) {
+    if (leave.aborted) return stopped(lease.step, pool, isCancelWritten);
     const read = await readAttemptRecord(config, run, attempt);
 
     if (!read.ok && read.error.code === 'fleet_record_unreadable') return fleetFailure(read.error);
@@ -122,17 +134,28 @@ async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awa
       continue;
     }
 
-    if (signal.aborted && !isCancelWritten && (record?.state === 'offered' || record?.state === 'claimed')) {
-      const cancel = await cancelAttempt(config, record);
+    if (cancel.aborted && !isCancelWritten) {
+      if (record === undefined) return { code: 'runtime_interrupted', message: `Step "${lease.step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read, so no member was asked to stop it.${read.ok ? '' : ` ${read.error.message}`}` };
 
-      if (!cancel.ok && cancel.error.code !== 'state_moved') return fleetFailure(cancel.error);
-      // Another write landed first, such as the member's progress: the cancel is written over what is read next.
-      isCancelWritten = cancel.ok;
-      continue;
+      if (record.state === 'offered' || record.state === 'claimed') {
+        const written = await cancelAttempt(config, record);
+
+        if (!written.ok && written.error.code !== 'state_moved') return fleetFailure(written.error);
+        // Another write landed first, such as the member's progress: the cancel is written over what is read next.
+        isCancelWritten = written.ok;
+        continue;
+      }
     }
 
-    await sleep(RECORD_POLL_MS, undefined, signal.aborted ? {} : { signal }).catch(() => undefined);
+    await sleep(RECORD_POLL_MS, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
   }
+}
+
+/** How the loop ends when this driver stops while the attempt is out: the attempt stays out for a later resume. */
+function stopped(step: string, pool: string, isCancelWritten: boolean): WorkflowFailure {
+  const member = isCancelWritten ? 'Its member was asked to stop it' : 'The member is not told';
+
+  return { code: 'runtime_interrupted', message: `Step "${step}" was stopped while it waited on a member of fleet pool ${pool}. ${member}, and its work stays on the attempt's ref: teamai workflow resume takes it.` };
 }
 
 /** How a cancelled attempt ends for the loop: as a command it stopped itself. */
@@ -201,22 +224,22 @@ async function takeWork({ config, run, root, dir, ref, to, step }: PlaceOf & { t
  * an offer is withdrawn, and a claim's member is asked to stop, which it answers at its next read of the record. Answers
  * what it did, for the person.
  */
-export async function cancelOffer(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<string> {
+export async function cancelFleetAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<{ ok: boolean; message: string }> {
   for (;;) {
     const read = await readAttemptRecord(config, run, attempt);
 
-    if (!read.ok) return `Attempt ${attempt} of run ${run} is out on the fleet, and its record could not be read, so its member was not asked to stop: ${read.error.message} Run teamai workflow cancel ${run} again.`;
+    if (!read.ok) return { ok: false, message: `Attempt ${attempt} of run ${run} is out on the fleet, and its record could not be read, so its member was not asked to stop: ${read.error.message} Run teamai workflow cancel ${run} again.` };
     const record = read.value;
 
-    if (record === 'absent' || (record.state !== 'offered' && record.state !== 'claimed')) return `Attempt ${attempt} of run ${run} was out on the fleet, and its record already says it is ${record === 'absent' ? 'not offered' : record.state}.`;
+    if (record === 'absent' || (record.state !== 'offered' && record.state !== 'claimed')) return { ok: true, message: `Attempt ${attempt} of run ${run} was out on the fleet, and its record already says it is ${record === 'absent' ? 'not offered' : record.state}.` };
     const cancel = await cancelAttempt(config, record);
 
     if (cancel.ok) {
-      return record.state === 'offered'
+      return { ok: true, message: record.state === 'offered'
         ? `Withdrew attempt ${attempt} of run ${run}, which no fleet member had taken.`
-        : `Asked the fleet member ${record.member.user} that runs attempt ${attempt} of run ${run} to stop it: it stops the step at its next read of the attempt's record and pushes its work, which a retry goes on from.`;
+        : `Asked the fleet member ${record.member.user} that runs attempt ${attempt} of run ${run} to stop it: it stops the step at its next read of the attempt's record and pushes its work, which a retry goes on from.` };
     }
 
-    if (cancel.error.code !== 'state_moved') return `Attempt ${attempt} of run ${run} is out on the fleet, and its cancel could not be written: ${cancel.error.message} Run teamai workflow cancel ${run} again.`;
+    if (cancel.error.code !== 'state_moved') return { ok: false, message: `Attempt ${attempt} of run ${run} is out on the fleet, and its cancel could not be written: ${cancel.error.message} Run teamai workflow cancel ${run} again.` };
   }
 }
