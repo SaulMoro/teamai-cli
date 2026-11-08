@@ -387,7 +387,7 @@ function run(
     try {
       child = spawnCommand(file, args, { cwd, env, stdio: 'inherit' });
     } catch (cause) {
-      // cmd.exe cannot carry the arguments: told as a command that could not start is.
+      // cmd.exe cannot carry the arguments: reported as exit 127, like a command that could not start.
       log.error(`Could not run ${file}: ${cause instanceof Error ? cause.message : String(cause)}`);
       resolve({ kind: 'exited', code: 127 });
 

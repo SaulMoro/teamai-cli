@@ -3,6 +3,8 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { Socket } from 'node:net';
 import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
+import { isBareCommandName } from './cli-path.js';
+import { findOnPath } from './lookpath.js';
 
 export interface ExecOptions {
   cwd?: string;
@@ -214,15 +216,23 @@ export function batchLaunchOf(executable: string, args: readonly string[], comsp
   return { ok: true, command: comspec, args: ['/d', '/v:off', '/s', '/c', `"${line}"`] };
 }
 
+/** `executable` as the child's PATH finds it when it is a bare name, such as the `claude` a member types, else as given. */
+function onChildPath(executable: string, env: NodeJS.ProcessEnv | undefined): string {
+  const pathEnv = env?.PATH ?? env?.Path ?? process.env.PATH;
+
+  return isBareCommandName(executable) ? findOnPath(executable, pathEnv === undefined ? {} : { pathEnv }) ?? executable : executable;
+}
+
 /**
  * Starts `executable` with `args`: on Windows, a batch file (an npm `.cmd` shim) under the system cmd.exe with its
  * arguments escaped as `batchLaunchOf` escapes them, anything else through cross-spawn. cmd.exe is found from this
  * process's environment by its absolute path, since the child's may hold no ComSpec and a bare name is looked up in the
- * cwd first. Throws, as a failed spawn does, when cmd.exe cannot carry the arguments.
+ * cwd first. A bare `executable` is looked up on the child's PATH, so a shim the member names by its name is found.
+ * Throws, as a failed spawn does, when cmd.exe cannot carry the arguments.
  */
 export function spawnCommand(executable: string, args: readonly string[], options: SpawnOptions): ChildProcess {
   const comspec = process.env.ComSpec ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`;
-  const batch = process.platform === 'win32' ? batchLaunchOf(executable, args, comspec) : undefined;
+  const batch = process.platform === 'win32' ? batchLaunchOf(onChildPath(executable, options.env), args, comspec) : undefined;
 
   if (batch?.ok === false) throw new Error(batch.message);
 

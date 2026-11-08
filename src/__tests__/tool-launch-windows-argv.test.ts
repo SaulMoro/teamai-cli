@@ -156,6 +156,22 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
     expect(Printed.parse(JSON.parse(stdout))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
   });
 
+  it('finds a bare name on the child\'s PATH, as env exec passes it, and delivers its arguments verbatim', async () => {
+    const bin = path.join(dir, 'npm-global');
+
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'claude.cmd'), NPM_CMD_SHIM);
+    const child = spawnCommand('claude', [PROMPT, ...NASTY_ARGS], { cwd: dir, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ''}` }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+
+    child.stdout?.setEncoding('utf8').on('data', (text: string) => { stdout += text; });
+    child.stdin?.end('');
+    const code = await new Promise<number | null>((resolve) => child.once('close', resolve));
+
+    expect(code).toBe(0);
+    expect(Printed.parse(JSON.parse(stdout))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
+  });
+
   it('throws the refusal from spawnCommand, as a failed spawn, when an argument holds a newline', () => {
     expect(() => spawnCommand(path.join(dir, 'copilot.cmd'), ['-p', MULTILINE], { cwd: dir })).toThrow('cannot pass an argument containing a newline');
   });
