@@ -18,7 +18,7 @@ import { definitionsOf, type Definitions } from '../handoff.js';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, takeRunLock } from '../store.js';
-import { workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
+import { stepWorkflow, workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
 import { git, hostGitEnv, keptOrigin, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
@@ -137,7 +137,9 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   const trusted = await trustedLease(config, claim);
 
   if ('refused' in trusted) {
-    return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": ${trusted.refused} Once the owner ran teamai pull, ${retryCommand(run, lease.step)} offers it again.` });
+    const next = trusted.next ?? `Once the owner ran teamai pull, ${retryCommand(run, lease.step)} offers it again.`;
+
+    return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": ${trusted.refused} ${next}` });
   }
 
   const fetched = await git(root, ['fetch', '--quiet', 'origin', ref]);
@@ -246,7 +248,7 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
  * only what the definitions the run executes say, read from its own team repository, as a claimer of a published run
  * does; a lease that says otherwise is refused, not corrected.
  */
-async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ command: string; env: Record<string, string> } | { refused: string }> {
+async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ command: string; env: Record<string, string> } | { refused: string; next?: string }> {
   const { run, lease, definition, values } = claim;
   const { teamRevision, ...named } = definition;
   // A team commit the member would not run itself names no definitions: without it, only its own copy can match.
@@ -258,7 +260,16 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
   }
 
   if (!found.ok) return { refused: found.error.message };
-  const step = definedStep(found.value, lease.step);
+  const defined = definedStep(found.value, lease.step);
+
+  if (defined.kind === 'admitted') {
+    return {
+      refused: `in workflow "${definition.name}", step "${defined.by}" runs the workflow step "${defined.from}" wrote, which no workflow of the team defines, so a member cannot check what it runs.`,
+      next: `Route the steps of that workflow to a runtime besides the fleet.`,
+    };
+  }
+
+  const step = defined.kind === 'step' ? defined.step : undefined;
 
   if (step?.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
 
@@ -276,23 +287,30 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
 
 /**
  * The step at instance path `stepPath` in `definitions`, as `locateStep` finds it in a run: a `finally` step at the top, and
- * nested workflows inline or by name. A workflow a `from` step admitted is in no definition, so it finds none there.
+ * nested workflows inline or by name. A workflow a `from` step admitted is in no definition: `admitted` names the step
+ * `by` that runs it and the step `from` that wrote it.
  */
-function definedStep({ definition, workflows }: Definitions, stepPath: string): WorkflowStep | undefined {
+function definedStep({ definition, workflows }: Definitions, stepPath: string):
+  | { kind: 'step'; step: WorkflowStep } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
   const segments = parseStepPath(stepPath);
   let steps = definition.finally?.some((step) => step.id === segments[0]?.id) ? definition.finally : definition.steps;
 
   for (const [index, segment] of segments.entries()) {
     const step = steps.find((item) => item.id === segment.id);
 
-    if (!step || index === segments.length - 1) return step;
+    if (!step) return { kind: 'none' };
+
+    if (index === segments.length - 1) return { kind: 'step', step };
+    const runs = stepWorkflow(step);
+
+    if (runs?.kind === 'from') return { kind: 'admitted', by: step.id, from: runs.step };
     const child = workflowRunBy({ workflows }, step, '');
 
-    if (!child) return undefined;
+    if (!child) return { kind: 'none' };
     steps = child.steps;
   }
 
-  return undefined;
+  return { kind: 'none' };
 }
 
 /**
@@ -319,7 +337,25 @@ async function pushWork({ work, ref, message, memberConfig, parent, index }: { w
   const url = keptOrigin(memberConfig);
 
   if (url === undefined) return { error: `The member could not push the step's work to ${ref}: its checkout names no origin.` };
-  const pushed = await remoteGit(work, { kept: memberConfig, env: hostGitEnv() }, ['push', '--quiet', url, `${to}:${ref}`], snapshotGit);
 
-  return pushed.code === 0 ? { to } : { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
+  for (const target of pushTargets(memberConfig, url)) {
+    const pushed = await remoteGit(work, { kept: target.kept, env: hostGitEnv() }, ['push', '--quiet', target.url, `${to}:${ref}`], snapshotGit);
+
+    if (pushed.code !== 0) return { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
+  }
+
+  return { to };
+}
+
+/**
+ * Where `git push origin` pushes in a checkout whose kept config is `kept`, origin's URL being `url`: every push URL it
+ * names, none of them rewritten by a `pushInsteadOf`, or else `url`, which one rewrites.
+ */
+function pushTargets(kept: MemberConfig, url: string): { url: string; kept: MemberConfig }[] {
+  const pushUrls = [...kept].flatMap((entry) => entry.startsWith('remote.origin.pushurl\n') ? [entry.slice('remote.origin.pushurl\n'.length)] : []);
+
+  if (pushUrls.length === 0) return [{ url, kept }];
+  const unrewritten = new Set([...kept].filter((entry) => !/^url\..*\.pushinsteadof\n/.test(entry)));
+
+  return pushUrls.map((pushUrl) => ({ url: pushUrl, kept: unrewritten }));
 }

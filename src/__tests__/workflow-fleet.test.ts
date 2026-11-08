@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseValues, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -154,10 +154,10 @@ steps:
  * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
  * takes it. Answers what Bob's take answered, and the record Alice reads then.
  */
-async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (alice: Member) => Promise<void>) {
-  const acme = team({ mark: MARK });
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow = MARK) {
+  const acme = team({ mark: workflow });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
-  await before?.(alice);
+  await before?.({ alice, bob });
   const started = await startRun(alice.config, 'mark', { mark: 'made.txt' }, { secrets: {} });
   if (!('data' in started)) throw new Error(started.error.message);
   const run = RunIdSchema.parse(String(started.data.run));
@@ -211,7 +211,7 @@ describe('a member taking an attempt', () => {
   });
   it('refuses an offer whose workflow comes from a team commit only a branch besides the default one holds, and runs nothing', async () => {
     // Anyone who can write the record can push such a branch, teamai-reports among them.
-    const { taken, record } = await takeForged((forged) => { forged.lease.command = 'echo forged > forged.txt'; }, async ({ config }) => {
+    const { taken, record } = await takeForged((forged) => { forged.lease.command = 'echo forged > forged.txt'; }, async ({ alice: { config } }) => {
       const clone = config.repo.localPath;
       git(clone, 'checkout', '-q', '-b', 'side');
       fs.writeFileSync(path.join(clone, 'workflows', 'mark.yaml'), MARK.replace('echo written > "$MARK"', 'echo forged > forged.txt'));
@@ -223,6 +223,44 @@ describe('a member taking an attempt', () => {
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
     expect(record?.state === 'finished' && record.result.to).toBeFalsy();
     expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*teamai pull/s);
+  });
+  it('pushes the work to every push URL its checkout names for origin, as git push origin does', async () => {
+    const mirrors: string[] = [];
+    const { taken, record } = await takeForged(() => undefined, async ({ bob }) => {
+      const origin = git(bob.checkout, 'remote', 'get-url', 'origin');
+      const mirror = path.join(path.dirname(origin), 'mirror.git');
+      git(path.dirname(origin), 'init', '-q', '--bare', mirror);
+      mirrors.push(origin, mirror);
+      git(bob.checkout, 'config', 'remote.origin.pushurl', origin);
+      git(bob.checkout, 'config', '--add', 'remote.origin.pushurl', mirror);
+      // git push origin applies no pushInsteadOf to a push URL the remote names.
+      git(bob.checkout, 'config', `url.${path.join(path.dirname(origin), 'nowhere.git')}.pushInsteadOf`, origin);
+    });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+    const to = record?.state === 'finished' ? record.result.to : undefined;
+    expect(to).toEqual(expect.any(String));
+    for (const remote of mirrors) expect(git(remote, 'for-each-ref', '--format=%(objectname)', 'refs/heads/teamai/attempts')).toBe(to);
+  });
+
+  it('refuses a step of a workflow a from step admitted, naming that step, and runs nothing', async () => {
+    const planned = `schemaVersion: v1alpha1
+name: mark
+description: Runs the workflow a step writes.
+inputs: { mark: string }
+steps:
+  - id: plan
+    command: node plan.js
+    output: { definition: workflow }
+  - id: run
+    needs: [plan]
+    workflow: { from: plan }
+`;
+    const { taken, record } = await takeForged((forged) => { forged.lease.step = 'run.write'; }, undefined, planned);
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'run.write', exit_code: 1 } } });
+    expect(record?.state === 'finished' && record.result.to).toBeFalsy();
+    expect(record?.state === 'finished' ? record.result.stderr : '').toContain('step "run" runs the workflow step "plan" wrote');
   });
 });
 
@@ -399,5 +437,21 @@ describe('a member\'s own checkout', () => {
 
     expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
     expect(fs.readFileSync(path.join(bob.checkout, '.git', 'config'), 'utf8')).not.toContain('planted');
+  });
+});
+
+describe('the values an offer carries', () => {
+  it('carries only the fields of an input, a step\'s outputs and the item that the env reads', () => {
+    const read = leaseValues(
+      { id: 'build', env: { TARGET: '{{ inputs.config.target }}', SHA: '{{ steps.plan.outputs.commit.sha }}', NAME: '{{ item.name }}' } },
+      {
+        inputs: { config: { target: 'web', cache: '/Users/alice/.cache/build' }, unread: 'x' },
+        steps: { plan: { outputs: { commit: { sha: 'abc', log: '/Users/alice/plan.log' }, notes: 'long' } } },
+        run: { id: 'r0123abcd' },
+        item: { name: 'one', path: '/Users/alice/one' },
+      },
+    );
+
+    expect(read).toEqual({ values: { inputs: { config: { target: 'web' } }, outputs: { plan: { commit: { sha: 'abc' } } }, item: { name: 'one' } } });
   });
 });
