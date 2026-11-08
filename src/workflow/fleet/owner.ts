@@ -89,7 +89,8 @@ export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; thro
 
   for (const entry of runtimes) {
     if (entry.use !== 'fleet' || entry.through !== undefined) continue;
-    const { max_parallel: _parallel, ...options } = entry.options ?? {};
+    // What teamai takes for itself (`engineOptions`) never reaches the runtime's own check.
+    const { max_parallel: _parallel, credentials: _credentials, ...options } = entry.options ?? {};
     const parsed = parseFleetOptions(options);
 
     if (!parsed.ok) continue;
