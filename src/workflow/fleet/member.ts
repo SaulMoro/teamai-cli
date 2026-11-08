@@ -18,7 +18,7 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type Held, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type Held, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
@@ -34,7 +34,7 @@ import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
-import type { TurnLimits } from '../requirements.js';
+import { lackedLabels, mergeRequirements, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { runPromptStep, type StagedLease } from '../steps/prompt.js';
 import { driverIdentity } from '../../driver-identity.js';
@@ -56,7 +56,7 @@ const ANSWER_READ_MS = 1_000;
 const STDERR_KEPT = 4_000;
 
 /** Where a member runs a step: here, as `--driver local` does, or on a step runtime of its own driver. */
-type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime };
+type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime; labels?: readonly string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
 type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true };
@@ -100,7 +100,7 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
     }
 
     if (entry.use === 'fleet') continue;
-    const runtime: RuntimePlace = { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime };
+    const runtime: RuntimePlace = { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime, ...(entry.can.labels && { labels: entry.can.labels }) };
 
     // A runtime runs commands, and prompts, unless it says it does not.
     if (entry.can.exec !== false) place.command ??= runtime;
@@ -119,6 +119,38 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
 }
 
 /**
+ * The labels where `at` runs a step declare, and what declares them: this machine's `workflows.labels` on the host, a
+ * runtime's own `labels` elsewhere, and for a whole workflow on the member's driver, its runtimes' together.
+ */
+function declaredLabels(config: LocalConfig, at: NonNullable<MemberPlace[keyof MemberPlace]>) {
+  const host = config.workflows?.labels ?? [];
+
+  switch (at.kind) {
+    case 'here': return { labels: host, where: 'workflows.labels on this machine' };
+    case 'runtime': return { labels: at.labels ?? [], where: `runtime ${at.use} of driver ${at.driver}` };
+    case 'driver': return { labels: at.runtimes.runtimes.flatMap((entry) => (entry.kind === 'local' ? host : entry.can.labels ?? [])), where: `driver ${at.runtimes.driver}` };
+    default: {
+      const unhandled: never = at;
+
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * The `requires.labels` of the step `offer` leases, as this member's copy of the team's workflows defines it, never as
+ * the record says. None when the member finds no definition: claiming the attempt refuses it then, saying why.
+ */
+async function requiredLabels(config: LocalConfig, offer: Offered): Promise<string[]> {
+  const found = await teamDefinitions(config, offer);
+
+  if ('refused' in found) return [];
+  const defined = definedStep(found.definitions, offer.lease.step);
+
+  return defined.kind === 'step' ? defined.labels : [];
+}
+
+/**
  * Takes and runs the oldest attempt pool `pool` offers for `repository` that another member did not claim first, from
  * checkout `root`. A member that starts first stops the commands its earlier runs left running, then finishes a claim it
  * still holds, as a member killed mid-step leaves one. Answers `{ ran: { run, attempt, step, exit_code } }`,
@@ -130,18 +162,24 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
   const finished = await finishLeftClaims(config, { repository, root, member, secrets, place });
 
   if (finished) return finished;
-  const labels = config.workflows?.labels ?? [];
+  const offers: Offered[] = [];
 
-  // An offer of a kind of step this member's driver does not run, or that needs a label this machine does not declare,
-  // is another member's to take.
-  const offers = (await listOffers(config, { pool, repository })).filter((offer) => {
-    if (offer.owner.id === member.id || place[leaseKind(offer.lease)] === undefined) return false;
-    const lacked = (offer.labels ?? []).filter((label) => !labels.includes(label));
+  // An offer of a kind of step this member's driver does not run, or that needs a label where it would run it does not
+  // declare, is another member's to take.
+  for (const offer of await listOffers(config, { pool, repository })) {
+    const at = place[leaseKind(offer.lease)];
 
-    if (lacked.length > 0) log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: its step requires labels ${lacked.join(', ')}, which workflows.labels on this machine does not declare.`);
+    if (offer.owner.id === member.id || at === undefined) continue;
+    const declared = declaredLabels(config, at);
+    const lacked = lackedLabels({ labels: await requiredLabels(config, offer) }, declared.labels);
 
-    return lacked.length === 0;
-  });
+    if (lacked.length > 0) {
+      log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: its step requires labels ${lacked.join(', ')}, which ${declared.where} does not declare.`);
+      continue;
+    }
+
+    offers.push(offer);
+  }
 
   let moved = 0;
 
@@ -703,8 +741,11 @@ type Trusted =
  * that says otherwise is refused, not corrected. Every team commit the record names counts only when this member would
  * run that commit itself: `definition.teamRevision` is the only one a record carries.
  */
-async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted | { refused: string; next?: string }> {
-  const { run, lease, definition, values } = claim;
+/**
+ * The team's workflows the run of `offered` runs, as this member finds them: at the team commit the offer pins when the
+ * member would run that commit itself, else its own copy, which must match. Or why it finds none.
+ */
+async function teamDefinitions(config: LocalConfig, { run, definition }: Pick<Offered, 'run' | 'definition'>): Promise<{ definitions: Definitions } | { refused: string }> {
   const { teamRevision, ...named } = definition;
   // A team commit the member would not run itself names no definitions: without it, only its own copy can match.
   const isTrusted = teamRevision !== undefined && (await teamCommitReach(config, teamRevision)).kind === 'member';
@@ -714,9 +755,16 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
     return { refused: `workflow "${definition.name}" comes from team commit ${teamRevision}, which neither this member's team checkout nor the team's default branch holds, and this member's copy of it differs. Merge it to the default branch.` };
   }
 
-  if (!found.ok) return { refused: found.error.message };
+  return found.ok ? { definitions: found.value } : { refused: found.error.message };
+}
+
+async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted | { refused: string; next?: string }> {
+  const { run, lease, definition, values } = claim;
+  const found = await teamDefinitions(config, claim);
+
+  if ('refused' in found) return found;
   const kind = leaseKind(lease);
-  const defined = definedStep(found.value, lease.step);
+  const defined = definedStep(found.definitions, lease.step);
 
   switch (defined.kind) {
     case 'step': break;
@@ -743,7 +791,7 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
   if (differs.length > 0) return { refused: `the offer's env ${differs.join(', ')} differs from what workflow "${definition.name}" renders from the offer's values.` };
 
   if ('workflow' in lease) {
-    const child = step.workflow === undefined ? undefined : workflowRunBy(found.value, step, '');
+    const child = step.workflow === undefined ? undefined : workflowRunBy(found.definitions, step, '');
 
     if (step.workflow === undefined || child === undefined || !isWorkflowFile(child)) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
     // A member runs only the sub-graph it was offered whole, as its own copy of the team's workflows defines it.
@@ -789,18 +837,20 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
  * `by` that runs it and the step `from` that wrote it.
  */
 function definedStep({ definition, workflows }: Definitions, stepPath: string):
-  | { kind: 'step'; step: WorkflowStep; defaultModel?: string } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
+  | { kind: 'step'; step: WorkflowStep; defaultModel?: string; labels: string[] } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
   const segments = parseStepPath(stepPath);
   let steps = definition.finally?.some((step) => step.id === segments[0]?.id) ? definition.finally : definition.steps;
   // The `defaults.model` in effect, a nested workflow's over the one it runs in, as the engine's scope keeps it.
   let defaultModel = definition.defaults?.model;
+  // The `requires` in effect, which add up level by level as the engine's scope merges them.
+  let requires = mergeRequirements(definition.defaults?.requires);
 
   for (const [index, segment] of segments.entries()) {
     const step = steps.find((item) => item.id === segment.id);
 
     if (!step) return { kind: 'none' };
 
-    if (index === segments.length - 1) return { kind: 'step', step, ...(defaultModel !== undefined && { defaultModel }) };
+    if (index === segments.length - 1) return { kind: 'step', step, labels: mergeRequirements(requires, step.requires).labels ?? [], ...(defaultModel !== undefined && { defaultModel }) };
     const runs = stepWorkflow(step);
 
     if (runs?.kind === 'from') return { kind: 'admitted', by: step.id, from: runs.step };
@@ -809,6 +859,7 @@ function definedStep({ definition, workflows }: Definitions, stepPath: string):
     if (!child) return { kind: 'none' };
     steps = child.steps;
     defaultModel = ('defaults' in child ? child.defaults?.model : undefined) ?? defaultModel;
+    requires = mergeRequirements(requires, step.requires, 'defaults' in child ? child.defaults?.requires : undefined);
   }
 
   return { kind: 'none' };

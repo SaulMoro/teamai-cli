@@ -95,10 +95,10 @@ export interface WorkflowDescription {
     budgets: Array<{ step?: string; tokens: number }>;
     /**
      * Each step that runs a command or a prompt, by path, with what the machine that runs it needs: the `requires.env`
-     * keys of the step and its setup, and the agent and `tool` of a prompt step, from which the driver picks its tool.
+     * keys of the step and its setup, its `requires.labels`, and the agent and `tool` of a prompt step, from which the
+     * driver picks its tool. `answer`: the step is an answer step, which the local driver runs on the member's AI tool.
      */
-    /** `answer`: the step is an answer step, which the local driver runs on the member's AI tool rather than a workflow tool. */
-    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; agent?: string; tool?: string; answer?: true }>;
+    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; labels?: string[]; agent?: string; tool?: string; answer?: true }>;
     /** Steps the describing driver is held from, by path, with what it lacks, and the `requires.env` keys they need. */
     held: Array<{ step: string; missing: Missing[]; env: string[] }>;
     localRoute?: LocalRoute;
@@ -180,6 +180,8 @@ export function describeWorkflow(input: {
     const role = runsWith?.kind === 'role' ? writtenRole(runsWith.role) : undefined;
     const setupEnv = hasContract ? scope.setup?.requires?.env ?? [] : [];
     const run: Facts['runs'][number] = { step: path, executor, env: [...new Set([...requires.env ?? [], ...setupEnv])] };
+
+    if (requires.labels !== undefined) run.labels = requires.labels;
 
     if (executor === 'prompt' && step.agent !== undefined) run.agent = step.agent;
 

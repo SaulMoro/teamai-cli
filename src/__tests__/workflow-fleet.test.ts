@@ -33,11 +33,11 @@ const RUN = RunIdSchema.parse('r0123abcd');
 const ATTEMPT = AttemptIdSchema.parse('a0123abcd');
 const LEASE: { step: string; command: string; env: Record<string, string> } = { step: 'build', command: 'npm run build', env: { MODE: 'ci' } };
 
-async function offer(owner: Member, input: { secrets?: Record<string, string>; lease?: typeof LEASE; start?: string; labels?: string[] } = {}) {
+async function offer(owner: Member, input: { secrets?: Record<string, string>; lease?: typeof LEASE; start?: string } = {}) {
   return offerAttempt(owner.config, {
     run: RUN, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(owner.config),
     start: input.start ?? 'f'.repeat(40), staleAfterMs: 60_000, lease: input.lease ?? LEASE, secrets: input.secrets ?? {},
-    definition: { name: 'build', sourceHash: 'a'.repeat(64), definitionHash: 'b'.repeat(64) }, values: {}, ...(input.labels && { labels: input.labels }),
+    definition: { name: 'build', sourceHash: 'a'.repeat(64), definitionHash: 'b'.repeat(64) }, values: {},
   });
 }
 
@@ -172,20 +172,6 @@ describe('fleet attempts on teamai-reports', () => {
     const finished = await readAttemptRecord(alice.config, RUN, ATTEMPT);
     expect(finished).toMatchObject({ ok: true, value: { state: 'finished', result: { exitCode: 1, tool: 'claude', tokens: { input: 10, output: 2 }, failure: { code: 'tool_failed' } } } });
     expect(JSON.stringify(finished)).not.toContain('/home/bob');
-  });
-
-  it('leaves an offer whose labels this machine does not declare every one of in workflows.labels for another member', async () => {
-    const acme = team();
-    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
-    const offered = await offer(alice, { labels: ['computer-use'] });
-    if (!offered.ok) throw new Error(offered.error.message);
-    await readableReportsWorktree(bob.config);
-    bob.config.workflows = { tools: {}, labels: ['gpu'] };
-
-    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
-
-    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
-    expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered', labels: ['computer-use'] } });
   });
 
   it('lists the attempts out for a business repository, with who claimed each and when it last wrote, and none that ended', async () => {

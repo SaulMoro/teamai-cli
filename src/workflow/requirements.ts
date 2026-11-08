@@ -302,6 +302,15 @@ export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<
   return { ...raised(merged, floor), floor };
 }
 
+/**
+ * The labels of `requires` that `declared` does not name: what keeps a step from the machine, runtime or fleet member that
+ * declares `declared`. The one reading of `requires.labels` the owner's negotiation, a fleet member and a published run's
+ * taker share.
+ */
+export function lackedLabels(requires: Pick<InEffect, 'labels'>, declared: readonly string[] | undefined): string[] {
+  return (requires.labels ?? []).filter((label) => !(declared ?? []).includes(label));
+}
+
 /** `values` with each of `isolation` and `network` raised to `floor`'s, where `floor` sets it higher. */
 function raised<T extends Floor>(values: T, floor: Floor): T {
   const isolation = floor.isolation !== undefined && (values.isolation === undefined || rank(values.isolation) < rank(floor.isolation)) ? floor.isolation : values.isolation;
@@ -483,7 +492,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true) ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
-    ...((requires.labels ?? []).some((label) => !(can.labels ?? []).includes(label)) ? ['labels' as const] : []),
+    ...(lackedLabels(requires, can.labels).length > 0 ? ['labels' as const] : []),
   ];
 
   const [first, ...rest] = gaps;

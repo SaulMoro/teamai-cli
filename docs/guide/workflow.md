@@ -851,6 +851,8 @@ $ teamai workflow resume --next --tools default=claude --auto-approve
 {"data":{"done":{"run":"r814cea92baadffac","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
+A step left with [`requires.labels`](workflow-advanced.md#requirements-and-limits) is lacked the same way on a machine whose `workflows.labels` does not list each label: `render requires labels gpu, which workflows.labels on this machine does not declare: add them to workflows.labels on a machine that has them`.
+
 A cron job on a VM that leaves `TEAMAI_MODE` unset runs attended, but has no terminal, so nobody could answer the approval at `ship`. `--next` leaves `release` for a person there too:
 
 ```console

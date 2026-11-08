@@ -23,7 +23,7 @@ import { fakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
-import { takeFleetAttempt } from '../workflow/fleet/member.js';
+import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
@@ -1739,6 +1739,18 @@ steps:
       counted: number
 `;
 
+/** A step that requires a label from the workflow's defaults, which only a member that declares it where it runs the step takes. */
+const LABELLED = `schemaVersion: v1alpha1
+name: slow
+description: Renders on a GPU.
+defaults:
+  requires: { labels: [gpu] }
+steps:
+  - id: work
+    workspace: new
+    command: echo rendered
+`;
+
 /** The fleet runtimes a scenario opened, which teardown disposes. */
 const fleetRuntimes: StepRuntime[] = [];
 
@@ -1757,11 +1769,11 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, workflows = {}, inputs, isWhole = false }: { workflow?: string; command?: string; tools?: string[]; workflows?: Record<string, string>; inputs?: Record<string, string>; isWhole?: boolean } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, inputs, isWhole = false }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; inputs?: Record<string, string>; isWhole?: boolean } = {}) {
   const acme = team({ slow: workflow, ...workflows });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(isWhole && { workflow: true }) } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isWhole && { workflow: true }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
@@ -1813,6 +1825,25 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: '{"made":1}' });
     expect(fs.readFileSync(path.join(place, 'done.txt'), 'utf8')).toBe('done\n');
+  }, 60_000);
+
+  it('leaves an attempt whose step requires a label to a member that declares it where it would run the step, as its own copy of the workflow says', async () => {
+    const owner = await ownerOf({ workflow: LABELLED, command: 'echo rendered', labels: ['gpu'] });
+    const { exec } = await owner.open();
+    const ended = exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+    const take = async (place: MemberPlace) => takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place });
+    const elsewhere = { kind: 'runtime' as const, driver: 'teamai-docker', use: 'docker', runtime: fleetStepRuntime({ config: owner.bob.config, masks: {} }) };
+
+    expect(await take({ command: { kind: 'here' } })).toEqual({ data: { idle: { offered: 0 } } });
+    owner.bob.config.workflows = { tools: {}, labels: ['gpu'] };
+    // This machine's labels say nothing of a runtime of its driver, where the step would run.
+    expect(await take({ command: elsewhere })).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+
+    expect(await take({ command: { kind: 'here' } })).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toMatchObject({ kind: 'exited', code: 0 });
   }, 60_000);
 
   it('leases a whole workflow step to a runtime that runs whole workflows, and starts it for any other, leasing its first step', async () => {
