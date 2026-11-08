@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
+import { eachLine } from '@teamai/runtime-kit/serve';
 import { ConnectedSchema, OuterHandleSchema, RegisterSchema } from '@teamai/runtime-kit/outer';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -163,11 +163,8 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
       // A wrapper connected for a registration that ended says nothing to the next one of its agent.
       if (agent !== undefined && ![...registrations.values()].includes(agent)) granted.delete(agent);
     });
-    const lines = readline.createInterface({ input: client });
-    // readline re-emits the connection's errors, such as a write to a wrapper that hung up, and throws them when nothing
-    // listens: this process, and every exec it runs, would end with it.
-    lines.on('error', () => client.destroy());
-    lines.on('line', (line) => {
+    // A connection that fails, such as on a write to a wrapper that hung up, ends only itself.
+    void eachLine(client, (line) => {
       void (async () => {
         let parsed: z.ZodSafeParseResult<SocketRequest>;
 
@@ -228,7 +225,7 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
           say(client, { refused: { code: 'runtime_failed', message: `The sandbox runtime failed on an ask: ${error instanceof Error ? error.message : String(error)}` } });
         }
       })();
-    });
+    }).catch(() => client.destroy());
   });
 
   const listened = await new Promise<Error | undefined>((resolve) => {
@@ -283,12 +280,13 @@ export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unre
 
   return new Promise((resolve) => {
     const client = net.connect(socketPath);
-    const lines = readline.createInterface({ input: client });
-    // readline re-emits the socket's errors, such as a write to a peer that hung up, and throws them when nothing listens.
-    lines.on('error', (error) => resolve({ unreachable: error.message }));
+    let isAnswered = false;
     client.on('error', (error) => resolve({ unreachable: error.message }));
     client.on('connect', () => client.write(`${JSON.stringify({ ask } satisfies SocketRequest)}\n`));
-    lines.once('line', (line) => {
+    // The first line is the answer; a socket that fails first, such as on a write to a peer that hung up, is unreachable.
+    void eachLine(client, (line) => {
+      if (isAnswered) return;
+      isAnswered = true;
       client.destroy();
 
       try {
@@ -297,7 +295,7 @@ export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unre
         // Never the line itself: a grant this version cannot read still holds the step's credentials.
         resolve({ unreadable: error instanceof z.ZodError ? `an answer of ${line.length} bytes whose shape this version does not know` : `an answer of ${line.length} bytes that is not JSON` });
       }
-    });
+    }).catch((error: Error) => resolve({ unreachable: error.message }));
     client.on('end', () => resolve({ unreachable: 'it closed the connection without an answer' }));
   });
 }
