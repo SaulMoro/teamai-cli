@@ -18,7 +18,7 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
@@ -74,13 +74,6 @@ export type MemberPlace = {
   prompt?: { kind: 'here' } | PromptRuntimePlace;
   workflow?: { kind: 'here' } | { kind: 'driver'; runtimes: DriverRuntimes };
 };
-
-/** The kind of step a record's lease runs. */
-function leaseKind(lease: FleetLease): keyof MemberPlace {
-  if ('command' in lease) return 'command';
-
-  return 'prompt' in lease ? 'prompt' : 'workflow';
-}
 
 /**
  * Where the member's driver `opened` runs each kind of step, as the local loop picks a runtime: its first runtime that
@@ -157,18 +150,18 @@ async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<Me
   if (defined.kind !== 'step') return undefined;
   const declared = declaredLabels(config, at);
   // A whole workflow needs what each of its steps requires, as the owner's negotiation reduced it.
-  const child = 'workflow' in offer.lease ? workflowRunBy(found.definitions, defined.step, '') : undefined;
+  const child = offer.lease.kind === 'workflow' ? workflowRunBy(found.definitions, defined.step, '') : undefined;
   const inner = child !== undefined && isWorkflowFile(child) ? child.steps.map((step) => mergeRequirements(defined.requires, child.defaults?.requires, step.requires)) : [];
   const lacked = [...new Set([defined.requires, ...inner].flatMap((requires) => lackedLabels(requires, declared.labels)))];
 
   if (lacked.length > 0) return `its step requires labels ${lacked.join(', ')}, which ${declared.where} does not declare`;
   // The member's own policy holds a step as the local driver's negotiation does; a whole workflow's nested run applies it.
   const allowed = config.workflows?.allow?.env;
-  const denied = allowed === undefined || 'workflow' in offer.lease ? [] : envScopeOf(defined.requires.env ?? [], { ...(defined.requires.floor && { floor: defined.requires.floor }), guarded: [] }).provide.filter((key) => sameEnvName(allowed, key) === undefined);
+  const denied = allowed === undefined || offer.lease.kind === 'workflow' ? [] : envScopeOf(defined.requires.env ?? [], { ...(defined.requires.floor && { floor: defined.requires.floor }), guarded: [] }).provide.filter((key) => sameEnvName(allowed, key) === undefined);
 
   if (denied.length > 0) return `its step requires env ${denied.join(', ')}, which workflows.allow.env on this machine does not allow`;
 
-  return 'prompt' in offer.lease && (at.kind === 'here' || at.kind === 'runtime') ? promptToolLack(config, defined.step, at) : undefined;
+  return offer.lease.kind === 'prompt' && (at.kind === 'here' || at.kind === 'runtime') ? promptToolLack(config, defined.step, at) : undefined;
 }
 
 /**
@@ -204,7 +197,7 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
   // An offer of a kind of step this member's driver does not run, or that needs a label where it would run it does not
   // declare, is another member's to take.
   for (const offer of await listOffers(config, { pool, repository })) {
-    const at = place[leaseKind(offer.lease)];
+    const at = place[offer.lease.kind];
 
     if (offer.owner.id === member.id || at === undefined) continue;
     const lacks = await lackedFor(config, offer, at);
@@ -847,7 +840,7 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
   const found = await teamDefinitions(config, claim);
 
   if ('refused' in found) return found;
-  const kind = leaseKind(lease);
+  const { kind } = lease;
   const defined = definedStep(found.definitions, lease.step);
 
   switch (defined.kind) {
@@ -875,45 +868,55 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
 
   if (differs.length > 0) return { refused: `the offer's env ${differs.join(', ')} differs from what workflow "${definition.name}" renders from the offer's values.` };
 
-  if ('workflow' in lease) {
-    const child = step.workflow === undefined ? undefined : workflowRunBy(found.definitions, step, '');
+  switch (lease.kind) {
+    case 'workflow': {
+      const child = step.workflow === undefined ? undefined : workflowRunBy(found.definitions, step, '');
 
-    if (step.workflow === undefined || child === undefined || !isWorkflowFile(child)) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
-    // A member runs only the sub-graph it was offered whole, as its own copy of the team's workflows defines it.
-    const unfit = notWhole(step, child);
+      if (step.workflow === undefined || child === undefined || !isWorkflowFile(child)) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
+      // A member runs only the sub-graph it was offered whole, as its own copy of the team's workflows defines it.
+      const unfit = notWhole(step, child);
 
-    if (unfit !== undefined) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${unfit}.` };
-    const inputs = leaseInputs(step, child, values, run);
+      if (unfit !== undefined) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${unfit}.` };
+      const inputs = leaseInputs(step, child, values, run);
 
-    if ('error' in inputs) return { refused: `workflow "${definition.name}" step "${lease.step}" ${inputs.error}.` };
+      if ('error' in inputs) return { refused: `workflow "${definition.name}" step "${lease.step}" ${inputs.error}.` };
 
-    if (!isDeepStrictEqual(inputs.inputs, lease.inputs)) return { refused: `the offer's inputs differ from what workflow "${definition.name}" renders from the offer's values for step "${lease.step}".` };
+      if (!isDeepStrictEqual(inputs.inputs, lease.inputs)) return { refused: `the offer's inputs differ from what workflow "${definition.name}" renders from the offer's values for step "${lease.step}".` };
 
-    return { kind: 'workflow', child, inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
+      return { kind: 'workflow', child, inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
+    }
+
+    case 'command': {
+      if (step.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
+
+      if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
+
+      return { kind: 'command', command: step.command, env: rendered.env, scope };
+    }
+
+    case 'prompt': {
+      if (step.prompt === undefined || step.answer !== undefined) return { refused: `workflow "${definition.name}" has no prompt step at ${lease.step}.` };
+      const texts = leasePrompt(step, values, run);
+
+      if ('error' in texts) return { refused: `workflow "${definition.name}" ${texts.error}.` };
+
+      if (texts.prompt !== lease.prompt) return { refused: `the offer's prompt differs from what workflow "${definition.name}" renders from the offer's values.` };
+
+      return {
+        kind: 'prompt', step, prompt: texts.prompt, env: rendered.env, scope,
+        ...(texts.model !== undefined && texts.model !== '' && { model: texts.model }),
+        // A model that rendered empty asks for the tool's default, so the defaults' model does not stand in for it.
+        ...(defaultModel !== undefined && texts.model !== '' && { defaultModel }),
+        ...(lease.limits !== undefined && { limits: lease.limits }),
+      };
+    }
+
+    default: {
+      const unhandled: never = lease;
+
+      return unhandled;
+    }
   }
-
-  if ('command' in lease) {
-    if (step.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
-
-    if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
-
-    return { kind: 'command', command: step.command, env: rendered.env, scope };
-  }
-
-  if (step.prompt === undefined || step.answer !== undefined) return { refused: `workflow "${definition.name}" has no prompt step at ${lease.step}.` };
-  const texts = leasePrompt(step, values, run);
-
-  if ('error' in texts) return { refused: `workflow "${definition.name}" ${texts.error}.` };
-
-  if (texts.prompt !== lease.prompt) return { refused: `the offer's prompt differs from what workflow "${definition.name}" renders from the offer's values.` };
-
-  return {
-    kind: 'prompt', step, prompt: texts.prompt, env: rendered.env, scope,
-    ...(texts.model !== undefined && texts.model !== '' && { model: texts.model }),
-    // A model that rendered empty asks for the tool's default, so the defaults' model does not stand in for it.
-    ...(defaultModel !== undefined && texts.model !== '' && { defaultModel }),
-    ...(lease.limits !== undefined && { limits: lease.limits }),
-  };
 }
 
 /**
