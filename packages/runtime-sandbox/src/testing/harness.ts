@@ -5,7 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
-import { build } from 'esbuild';
+import { build, type Plugin } from 'esbuild';
 import { z } from 'zod';
 
 // ─── Test support: the runtime over its stdio, on a fake container engine ───
@@ -20,12 +20,21 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_ENGINE = path.join(HERE, 'fake-engine.mjs');
 const ENTRY = path.join(HERE, '..', 'main.ts');
 
+/** Swaps `providers/system-bin.ts` for `testing/system-bin.ts`, so a test may run stand-ins for macOS's own tools. */
+export const SYSTEM_BIN_STAND_INS: Plugin = {
+  name: 'system-bin-stand-ins',
+  setup(bundler) {
+    bundler.onResolve({ filter: /\/system-bin\.js$/ }, () => ({ path: path.join(HERE, 'system-bin.ts') }));
+  },
+};
+
 /** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
 export async function bundleRuntime(dir: string): Promise<string> {
   const outfile = path.join(dir, 'teamai-runtime-sandbox.mjs');
 
   await build({
     entryPoints: [ENTRY], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
+    plugins: [SYSTEM_BIN_STAND_INS],
     banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
   });
 

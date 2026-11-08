@@ -7,7 +7,9 @@ import { connect, type Connection, type Message } from './harness.js';
 //
 //  `nativeHost` lays out a host for the runtime: a home, a PATH holding the tools as node scripts, and, unless the test
 //  runs the real one, a stand-in `sandbox-exec`, `sw_vers` and `bwrap` that record their argv (paths only, never an
-//  environment value) and then run the command they were given, as the real ones do once they set up the sandbox.
+//  environment value) and then run the command they were given, as the real ones do once they set up the sandbox. The
+//  runtime runs `sandbox-exec` and `sw_vers` from `/usr/bin` only, never from PATH; the test bundle reads them from
+//  `SANDBOX_TEST_SYSTEM_BIN`, which `env` sets to the stand-ins' own directory (a test running the real ones unsets it).
 //
 
 export interface NativeHost {
@@ -18,6 +20,8 @@ export interface NativeHost {
   tools: string;
   /** The directory the stand-ins are in, first on the runtime's PATH unless the real sandbox is asked for. */
   fakes: string;
+  /** The directory the stand-ins for macOS's own `/usr/bin` tools are in (`sandbox-exec`, `sw_vers`), never on PATH. */
+  system: string;
   /** Adds `name` to the tools, a script that runs `body` in node. */
   tool(name: string, body: string): void;
   /** Every argv a stand-in was run with, as `[name, ...args]`. */
@@ -52,12 +56,13 @@ export function nativeHost(dir: string): NativeHost {
   const home = path.join(dir, 'home');
   const tools = path.join(dir, 'tools-bin');
   const fakes = path.join(dir, 'native-bin');
+  const system = path.join(dir, 'system-bin');
   const log = path.join(dir, 'native.log');
 
-  for (const at of [home, tools, fakes]) fs.mkdirSync(at, { recursive: true });
+  for (const at of [home, tools, fakes, system]) fs.mkdirSync(at, { recursive: true });
 
-  fs.writeFileSync(path.join(fakes, 'sandbox-exec'), standIn('sandbox-exec', log, '    -p|-f|-n|-D) shift 2 ;;'), { mode: 0o755 });
-  fs.writeFileSync(path.join(fakes, 'sw_vers'), '#!/bin/sh\necho "${FAKE_MACOS_VERSION:-15.1}"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(system, 'sandbox-exec'), standIn('sandbox-exec', log, '    -p|-f|-n|-D) shift 2 ;;'), { mode: 0o755 });
+  fs.writeFileSync(path.join(system, 'sw_vers'), '#!/bin/sh\necho "${FAKE_MACOS_VERSION:-15.1}"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(fakes, 'bwrap'), standIn('bwrap', log, [
     '    --bind|--ro-bind|--bind-try|--ro-bind-try|--dev-bind|--symlink|--setenv) shift 3 ;;',
     '    --proc|--dev|--tmpfs|--dir|--unsetenv|--remount-ro) shift 2 ;;',
@@ -66,18 +71,18 @@ export function nativeHost(dir: string): NativeHost {
   ].join('\n')), { mode: 0o755 });
 
   return {
-    dir, home, tools, fakes,
+    dir, home, tools, fakes, system,
     tool(name, body) {
       fs.writeFileSync(path.join(tools, name), `#!${process.execPath}\n${body}\n`, { mode: 0o755 });
     },
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => LoggedSchema.parse(JSON.parse(line))) : []),
-    env: (extra = {}) => ({ PATH: [fakes, tools, '/usr/bin', '/bin'].join(path.delimiter), HOME: home, ...extra }),
+    env: (extra = {}) => ({ PATH: [fakes, tools, '/usr/bin', '/bin'].join(path.delimiter), HOME: home, SANDBOX_TEST_SYSTEM_BIN: system, ...extra }),
   };
 }
 
 /** Makes the stand-in `name` fail before it runs anything, printing `stderr`, as a sandbox that cannot start. */
 export function failStandIn(host: NativeHost, name: 'sandbox-exec' | 'bwrap', stderr: string): void {
-  fs.writeFileSync(path.join(host.fakes, `${name}.fails`), `${stderr}\n`);
+  fs.writeFileSync(path.join(name === 'sandbox-exec' ? host.system : host.fakes, `${name}.fails`), `${stderr}\n`);
 }
 
 export const RUN = 'r0123abcd';

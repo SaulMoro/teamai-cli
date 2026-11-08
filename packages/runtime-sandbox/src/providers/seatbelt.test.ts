@@ -84,8 +84,8 @@ describe('seatbelt: init', () => {
   });
 
   it('fails sandbox_unavailable off macOS, naming bwrap', async () => {
-    fs.rmSync(path.join(host.fakes, 'sw_vers'));
-    const reply = await init(start({ PATH: [host.fakes, host.tools].join(path.delimiter) }), { provider: 'seatbelt' });
+    fs.rmSync(path.join(host.system, 'sw_vers'));
+    const reply = await init(start(), { provider: 'seatbelt' });
 
     expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
     expect(String((reply.error as Message).message)).toContain('provider: bwrap');
@@ -113,6 +113,29 @@ describe('seatbelt: a step', () => {
     expect(Object.values(params)).not.toContain(fs.realpathSync(host.home));
     // No credential value ever reaches the sandbox's argv.
     expect(JSON.stringify(host.calls())).not.toContain('step-key');
+  });
+});
+
+describe("seatbelt: macOS's own sandbox-exec", () => {
+  it('runs sandbox-exec and sw_vers from /usr/bin, never one found earlier on PATH', async () => {
+    const planted = path.join(host.dir, 'planted-bin');
+    fs.mkdirSync(planted);
+    const marker = path.join(host.dir, 'planted-ran');
+
+    // Either one, run, would leave its name in the marker, and the planted sandbox-exec runs the step unconfined.
+    fs.writeFileSync(path.join(planted, 'sw_vers'), `#!/bin/sh\necho sw_vers >> "${marker}"\necho 15.1\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(planted, 'sandbox-exec'), `#!/bin/sh\necho sandbox-exec >> "${marker}"\nwhile [ $# -gt 0 ]; do case "$1" in -p|-D) shift 2 ;; *) break ;; esac; done\nexec "$@"\n`, { mode: 0o755 });
+    const connection = start({ PATH: [planted, host.fakes, host.tools, '/usr/bin', '/bin'].join(path.delimiter) });
+
+    expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at);
+    const { end, output } = await exec(connection, { argv: ['claude', '-p', 'Review it.'], cwd: at.worktree });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(output).toBe('reviewed\n');
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(host.calls().filter(([name]) => name === 'sandbox-exec')).toHaveLength(2);
   });
 });
 
@@ -199,7 +222,7 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, 
     fs.mkdirSync(other);
     fs.writeFileSync(path.join(other, 'file'), 'other');
     // The real sandbox-exec and sw_vers, never the stand-ins; the member's temp directory holds the test's files.
-    const connection = startOn(executable, host, open, { PATH: [host.tools, '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir) });
+    const connection = startOn(executable, host, open, { PATH: [host.tools, '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), SANDBOX_TEST_SYSTEM_BIN: undefined });
     expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
     const at = placeIn(host.dir);
     await openPlace(connection, at);
@@ -221,7 +244,7 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, 
     fs.mkdirSync(path.join(host.home, '.config'));
     fs.writeFileSync(path.join(host.home, '.config', 'login'), 'member login');
     fs.writeFileSync(path.join(local, 'bin', 'probe'), `#!${process.execPath}\nconst fs = require('node:fs');\nconsole.log(JSON.stringify(process.argv.slice(2).map((at) => { try { fs.readFileSync(at); return 'ok'; } catch (error) { return error.code; } })));\n`, { mode: 0o755 });
-    const connection = startOn(executable, host, open, { PATH: [path.join(local, 'bin'), path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir) });
+    const connection = startOn(executable, host, open, { PATH: [path.join(local, 'bin'), path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), SANDBOX_TEST_SYSTEM_BIN: undefined });
     expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
     const at = placeIn(host.dir);
     await openPlace(connection, at);
@@ -268,7 +291,7 @@ const tries = JSON.parse(process.argv[2]);
   /** The runtime on the real sandbox-exec, with node on its PATH, and `extra` over its environment; its place under `root`. */
   async function onThisMac(extra: NodeJS.ProcessEnv = {}, root = host.dir): Promise<{ connection: Connection; at: ReturnType<typeof placeIn> }> {
     host.tool('tries', TRIES);
-    const connection = startOn(executable, host, open, { PATH: [host.tools, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), ...extra });
+    const connection = startOn(executable, host, open, { PATH: [host.tools, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), SANDBOX_TEST_SYSTEM_BIN: undefined, ...extra });
     expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
 
     return { connection, at: placeIn(root) };
@@ -313,7 +336,7 @@ const tries = JSON.parse(process.argv[2]);
     try {
       const { connection, at } = await onThisMac({ HOME: home });
       await openPlace(connection, at);
-      const { end, output } = await exec(connection, { argv: ['tries', JSON.stringify(sockets.map((at, index) => [String(index), 'connect', at]))], cwd: at.worktree });
+      const { end, output } = await exec(connection, { argv: ['tries', JSON.stringify(sockets.map((socket, index) => [String(index), 'connect', socket]))], cwd: at.worktree });
 
       expect(end).toMatchObject({ event: 'exited', code: 0 });
       expect(Object.values(JSON.parse(output))).toEqual(sockets.map(() => 'EPERM'));
