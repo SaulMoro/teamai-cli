@@ -91,7 +91,7 @@ describe('driveByDefault', () => {
 });
 
 describe('workflows.idle_timeout on this machine', () => {
-  it('reaches a workspace as written, for the answer step that reads it to check', async () => {
+  it('reaches a workspace as written, for the prompt step that reads it to check', async () => {
     onMachine('workflows:\n  idle_timeout: 2m\n');
 
     expect((await workspace('')).workflows?.idle_timeout).toBe('2m');
