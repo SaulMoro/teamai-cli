@@ -60,3 +60,68 @@ describe('an exec that ends', () => {
     expect(written).toEqual([{ op: OP, event: 'exited', code: 0, stdout: `[teamai: only the last 64 KiB of stdout follow]\n${'x'.repeat(65_536)}` }]);
   });
 });
+
+describe('an operation this process runs', () => {
+  it('ends once, with the first end any of its sources gives, and is no longer running then', async () => {
+    const { written, ledger } = ledgerWritten();
+    const run = { title: 'review' };
+    ledger.begin(OP, run);
+
+    expect(ledger.running(OP)).toBe(run);
+    await Promise.all([
+      ledger.finish({ op: OP, run, ended: { op: OP, state: 'cancelled' }, keep: () => {} }),
+      ledger.finish({ op: OP, run, ended: FINISHED, keep: () => {} }),
+    ]);
+
+    expect(written).toEqual([{ op: OP, event: 'cancelled' }]);
+    expect(ledger.running(OP)).toBeUndefined();
+  });
+
+  it('is ended by no source of an earlier run of it, once it runs again', async () => {
+    const { written, ledger } = ledgerWritten();
+    const before = { title: 'first' };
+    const after = { title: 'retried' };
+    ledger.begin(OP, before);
+    await ledger.finish({ op: OP, run: before, ended: { op: OP, state: 'failed', failure: { code: 'cancel_failed', message: 'still runs' } }, keep: () => {} });
+    ledger.begin(OP, after);
+
+    await ledger.finish({ op: OP, run: before, ended: FINISHED, keep: () => {} });
+
+    expect(ledger.running(OP)).toBe(after);
+    expect(written.map((line) => 'event' in line && line.event)).toEqual(['failed']);
+  });
+
+  it('is let go with no end, so a later request runs it again', () => {
+    const { written, ledger } = ledgerWritten();
+    const run = { title: 'review' };
+    ledger.begin(OP, run);
+
+    ledger.abandon(OP, run);
+
+    expect(ledger.running(OP)).toBeUndefined();
+    expect(ledger.knows(OP)).toBe(true);
+    expect(written).toEqual([]);
+  });
+});
+
+describe('what a runtime process knows of an operation', () => {
+  it('takes the place of an op from the acceptance that named it', () => {
+    const { ledger } = ledgerWritten();
+
+    ledger.write({ op: OP, event: 'accepted', handle: 't3-r1-a1' });
+
+    expect(ledger.handleOf(OP)).toBe('t3-r1-a1');
+    expect(ledger.knows(OP)).toBe(true);
+    expect(ledger.knows('op-00000000' as OpId)).toBe(false);
+  });
+
+  it('keeps why a cancel came before its op ran here, until the op takes it', () => {
+    const { ledger } = ledgerWritten();
+
+    ledger.mark(OP, 'cancelled-unseen');
+
+    expect(ledger.knows(OP)).toBe(true);
+    expect(ledger.takeMark(OP)).toBe('cancelled-unseen');
+    expect(ledger.takeMark(OP)).toBeUndefined();
+  });
+});

@@ -7,6 +7,7 @@ import {
   type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { opLedger, type OpEnd } from '@teamai/runtime-kit/ledger';
+import { placeWork } from '@teamai/runtime-kit/places';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { findOnPath } from '@teamai/tool-core/lookpath';
@@ -512,7 +513,10 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
 
 export function serve(options: ServeOptions): Promise<number> {
   const { journal } = options;
-  const ledger = opLedger({ name: 't3', write: options.write });
+  /** Each op's one end, and what this process knows of each: the prompts it runs and cancels it retries, by op. */
+  const ledger = opLedger<Running>({ name: 't3', write: options.write });
+  /** The open and the launches under way in each place, and the places the person released. */
+  const places = placeWork();
   const { write } = ledger;
   let session: Session | undefined;
   /**
@@ -520,22 +524,10 @@ export function serve(options: ServeOptions): Promise<number> {
    * stop starts whatever the sign-in or T3 Code's state. A failed one is tried again by the next request.
    */
   let recovering: { connecting?: Promise<Reach> } | undefined;
-  /** The handle of each operation this process saw, so `cancel` (which names only the op) reaches its place. */
-  const handleOf = new Map<OpId, string>();
   // In a T3 thread, T3 sets CLAUDE_CONFIG_DIR or CODEX_HOME to the home of that thread's instance: a fact of the
   // thread, not a home teamai gives a tool.
   const toolHomeEnv = options.startedFrom === undefined ? options.env : {};
   const toolHomeOf = (instance: InitInstance, driver: Driver): string => teamaiToolHome({ instance, driver, home: options.home, env: toolHomeEnv, cwd: options.cwd });
-  /** The ops whose end this process owns, by op: prompts it runs and cancels it retries. A repeated prompt joins one. */
-  const running = new Map<OpId, Running>();
-  /** Ops teamai cancelled before this process saw their prompt. */
-  const cancelledEarly = new Set<OpId>();
-  /** Ops whose cancel failed on a record it could not read, which may have been another place's. */
-  const cancelledUnread = new Set<OpId>();
-  /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
-  const working = new Map<string, Set<Promise<unknown>>>();
-  /** The places a close forgot as the person released them: an open or a launch that ends later records nothing there. */
-  const released = new Set<string>();
 
   /** A line for the person, about the operation or the place it names: teamai shows it as it runs. */
   const notice = (message: string, about: { op?: OpId; handle?: string }): void => write({ event: 'notice', ...about, message });
@@ -559,23 +551,6 @@ export function serve(options: ServeOptions): Promise<number> {
     if (set === 'full-access' && work.kind === 'judge') return 'auto';
 
     return set ?? inheritedMode(mode, about);
-  };
-
-  /** `work`, counted as under way in `handle` until it settles. */
-  const track = <TValue>(handle: string, work: Promise<TValue>): Promise<TValue> => {
-    const under = working.get(handle) ?? new Set();
-    working.set(handle, under);
-    under.add(work);
-
-    const done = (): void => {
-      under.delete(work);
-
-      if (under.size === 0 && working.get(handle) === under) working.delete(handle);
-    };
-
-    work.then(done, done);
-
-    return work;
   };
 
   /** The handle of the place `open` makes for a run's attempt. */
@@ -726,11 +701,8 @@ export function serve(options: ServeOptions): Promise<number> {
    * Ends a prompt this process runs, once: a later end, such as a follow that saw the run end after a stop ended the
    * prompt, writes nothing. An end the journal cannot keep is still answered, since nothing would answer it later.
    */
-  const endRunning = async (state: Running, ended: OpEnd, { threadEnded }: { threadEnded: boolean }): Promise<void> => {
-    if (running.get(ended.op) !== state) return;
-    running.delete(ended.op);
-    await ledger.settle(ended, () => record(state.handle, ended, { threadEnded }));
-  };
+  const endRunning = (state: Running, ended: OpEnd, { threadEnded }: { threadEnded: boolean }): Promise<void> =>
+    ledger.finish({ op: ended.op, run: state, ended, keep: () => record(state.handle, ended, { threadEnded }) });
 
   /**
    * Stops the thread of a prompt this process runs, and answers why it did not stop. A stop ends the prompt cancelled. A
@@ -1031,8 +1003,7 @@ export function serve(options: ServeOptions): Promise<number> {
 
   const open = async (request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> => {
     const handle = handleFor(request);
-    handleOf.set(request.op, handle);
-    released.delete(handle);
+    places.reopen(handle);
     write({ op: request.op, event: 'accepted', handle });
 
     if (!session) {
@@ -1173,7 +1144,7 @@ export function serve(options: ServeOptions): Promise<number> {
       ...(settle !== undefined && { settleScript: settle }), settingsProjectId: checkout.project.id, ops: {}, threads: {}, launches: {},
     };
 
-    if (released.has(handle)) {
+    if (places.isReleased(handle)) {
       fail(request.op, { code: 'open_failed', message: `teamai released ${handle} while T3 Code was still opening it, so the runtime does not keep it.` });
 
       return;
@@ -1220,7 +1191,7 @@ export function serve(options: ServeOptions): Promise<number> {
     if (shell.worktreePath === null) throw new Error(`T3 Code gave the thread ${threadId} no folder.`);
     const launched = known ?? await journalThread(threadId, shell.worktreePath, scratch?.modelSelection?.model);
 
-    if (shell.runCount === 0 && released.has(request.handle)) throw new JudgeReleased('teamai released the place while T3 Code launched the judge thread, so it did not brief that thread, and the judge did not start.');
+    if (shell.runCount === 0 && places.isReleased(request.handle)) throw new JudgeReleased('teamai released the place while T3 Code launched the judge thread, so it did not brief that thread, and the judge did not start.');
 
     if (shell.runCount === 0) {
       try {
@@ -1267,7 +1238,7 @@ export function serve(options: ServeOptions): Promise<number> {
 
     for (;;) {
       // A stop teamai asked for ended the op.
-      if (running.get(request.op) !== state) return undefined;
+      if (ledger.running(request.op) !== state) return undefined;
       let waited: Waited;
 
       try {
@@ -1349,7 +1320,6 @@ export function serve(options: ServeOptions): Promise<number> {
   };
 
   const prompt = async (request: PromptRequest): Promise<void> => {
-    handleOf.set(request.op, request.handle);
     const read = journal.read(request.handle);
     const opened = read.kind === 'found' ? read.place : undefined;
     const ended = ledger.unkept(request.op) ?? opened?.ops[request.op];
@@ -1360,7 +1330,7 @@ export function serve(options: ServeOptions): Promise<number> {
     };
 
     // An op this process owns ends here, whatever its record says while its owner writes it.
-    if (running.has(request.op)) {
+    if (ledger.running(request.op)) {
       accept(opened?.threads[request.op]);
 
       return;
@@ -1383,10 +1353,7 @@ export function serve(options: ServeOptions): Promise<number> {
 
     const s = session;
 
-    const end = async (state: OpEnd, threadEnded = false): Promise<void> => {
-      running.delete(request.op);
-      await ledger.settle(state, () => record(request.handle, state, { threadEnded }));
-    };
+    const end = (state: OpEnd, threadEnded = false): Promise<void> => ledger.settle(state, () => record(request.handle, state, { threadEnded }));
 
     let thread = opened.threads[request.op];
     const pending = opened.launches[request.op];
@@ -1406,7 +1373,10 @@ export function serve(options: ServeOptions): Promise<number> {
       await end(unconfirmed(request.op, code === 'launch_unconfirmed' ? message : `${message.replace(/\.$/, '')} (${code}). ${held} may still run: run teamai workflow cancel ${opened.run} to stop it.`));
     };
 
-    if (cancelledEarly.delete(request.op)) {
+    // Why teamai's cancel came before this prompt, if it did.
+    const mark = ledger.takeMark(request.op);
+
+    if (mark === 'cancelled-unseen') {
       // The mark says only that teamai cancelled the op before this process saw it: a thread or launch the journal holds
       // for it ends the op cancelled once the cancel confirmed its stop, never on the mark alone.
       if ((thread && !thread.ended) || pending) {
@@ -1421,7 +1391,7 @@ export function serve(options: ServeOptions): Promise<number> {
 
     // A record that holds the op was the one its cancel could not read, and the prompt reconnects to what it holds. One
     // that holds nothing of it says the cancel failed on another place's record, so the cancel stands.
-    if (cancelledUnread.delete(request.op) && !ended) {
+    if (mark === 'cancel-unread' && !ended) {
       await refuse({ op: request.op, state: 'cancelled' });
 
       return;
@@ -1510,11 +1480,11 @@ export function serve(options: ServeOptions): Promise<number> {
     // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent. One it cannot
     // journal fails the request before the op runs here, as nothing was launched.
     if (!thread) {
-      await journalOp({ handle: request.handle, op: request.op, ...(!released.has(request.handle) && { opened }) }, (conversation) => ({ ...conversation, state: { op: request.op, state: 'running' }, launch }));
+      await journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, (conversation) => ({ ...conversation, state: { op: request.op, state: 'running' }, launch }));
     }
 
     const state: Running = { handle: request.handle, run: opened.run, title };
-    running.set(request.op, state);
+    ledger.begin(request.op, state);
     ledger.forget(request.op);
     const finish = (outcome: OpEnd, threadEnded = false): Promise<void> => endRunning(state, outcome, { threadEnded });
 
@@ -1528,7 +1498,7 @@ export function serve(options: ServeOptions): Promise<number> {
       const journalThread = async (threadId: string, copy: string | undefined, model: string | undefined): Promise<ThreadRecord> => {
         const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }) };
         // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
-        await journalOp({ handle: request.handle, op: request.op, ...(!released.has(request.handle) && { opened }) }, (conversation) => ({ state: conversation?.state ?? { op: request.op, state: 'running' }, thread: launched }));
+        await journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, (conversation) => ({ state: conversation?.state ?? { op: request.op, state: 'running' }, thread: launched }));
 
         state.thread = launched;
         write({ op: request.op, event: 'display', display: threadDisplay(launched, s.environment) });
@@ -1542,7 +1512,7 @@ export function serve(options: ServeOptions): Promise<number> {
       const known = thread;
 
       // A close that comes meanwhile waits for the launch, so it stops the thread the launch started.
-      thread = await track(request.handle, work.kind === 'judge'
+      thread = await places.track(request.handle, work.kind === 'judge'
         ? launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known })
         : known ? Promise.resolve(known) : launchStep(s, request, work.place, newThread).then(({ threadId, model }) => journalThread(threadId, undefined, model)));
     } catch (error) {
@@ -1629,7 +1599,7 @@ export function serve(options: ServeOptions): Promise<number> {
   };
 
   const cancel = async (op: OpId): Promise<void> => {
-    const state = running.get(op);
+    const state = ledger.running(op);
 
     if (state) {
       if (state.cancelBy === undefined) {
@@ -1639,7 +1609,7 @@ export function serve(options: ServeOptions): Promise<number> {
         // Without a thread yet, the prompt stops it once T3 answers the launch, and a stop ends by the deadline itself;
         // a launch T3 has not answered by then ends the op.
         setTimeout(() => {
-          if (running.get(op) === state && !state.stopping) void endRunning(state, unconfirmed(op, `teamai cancelled the step while T3 Code launched its thread "${state.title}", and the launch had not finished ${STOP_WAIT_MS / 1_000} s later, so the thread may run. Run teamai workflow cancel ${state.run} again.`), { threadEnded: false });
+          if (ledger.running(op) === state && !state.stopping) void endRunning(state, unconfirmed(op, `teamai cancelled the step while T3 Code launched its thread "${state.title}", and the launch had not finished ${STOP_WAIT_MS / 1_000} s later, so the thread may run. Run teamai workflow cancel ${state.run} again.`), { threadEnded: false });
         }, by - Date.now());
       }
 
@@ -1648,12 +1618,12 @@ export function serve(options: ServeOptions): Promise<number> {
       return;
     }
 
-    const handle = handleOf.get(op);
+    const handle = ledger.handleOf(op);
     const read = handle ? journal.read(handle) : journal.placeOf(op);
 
     // A record that cannot be read may hold the op's thread: that is no proof it launched nothing.
     if (read.kind === 'unreadable') {
-      cancelledUnread.add(op);
+      ledger.mark(op, 'cancel-unread');
 
       return fail(op, { ...unreadable(handle ?? read.handle ?? op, read), code: CANCEL_FAILED });
     }
@@ -1665,7 +1635,7 @@ export function serve(options: ServeOptions): Promise<number> {
     // before; teamai cancels before it reattaches.
     if (!known || !(retained?.state === 'running' || (retained?.state === 'failed' && retained.failure.code === CANCEL_FAILED))) {
       if (retained) answerEnded(op, retained);
-      else cancelledEarly.add(op);
+      else ledger.mark(op, 'cancelled-unseen');
 
       return;
     }
@@ -1677,7 +1647,7 @@ export function serve(options: ServeOptions): Promise<number> {
     // This cancel owns the op's end as a prompt this process runs would, before anything is awaited: a prompt teamai
     // resends meanwhile joins it rather than following the thread, and only one end is written.
     const owner: Running = { handle: at, run, title: (known.threads[op] ?? known.launches[op])?.title ?? op, cancelBy: deadline, thread: known.threads[op] };
-    running.set(op, owner);
+    ledger.begin(op, owner);
 
     // From reading this cancel until its stop is confirmed or fails again, the op runs: a stop that failed before is not
     // this cancel's outcome. A record that cannot be written leaves no owner behind to swallow the next cancel.
@@ -1685,7 +1655,7 @@ export function serve(options: ServeOptions): Promise<number> {
       try {
         await record(at, { op, state: 'running' }, { threadEnded: false });
       } catch (error) {
-        if (running.get(op) === owner) running.delete(op);
+        ledger.abandon(op, owner);
         throw error;
       }
     }
@@ -1836,10 +1806,9 @@ export function serve(options: ServeOptions): Promise<number> {
     const deadline = Date.now() + STOP_WAIT_MS;
     const left = (): number => Math.max(deadline - Date.now(), 0);
     const late = `T3 Code did not answer within ${STOP_WAIT_MS / 1_000} s`;
-    const under = [...(working.get(handle) ?? [])];
 
     // An open or a launch still under way would make what close then never sees: a record, or a thread it starts.
-    if (under.length > 0 && !(await within(Promise.allSettled(under), left())).answered) {
+    if (!(await places.settled(handle, left()))) {
       return failClose({ code: 't3_unavailable', message: `teamai was still opening ${handle} or launching a T3 thread in it, and ${late} of the close, so teamai keeps the place. Run teamai workflow cancel again once T3 Code answers.` });
     }
 
@@ -1908,7 +1877,7 @@ export function serve(options: ServeOptions): Promise<number> {
         const s = reached.reached;
 
         const stops = await Promise.all(owned.map(async ({ op, thread }) => {
-          const live = running.get(op);
+          const live = ledger.running(op);
           // A prompt still running here ends cancelled once its thread stopped, and is followed on while it did not.
           const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false, deadline }) : await whyNotStopped(s.t3, thread.threadId, deadline);
 
@@ -1955,7 +1924,7 @@ export function serve(options: ServeOptions): Promise<number> {
   /** Forgets a place the person released: its record, readable or not, and a judge's copy. */
   const forget = (handle: string): void => {
     const known = place(handle);
-    released.add(handle);
+    places.release(handle);
     removeCopies(known);
     journal.remove(handle);
 
@@ -1968,7 +1937,7 @@ export function serve(options: ServeOptions): Promise<number> {
     ledger,
     handlers: {
       init,
-      open: (request) => track(handleFor(request), open(request)),
+      open: (request) => places.track(handleFor(request), open(request)),
       exec: async (request) => {
         write({ op: request.op, event: 'accepted' });
         fail(request.op, { code: 'exec_unsupported', message: 'Runtime t3 runs prompt steps as T3 Code threads and runs no command (can.exec: false).' });
@@ -2010,13 +1979,13 @@ export function serve(options: ServeOptions): Promise<number> {
         const latest = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt)[0];
         const display = session && (latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment));
         // An op this process owns runs until it ends here, whatever its record says while that is being written.
-        const stateOf = (kept: OpState): OpState => (running.has(kept.op) ? { op: kept.op, state: 'running' } : ledger.unkept(kept.op) ?? kept);
+        const stateOf = (kept: OpState): OpState => (ledger.running(kept.op) ? { op: kept.op, state: 'running' } : ledger.unkept(kept.op) ?? kept);
         write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops).map(stateOf), ...(display && { display }) });
       },
       close: (request) => close(request.handle, { release: request.release === true }),
     },
-    // An op this process saw, or one a record holds or may hold, already has its outcome or gets it from what runs it.
-    holds: (op) => handleOf.has(op) || running.has(op) || cancelledEarly.has(op) || cancelledUnread.has(op) || journal.placeOf(op).kind !== 'missing',
+    // An op a record holds or may hold already has its outcome, or gets it from what runs it.
+    holds: (op) => journal.placeOf(op).kind !== 'missing',
     stopped: 'its T3 thread',
     debug: (line) => process.stderr.write(`${line}\n`),
   });

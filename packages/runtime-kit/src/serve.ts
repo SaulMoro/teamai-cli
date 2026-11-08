@@ -28,8 +28,9 @@ export interface ServeRuntime {
   ledger: OpLedger;
   handlers: RuntimeHandlers;
   /**
-   * Whether the runtime already runs `op` or answered it, or a record it keeps holds or may hold it: such an op has its
-   * outcome, or gets it from what runs it, so a line that names it and cannot be read is dropped, not answered.
+   * Whether a record the runtime keeps holds or may hold `op`, which this process never saw: such an op has its outcome,
+   * or gets it from what runs it, so a line that names it and cannot be read is dropped, not answered, as is one that
+   * names an op the ledger knows.
    */
   holds(op: OpId): boolean;
   /** What may still run when a cancel threw, as the subject of "… may still run", such as `its T3 thread`. */
@@ -123,7 +124,7 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
   /** Whether the runtime holds `op`: when it cannot tell, it may, so the line is dropped rather than answered. */
   const mayHold = (op: OpId): boolean => {
     try {
-      return holds(op);
+      return ledger.knows(op) || holds(op);
     } catch (error) {
       debug(`Runtime ${name} could not tell whether it holds ${op}, so it drops the line that names it: ${error instanceof Error ? error.message : String(error)}`);
 
@@ -163,6 +164,9 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
 
     // The ends of its op written before it, which a repeated op is answered with again, are not this request's.
     const endsBefore = 'op' in request ? ledger.endsOf(request.op) : 0;
+
+    // A cancel names only its op: it finds the place of one this process saw here.
+    if (request.type === 'exec' || request.type === 'prompt') ledger.locate(request.op, request.handle);
 
     void (async () => {
       try {
