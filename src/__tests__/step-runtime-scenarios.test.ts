@@ -25,7 +25,7 @@ import { leaseNext } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { shellArgv } from '../workflow/shell-command.js';
 import { getRepoIdentity } from '../session-flow/sync.js';
@@ -1739,6 +1739,36 @@ steps:
       counted: number
 `;
 
+/** A whole workflow step with a token budget its first review spends: the owner would fail it before the second. */
+const BUDGETED = `schemaVersion: v1alpha1
+name: slow
+description: Reviews twice, on a budget.
+steps:
+  - id: work
+    workspace: new
+    workflow: reviews
+    budget: { tokens: 1 }
+`;
+
+const REVIEWS = `schemaVersion: v1alpha1
+name: reviews
+description: Reviews the work twice.
+steps:
+  - id: first
+    workspace: continue
+    tool: claude
+    prompt: Review the work first.
+    output:
+      ok: boolean
+  - id: second
+    needs: [first]
+    workspace: continue
+    tool: claude
+    prompt: Review the work again.
+    output:
+      ok: boolean
+`;
+
 /** A step that requires a label from the workflow's defaults, which only a member that declares it where it runs the step takes. */
 const LABELLED = `schemaVersion: v1alpha1
 name: slow
@@ -1815,12 +1845,12 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, isMeasured = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean; isMeasured?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
   const acme = team({ slow: workflow, ...workflows }, files);
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await beforeStart?.(alice);
   const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }), ...(isPromptless && { prompt: false as const }) } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }), ...(isPromptless && { prompt: false as const }), ...(isMeasured && { tokens: true }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
@@ -1849,6 +1879,15 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels,
   });
 
   return { alice, bob, run, attempt, open, record };
+}
+
+/** The runs on `config`'s install: on a member, the nested runs of the whole workflows it took. */
+async function runsOf(config: Member['config']) {
+  const dir = runsDir(config);
+  const ids = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)) : [];
+  const states = await Promise.all(ids.map(async (id) => readRun(config, RunIdSchema.parse(id))));
+
+  return states.flatMap((state) => (state === 'missing' || state === 'corrupt' ? [] : [state]));
 }
 
 describe('StepRuntime scenarios: fleet with two installs', () => {
@@ -2162,6 +2201,76 @@ done`);
     expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 1 } } });
     const end = await ended;
     expect(end.kind === 'exited' && JSON.parse(end.stdout)).toMatchObject({ outcome: 'failed', failure: { code: 'hitl_required', message: expect.stringContaining('Step "keep" of the workflow step "work"') } });
+  }, 90_000);
+
+  it('cancels the nested run of a member\'s whole workflow whose gate the owner refused, so it no longer waits at that gate', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId(), 'workflow');
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { exit_code: 1 } } });
+    expect(await ended).toMatchObject({ kind: 'exited', code: 1 });
+    expect(await runsOf(owner.bob.config)).toEqual([expect.objectContaining({ status: 'cancelled' })]);
+  }, 90_000);
+
+  it('stops a member\'s whole workflow that the owner cancelled before its nested run started, once the run appears, and runs none of its steps', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: PAIR }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    // Bob reads the record for a cancel every 4 s, a third of stale_after.
+    const { runtime, exec } = await owner.open(place, { stale_after: '12s' });
+    const op = newOpId();
+    const ended = exec(op, 'workflow');
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+    // Bob's nested run is slow to start: the copy of his team checkout's index it pins the run's team files with takes
+    // 5 s to refresh (git asks the hook twice), past his first read of the record, which finds the owner's cancel.
+    const hook = path.join(path.dirname(owner.bob.checkout), 'slow-pin');
+    fs.writeFileSync(hook, '#!/bin/sh\ncase "$GIT_INDEX_FILE" in *teamai-team-pin-*) sleep 2.5;; esac\nexit 1\n', { mode: 0o755 });
+    git(owner.bob.config.repo.localPath, 'config', 'core.fsmonitor', hook);
+    void eventually(async () => ((await owner.record())?.state === 'claimed' ? true : undefined)).then(async () => runtime.cancel(op));
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { cancelled: { run: owner.run, attempt: owner.attempt } } });
+    expect(await ended).toEqual({ kind: 'cancelled' });
+    const [nested] = await runsOf(owner.bob.config);
+    expect(nested).toMatchObject({ status: 'cancelled' });
+    expect(nested?.steps.filter((step) => step.status === 'succeeded')).toEqual([]);
+  }, 90_000);
+
+  it('fails a member\'s whole workflow once its steps spent more than the workflow step\'s budget, as the owner would, and returns what they spent', async () => {
+    const owner = await ownerOf({ workflow: BUDGETED, workflows: { reviews: REVIEWS }, tools: ['claude'], isWhole: true, isMeasured: true });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}' });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+
+    try {
+      const ended = exec(newOpId(), 'workflow');
+      await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+      await readableReportsWorktree(owner.bob.config);
+
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+      expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 1 } } });
+      const end = await ended;
+      expect(end.kind === 'exited' && JSON.parse(end.stdout)).toMatchObject({ outcome: 'failed', failure: { code: 'budget_exceeded' }, tokens: { input: expect.any(Number) } });
+      expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work first.')]) })]);
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
   }, 90_000);
 
   it('offers a prompt step, which a member runs on its own tool from its own copy of the step, then ends with the result its agent wrote', async () => {

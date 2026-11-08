@@ -345,11 +345,12 @@ function wholeReport(result: CommandExit): Omit<ReportBody, 'attempt' | 'revisio
   const parsed = WholeEndSchema.safeParse(commandOutputs(result.stdout));
 
   if (!parsed.success) return commandEnd(result);
-  const { outcome, end, outputs, failure } = parsed.data;
+  const { outcome, end, outputs, failure, tokens } = parsed.data;
 
   return {
     outcome: outcome === 'succeeded' ? 'success' : 'failed', exitCode: result.exitCode,
     ...(end !== undefined && { end }), ...(outputs !== undefined && { outputs }), ...(failure && { failure, message: failure.message }),
+    ...(tokens !== undefined && { tokens }),
   };
 }
 

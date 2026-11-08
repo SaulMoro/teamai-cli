@@ -194,6 +194,7 @@ function wholeEnd(result: FleetResult): WholeEnd {
   return {
     outcome: result.exitCode === 0 && result.failure === undefined ? 'succeeded' : 'failed',
     ...(result.end !== undefined && { end: result.end }), ...(outputs !== undefined && { outputs }), ...(result.failure && { failure: result.failure }),
+    ...(result.tokens !== undefined && { tokens: result.tokens }),
   };
 }
 

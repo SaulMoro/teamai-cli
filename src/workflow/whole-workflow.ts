@@ -10,6 +10,7 @@ import { isRecord } from './expression.js';
 import { mergeRequirements, type InEffect } from './requirements.js';
 import { renderStrings, type TemplateContext } from './template.js';
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowStep } from './types.js';
+import { TokenUsageSchema } from './step-state.js';
 
 /** A step of a workflow that goes whole that runs something, with the `requires` in effect for it. */
 export type WholeRun = { step: WorkflowStep; executor: 'command' | 'prompt'; requires: InEffect };
@@ -37,6 +38,17 @@ export function wholeFit(step: WorkflowStep, child: WorkflowDefinition | InlineW
 }
 
 /**
+ * The workflow a member runs as the nested run of whole workflow step `step`: `child`, with the budget the step's
+ * children spend together, the smaller of the step's own and the workflow's, as the owner's engine gives that workflow
+ * (scope.ts `childScope`). A `for_each` step's budget covers all its items, which the owner counts as each item ends.
+ */
+export function wholeRunDefinition(step: WorkflowStep, child: WorkflowDefinition): WorkflowDefinition {
+  const budgets = [step.forEach === undefined ? step.budget?.tokens : undefined, child.budget?.tokens].filter((tokens) => tokens !== undefined);
+
+  return budgets.length === 0 ? child : { ...child, budget: { tokens: Math.min(...budgets) } };
+}
+
+/**
  * Why the workflow `child`, which step `step` runs, does not go whole, or undefined when it does: it is a workflow file
  * whose children are command, prompt or gate steps that work in the copy the step works in, with nothing a member
  * cannot run on its own: a gate the member asks the owner through the attempt's record.
@@ -54,6 +66,9 @@ function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow
   if (step.workspace === undefined && child.workspace === 'new') return 'its workflow opens a copy of its own';
 
   if (child.setup !== undefined) return 'its workflow has a setup of its own';
+
+  // An allowance its prompts end their turn at is counted by the owner's engine across them, which a nested run is not.
+  if (step.onLimit === 'end_turn') return 'it gives its prompts a turn allowance (on_limit: end_turn)';
   const isShipped = DefaultWorkflows.named(child.name) !== undefined;
 
   for (const inner of child.steps) {
@@ -101,6 +116,8 @@ export const WholeEndSchema = z.object({
   end: z.string().min(1).optional(),
   outputs: z.record(z.string(), JsonValueSchema).optional(),
   failure: z.object({ code: z.string().min(1), message: z.string() }).optional(),
+  /** The tokens its steps spent, which the budgets around the step count. */
+  tokens: TokenUsageSchema.optional(),
 });
 
 export type WholeEnd = z.infer<typeof WholeEndSchema>;

@@ -105,9 +105,40 @@ steps:
       counted: number
 `;
 
+/** A workflow step a member takes whole, whose one command holds until stopped the first time, writing its pid where the test reads it. */
+const WHOLE_HOLD = flow('wholehold', `  - id: pair
+    workspace: new
+    workflow: holdone
+`);
+const HOLD_ONE = flow('holdone', `  - id: hold
+    workspace: continue
+    command: node -e "const fs = require('fs'); const pid = require('os').homedir() + '/nested.pid'; if (fs.existsSync(pid)) process.exit(0); fs.writeFileSync(pid, String(process.pid)); setInterval(() => {}, 1000)"
+`);
+
+/** A run on a budget whose one workflow step a member takes whole; its prompt spends more than the run may. */
+const WHOLE_SPEND = `schemaVersion: v1alpha1
+name: wholespend
+description: wholespend
+budget: { tokens: 5 }
+steps:
+  - id: pair
+    workspace: new
+    workflow: spendone
+`;
+const SPEND_ONE = flow('spendone', `  - id: review
+    workspace: continue
+    tool: claude
+    prompt: Review the work.
+    output:
+      ok: boolean
+`);
+
 const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1, can: { tools: [] } } }, { use: 'local' }] };
 
 /** The default pool, two attempts out at once. */
+/** The default pool, whose members run claude and report the tokens it spent. */
+const TOKEN_FLEET = { schemaVersion: 'v1alpha1', name: 'token-fleet', runtimes: [{ use: 'fleet', options: { can: { tools: ['claude'], tokens: true } } }, { use: 'local' }] };
+
 const FAN_FLEET = { schemaVersion: 'v1alpha1', name: 'fan-fleet', runtimes: [{ use: 'fleet', options: { max_parallel: 2 } }, { use: 'local' }] };
 
 interface Envelope { data?: Record<string, unknown>; error?: { code: string; message: string } }
@@ -309,6 +340,11 @@ function runStateOf(member: string, run: string): { steps: Step[] } {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as { steps: Step[] } : { steps: [] };
 }
 
+/** The status of `member`'s run `run`. */
+function runStatusOf(member: string, run: string): string {
+  return (JSON.parse(fs.readFileSync(path.join(dataHomeOf(member), 'workflows', 'runs', `${run}.json`), 'utf8')) as { status: string }).status;
+}
+
 /** The ids of `member`'s runs. */
 function runsOf(member: string): string[] {
   const dir = path.join(dataHomeOf(member), 'workflows', 'runs');
@@ -356,6 +392,11 @@ describe('the fleet', () => {
       'workflows/fan.yaml': FAN,
       'workflows/whole.yaml': WHOLE,
       'workflows/pair.yaml': PAIR,
+      'workflows/wholehold.yaml': WHOLE_HOLD,
+      'workflows/wholespend.yaml': WHOLE_SPEND,
+      'workflows/spendone.yaml': SPEND_ONE,
+      'drivers/token-fleet.yaml': stringify(TOKEN_FLEET),
+      'workflows/holdone.yaml': HOLD_ONE,
       'drivers/build-fleet.yaml': stringify(FLEET),
       'drivers/fan-fleet.yaml': stringify(FAN_FLEET),
     };
@@ -564,6 +605,50 @@ describe('the fleet', () => {
     expect(originGit('show', `${finished?.result?.to ?? ''}:made.txt`)).toBe('W');
     // The member's nested run pushed nothing of its own to origin.
     expect(originGit('for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/').split('\n').filter((branch) => branch.endsWith('/_run'))).toEqual([]);
+  }, 240_000);
+
+  it('counts what a member\'s whole workflow step spent against the run\'s budget', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const started = teamai('alice', ['workflow', 'start', 'wholespend', '--driver', 'token-fleet'], (pid) => { alicePid = pid; });
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+
+    const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 0 } } });
+    const done = await started;
+    // Bob's Claude reports 4 input and 2 output tokens: 6, past the run's 5.
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'budget_exceeded' } } } });
+  }, 240_000);
+
+  it('stops the nested run a member killed during a whole workflow step left running before it runs the step again', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const started = teamai('alice', ['workflow', 'start', 'wholehold', '--driver', 'fan-fleet'], (pid) => { alicePid = pid; });
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    const pidFile = path.join(homeOf('bob'), 'nested.pid');
+    fs.rmSync(pidFile, { force: true });
+    const bobsBefore = new Set(runsOf('bob'));
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool'], (pid) => { bobPid = pid; });
+    await waitOn(() => fs.existsSync(pidFile), 60_000, () => bobPid, taking);
+    const left = Number(fs.readFileSync(pidFile, 'utf8'));
+    // Bob's teamai is killed; the command of its nested run, in a process group of its own, is not.
+    process.kill(bobPid, 'SIGKILL');
+    await taking;
+    expect(isAlive(left)).toBe(true);
+
+    const again = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+    expect(again.envelope(), said(again)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 0 } } });
+    expect(isAlive(left)).toBe(false);
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    // The nested run the killed teamai left ended cancelled; the one the restart ran, succeeded.
+    expect(runsOf('bob').filter((id) => !bobsBefore.has(id)).map((id) => runStatusOf('bob', id)).sort()).toEqual(['cancelled', 'succeeded']);
   }, 240_000);
 
   it('stops a member\'s step when the owner cancels the run, and the member pushes its work and answers the cancel', async () => {
