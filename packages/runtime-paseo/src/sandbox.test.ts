@@ -107,6 +107,28 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'send_agent_message_request')).toHaveLength(1);
   });
 
+  it('never sends the prompt once a cancel from another runtime stopped the agent while its wrapper waited for the sandbox, and leaves no agent behind', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const grant = path.join(dir, 'grant');
+    attempt = await serveAttemptSocket({ holdUntil: grant });
+    const { runtime } = startThrough(attempt);
+    await ready(runtime);
+    const { handle } = await openThrough(runtime, attempt);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await expect.poll(() => attempt?.lines.some((line) => 'ask' in line)).toBe(true);
+
+    // `teamai workflow cancel` reaches the prompt through a runtime of its own, which finds the agent idle.
+    const canceller = start();
+    await ready(canceller, { mode: 'recover' });
+    canceller.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await canceller.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    fs.writeFileSync(grant, '');
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    expect(received().map((request) => request.type)).not.toContain('send_agent_message_request');
+    await expect.poll(() => received().filter((request) => request.type === 'delete_agent_request')).toMatchObject([{ agentId: createdAgent('op-0000000b') }]);
+  });
+
   it('refuses to open an OpenCode place through the sandbox, since Paseo may serve several agents from one OpenCode server', async () => {
     attempt = await serveAttemptSocket();
     const { runtime } = startThrough(attempt);

@@ -1,4 +1,4 @@
-import type { RuntimeFailure, RuntimeRequest } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { outerHandleOf, type Registration } from '@teamai/runtime-kit/outer';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import type { Daemon, Target } from './daemon/connect.js';
@@ -70,10 +70,12 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
 
 /**
  * Starts a prompt's idle agent, which Paseo runs on the wrapper, and sends it the prompt once `registration` says its
- * wrapper connected, after `markSent`; else removes the agent, and says why. `stopped` once the prompt is stopped first.
+ * wrapper connected, after `markSent`; else removes the agent, and says why. `stopped` once the prompt is stopped first:
+ * by this process (`stopped`), or by a cancel or close anywhere (`isStillOurs`), which found the agent idle and took it
+ * for stopped, so the agent is removed rather than sent the prompt.
  */
-export async function handOver(live: Daemon, { record, provider, registration, stopped, markSent }: {
-  record: AgentPrompt; provider: string; registration: Registration; stopped: Promise<'stopped'>; markSent: () => void;
+export async function handOver(live: Daemon, { record, provider, registration, stopped, isStillOurs, markSent }: {
+  record: AgentPrompt; provider: string; registration: Registration; stopped: Promise<'stopped'>; isStillOurs: () => boolean; markSent: () => void;
 }): Promise<'sent' | 'stopped' | RuntimeFailure> {
   const { agentId, prompt } = record.create;
   const never = new Promise<never>(() => {});
@@ -113,14 +115,22 @@ export async function handOver(live: Daemon, { record, provider, registration, s
   if (outcome === 'stopped') return 'stopped';
 
   if (outcome === 'connected') {
+    // Journaled first, so a stop that reads the record from now on knows the prompt may have been sent; a stop already
+    // made is seen next.
     markSent();
+
+    if (!isStillOurs()) {
+      await live.remove(agentId).catch(() => {});
+
+      return 'stopped';
+    }
 
     try {
       await live.send(agentId, prompt);
 
       return 'sent';
     } catch (error) {
-      return { code: 'paseo_failed', message: `Paseo did not take the prompt for the ${record.tool} agent ${agentId}, which runs in the sandbox: ${error instanceof Error ? error.message : String(error)}. It may still have reached the agent; stop it in the Paseo app.` };
+      return { code: CANCEL_FAILED, message: `Paseo did not take the prompt for the ${record.tool} agent ${agentId}, which runs in the sandbox: ${error instanceof Error ? error.message : String(error)}. It may still have reached the agent; stop it in the Paseo app.` };
     }
   }
 
