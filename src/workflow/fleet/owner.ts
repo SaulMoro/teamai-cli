@@ -495,8 +495,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
 
     if (pushed.code !== 0) return failed({ code: 'push_failed', message: `Step "${step}" could not push its start commit to ${ref} on origin, so no fleet member can take it: ${pushed.stderr.trim()}` });
     await markOffered(config, run, attempt, pool, { op, staleAfterMs });
-    const { labels } = leased.requires;
-    const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, definition: runDefinition(state), values: values.values, secrets, ...(labels && { labels }) });
+    // A member reads the step's labels from its own copy of the workflow, so the record carries none.
+    const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, definition: runDefinition(state), values: values.values, secrets });
 
     if (!offered.ok) return failed(fleetFailure(offered.error));
   }

@@ -851,6 +851,8 @@ $ teamai workflow resume --next --tools default=claude --auto-approve
 {"data":{"done":{"run":"r814cea92baadffac","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
+剩下的步骤带 [`requires.labels`](workflow-advanced.md#要求和限制) 时，如果这台机器的 `workflows.labels` 没有列出每个标签，同样算作缺少：`render requires labels gpu, which workflows.labels on this machine does not declare: add them to workflows.labels on a machine that has them`。
+
 VM 上的 cron 作业如果没有设置 `TEAMAI_MODE`，就是有人值守，但没有终端，没人能回答 `ship` 处的审批。这时 `--next` 同样把 `release` 留给人：
 
 ```console

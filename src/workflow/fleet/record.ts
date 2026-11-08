@@ -18,7 +18,7 @@ import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
-import { LabelSchema, TurnLimitsSchema } from '../requirements.js';
+import { TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
 import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
@@ -119,8 +119,8 @@ const FleetResultSchema = z.strictObject({
 export type FleetResult = z.infer<typeof FleetResultSchema>;
 
 /**
- * The format of the attempt records this teamai writes and reads. 2: labels, prompt leases, a prompt's session and
- * whole workflow leases. Every object of a record is strict, so a field this format does not name makes the record
+ * The format of the attempt records this teamai writes and reads. 2: prompt leases, a prompt's session, whole
+ * workflow leases and their gates. Every object of a record is strict, so a field this format does not name makes the record
  * unreadable rather than read without it: a newer format bumps this, and a teamai that reads it refuses it by version.
  */
 const RECORD_VERSION = 2;
@@ -136,8 +136,6 @@ const OfferedSchema = z.strictObject({
   run: RunIdSchema,
   attempt: AttemptIdSchema,
   pool: z.string().min(1),
-  /** The step's `requires.labels`: a member takes the attempt only when its `workflows.labels` declares each. */
-  labels: z.array(LabelSchema).optional(),
   /** The business repository the attempt runs in, as `getRepoIdentity` names it. */
   repository: z.string().min(1),
   owner: OwnerSchema,
@@ -199,7 +197,7 @@ export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, C
 
 export type FleetRecord = z.infer<typeof FleetRecordSchema>;
 
-type Offered = Extract<FleetRecord, { state: 'offered' }>;
+export type Offered = Extract<FleetRecord, { state: 'offered' }>;
 
 export type Claimed = Extract<FleetRecord, { state: 'claimed' }>;
 
@@ -420,7 +418,7 @@ export function leaseInputs(step: Pick<WorkflowStep, 'with'>, child: Pick<Workfl
 /** Offers `lease` of attempt `attempt` to pool `pool`, once its start commit is on the attempt's ref. */
 export async function offerAttempt(config: LocalConfig, input: {
   run: RunId; attempt: AttemptId; pool: string; repository: string; owner: HandoffOwner; start: string; staleAfterMs: number; lease: FleetLease;
-  definition: Offered['definition']; values: LeaseValues; secrets: Record<string, string>; labels?: string[];
+  definition: Offered['definition']; values: LeaseValues; secrets: Record<string, string>;
 }): Promise<Written<Offered>> {
   const { secrets, ...fields } = input;
   const record: Offered = { version: RECORD_VERSION, teamai: getCurrentVersion(), ...fields, write: randomUUID(), offeredAt: new Date().toISOString(), state: 'offered' };

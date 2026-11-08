@@ -16,7 +16,7 @@ import { launchToolFor } from './workflow/steps/prompt.js';
 import { memberTools, type MemberTool } from './tool-launch/member-tools.js';
 import { launchExecutableOf, type LaunchTarget } from './tool-launch/tools.js';
 import { sameEnvName } from './resources/env-key.js';
-import { envAdvice, type EnvFacts } from './workflow/requirements.js';
+import { envAdvice, lackedLabels, type EnvFacts } from './workflow/requirements.js';
 import { personSteps, type PersonStep } from './workflow/engine.js';
 import { definitionsOf, handedRun, settledSteps } from './workflow/handoff.js';
 import { invokeRefusal, type InvokeCaller } from './workflow/protocol.js';
@@ -170,7 +170,7 @@ async function offerOf(config: LocalConfig, snapshot: RunSnapshot, at: string, {
 
   const isSandbox = taker.driver === 'local' && (taker.sandbox || config.workflows?.sandbox === true);
   const sealed = taker.driver === 'local' && !isSandbox ? sandboxLacks(description.facts.held.filter((held) => isLeft(held.step, settled))) : [];
-  const offer: Offer = { at, needs, mayNeed, uses, lacks: [...envLacks(left, env.facts), ...toolLacksOf(left), ...sealed] };
+  const offer: Offer = { at, needs, mayNeed, uses, lacks: [...envLacks(left, env.facts), ...labelLacks(left, config.workflows?.labels), ...toolLacksOf(left), ...sealed] };
 
   if (refusal) offer.refusal = refusal;
 
@@ -274,6 +274,20 @@ function sandboxLacks(held: WorkflowDescription['facts']['held']): Lack[] {
   return [{
     reason: `${listOf(steps)} need${steps.length > 1 ? '' : 's'} a sandbox, which this machine does not declare`,
     fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, or set workflows.sandbox: true',
+  }];
+}
+
+/** What `runs` require of labels that `declared`, this machine's `workflows.labels`, does not name. */
+function labelLacks(runs: readonly StepRun[], declared: readonly string[] | undefined): Lack[] {
+  const short = runs.filter((run) => lackedLabels(run, declared).length > 0);
+
+  if (short.length === 0) return [];
+  const labels = [...new Set(short.flatMap((run) => lackedLabels(run, declared)))];
+  const steps = short.map((run) => run.step);
+
+  return [{
+    reason: `${listOf(steps)} require${steps.length > 1 ? '' : 's'} labels ${listOf(labels)}, which workflows.labels on this machine does not declare`,
+    fix: 'add them to workflows.labels on a machine that has them',
   }];
 }
 

@@ -1050,6 +1050,39 @@ steps:
     expect(PublishedRuns.candidates(keyed, { repository: 'github.com/acme/app', hasPerson: false, self }).map((run) => run.run)).toEqual([runId]);
   });
 
+  const RENDER = `schemaVersion: v1alpha1
+name: render
+description: Build, then render on a GPU.
+steps:
+  - id: build
+    command: echo build
+  - id: render
+    needs: [build]
+    requires: { labels: [gpu] }
+    command: echo render
+`;
+
+  it('lists an offered run whose steps left require a label this machine does not declare as lacking it, which no runner here takes', async () => {
+    const acme = team({ render: RENDER });
+    const alice = await acme.member('alice');
+    const runner = await acme.member('runner');
+    originAt('https://github.com/acme/app.git', [alice, runner]);
+    const started = await startRun(alice.config, 'render', {}, { secrets: {} });
+    const runId = 'data' in started ? String(started.data.run) : '';
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+
+    const runs = await publishedRuns(runner);
+    expect(runs[0]?.offer?.lacks).toEqual([{
+      reason: 'render requires labels gpu, which workflows.labels on this machine does not declare', fix: 'add them to workflows.labels on a machine that has them',
+    }]);
+    const self = (await installOwner(runner.config)).id;
+    expect(PublishedRuns.candidates(runs, { repository: 'github.com/acme/app', hasPerson: true, self })).toEqual([]);
+
+    runner.config.workflows = { tools: {}, ...runner.config.workflows, labels: ['gpu'] };
+    const labelled = await publishedRuns(runner);
+    expect(labelled[0]?.offer).toMatchObject({ lacks: [] });
+  });
+
   const DOCS = `schemaVersion: v1alpha1
 name: docs
 description: Build, then write the release notes.
