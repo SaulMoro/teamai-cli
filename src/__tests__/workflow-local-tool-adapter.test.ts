@@ -535,6 +535,45 @@ describe('local tool adapter', () => {
     expect(ran).toMatchObject({ session: 'ses_1', tokens: { input: 16, output: 3 }, cost: { amount: 0.75, unit: 'USD' } });
   });
 
+  // OpenCode 2.2.5 prints `{"type":"error","error":{"type":"provider.<kind>","message":…}}` and exits 1; 1.3.x exits 0.
+  it.each([
+    ['a rate limit, exiting 1', 'provider.rate-limit', 'Rate limit exceeded', 1],
+    ['its free usage limit, exiting 0', 'provider.free-limit', 'Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.', 0],
+    ['a provider quota, exiting 1', 'provider.quota', 'Quota exceeded', 1],
+  ])('fails usage_limited when OpenCode stops on %s', async (_case, type, message, exitCode) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-opencode-limit-${Date.now()}-${Math.random()}.json`);
+    files.push(resultPath);
+    const stdout = JSON.stringify({ type: 'error', timestamp: 1794142734400, sessionID: 'ses_1', error: { type, message } });
+    const adapter = createLocalToolAdapter(vi.fn(() => child(stdout, exitCode)) as unknown as ToolSpawn, () => '/usr/bin/opencode');
+
+    const ran = await adapter.run('opencode', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, secrets: {} });
+
+    expect(ran.failure).toEqual({ code: 'usage_limited', message: `opencode hit its usage limit: ${message}` });
+  });
+
+  it('keeps tool_failed with OpenCode\'s own reason for an error that is not a limit', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-opencode-error-${Date.now()}-${Math.random()}.json`);
+    files.push(resultPath);
+    const stdout = JSON.stringify({ type: 'error', sessionID: 'ses_1', error: { type: 'provider.no-route', message: 'Model unavailable: anthropic/claude-nonexistent-9' } });
+    const adapter = createLocalToolAdapter(vi.fn(() => child(stdout, 1)) as unknown as ToolSpawn, () => '/usr/bin/opencode');
+
+    const ran = await adapter.run('opencode', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, secrets: {} });
+
+    expect(ran.failure).toEqual({ code: 'tool_failed', message: 'opencode exited with status 1: Model unavailable: anthropic/claude-nonexistent-9' });
+  });
+
+  // CodeBuddy prints Claude's result record; its limit text here is Claude Code's, as no CodeBuddy install was at hand.
+  it.each(['claude', 'codebuddy'] as const)('fails usage_limited when %s says it hit its limit', async (tool) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-${tool}-limit-${Date.now()}-${Math.random()}.json`);
+    files.push(resultPath);
+    const stdout = claudeStream('claude-sonnet', { subtype: 'success', is_error: true, result: 'You\'ve hit your limit · resets 3pm (Europe/Madrid)' });
+    const adapter = createLocalToolAdapter(vi.fn(() => child(stdout, 1)) as unknown as ToolSpawn, () => `/usr/bin/${tool}`);
+
+    const ran = await adapter.run(tool, { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, secrets: {} });
+
+    expect(ran.failure).toEqual({ code: 'usage_limited', message: `${tool} hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid)` });
+  });
+
   it('reports tool_unavailable without spawning when the executable cannot be resolved', async () => {
     const spawnTool = vi.fn() as unknown as ToolSpawn;
     const adapter = createLocalToolAdapter(spawnTool, () => null);

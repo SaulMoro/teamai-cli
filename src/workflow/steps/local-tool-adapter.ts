@@ -230,6 +230,16 @@ export function withoutPrompt(message: string, input: LocalToolRun): string {
   return kept;
 }
 
+/** Whether what the tool printed says it stopped on its usage limit: by the kind of its error, or by its text. */
+function isUsageLimit(printed: ToolReport | null): printed is ToolReport & { error: string } {
+  return printed?.error !== undefined && (printed.isUsageLimit === true || isUsageLimitText(printed.error));
+}
+
+/** A spent usage limit, with the tool's own words, which name the reset when the tool gives it. */
+function usageLimited(tool: string, error: string, input: LocalToolRun): WorkflowFailure {
+  return { code: 'usage_limited', message: `${tool} hit its usage limit: ${withoutPrompt(error, input)}` };
+}
+
 function redactFailure(result: ResultFile, input: LocalToolRun): void {
   if (result.failure) result.failure.message = withoutPrompt(result.failure.message, input);
 }
@@ -517,6 +527,9 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       const stoppedBy: Limit | undefined = stopped ?? (stated?.reachedMaxTurns ? 'max_turns' : undefined);
       const ended = stoppedBy ? { stoppedBy } : {};
 
+      // OpenCode 1.x exits 0 on a provider's error, a spent limit among them, and writes no result.
+      if (!fileResult && isUsageLimit(printed)) return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: usageLimited(tool, printed.error, input) };
+
       if (!result) {
         return {
           started: true,
@@ -536,8 +549,10 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       if (completed.exitCode !== 0 && !result.failure) {
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
 
-        if (printed?.error !== undefined) {
-          if (isUsageLimitText(printed.error)) result.failure = { code: 'usage_limited', message: `${tool} hit its usage limit` };
+        if (isUsageLimit(printed)) {
+          result.failure = { code: 'usage_limited', message: `${tool} hit its usage limit` };
+          told = usageLimited(tool, printed.error, input);
+        } else if (printed?.error !== undefined) {
           told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
         }
       }
