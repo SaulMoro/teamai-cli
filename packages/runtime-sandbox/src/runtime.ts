@@ -1,9 +1,10 @@
 import type { Readable } from 'node:stream';
 import { opLedger } from '@teamai/runtime-kit/ledger';
+import type { OuterHandle } from '@teamai/runtime-kit/outer';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
 import type { Can, InitInstance, OpenRequestSchema, OpId, RuntimeFailure, RuntimeMessage, RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
-import { placeOf, socketPathOf, type OuterHandle } from './attempt-socket.js';
+import { placeOf, socketPathOf } from './attempt-socket.js';
 import { BOUND_MS, by } from './deadline.js';
 import { execOperations } from './exec.js';
 import type { Journal, PlaceRecord } from './journal.js';

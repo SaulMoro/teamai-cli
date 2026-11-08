@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { getUserHome } from '@teamai/tool-core/home';
 import { journal } from './journal.js';
 import { RUNTIME_PROTOCOL_ENV, type RuntimeMessage } from '@teamai/runtime-protocol';
@@ -40,7 +41,6 @@ const NOT_ON_WINDOWS = 'A sandbox mounts each path of the attempt at that same p
 
 // Called as `teamai-sandbox-<tool>` (a `bin` of teamai-cli, or a link named after an instance), or as
 // `teamai-runtime-sandbox tool-exec <tool> …`, it is the sandbox wrapper an app runs in place of a tool (wrapper.ts).
-const WRAPPER_PREFIX = 'teamai-sandbox-';
 const calledAs = path.basename(process.argv[1] ?? '');
 const [mode, wrapped] = process.argv.slice(2);
 

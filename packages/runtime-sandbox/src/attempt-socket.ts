@@ -4,8 +4,9 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import { z } from 'zod';
+import { ConnectedSchema, OuterHandleSchema, RegisterSchema } from '@teamai/runtime-kit/outer';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
+import { z } from 'zod';
 
 // ─── The attempt socket ──────────────────────────────────
 //
@@ -22,11 +23,6 @@ import type { RuntimeFailure } from '@teamai/runtime-protocol';
 //  are the step's credentials, held in this runtime's memory only: never on disk, never in an argv (`-e NAME`).
 //
 
-/** The handle of a place whose attempt socket serves the wrapper: the place, and the socket the inner registers on. */
-export const OuterHandleSchema = z.object({ place: z.string().min(1), socket: z.string().min(1) });
-
-export type OuterHandle = z.infer<typeof OuterHandleSchema>;
-
 /** The place a handle names: the handle itself, or the place of an outer handle. */
 export function placeOf(handle: string): string {
   if (!handle.startsWith('{')) return handle;
@@ -38,10 +34,10 @@ export function placeOf(handle: string): string {
   }
 }
 
-const AgentSchema = z.string().min(1).nullable();
+const AgentSchema = RegisterSchema.shape.register.shape.agent;
 
 export const SocketRequestSchema = z.union([
-  z.object({ register: z.object({ agent: AgentSchema }) }),
+  RegisterSchema,
   z.object({ ask: z.object({ tool: z.string().min(1), agent: AgentSchema, cwd: z.string().min(1) }) }),
 ]);
 
@@ -63,7 +59,7 @@ export type Grant = z.infer<typeof GrantSchema>;
 export const AnswerSchema = z.union([
   z.object({ grant: GrantSchema }),
   z.object({ refused: z.object({ code: z.string().min(1), message: z.string() }) }),
-  z.object({ connected: z.object({ agent: AgentSchema }) }),
+  ConnectedSchema,
 ]);
 
 export type Answer = z.infer<typeof AnswerSchema>;
