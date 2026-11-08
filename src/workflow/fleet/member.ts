@@ -10,19 +10,47 @@ import path from 'node:path';
 import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
-import { startGroupedCommand, stopRecordedGroup } from '../../tool-launch/process-stop.js';
+import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../tool-launch/process-stop.js';
+import { attemptRun } from '../runtimes/attempt.js';
+import { stopLeftAttempt } from '../runtimes/cancelled.js';
+import type { OpenedDriver } from '../runtimes/sources.js';
+import type { StepRuntime } from '../runtimes/step-runtime.js';
+import { shellArgv } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetResult } from './record.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
-import { attemptDir, takeRunLock } from '../store.js';
+import { attemptDir, attemptResultPath, runScratchDir, takeRunLock, type AttemptId, type RunId } from '../store.js';
 import { stepWorkflow, workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
 const CANCEL_READ_MS = 30_000;
+
+/** The last characters of a step's stderr a member keeps. */
+const STDERR_KEPT = 4_000;
+
+/** Where a member runs a step's command: here, as `--driver local` does, or on a step runtime of its own driver. */
+export type MemberPlace = { kind: 'here' } | { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime };
+
+/**
+ * Where the member's driver `opened` runs a command step: its first runtime that runs commands, as the local loop picks
+ * one, here when that is `local` or the member gave no driver. A fleet entry of its own is passed over: the member would
+ * offer the attempt again instead of running it.
+ */
+export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { refused: string } {
+  if (opened === undefined) return { kind: 'here' };
+
+  for (const entry of opened.runtimes) {
+    if (entry.kind === 'local') return { kind: 'here' };
+
+    if (entry.use !== 'fleet' && entry.can.exec === true) return { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime };
+  }
+
+  return { refused: `Driver ${opened.asked} has no runtime that runs command steps, so this member can take no attempt on it. Use a driver with one, such as --driver local.` };
+}
 
 /**
  * Takes and runs the oldest attempt pool `pool` offers for `repository` that another member did not claim first, from
@@ -31,9 +59,9 @@ const CANCEL_READ_MS = 30_000;
  * `{ cancelled: { run, attempt, step } }` when the owner cancelled the attempt meanwhile, or `{ idle: { offered } }`
  * when it took none.
  */
-export async function takeFleetAttempt(config: LocalConfig, input: { pool: string; repository: string; root: string; member: HandoffOwner; secrets: Record<string, string> }): Promise<WorkflowEnvelope> {
-  const { pool, repository, root, member, secrets } = input;
-  const finished = await finishLeftClaims(config, { repository, root, member, secrets });
+export async function takeFleetAttempt(config: LocalConfig, input: { pool: string; repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope> {
+  const { pool, repository, root, member, secrets, place } = input;
+  const finished = await finishLeftClaims(config, { repository, root, member, secrets, place });
 
   if (finished) return finished;
   const offers = (await listOffers(config, { pool, repository })).filter((offer) => offer.owner.id !== member.id);
@@ -44,7 +72,7 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
     const held = await takeRunLock(config, offer.run, async (): Promise<WorkflowEnvelope | 'moved'> => {
       const claimed = await claimAttempt(config, offer, member);
 
-      if (claimed.ok) return runClaim(config, { claim: claimed.value, root, secrets, member });
+      if (claimed.ok) return runClaim(config, { claim: claimed.value, root, secrets, member, place });
 
       return claimed.error.code === 'state_moved' ? 'moved' : { error: fleetFailure(claimed.error) };
     }, { waitMs: 0 });
@@ -70,11 +98,15 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
  * still holds, which it finishes from the work it pushed, or, when the owner cancelled it meanwhile, answers. A run of
  * this install that is still live holds the run's lock, so what it runs is left alone. Undefined when it held no claim.
  */
-async function finishLeftClaims(config: LocalConfig, { repository, root, member, secrets }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string> }): Promise<WorkflowEnvelope | undefined> {
+async function finishLeftClaims(config: LocalConfig, { repository, root, member, secrets, place }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope | undefined> {
   for (const record of await listMemberRecords(config, { member, repository })) {
     const held = await takeRunLock(config, record.run, async (): Promise<WorkflowEnvelope | undefined> => {
-      // A member killed mid-step leaves its command's process group running: nothing else stops it.
+      // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
+      // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it.
       await stopRecordedGroup(attemptDir(config, record.run, record.attempt));
+      const stillRuns = await stopLeftAttempt(config, record.run, record.attempt, root);
+
+      if (stillRuns !== undefined) return { error: { code: 'runtime_lost', message: `The step it ran on a step runtime may still run there: ${stillRuns}` } };
 
       if (record.state !== 'claimed' && record.state !== 'cancelling') return undefined;
       const ref = attemptRef(record.run, record.attempt);
@@ -90,7 +122,7 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       if (record.state === 'cancelling') return answered(config, record, saved);
       log.info(`Finishing attempt ${record.attempt} of run ${record.run}, which this member claimed and left: step "${record.lease.step}" runs again from the work it pushed.`);
 
-      return runClaim(config, { claim: record, root, secrets, member, from: saved });
+      return runClaim(config, { claim: record, root, secrets, member, place, from: saved });
     }, { waitMs: 0 });
 
     if (held.kind !== 'held' || !held.value) continue;
@@ -123,7 +155,7 @@ async function answered(config: LocalConfig, cancelling: Cancelling, pushed: str
  * the work it pushed, then pushes its work and writes how it ended. A cancel of the claim stops the step: its work is
  * pushed, and the member answers the cancel.
  */
-async function runClaim(config: LocalConfig, { claim, root, secrets, member, from = claim.start }: { claim: Claimed; root: string; secrets: Record<string, string>; member: HandoffOwner; from?: string }): Promise<WorkflowEnvelope> {
+async function runClaim(config: LocalConfig, { claim, root, secrets, member, place, from = claim.start }: { claim: Claimed; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
   const { run, attempt, lease } = claim;
   const ref = attemptRef(run, attempt);
   const dir = attemptDir(config, run, attempt);
@@ -186,9 +218,10 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   };
 
   try {
-    const env = { ...process.env, ...trusted.env };
+    const command = place.kind === 'here'
+      ? startGroupedCommand({ command: trusted.command, cwd: work, env: { ...process.env, ...trusted.env }, detached: process.platform !== 'win32', group: dir })
+      : runtimeCommand(config, { run, attempt, place, work, command: trusted.command, env: trusted.env });
 
-    const command = startGroupedCommand({ command: trusted.command, cwd: work, env, detached: process.platform !== 'win32', group: dir });
     let gone: string | undefined;
     let cancelling: Cancelling | undefined;
     let beating: Promise<void> | undefined;
@@ -268,6 +301,68 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
+}
+
+/**
+ * Command `command` in clone `work` on the member's step runtime `place`: open a place on `work`, one exec of the shell,
+ * bring the place's work back into `work`, close it. The runtime gets the step's env alone, never this process's. A
+ * failure of the runtime ends it as a failed command whose stderr says why, so the member writes it as the step's end.
+ */
+function runtimeCommand(config: LocalConfig, { run, attempt, place, work, command, env }: { run: RunId; attempt: AttemptId; place: Extract<MemberPlace, { kind: 'runtime' }>; work: string; command: string; env: Record<string, string> }): GroupedCommand {
+  const running = attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver });
+  let output = '';
+  let stderr = '';
+  const failed = (message: string): CommandExit => ({ exitCode: 1, stdout: '', stderr: `${stderr}${message} (step runtime "${place.use}")`, output });
+
+  const exit = (async (): Promise<CommandExit> => {
+    const result = path.dirname(attemptResultPath(config, run, attempt));
+    const runDir = runScratchDir(config, run);
+    await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
+    const opened = await running.open({ worktree: work, readonly: [path.join(work, '.git')], result, runDir, toolHome: {} });
+
+    if (!opened.ok) return failed(opened.failure.message);
+
+    // A command runs no tool, so it gets none of the runtime's credentials.
+    const end = await running.exec({ argv: shellArgv(command), env, unset: [], credentials: {}, cwd: work }, {
+      onOutput: (stream, data) => {
+        output += data;
+
+        if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
+      },
+    });
+
+    const uncollected = await running.collect();
+    const unclosed = await running.close();
+
+    if (uncollected) return failed(uncollected.message);
+
+    if (unclosed) log.warn(unclosed.message);
+
+    switch (end.kind) {
+      case 'exited': return { exitCode: end.code, stdout: end.stdout, stderr, output: output || end.stdout };
+      case 'cancelled': return { exitCode: 130, stdout: '', stderr, output };
+      case 'failed':
+      case 'lost': return failed(end.failure.message);
+      case 'interrupted':
+      case 'left': return failed('teamai stopped while the step ran.');
+      default: {
+        const unhandled: never = end;
+
+        return unhandled;
+      }
+    }
+  })();
+
+  let stopping: Promise<CommandExit> | undefined;
+
+  return {
+    exit,
+    stop: () => {
+      stopping ??= running.cancel().then(() => exit);
+
+      return stopping;
+    },
+  };
 }
 
 /**
