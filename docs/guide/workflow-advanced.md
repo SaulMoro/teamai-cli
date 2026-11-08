@@ -1431,7 +1431,7 @@ Every refusal is one JSON envelope with `error.code`, `error.message`, and the e
 | `not_owner` | Another install owns the run. Carries `owner` and `ownedAt`. | Ask the owner, or take it over with `resume <run> --claim`. |
 | `owner_active` | The owner wrote the running run within the last hour and nobody offers it, so its driver may be running a step. Carries `owner` and `wroteAt`. | Ask the owner to stop it and publish it. Once it stopped, `resume <run> --claim --confirmed`; unattended, wait for the hour to pass. |
 | `run_offered` | A `next` without a claim on a run this install offers. | Take the offer back: `resume <run>`, or `"claim": true` on the next. |
-| `driver_running` | `publish` while a local driver of the run runs on this machine. | Stop that driver, then publish. |
+| `driver_running` | `publish` while a local driver of the run runs on this machine, or the skill driver runs one of its steps here. | Stop that driver, or wait until the skill driver reports the step, then publish. |
 | `state_moved` | The run changed while this machine prepared its claim or its publish: on `teamai-reports` for a claim, on this machine for a publish. Nothing was claimed or published. | Claim again, or publish again. |
 | `state_conflict` | `teamai-reports` holds a later state than this machine last saw. | Run `resume <run>` to take the published state. |
 | `run_not_published` | Nobody published the run. | Publish it from the machine that has it. |

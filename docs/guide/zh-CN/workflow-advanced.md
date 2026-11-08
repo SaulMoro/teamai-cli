@@ -1425,7 +1425,7 @@ teamai workflow resume [--next]
 | `not_owner` | 另一个安装实例拥有该运行。带 `owner` 和 `ownedAt`。 | 联系所有者，或用 `resume <run> --claim` 接管。 |
 | `owner_active` | 所有者在最近一小时内写过这个仍在运行的运行，且没有人留给运行器接手，它的驱动可能正在执行步骤。带 `owner` 和 `wroteAt`。 | 请所有者停止驱动并发布。停止后执行 `resume <run> --claim --confirmed`；无人值守时，等这一小时过去。 |
 | `run_offered` | 对本安装实例留给运行器接手的运行，执行了不带认领的 `next`。 | 撤回待接手状态：`resume <run>`，或在 next 中加 `"claim": true`。 |
-| `driver_running` | 本机有该运行的本地驱动正在运行时执行了 `publish`。 | 停止那个驱动，再发布。 |
+| `driver_running` | 本机有该运行的本地驱动正在运行，或 skill 驱动正在本机执行它的某个步骤时，执行了 `publish`。 | 停止那个驱动，或等 skill 驱动报告该步骤后，再发布。 |
 | `state_moved` | 本机准备认领或发布期间，运行发生了变化：认领时在 `teamai-reports` 上，发布时在本机上。没有认领或发布任何内容。 | 再认领一次，或再发布一次。 |
 | `state_conflict` | `teamai-reports` 上的状态比本机上次看到的更新。 | 执行 `resume <run>` 取得已发布的状态。 |
 | `run_not_published` | 没有人发布过该运行。 | 在有这个运行的机器上发布它。 |

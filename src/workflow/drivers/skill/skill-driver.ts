@@ -18,14 +18,14 @@ import { agentEvidence, isAttemptRunner, type AgentEvidence } from '../../attemp
 import { inProcessClient, invokeDeniedMessage, type ResumeClaim, type WorkflowClient } from '../../protocol.js';
 import type { SessionApp } from '../../session-apps.js';
 import type { WorkflowFailure } from '../../types.js';
-import { AttemptIdSchema, RunIdSchema, runsDir, takeRunLock, type AttemptId, type LockTaken, type RunId, type RunLock } from '../../store.js';
+import { AttemptIdSchema, RunIdSchema, runnerAlive, runsDir, takeRunLock, type AttemptId, type LockTaken, type RunId, type RunLock } from '../../store.js';
 import { canFor, HOST_CHOICES, sessionOffers, type HostChoice } from './host-profiles.js';
 import { journalCall } from './journal.js';
 import { describeLiteral, invocationOf, type Invocation } from './literals.js';
 import { askFor, attendedReason, ceilingOf, checkStartAnswers, localPromptTool, localReason, neededAnswers, needsTool, type HitlMode } from './preflight.js';
 import { drivesRun, readSkillState, writeSkillState } from './skill-state.js';
 import { detachedRunners, runRunner } from './skill-runner.js';
-import { agentReport, foreground, plannedState, poll } from './tick.js';
+import { agentReport, foreground, plannedState, poll, WAIT_GRACE_MS } from './tick.js';
 import { APP_CHECKED_ROWS, describeRow, judgedBy, startRow, type DescribeInput, type ResumeAnswers, type RowId } from './transitions.js';
 import { errorOf, type SkillAnswer, type SkillError } from './turn.js';
 
@@ -155,6 +155,33 @@ export async function sessionDrivesRun(config: LocalConfig, run: RunId): Promise
   const read = await readSkillState(config, run);
 
   return drivesRun(read.kind === 'found' ? read.state : undefined, (await agentSessionFromEnv()).id);
+}
+
+/**
+ * Runs `body` while no driver of run `run` runs a step on this machine, or answers `busy` with `driver_running`: it holds
+ * the run's driver.lock, which a local driver holds for its whole drive and every skill driver tick takes, and finds no
+ * skill runner of the run alive (its runner.lock) nor spawned within `WAIT_GRACE_MS`, as C10 counts one still starting.
+ * Every spawn happens under driver.lock, so no runner starts while `body` runs.
+ */
+export async function whileNoDriverHere<T>(config: LocalConfig, run: RunId, body: (lock: RunLock) => Promise<T>): Promise<LockTaken<T>> {
+  const taken = await takeRunLock(config, run, async (lock): Promise<{ kind: 'ran'; value: T } | { kind: 'runner'; step: string; attempt: AttemptId }> => {
+    const read = await readSkillState(config, run);
+
+    for (const open of read.kind === 'found' ? read.state.attempts : []) {
+      const starting = (open.phase === 'preparing' || open.phase === 'running') && Date.now() - Date.parse(open.spawnedAt) <= WAIT_GRACE_MS;
+
+      if (starting || await runnerAlive(config, run, open.attempt)) return { kind: 'runner', step: open.step, attempt: open.attempt };
+    }
+
+    return { kind: 'ran', value: await body(lock) };
+  }, { waitMs: 0 });
+
+  if (taken.kind === 'busy') return taken;
+
+  if (taken.value.kind === 'ran') return { kind: 'held', value: taken.value.value };
+  const { step, attempt } = taken.value;
+
+  return { kind: 'busy', error: { code: 'driver_running', message: `Step "${step}" of run ${run} runs on this machine, in the skill driver's runner of attempt ${attempt}. Wait until the skill driver reports it, then try again.` } };
 }
 
 /** Whether agent session `session` drives, with the skill driver, a run of `config`'s scope whose skill.json records no end yet. */
