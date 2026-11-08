@@ -19,7 +19,7 @@ import { redact } from '@teamai/shared/redact';
 import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { credentialSecrets, isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { credentialSecrets, isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -279,7 +279,8 @@ export interface AttemptRun {
    * entry through another runtime, the names its prompt goes without, which the outer keeps from the tool.
    */
   open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string>; unset?: string[] }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
-  exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
+  /** Runs the step's `command`, or a prompt step's `tool`, as the attempt's one exec. */
+  exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents, kind: Exclude<ExecKind, 'setup'>): Promise<AttemptExecEnd>;
   /**
    * Runs the workflow's setup as an exec of the open place, recorded apart from the step's exec, under a new id. A setup
    * a teamai before this one left is stopped before its place is prepared again (`stopLeftSetup`), and here again for a
@@ -539,7 +540,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       return { ok: true, handle: opened.handle };
     },
 
-    async exec(request, events) {
+    async exec(request, events, kind) {
       const before = await current();
       const handle = before?.open.handle;
 
@@ -582,7 +583,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       running = exec;
       const acceptance = accepting(events);
       const leaving = new Promise<{ kind: 'left' }>((resolve) => { leave = () => resolve({ kind: 'left' }); });
-      const end = await Promise.race([runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }), leaving]);
+      const end = await Promise.race([runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind), leaving]);
       leave = undefined;
       await acceptance.kept();
       running = undefined;
@@ -608,7 +609,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       await save({ ...before, setup, phase: 'running' });
       running = setup;
       const acceptance = accepting(events);
-      const end = await runtime.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
+      const end = await runtime.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, 'setup');
       await acceptance.kept();
       running = undefined;
 

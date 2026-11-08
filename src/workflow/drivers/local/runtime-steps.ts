@@ -126,7 +126,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
         if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
       },
-    });
+    }, 'command');
 
     const uncollected = await run.collect();
 
@@ -264,7 +264,7 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
           stdout += data;
           onStdout(data);
         },
-      });
+      }, 'tool');
 
       const uncollected = await run.collect();
 

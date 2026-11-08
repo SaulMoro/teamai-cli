@@ -209,7 +209,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const end = await runtime.exec(execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write(`${process.env.STEP_VALUE}\\n`); process.exitCode = 3']), {
       onAccepted: () => { accepted = true; },
       onOutput: (stream, data) => { if (stream === 'stdout') output.push(data); },
-    });
+    }, 'command');
 
     expect(accepted).toBe(true);
     expect(end).toEqual({ kind: 'exited', code: 3, stdout: 'from-teamai\n' });
@@ -222,7 +222,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await runtime.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
 
-    const end = await runtime.exec(execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write("start" + "x".repeat(100000) + "end")']), {});
+    const end = await runtime.exec(execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write("start" + "x".repeat(100000) + "end")']), {}, 'command');
 
     expect(end).toEqual({ kind: 'exited', code: 0, stdout: `start${'x'.repeat(100_000)}end` });
   });
@@ -232,7 +232,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await runtime.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
 
-    const end = await runtime.exec({ ...execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write(String(process.env.SCENARIO_TOKEN))']), credentials: { SCENARIO_TOKEN: 'scenario-value' } }, {});
+    const end = await runtime.exec({ ...execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write(String(process.env.SCENARIO_TOKEN))']), credentials: { SCENARIO_TOKEN: 'scenario-value' } }, {}, 'command');
 
     expect(end).toEqual({ kind: 'exited', code: 0, stdout: 'scenario-value' });
   });
@@ -245,7 +245,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
       const runtime = await start();
       const opened = await runtime.open(openRequest(), async () => {});
       if (opened.kind !== 'ready') throw new Error('not opened');
-      const end = await runtime.exec({ ...execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write(String(process.env.TEAMAI_SCENARIO_WITHHELD))']), unset: ['TEAMAI_SCENARIO_WITHHELD'] }, {});
+      const end = await runtime.exec({ ...execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write(String(process.env.TEAMAI_SCENARIO_WITHHELD))']), unset: ['TEAMAI_SCENARIO_WITHHELD'] }, {}, 'command');
 
       expect(end).toEqual({ kind: 'exited', code: 0, stdout: 'undefined' });
     } finally {
@@ -258,9 +258,9 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await runtime.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, [process.execPath, '-e', 'require("fs").appendFileSync("runs", "x"); process.stdout.write("once")']);
-    const first = await runtime.exec(request, {});
+    const first = await runtime.exec(request, {}, 'command');
 
-    expect(await runtime.exec(request, {})).toEqual(first);
+    expect(await runtime.exec(request, {}, 'command')).toEqual(first);
     expect(fs.readFileSync(path.join(worktree, 'runs'), 'utf8')).toBe('x');
   });
 
@@ -271,9 +271,9 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const request = execRequest(opened.handle, [process.execPath, '-e', 'require("fs").appendFileSync("runs", "x"); setTimeout(() => process.stdout.write("once"), 300)']);
     let accepted = 0;
     const events = { onAccepted: () => { accepted += 1; } };
-    const first = runtime.exec(request, events);
+    const first = runtime.exec(request, events, 'command');
     expect(await until(() => fs.existsSync(path.join(worktree, 'runs')))).toBe(true);
-    const repeated = runtime.exec(request, events);
+    const repeated = runtime.exec(request, events, 'command');
 
     expect(await Promise.all([first, repeated])).toEqual([{ kind: 'exited', code: 0, stdout: 'once' }, { kind: 'exited', code: 0, stdout: 'once' }]);
     expect(accepted).toBe(2);
@@ -284,7 +284,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const runtime = await start();
     const opened = await runtime.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
-    const end = await runtime.exec(execRequest(opened.handle, [process.execPath, '-e', 'require("fs").writeFileSync("work.txt", "kept"); process.exit(1)']), {});
+    const end = await runtime.exec(execRequest(opened.handle, [process.execPath, '-e', 'require("fs").writeFileSync("work.txt", "kept"); process.exit(1)']), {}, 'command');
 
     expect(end).toMatchObject({ kind: 'exited', code: 1 });
     expect(await runtime.collect(opened.handle)).toEqual({ ok: true });
@@ -296,7 +296,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await runtime.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, ['/bin/sh', '-c', 'sleep 30 & echo $! > child.pid; wait']);
-    const ending = runtime.exec(request, {});
+    const ending = runtime.exec(request, {}, 'command');
     const pidFile = path.join(worktree, 'child.pid');
     expect(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '')).toBe(true);
     const child = Number(fs.readFileSync(pidFile, 'utf8').trim());
@@ -335,7 +335,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, ['/bin/sh', '-c', 'echo started; while [ ! -f release ]; do sleep 0.05; done; echo done']);
     let isRunning = false;
-    const ended = runtime.exec(request, { onOutput: (stream, data) => { if (stream === 'stdout' && data.includes('started')) isRunning = true; } });
+    const ended = runtime.exec(request, { onOutput: (stream, data) => { if (stream === 'stdout' && data.includes('started')) isRunning = true; } }, 'command');
     expect(await until(() => isRunning)).toBe(true);
     const journal = subject.journal?.(state) ?? [];
 
@@ -364,12 +364,12 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await first.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write("retained")']);
-    await first.exec(request, {});
+    await first.exec(request, {}, 'command');
     await first.dispose();
     const second = await start();
 
     expect(await second.reattach(opened.handle)).toEqual(alive([{ op: request.op, state: 'exited', code: 0, stdout: 'retained' }]));
-    expect(await second.exec(request, {})).toEqual({ kind: 'exited', code: 0, stdout: 'retained' });
+    expect(await second.exec(request, {}, 'command')).toEqual({ kind: 'exited', code: 0, stdout: 'retained' });
   });
 
   it.runIf(subject.retains)('finishes an exec its own restart left running, so reattach reads it running, and cancel stops it', async () => {
@@ -377,7 +377,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await first.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, ['/bin/sh', '-c', 'echo $$ > shell.pid; sleep 30']);
-    void first.exec(request, {});
+    void first.exec(request, {}, 'command');
     const pidFile = path.join(worktree, 'shell.pid');
     expect(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '')).toBe(true);
     const shell = Number(fs.readFileSync(pidFile, 'utf8').trim());
@@ -402,13 +402,13 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await first.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, ['/bin/sh', '-c', 'echo x >> runs; sleep 30']);
-    void first.exec(request, {});
+    void first.exec(request, {}, 'command');
     const runs = path.join(worktree, 'runs');
     expect(await until(() => fs.existsSync(runs))).toBe(true);
     await first.dispose();
     const second = await start();
     let accepted = false;
-    const ending = second.exec(request, { onAccepted: () => { accepted = true; } });
+    const ending = second.exec(request, { onAccepted: () => { accepted = true; } }, 'command');
     expect(await until(() => accepted)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -422,14 +422,14 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const opened = await first.open(openRequest(), async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const request = execRequest(opened.handle, [process.execPath, '-e', 'require("fs").writeFileSync("started", ""); setTimeout(() => process.stdout.write("finished"), 3000)']);
-    void first.exec(request, {});
+    void first.exec(request, {}, 'command');
     expect(await until(() => fs.existsSync(path.join(worktree, 'started')))).toBe(true);
     // The exec outlasts the wait dispose gives the runtime to exit, so the second runtime gets it still running.
     await first.dispose();
     const second = await start();
 
     expect(await second.reattach(opened.handle)).toEqual(alive([{ op: request.op, state: 'running' }]));
-    expect(await second.exec(request, {})).toEqual<ExecEnd>({ kind: 'exited', code: 0, stdout: 'finished' });
+    expect(await second.exec(request, {}, 'command')).toEqual<ExecEnd>({ kind: 'exited', code: 0, stdout: 'finished' });
   });
 });
 
@@ -638,7 +638,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
 
   it('runs no command: an exec fails, naming the runtime\'s offer', async () => {
     const runtime = await start();
-    const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], credentials: {}, cwd: worktree }, {});
+    const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], credentials: {}, cwd: worktree }, {}, 'command');
 
     expect(end).toMatchObject({ kind: 'failed', failure: { code: 'exec_unsupported' } });
     expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
@@ -924,7 +924,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
 
   it('fails a close once the runtime has stopped, instead of answering it closed', async () => {
     const { runtime, handle } = await opened({ exit_at: 'exec-accepted' });
-    expect(await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}))
+    expect(await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}, 'command'))
       .toMatchObject({ kind: 'lost', failure: { code: 'runtime_exited' } });
 
     expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'runtime_exited' } });
@@ -932,7 +932,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
 
   it('fails an open sent once the runtime has stopped as runtime_not_sent, since the runtime never got it', async () => {
     const { runtime, handle } = await opened({ exit_at: 'exec-accepted' });
-    await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {});
+    await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}, 'command');
     const op = newOpId();
     let isAccepted = false;
 
@@ -972,7 +972,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     const { runtime, handle } = await opened({ answer: { exec: 'error' } });
     const op = newOpId();
 
-    expect(await runtime.exec({ op, handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {})).toEqual({
+    expect(await runtime.exec({ op, handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}, 'command')).toEqual({
       kind: 'lost',
       failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not answer exec ${op}: it wrote an error that names no request (The toy cannot answer exec of ${handle}: answer.exec is set.).` },
     });
@@ -1021,7 +1021,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     const execEnd = runtime.exec({ op: execOp, handle, argv: [process.execPath, '-e', 'const t = setInterval(() => console.log("tick"), 20); setTimeout(() => clearInterval(t), 3000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {
       onAccepted: () => execAccepted(),
       onOutput: () => { if (cancelSent) wroteAfterCancel(); },
-    });
+    }, 'command');
     const promptEnd = agentToy.prompt({
       op: promptOp, handle: 'toy-r0123abcd-a0123abcd', env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
       lease: { step: 'review', tool: 'claude', prompt: 'p', result: path.join(dir, 'out', 'result.json'), permissions: 'unattended', interactive: false },
@@ -1195,7 +1195,7 @@ describe('a cancel a runtime tries again, over stdio', () => {
     }, async () => {});
     if (place.kind !== 'ready') throw new Error('not opened');
     const op = newOpId();
-    void first.exec({ op, handle: place.handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {});
+    void first.exec({ op, handle: place.handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}, 'command');
     expect(await until(async () => JSON.stringify(await first.reattach(place.handle)).includes('"running"'))).toBe(true);
     await first.cancel(op);
     expect(await until(async () => JSON.stringify(await first.reattach(place.handle)).includes('cancel_failed'))).toBe(true);
@@ -1272,7 +1272,7 @@ describe('the toy runtime once teamai stops reading it', () => {
 
     // Another command under the same id: an outcome of `finished` is the recorded one, not a second run.
     const rerun = [process.execPath, '-e', 'process.stdout.write("ran again")'];
-    expect(await second.exec({ op, handle: 'toy-r0123abcd-a0123abcd', argv: rerun, env: {}, unset: [], credentials: {}, cwd: worktree }, {}))
+    expect(await second.exec({ op, handle: 'toy-r0123abcd-a0123abcd', argv: rerun, env: {}, unset: [], credentials: {}, cwd: worktree }, {}, 'command'))
       .toEqual<ExecEnd>({ kind: 'exited', code: 0, stdout: 'finished' });
   });
 
@@ -1426,7 +1426,7 @@ describe('an attempt\'s deadline, over stdio', () => {
     let accepted = (): void => {};
     const isAccepted = new Promise<void>((resolve) => { accepted = resolve; });
 
-    const end = runtime.exec({ op, handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60_000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, { onAccepted: () => accepted() });
+    const end = runtime.exec({ op, handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60_000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, { onAccepted: () => accepted() }, 'command');
     await isAccepted;
     await vi.advanceTimersByTimeAsync(15_000);
     expect(await Promise.race([end, 'still running'])).toBe('still running');
@@ -1604,9 +1604,9 @@ describe('the stdio step runtime client', () => {
       const [first, second] = [newOpId(), newOpId()];
       const exec = (op: typeof first): ExecRequest => ({ op, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() });
 
-      expect(await runtime.exec(exec(first), {})).toEqual({ kind: 'exited', code: 0, stdout: 'ok' });
+      expect(await runtime.exec(exec(first), {}, 'command')).toEqual({ kind: 'exited', code: 0, stdout: 'ok' });
       expect(await until(() => warned.mock.calls.length === 1)).toBe(true);
-      expect(await runtime.exec(exec(second), {})).toEqual({ kind: 'exited', code: 0, stdout: 'ok' });
+      expect(await runtime.exec(exec(second), {}, 'command')).toEqual({ kind: 'exited', code: 0, stdout: 'ok' });
       expect(await until(() => warned.mock.calls.length === 2)).toBe(true);
 
       expect(warned.mock.calls.map(([line]) => line)).toEqual([
@@ -1636,7 +1636,7 @@ describe('the stdio step runtime client', () => {
       const [cancelled, ended] = [newOpId(), newOpId()];
 
       await runtime.cancel(cancelled);
-      await runtime.exec({ op: ended, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() }, {});
+      await runtime.exec({ op: ended, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() }, {}, 'command');
       expect(await until(() => warned.mock.calls.length > 0)).toBe(true);
       expect(warned.mock.calls.map(([line]) => line)).toEqual([
         `Step runtime "answers" answered ${ended} with exited after teamai stopped waiting for it, which teamai ignores (late answers from this runtime: 1).`,
@@ -1701,7 +1701,7 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND }: { workflow?:
     expect(await runtime.init({ options, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { prompt: false, remote: true } });
     const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
     if (opened.kind !== 'ready') throw new Error(opened.failure.message);
-    const exec = (op: OpId) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {});
+    const exec = (op: OpId) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {}, 'command');
 
     return { runtime, handle: opened.handle, exec };
   };
@@ -1767,10 +1767,19 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     const owner = await ownerOf();
     const { runtime, handle } = await owner.open();
 
-    expect(await runtime.exec({ op: newOpId(), handle, argv: shellArgv('echo set up'), env: {}, unset: [], credentials: {}, cwd: owner.alice.checkout }, {}))
+    expect(await runtime.exec({ op: newOpId(), handle, argv: shellArgv('echo set up'), env: {}, unset: [], credentials: {}, cwd: owner.alice.checkout }, {}, 'setup'))
       .toEqual({ kind: 'exited', code: 0, stdout: 'set up\n' });
     expect(await readAttemptRecord(owner.alice.config, owner.run, owner.attempt)).toEqual({ ok: true, value: 'absent' });
   });
+
+  it('runs a setup on this host and offers nothing, even when it is the same text as the step\'s command', async () => {
+    const owner = await ownerOf({ workflow: SLOW.replace(SLOW_COMMAND, 'echo set up'), command: 'echo set up' });
+    const { runtime, handle } = await owner.open();
+
+    expect(await runtime.exec({ op: newOpId(), handle, argv: shellArgv('echo set up'), env: {}, unset: [], credentials: {}, cwd: owner.alice.checkout }, {}, 'setup'))
+      .toEqual({ kind: 'exited', code: 0, stdout: 'set up\n' });
+    expect(await readAttemptRecord(owner.alice.config, owner.run, owner.attempt)).toEqual({ ok: true, value: 'absent' });
+  }, 15_000);
 
   it('reconnects a restarted teamai to the exec it left by the same id, and a cancel with no wait reaches the record', async () => {
     const owner = await ownerOf();

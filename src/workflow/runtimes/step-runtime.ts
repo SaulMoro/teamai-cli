@@ -46,6 +46,12 @@ export type OpenRequest = Omit<z.infer<typeof OpenRequestSchema>, 'type'>;
 /** An exec as the local loop sends it; the protocol's request without its type. */
 export type ExecRequest = Omit<z.infer<typeof ExecRequestSchema>, 'type'>;
 
+/**
+ * What an exec runs, which teamai knows and the protocol does not carry: the workflow's `setup`, the step's `command`, or
+ * a prompt step's `tool`. Only an in-process runtime reads it, such as the fleet, which offers the step's command alone.
+ */
+export type ExecKind = 'setup' | 'command' | 'tool';
+
 /** A prompt as the local loop sends it to a runtime that launches agents its own way. */
 export type PromptRequest = Omit<z.infer<typeof PromptRequestSchema>, 'type'>;
 
@@ -127,7 +133,7 @@ export interface StepRuntime {
    * rejects with its error. A place made in steps (a runtime through another) is accepted at each, with the handle so far.
    */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
-  exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
+  exec(request: ExecRequest, events: ExecEvents, kind: ExecKind): Promise<ExecEnd>;
   /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */
   prompt(request: PromptRequest, events: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>): Promise<PromptEnd>;
   /** Stops operation `op` and every process it started. Its `exec` or `prompt` then ends `cancelled`. */

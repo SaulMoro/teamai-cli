@@ -200,13 +200,13 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       return { kind: 'ready', handle: JSON.stringify({ outer: outerOpened.handle, inner: innerOpened.handle } satisfies ComposedHandle), ...(display && { display }) };
     },
 
-    async exec(request, events) {
+    async exec(request, events, kind) {
       const handle = handleOf(request.handle);
 
       if (!handle) return { kind: 'failed', failure: unknownHandle(request.handle) };
       ranBy.set(request.op, outer);
 
-      return outer.exec({ ...request, handle: handle.outer }, events);
+      return outer.exec({ ...request, handle: handle.outer }, events, kind);
     },
 
     async prompt(request, events) {
