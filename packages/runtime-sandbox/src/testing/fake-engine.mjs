@@ -39,6 +39,9 @@
 //  home. `build` keeps the files of its context under `saved/<tag>/context`, and takes its base from the Containerfile's
 //  FROM line.
 //
+//  What it does not model: a read-only mount stays writable, since its processes run on the host. The container
+//  provider spec (providers/container-spec.test.ts) runs the same cases on a real engine, which checks that one.
+//
 //  sbx answers `policy check network --json <target>` from a file `allowed-network` in its state directory, one
 //  `localhost:<port>` per line, as `sbx policy allow network` adds them; host.docker.internal is checked as localhost.
 import { spawn } from 'node:child_process';
