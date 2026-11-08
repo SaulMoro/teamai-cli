@@ -111,6 +111,23 @@ outputs: { color: steps.ask.outputs.color }
     expect(claude().stdin).toBe('Name one color.\n\nReply with only a JSON value, with no other text: a value that matches this JSON Schema: `{"type":"object","properties":{"color":{"type":"string"}},"required":["color"]}`');
   });
 
+  it('reads the JSON a reply fences after a line of prose', async () => {
+    const { config, workspace, runId, bin } = await answering(`schemaVersion: v1alpha1
+name: build
+description: Ask for a color.
+steps:
+  - id: ask
+    answer: Name one color.
+    output: { color: string }
+outputs: { color: steps.ask.outputs.color }
+`);
+    fakeTool(bin, 'claude', { stdout: claudeReply('Here is the result:\n```json\n{"color":"blue"}\n```\nLet me know if you need more.') });
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { color: 'blue' } } } });
+  });
+
   it('fails the step tool_failed with the reason the tool gave', async () => {
     const { config, workspace, runId, bin } = await answering(COLOR);
     fakeTool(bin, 'claude', { stdout: '', exitCode: 2, before: "process.stderr.write('Authentication failed\\n');" });

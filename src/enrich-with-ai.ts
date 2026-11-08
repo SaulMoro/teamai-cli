@@ -2,6 +2,7 @@ import path from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 
 import { z } from 'zod';
+import { extractReply } from '@teamai/tool-core/reply';
 
 import { log } from './utils/logger.js';
 import { assertSafeResourceName, assertWithinRoot } from './utils/path-safety.js';
@@ -77,18 +78,6 @@ function modulesSummary(moduleResults: Array<{ name: string; result: ModuleAIRes
   return moduleResults.map(m =>
     `${m.name}: domain=${m.result.domain}, layer=${m.result.layer}, summary=${m.result.summary}`
   ).join('\n');
-}
-
-function parseJSON<T>(raw: string, schema: z.ZodType<T>): T | null {
-  const match = raw.match(/\{[\s\S]*\}/);
-
-  if (!match) return null;
-
-  try {
-    return schema.safeParse(JSON.parse(match[0])).data ?? null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -427,7 +416,7 @@ function answeredModules(replies: ModuleReply[]): Array<{ name: string; result: 
   if (replies.some(reply => reply.failure !== '')) return [];
 
   return replies.flatMap(({ name, text }) => {
-    const result = parseJSON(text, ModuleAIResultSchema);
+    const result = extractReply(text, ModuleAIResultSchema) ?? null;
 
     return result ? [{ name, result }] : [];
   });
@@ -463,7 +452,7 @@ async function write(target: CodebaseEnrichTarget, replies: ModuleReply[], domai
   const ctx = await extractedContext(target);
 
   if (domain.failure !== '') log.debug('enrichWithAI: domain classification failed, continuing without');
-  const result = enrichResultOf(ctx, answered, domain.failure === '' ? parseJSON(domain.text, DomainAIResultSchema) : null);
+  const result = enrichResultOf(ctx, answered, domain.failure === '' ? extractReply(domain.text, DomainAIResultSchema) ?? null : null);
   const evidenceDir = path.join(target.wikiRoot, 'evidence', 'code', target.project);
   assertWithinRoot(target.wikiRoot, evidenceDir);
   const recorded = await writeEnrichResult(result, evidenceDir);

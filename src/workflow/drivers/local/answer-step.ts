@@ -4,8 +4,8 @@
  */
 import { CallError, type CallErrorKind } from '../../../tool-launch/member-tools.js';
 import { createToolCaller, type CallOptions, type ToolCallerDeps } from '../../../tool-launch/call.js';
-import { parseReply } from '../../../tool-launch/confined.js';
-import type { LocalConfig } from '../../../types.js';
+import { extractReply } from '@teamai/tool-core/reply';
+import { JsonValueSchema, type LocalConfig } from '../../../types.js';
 import type { ReportInput } from '../../engine.js';
 import { expectedOutput } from '../../output.js';
 import type { OutputSchema, WorkflowFailure } from '../../types.js';
@@ -63,7 +63,7 @@ export async function runAnswerStep({ config, prompt, output, cwd, expiresAt, si
     if (tokens) ran.tokens = tokens;
 
     if (takesText(output)) return { ...ran, outputs: { text: text.trim() } };
-    const reply = parseReply(text);
+    const reply = extractReply(text, JsonValueSchema);
 
     if (reply === undefined) {
       return { ...ran, ...failed({ code: 'invalid_output', message: `${tool} replied with no JSON value, which this step's output needs: ${text.trim().slice(0, 200)}` }) };
