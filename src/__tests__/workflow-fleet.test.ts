@@ -21,6 +21,8 @@ import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import os from 'node:os';
 import { openSessionArchive } from '../session-flow/archive.js';
+import { sessionArchiveRoot } from '../session-flow/session-cmd-shared.js';
+import { getRepoIdentity, SyncManager } from '../session-flow/sync.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -337,6 +339,25 @@ describe('a member taking a prompt attempt', () => {
     const restored = await archive.restore({ platform: 'claude-code', sessionId: session ?? '' }, { platform: 'claude-code', cwd: alice.checkout });
     await archive.close();
     expect(restored).toEqual({ status: 'restored', sessionId: expect.any(String) });
+  });
+
+  it('archives beside the session the evidence the step left in its attempt\'s out/ directory, masked', async () => {
+    const token = `ghp_${'Z9y8X7w6V5'.repeat(4)}`;
+    claudeOnPath('{"ok":true}', `fs.writeFileSync(path.join(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), 'check.log'), 'checked with ${token}');`);
+
+    const { record, alice } = await takeForged((forged) => {
+      forged.lease = { step: 'write', prompt: 'Write made.txt.', env: {} };
+    }, useClaude, PROMPTED);
+
+    const session = record?.state === 'finished' ? record.result.session : undefined;
+    await readableReportsWorktree(alice.config);
+    const archive = new SyncManager(sessionArchiveRoot(alice.config) ?? '');
+    const identity = getRepoIdentity(alice.checkout);
+    const entry = archive.findArchived(identity, { platform: 'claude-code', sessionId: session ?? '' });
+    expect(entry).toBeDefined();
+    const evidence = archive.loadEvidence(identity, entry?.sessionName ?? '', entry?.author);
+    expect(JSON.stringify(evidence)).not.toContain(token);
+    expect(evidence?.files).toEqual([expect.objectContaining({ kind: 'text', path: 'check.log', text: expect.stringMatching(/^checked with <REDACTED:/) })]);
   });
 
   it('archives the session from the Claude root the member\'s checkout records, though the step ran in a clone of it', async () => {

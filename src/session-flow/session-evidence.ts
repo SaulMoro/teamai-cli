@@ -92,14 +92,16 @@ async function sha256Of(file: string): Promise<string> {
 }
 
 /**
- * The evidence in `dir`, each text file and each path passed through `mask`, or undefined when `dir` holds no file. A
- * `mask` that throws fails the whole collection, so no text leaves unmasked.
+ * The evidence in `dir`, each text file and each path passed through `mask`, or undefined when `dir` holds no file but
+ * those of `leaveOut` (paths relative to `dir`). A `mask` that throws fails the whole collection, so no text leaves
+ * unmasked.
  */
-async function collect(dir: string, mask: (text: string) => string): Promise<ArchivedEvidence | undefined> {
-  const names = await regularFiles(dir).catch((error: unknown) => {
+async function collect(dir: string, mask: (text: string) => string, { leaveOut = [] }: { leaveOut?: readonly string[] } = {}): Promise<ArchivedEvidence | undefined> {
+  const found = await regularFiles(dir).catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
   });
+  const names = found.filter((name) => !leaveOut.includes(name));
 
   if (names.length === 0) return undefined;
   const files: EvidenceFile[] = [];

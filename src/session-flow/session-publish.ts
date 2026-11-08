@@ -14,7 +14,7 @@ import { readFileSafe } from '../utils/fs.js';
 import { runPasses, type RunPass } from '../workflow/loop.js';
 import { privateSteps } from '../workflow/scope.js';
 import { settledHere } from '../workflow/judge-work.js';
-import { installOwner, readRuns } from '../workflow/store.js';
+import { AttemptIdSchema, attemptResultPath, installOwner, readRuns, RunIdSchema } from '../workflow/store.js';
 import type { RunState } from '../workflow/types.js';
 import { isIsolated } from '../workflow/workspace.js';
 import { AgentSession, recordedToolRoots, sessionKey, type AgentSessionFailure, type ToolRootsLookup } from './agent-session.js';
@@ -176,6 +176,14 @@ function skippedReason(failures: readonly ReadFailure[]): string {
   return `these sessions could not be read here (${[...causes].map(([source, said]) => `${source}: ${[...said].join(', ')}`).join('; ')}), so they stay unarchived`;
 }
 
+/** The `out/` directory of attempt `attempt` of run `run`, where its step left the evidence archived beside its session. */
+function attemptOutDir(config: LocalConfig, run: string, attempt: string | undefined): string | undefined {
+  const runId = RunIdSchema.safeParse(run);
+  const attemptId = AttemptIdSchema.safeParse(attempt);
+
+  return runId.success && attemptId.success ? path.dirname(attemptResultPath(config, runId.data, attemptId.data)) : undefined;
+}
+
 /** A pass whose session is not recorded yet; `storeDir` is its attempt's tool home store, when it ran on a step runtime. */
 type UnrecordedPass = { pass: RunPass; key: PublishedKey; storeDir: string | undefined };
 
@@ -236,6 +244,9 @@ async function steps(config: LocalConfig, mode: RunMode, now: string): Promise<S
       if (failure !== undefined) unread.push({ pass, key, storeDir, failure });
       else if (key.kind === 'platform') {
         const ref: ArchiveSessionRef = { platform: key.platform, sessionId: key.sessionId };
+        const evidenceDir = attemptOutDir(config, run.id, pass.attempt);
+
+        if (evidenceDir !== undefined) ref.evidenceDir = evidenceDir;
 
         if (storeDir !== undefined) ref.storeDir = storeDir;
         refs.set(sessionKey(key), ref);
