@@ -64,6 +64,8 @@ workflows:
   auto_approve: false
 ```
 
+`workflows.idle_timeout`, a duration such as `5m`, stops a prompt step's Claude that prints nothing for that long and fails the step `tool_failed`; a value that is no duration fails it `tool_unconfigured`. It applies only to Claude launched for a prompt step without a terminal, which prints each message as it comes. A tool that prints only once it ends would always reach the limit, so other tools, and Claude in a terminal, have none.
+
 A prompt in the current checkout waits until that checkout is free, and nothing else in that checkout starts until the prompt finishes. The read-only check compares that checkout before and after the prompt. A prompt with `workspace: new` runs in its own worktree, so it can overlap steps in other worktrees, up to `max_parallel`. Commands with no `workspace` share the checkout and run one at a time with anything else there.
 
 With `max_parallel` above 1:

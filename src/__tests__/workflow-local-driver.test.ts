@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { claudeFake } from '@teamai/tool-claude/testing';
+import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { launchEnv, sessionRun } from '../launch-context.js';
 import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutRecordKey, type CheckoutRecord } from '../pull.js';
@@ -18,10 +20,25 @@ import { dirs, endRecord, fixture, memberAiTool, projectAiTool, toolPaths, workf
 
 _setDriverPollMs(20);
 
+const fakeAgents: FakeAgent[] = [];
+
 afterEach(() => {
+  const left = fakeAgents.splice(0).flatMap((agent) => agent.stopLeft());
+
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  expect(left, 'fake agents left running').toEqual([]);
 });
+
+/** Claude as its recorded call prints it, in a `bin` beside `workspace`, keeping its sessions under a home of its own. */
+function claudeBeside(workspace: string, options: Omit<Parameters<typeof fakeAgent>[1], 'bin'>): FakeAgent {
+  vi.stubEnv('HOME', path.join(path.dirname(workspace), 'home'));
+  const agent = fakeAgent(claudeFake, { bin: path.join(path.dirname(workspace), 'bin'), ...options });
+  fakeAgents.push(agent);
+
+  return agent;
+}
 describe('local workflow prompt driver', () => {
   it('runs a prompt with a private result path and stores metadata', async () => {
     const { config, workspace, runId } = await fixture();
@@ -532,14 +549,50 @@ sandbox_mode = "read-only"
     expect(await endRecord(config)).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
   });
 
+  it('stops a Claude prompt step that prints nothing for workflows.idle_timeout, and fails it naming the limit', async () => {
+    const { config, workspace, runId } = await fixture();
+    config.workflows = { tools: { default: 'claude' }, idle_timeout: '1s' };
+    const claude = claudeBeside(workspace, { always: ['hang'] });
+    const started = Date.now();
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [{ id: 'review', status: 'failed', failure: { code: 'tool_failed', message: 'claude printed nothing for 1s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.' } }],
+    });
+  });
+
+  it('keeps a Claude prompt step that streams for longer than the idle limit but never stays silent that long', async () => {
+    const { config, workspace, runId } = await fixture();
+    config.workflows = { tools: { default: 'claude' }, idle_timeout: '1s' };
+    const claude = claudeBeside(workspace, { answer: '{"ok":true}', always: ['slow'], slowMs: 600 });
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded', outputs: { ok: true } }] });
+  });
+
+  it('refuses an idle limit that is no duration before it launches the prompt step\'s tool, naming the setting to fix', async () => {
+    const { config, workspace, runId } = await fixture();
+    config.workflows = { tools: { default: 'claude' }, idle_timeout: 'soon' };
+    const claude = claudeBeside(workspace, { answer: '{"ok":true}' });
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+
+    expect(claude.calls()).toEqual([]);
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [{ id: 'review', status: 'failed', failure: { code: 'tool_unconfigured', message: 'workflows.idle_timeout is "soon", which is no duration. Set it to one, such as 2m, or remove it.' } }],
+    });
+  });
+
   it('publishes no failure code the tool wrote into its result', async () => {
     const { config, workspace, runId } = await fixture();
-    const writesFailure: ToolSpawn = (_command, _args, options) => spawn(process.execPath, [
-      '-e',
-      'require("fs").writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ failure: { code: "secret-x", message: "secret-x happened" } }))',
-    ], options);
+    const claude = claudeBeside(workspace, {
+      before: 'fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ failure: { code: "secret-x", message: "secret-x happened" } }));',
+    });
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(writesFailure, () => process.execPath), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ status: 'failed', failure: { code: 'secret-x' } }] });
     const record = await endRecord(config);
