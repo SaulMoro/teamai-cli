@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { answerCancel, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -95,20 +95,6 @@ describe('fleet attempts on teamai-reports', () => {
 
     expect(taken).toMatchObject({ kind: 'held', value: { data: { idle: { offered: 1 } } } });
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered' } });
-  });
-
-  it('goes on from no gone work of an attempt another install offered', async () => {
-    const acme = team();
-    const [alice, bob, carol] = [await acme.member('alice'), await acme.member('bob'), await acme.member('carol')];
-    const offered = await offer(carol);
-    if (!offered.ok) throw new Error(offered.error.message);
-    const claimed = await claimAttempt(bob.config, offered.value, await installOwner(bob.config));
-    if (!claimed.ok) throw new Error(claimed.error.message);
-    await recordProgress(bob.config, claimed.value, 'e'.repeat(40)).then(async (progressed) => progressed.ok && expireClaim(carol.config, progressed.value));
-    await readableReportsWorktree(alice.config);
-
-    expect(await lastGoneWork(alice.config, { run: RUN, step: 'build', owner: await installOwner(alice.config) })).toBeUndefined();
-    expect(await lastGoneWork(alice.config, { run: RUN, step: 'build', owner: await installOwner(carol.config) })).toEqual({ attempt: ATTEMPT, pushed: 'e'.repeat(40) });
   });
 
   it('reads no record whose start is a name git would resolve rather than a commit id', async () => {
@@ -324,6 +310,7 @@ async function offerSlow(staleAfterMs: number, { definition = SLOW, command = 'e
     values: {},
   });
   if (!offered.ok) throw new Error(offered.error.message);
+  await markOffered(alice.config, run, ATTEMPT, 'default');
   await readableReportsWorktree(bob.config);
 
   return { alice, bob, run, startCommit, offered: offered.value };
@@ -378,7 +365,7 @@ describe('cancelling an attempt through its record', () => {
     git(alice.checkout, 'fetch', '-q', 'origin', `refs/heads/teamai/attempts/${run}/${ATTEMPT}`);
     expect(git(alice.checkout, 'show', `${cancelled.pushed}:begun.txt`)).toBe('begun');
     await readableReportsWorktree(alice.config);
-    expect(await lastGoneWork(alice.config, { run, step: 'work', owner: await installOwner(alice.config) })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
+    expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
   }, 60_000);
 
   it('goes on from the work a member pushed before a cancel it never answered', async () => {
@@ -390,7 +377,7 @@ describe('cancelling an attempt through its record', () => {
 
     expect(await cancelAttempt(alice.config, progressed.value)).toMatchObject({ ok: true, value: { state: 'cancelling' } });
     await readableReportsWorktree(alice.config);
-    expect(await lastGoneWork(alice.config, { run, step: 'work', owner: await installOwner(alice.config) })).toEqual({ attempt: ATTEMPT, pushed: 'e'.repeat(40) });
+    expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: ATTEMPT, pushed: 'e'.repeat(40) });
   });
 });
 
@@ -528,5 +515,118 @@ describe('the values an offer carries', () => {
 
     // As the owner renders it, from the whole item.
     expect(leaseEnv(step, read.values, RUN)).toEqual(leaseEnv(step, { item: { path: '/Users/alice/one' } }, RUN));
+  });
+
+  it('carries nothing for a field an input does not have, even one every object inherits', () => {
+    expect(leaseValues({ id: 'build', env: { KIND: '{{ inputs.constructor }}' } }, { inputs: { target: 'web' }, steps: {}, run: { id: 'r0123abcd' } }))
+      .toEqual({ values: {} });
+  });
+});
+
+/** A command that works for a few seconds, writing a file before and after. */
+const BRIEF = SLOW.replace('echo begun > begun.txt; sleep 60', 'echo begun > begun.txt; sleep 4; echo done > done.txt');
+const BRIEF_COMMAND = 'echo begun > begun.txt; sleep 4; echo done > done.txt';
+const OTHER = AttemptIdSchema.parse('a4567cdef');
+
+describe('a member\'s claim among writes it did not see land', () => {
+  it('goes on running when a write of its own claim landed though it could not tell', async () => {
+    const { alice, bob, run, startCommit } = await offerSlow(3_000, { definition: BRIEF, command: BRIEF_COMMAND });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    const claimed = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' ? record : undefined;
+    });
+
+    // The member's own progress write, which landed while the member read that it failed.
+    expect(await recordProgress(bob.config, claimed, startCommit)).toMatchObject({ ok: true });
+
+    expect(await taking).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+  }, 60_000);
+
+  it('saves again once a push to one of its push URLs failed, from the work the others took', async () => {
+    let mirror = '';
+    const { alice, bob, run } = await offerSlow(3_000, { definition: BRIEF, command: BRIEF_COMMAND });
+    const origin = git(bob.checkout, 'remote', 'get-url', 'origin');
+    mirror = path.join(path.dirname(origin), 'mirror.git');
+    git(path.dirname(origin), 'init', '-q', '--bare', mirror);
+    git(bob.checkout, 'config', 'remote.origin.pushurl', origin);
+    git(bob.checkout, 'config', '--add', 'remote.origin.pushurl', mirror);
+    // The mirror takes no object until the first save reached origin.
+    const objects = path.join(mirror, 'objects');
+    fs.chmodSync(objects, 0o555);
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    const ref = `refs/heads/teamai/attempts/${run}/${ATTEMPT}`;
+    const startTip = git(origin, 'rev-parse', ref);
+
+    try {
+      await eventually(async () => (git(origin, 'rev-parse', ref) === startTip ? undefined : true));
+    } finally {
+      fs.chmodSync(objects, 0o755);
+    }
+
+    expect(await taking).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+    const finished = await recordOf(alice, run);
+    const to = finished?.state === 'finished' ? finished.result.to : undefined;
+    expect(git(origin, 'show', `${to}:done.txt`)).toBe('done');
+    expect(git(mirror, 'rev-parse', ref)).toBe(to);
+  }, 60_000);
+
+  it('takes an offer although a record it never claimed names it as the claimer', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: BRIEF, command: BRIEF_COMMAND });
+    // A claim naming Bob of an attempt whose ref origin does not hold, which Bob never wrote.
+    const other = await offerAttempt(alice.config, { ...offered, attempt: OTHER, secrets: {} });
+    if (!other.ok) throw new Error(other.error.message);
+    expect(await claimAttempt(alice.config, other.value, await installOwner(bob.config))).toMatchObject({ ok: true });
+    await readableReportsWorktree(bob.config);
+
+    expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} }))
+      .toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+  }, 60_000);
+});
+
+describe('the gone work a retry goes on from', () => {
+  it('is never that of an attempt this install did not offer, whatever owner its record names', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000);
+    // A record of an attempt Alice never offered, naming her as its owner.
+    const forged = await offerAttempt(bob.config, { ...offered, attempt: OTHER, secrets: {} });
+    if (!forged.ok) throw new Error(forged.error.message);
+    const claimed = await claimAttempt(bob.config, forged.value, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const progressed = await recordProgress(bob.config, claimed.value, 'e'.repeat(40));
+    if (!progressed.ok) throw new Error(progressed.error.message);
+    expect(await expireClaim(bob.config, progressed.value)).toMatchObject({ ok: true });
+    await readableReportsWorktree(alice.config);
+
+    expect(await lastGoneWork(alice.config, { run, step: 'work' })).toBeUndefined();
+    await markOffered(alice.config, run, OTHER, 'default');
+    expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: OTHER, pushed: 'e'.repeat(40) });
+  });
+
+  it('is the last one the owner gave up by its own clock, whatever time a member wrote', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000);
+    const member = await installOwner(bob.config);
+    const claimed = await claimAttempt(bob.config, offered, member);
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const cancelling = await cancelAttempt(alice.config, (await recordProgress(bob.config, claimed.value, 'd'.repeat(40))).ok ? (await recordOf(alice, run)) as typeof claimed.value : claimed.value);
+    if (!cancelling.ok || cancelling.value.state !== 'cancelling') throw new Error('not cancelling');
+    // The member's clock runs a year ahead when it answers.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 365 * 24 * 3600_000 });
+    try {
+      expect(await answerCancel(bob.config, cancelling.value, 'd'.repeat(40))).toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+    const later = await offerAttempt(alice.config, { ...offered, attempt: OTHER, secrets: {} });
+    if (!later.ok) throw new Error(later.error.message);
+    const reclaimed = await claimAttempt(bob.config, later.value, member);
+    if (!reclaimed.ok) throw new Error(reclaimed.error.message);
+    const moved = await recordProgress(bob.config, reclaimed.value, 'e'.repeat(40));
+    if (!moved.ok) throw new Error(moved.error.message);
+    expect(await expireClaim(alice.config, moved.value)).toMatchObject({ ok: true });
+    await markOffered(alice.config, run, OTHER, 'default');
+    await readableReportsWorktree(alice.config);
+
+    expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: OTHER, pushed: 'e'.repeat(40) });
   });
 });
