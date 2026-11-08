@@ -427,6 +427,8 @@ runtimes:
 
 step 的 agent 创建时不带 prompt。teamai 先在 attempt 的 socket 上登记该 agent，再启动它的工具，直到沙箱确认该 agent 的包装器已连接才发送 prompt。若沙箱拒绝包装器，或包装器 30 秒内未连接，teamai 删除该 agent，step 以 `isolation_unproven` 失败，prompt 不会到达沙箱外的工具。崩溃后重新启动的 runtime 会再次登记该 agent。step 的会话从 attempt 的工具主目录读取。
 
+包装器在 daemon 启动它时所用的 `HOME` 下查找 attempt，因此 daemon 必须使用与 teamai 相同的 `HOME`，由你自己启动两者时即是如此。若 daemon 以其他 `HOME` 启动，每个 step 都会以 `isolation_unproven` 失败；请在该 provider 的 `env` 中把 `HOME` 设为 teamai 的。
+
 在 Paseo 上，OpenCode 不能通过沙箱运行：Paseo 可能让多个 agent 共用一个 OpenCode 服务，沙箱无法区分 step 的 agent 与其他 agent。
 
 ## 凭据

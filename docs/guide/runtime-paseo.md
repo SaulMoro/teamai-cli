@@ -427,6 +427,8 @@ runtimes:
 
 The step's agent is created with no prompt. teamai registers it on the attempt's socket, starts its tool, and sends the prompt only once the sandbox says that agent's wrapper connected. When the sandbox refuses the wrapper, or it does not connect within 30 s, teamai deletes the agent and the step fails `isolation_unproven`, so the prompt never reaches a tool outside the sandbox. A runtime started again after a crash registers the agent again. The step's session is read in the attempt's tool home.
 
+The wrapper finds the attempt under the `HOME` the daemon starts it with, so the daemon must run with the `HOME` teamai runs with, as it does when you start both. A daemon started with another `HOME` fails every step `isolation_unproven`; set `HOME` to teamai's in the provider's `env`.
+
 OpenCode does not run through a sandbox on Paseo: Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step's agent from another.
 
 ## Credentials

@@ -290,9 +290,9 @@ export interface Daemon {
   /**
    * Creates the agent in the workspace of `cwd`, or answers the one a repeated create made. A create that failed says
    * whether it was sent: one Paseo refused may still start its agent, and only one never sent proves none started.
-   * `idle`: the agent is created with no prompt, and waits for its first message.
+   * `isIdle`: the agent is created with no prompt, and waits for its first message.
    */
-  create(cwd: string, create: AgentCreate, how?: { idle: boolean }): Promise<Creation>;
+  create(cwd: string, create: AgentCreate, how?: { isIdle: boolean }): Promise<Creation>;
   /** Starts an idle agent's tool: Paseo starts Codex's at the create, and Claude's at the first listing of its commands. */
   start(agentId: string): Promise<void>;
   /** Sends an idle agent its first message. */
@@ -698,7 +698,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         const parsed = CustomProvidersSchema.safeParse((await api.config.get()).config.providers);
         configured = parsed.success ? parsed.data : {};
       } catch (error) {
-        return cannot(`Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\`, then run the step again`);
+        return cannot(`Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\``);
       }
 
       const setUp = `add one on the daemon's host that extends ${tool} with command ${JSON.stringify([id])} (\`paseo daemon config set agents.providers …\`, then \`paseo daemon reload\`)`;
@@ -737,7 +737,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
       return { provider, added };
     },
-    async create(cwd, create, { idle } = { idle: false }) {
+    async create(cwd, create, { isIdle } = { isIdle: false }) {
       // Paseo keeps a create's env in plain text and applies it again on resume, so it carries no secret, only the run
       // directory's name: tools use the daemon host's own logins.
       let workspace: Awaited<ReturnType<PaseoApi['workspaces']['open']>>;
@@ -750,7 +750,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
       try {
         const { prompt, ...withoutPrompt } = create;
-        await workspace.agents.create(idle ? withoutPrompt : { ...withoutPrompt, prompt });
+        await workspace.agents.create(isIdle ? withoutPrompt : { ...withoutPrompt, prompt });
 
         return { outcome: 'created' };
       } catch (error) {

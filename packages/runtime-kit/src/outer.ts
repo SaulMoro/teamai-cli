@@ -43,10 +43,10 @@ export interface Registration {
 }
 
 /**
- * Registers `agent` on the attempt socket at `socketPath`. Never on a socket in a directory another user may open: who
- * made that socket would say what ran in the sandbox.
+ * Registers `agent` on the attempt socket at `socket`: an app's agent id, or null for an app that gives its tool none.
+ * Never on a socket in a directory another user may open: who made that socket would say what ran in the sandbox.
  */
-export function registerAgent(socketPath: string, agent: string): Registration {
+export function registerAgent({ socket: socketPath, agent }: { socket: string; agent: string | null }): Registration {
   const dir = path.dirname(socketPath);
 
   const stat = (() => {
