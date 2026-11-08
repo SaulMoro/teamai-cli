@@ -5,7 +5,8 @@ import { LIMIT_FAILURES } from './requirements.js';
  * refusals a command, driver or step runtime answers, several of which a step runtime's refusal carries onto its step.
  * A run record keeps a failure code only when it is one of these, since a code a model writes into its result, or
  * another driver reports, can be any text. Lint (`teamai/workflow-failure-codes`) rejects a code literal under
- * `src/workflow` that is not listed here, so a new code reaches the record by default.
+ * `src/workflow` that is neither listed here nor a judge's (`JUDGE_FAILURES`), so a new code teamai sets on a step
+ * must be added here to pass lint.
  */
 export const FAILURE_CODES = [
   'cancelled', 'hitl_required',

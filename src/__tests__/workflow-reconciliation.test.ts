@@ -511,6 +511,6 @@ describe.each(Object.keys(scenarios))('workflow report reconciliation of %s', (k
     const digest = createHash('sha1')
       .update(`${JSON.stringify({ key, seed, between: false, trace: plain })}\n${JSON.stringify({ key, seed, between: true, trace: extra })}\n`)
       .digest('hex');
-    expect(digest).toBe(TRACE_DIGESTS[key]![seed - 1]);
+    expect(digest).toBe(TRACE_DIGESTS[key]?.[seed - 1]);
   });
 });
