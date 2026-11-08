@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { registerLine, WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -10,10 +9,10 @@ import { PATH_WITHOUT_T3, type Connection, type Line } from './testing/harness.j
 import { checkout, dir, ended, initialized, isNotice, linkTo, noticesOf, OPEN, opened, openOn, prompt, result, RUN, scriptsInProject1, start, t3, usePromptStep, useT3Runtime, worktree } from './testing/suite.js';
 
 /** teamai's wrapper for Claude, which a step through a sandbox runs in place of Claude. */
-const SANDBOX_CLAUDE = `${WRAPPER_PREFIX}claude`;
+const SANDBOX_CLAUDE = 'teamai-sandbox-claude';
 
 /** The registration of an app's tool that has no agent id, as the attempt socket reads it. */
-const REGISTERED = registerLine(null).trimEnd();
+const REGISTERED = '{"register":{"agent":null}}';
 
 describe('teamai-runtime-t3', () => {
   useT3Runtime();
@@ -678,7 +677,7 @@ describe('teamai-runtime-t3', () => {
       });
 
       it('refuses Codex before registering anything or adding a provider instance, since T3 cannot run it through a sandbox', async () => {
-        fs.writeFileSync(path.join(bin, `${WRAPPER_PREFIX}codex`), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        fs.writeFileSync(path.join(bin, 'teamai-sandbox-codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
         const runtime = await throughSandbox();
 
         expect(await openThrough(runtime, outer(), 'codex')).toMatchObject({
@@ -686,7 +685,7 @@ describe('teamai-runtime-t3', () => {
           failure: { code: 'open_failed', message: 'Runtime t3 runs only Claude through a sandbox: T3 Code starts Codex as an app server outside the step\'s folder, and teamai\'s wrapper cannot yet tell which attempt it belongs to. Run this step on T3 without through: sandbox, or on the sandbox runtime alone.' },
         });
         expect(lines).toEqual([]);
-        expect(settingsNow()).not.toHaveProperty(['providerInstances', `${WRAPPER_PREFIX}codex`]);
+        expect(settingsNow()).not.toHaveProperty(['providerInstances', 'teamai-sandbox-codex']);
       });
 
       it('fails the open, naming the command, when teamai\'s wrapper for the tool is not on PATH', async () => {
