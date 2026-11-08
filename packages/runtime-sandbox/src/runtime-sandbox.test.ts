@@ -2125,12 +2125,13 @@ describe('an attempt in an sbx sandbox', () => {
     expect(JSON.stringify(reply)).toMatch(/agent: claude/);
   });
 
-  it("offers claude and codex with no agent, and starts each attempt from its own tool's template, a command step's from the bare shell", async () => {
+  it("offers claude, codex and opencode with no agent, and starts each attempt from its own tool's template, a command step's from the bare shell", async () => {
     engine.secret('anthropic', true);
     engine.secret('openai', true);
     const connection = start();
 
-    expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
+    // OpenCode needs no sign-in: it runs its free models.
+    expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'opencode'] } });
     const at = place();
     const templates: string[] = [];
 
@@ -2156,7 +2157,7 @@ describe('an attempt in an sbx sandbox', () => {
     engine.secret('anthropic', true);
 
     expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox' }, { use: 'local' }] });
-    expect(await init(start(), options, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
+    expect(await init(start(), options, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
   });
 
   it.each([
@@ -2166,7 +2167,7 @@ describe('an attempt in an sbx sandbox', () => {
     for (const service of secrets) engine.secret(service, true);
 
     expect(await init(start(), { provider: 'sbx' }, 'unattended', { env: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'OPENAI_API_KEY'], logins: [] }))
-      .toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] }, ownLogins });
+      .toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'opencode'] }, ownLogins });
   });
 
   it('runs a Claude step from the claude template with no agent, and a command step in that same sandbox', async () => {
@@ -2490,7 +2491,7 @@ describe('an attempt in an sbx sandbox', () => {
     // An instance whose command is its tool's own runs in that tool's template.
     const reply = await init(start(), { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE, { name: 'claude-fast', tool: 'claude', command: 'claude' }]);
 
-    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'claude-fast'] }, unavailable: { 'acme-claude': expect.stringMatching(/acme-claude.*sbx's claude template.*agent.*kit.*--driver local/) } });
+    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode', 'claude-fast'] }, unavailable: { 'acme-claude': expect.stringMatching(/acme-claude.*sbx's claude template.*agent.*kit.*--driver local/) } });
   });
 
   it("opens a Claude instance teamai names in open from sbx's claude template, and signs it in on the login sbx keeps, in the instance's own home", async () => {
@@ -2499,7 +2500,7 @@ describe('an attempt in an sbx sandbox', () => {
     const connection = start();
     const instance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'ACME_CLAUDE_CONFIG_DIR' } } satisfies InitInstance;
 
-    expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [instance])).toMatchObject({ ok: true, can: { tools: ['claude', 'claude-work'] } });
+    expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [instance])).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode', 'claude-work'] } });
     const at = place();
     const op = newOp();
     connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude-work', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { ACME_CLAUDE_CONFIG_DIR: at.toolHome } } });
