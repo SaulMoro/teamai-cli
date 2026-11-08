@@ -11,7 +11,7 @@ export default defineRule({
     if (!inProductionSource(context)) return {};
 
     if (!/\/src\/(?:workflow|scorers)\//.test(file) && !/from ['"](?:\.\.?\/)+scorers\/|\bWorkflowEnvelope\b/.test(context.sourceCode.text)) return {};
-    const message = 'Classify this workflow failure code in records.ts or the command-only failure policy before emitting it.';
+    const message = 'List this workflow failure code in FAILURE_CODES (src/workflow/failure-codes.ts) before emitting it, so the run record keeps it.';
 
     return {
       Literal(node) {
