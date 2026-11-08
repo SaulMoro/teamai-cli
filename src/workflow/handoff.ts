@@ -22,7 +22,7 @@ import {
 } from './snapshot.js';
 import { openPrivateStep } from './scope.js';
 import { takeOver, type UnleasedStep } from './step-state.js';
-import { offeredPool } from './fleet.js';
+import { offeredPool } from './fleet/record.js';
 import { AttemptIdSchema, installOwner, isRunId, readRun, RunIdSchema, updateRun } from './store.js';
 import { workflowRunBy, type RunPublication, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
 import { attemptHoldingSession } from './runtimes/attempt.js';

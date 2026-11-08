@@ -10,16 +10,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
-import { getReportsDir, type LocalConfig } from '../types.js';
-import { gitRoot } from '../utils/branch-worktree.js';
-import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../utils/reports-branch.js';
-import { isJsonObject } from '../types.js';
-import { JsonValueSchema, parseJson, type JsonValue } from '../utils/json.js';
-import { expressionPaths, isIndex } from './expression.js';
-import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from './snapshot.js';
-import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from './store.js';
-import { parseTemplate, renderText, templateExpressions, type TemplateContext } from './template.js';
-import type { WorkflowFailure, WorkflowStep } from './types.js';
+import { getReportsDir, type LocalConfig } from '../../types.js';
+import { gitRoot } from '../../utils/branch-worktree.js';
+import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
+import { isJsonObject } from '../../types.js';
+import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
+import { expressionPaths, isIndex } from '../expression.js';
+import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
+import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
+import { parseTemplate, renderText, templateExpressions, type TemplateContext } from '../template.js';
+import type { WorkflowFailure, WorkflowStep } from '../types.js';
 
 /** Where the records of every offered attempt live on `teamai-reports`. */
 const ATTEMPTS_DIR = 'workflows/attempts';

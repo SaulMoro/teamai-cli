@@ -56,3 +56,7 @@ rule.invalid('rejects a place module import of a scorers module', `import { stag
 rule.invalid('rejects a skill driver type import of a scorers module', `import type { JudgeUsage } from '../../../scorers/label.js';`);
 rule.invalid('rejects a workflow module new to the tree importing a scorers module', `import { scoresDir } from '../scorers/home.js';`, undefined, { filename: 'src/workflow/new-module.ts' });
 rule.valid('allows the engine to reach scoring through its hooks', `import { verifiedScorers } from '../scorers/engine-hooks.js';`, { filename: 'src/workflow/protocol.ts' });
+rule.valid('allows the command layer the fleet member', `import { takeFleetAttempt } from './workflow/fleet/member.js';`, { filename: 'src/workflow-commands.ts' });
+rule.valid('allows publish the fleet records', `import { offeredPool } from './fleet/record.js';`, { filename: 'src/workflow/handoff.ts' });
+rule.invalid('rejects the fleet owner from the command layer', `import { fleetCommand } from './workflow/fleet/owner.js';`, undefined, { filename: 'src/workflow-commands.ts' });
+rule.invalid('rejects the fleet records from an engine module that does not read them', `import { readAttemptRecord } from './fleet/record.js';`, undefined, { filename: 'src/workflow/engine.ts' });

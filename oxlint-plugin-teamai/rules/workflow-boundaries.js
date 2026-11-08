@@ -7,6 +7,7 @@ import { lintedPath } from '../utils.js';
 const SKILL = 'src/workflow/drivers/skill/';
 const LOCAL = 'src/workflow/drivers/local/';
 const PLACE = 'src/workflow/place/';
+const FLEET = 'src/workflow/fleet/';
 const DISCOVERY = 'src/workflow/discovery/';
 const BENCHMARK = 'src/benchmark/';
 const SCORERS = 'src/scorers/';
@@ -78,11 +79,22 @@ const ENTRIES = [
     // engine.ts stages, before it saves a run, the evidence a step that settled there left in its clone.
     // index.ts moves the home of a command a step started in its clone to that clone's own install.
     // check-run.ts clones and sets up the commit a check runs on, for a benchmark and a scorer alike.
-    entries: { 'place.ts': ['src/index.ts', 'src/workflow/engine.ts', 'src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/drivers/local/fleet-attempt.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`, 'src/scorers/check-run.ts'], 'setup.ts': ['src/scorers/check-run.ts'] },
+    entries: { 'place.ts': ['src/index.ts', 'src/workflow/engine.ts', 'src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/fleet/owner.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`, 'src/scorers/check-run.ts'], 'setup.ts': ['src/scorers/check-run.ts'] },
     testEntries: ['place.ts', 'team-without.ts', 'role-copy.ts', 'data.ts'],
   },
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
-  { folder: LOCAL, entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts', 'src/workflow-drive.ts'], 'local-tool-adapter.ts': [], 'fleet-member.ts': ['src/workflow-commands.ts'] }, testEntries: ['local-driver.ts', 'local-tool-adapter.ts', 'fleet-member.ts'] },
+  {
+    folder: LOCAL,
+    // The fleet's owner settles a step as the loop settles a command it started itself.
+    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts', 'src/workflow-drive.ts'], 'local-tool-adapter.ts': [], 'runtime-steps.ts': ['src/workflow/fleet/owner.ts'] },
+    testEntries: ['local-driver.ts', 'local-tool-adapter.ts'],
+  },
+  // The fleet: the owner's side is the local driver's, the member's a command's; the records are read by publish too.
+  {
+    folder: FLEET,
+    entries: { 'owner.ts': ['src/workflow/drivers/local/local-driver.ts'], 'member.ts': ['src/workflow-commands.ts'], 'record.ts': ['src/workflow/handoff.ts', 'src/workflow/drivers/local/local-driver.ts'] },
+    testEntries: ['record.ts', 'owner.ts', 'member.ts'],
+  },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },
   // A suite's checks, start and report change state, so only the commands reach them. Pull, push and their checks sync suites with the team's other definitions.
   {
@@ -136,7 +148,7 @@ export default defineRule({
       }
 
       if (from === SKILL + 'transitions.ts' && !typeOnly) violation = true;
-      const flat = from.startsWith(FLAT) && ![FLAT + 'drivers/', PLACE, DISCOVERY].some((folder) => from.startsWith(folder));
+      const flat = from.startsWith(FLAT) && ![FLAT + 'drivers/', PLACE, DISCOVERY, FLEET].some((folder) => from.startsWith(folder));
 
       if (flat && (to.startsWith(FLAT + 'drivers/') || to.startsWith(DISCOVERY) || (to.startsWith(PLACE) && !namedEntry(from, to)))) violation = true;
 
