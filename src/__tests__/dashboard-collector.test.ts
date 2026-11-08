@@ -3085,10 +3085,13 @@ describe('dashboard-report records the git state a session started on', () => {
     const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf-8' }).stdout.trim();
     const wrapperDir = path.join(tmpDir, 'git-wrapper');
     fs.mkdirSync(wrapperDir);
-    // Hangs on the two reads a Stop makes, and leaves a child that holds the pipe once it is killed.
+    const holders = path.join(wrapperDir, 'holders');
+    // Hangs on the two reads a Stop makes, ending on the interrupt that stops git as git does, and leaves a child that
+    // holds the pipe once it is killed: a background child of a script ignores the interrupt. It notes that child, which
+    // only the test can stop.
     fs.writeFileSync(path.join(wrapperDir, 'git'), [
       '#!/bin/sh',
-      'case "$*" in *"rev-parse --verify"*|*"symbolic-ref --quiet"*) (sleep 12) & sleep 12 ;; esac',
+      `case "$*" in *"rev-parse --verify"*|*"symbolic-ref --quiet"*) sleep 12 & echo $! >> '${holders}'; exec sleep 12 ;; esac`,
       `exec ${realGit} "$@"`,
       '',
     ].join('\n'), { mode: 0o755 });
@@ -3099,6 +3102,14 @@ describe('dashboard-report records the git state a session started on', () => {
       await runHook({ hook_event_name: 'Stop', session_id: 'git-hangs', cwd: repo });
     } finally {
       process.env.PATH = originalPath;
+
+      for (const pid of fs.existsSync(holders) ? fs.readFileSync(holders, 'utf8').split('\n').filter(Boolean) : []) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
     }
 
     // The Stop handler is stopped after 4.5 seconds, its event unwritten.
