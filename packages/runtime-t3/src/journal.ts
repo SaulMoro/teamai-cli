@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { OpStateSchema, RuntimeHandleSchema, type OpState } from '@teamai/runtime-protocol';
+import { OpStateSchema, RuntimeHandleSchema, type OpState, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { recordStore, type RecordRead } from '@teamai/runtime-kit/journal';
 import { z } from 'zod';
 import { STEP_MODES } from './t3.js';
@@ -132,6 +132,8 @@ function keysIn(store: { keys(): string[] }, dir: string): { kind: 'listed'; key
 
 export interface Journal {
   read(handle: string): PlaceRead;
+  /** The place's record, to write to: none when it is missing or cannot be read, which is never written over. */
+  writable(handle: string): PlaceRecord | undefined;
   /**
    * The place of `op`, from that op's record alone: a restarted runtime is asked to cancel an op before it reattaches.
    * An op record, or its place's, that cannot be read may hold the op's thread, so the answer is unreadable then.
@@ -197,6 +199,11 @@ export function journal(dir: string): Journal {
 
   return {
     read,
+    writable(handle) {
+      const found = read(handle);
+
+      return found.kind === 'found' ? found.place : undefined;
+    },
     placeOf(op) {
       const found = ops.read(op);
 
@@ -226,5 +233,13 @@ export function journal(dir: string): Journal {
     },
     file: places.file,
     opFile: ops.file,
+  };
+}
+
+/** What a request that needs a place answers when its record is there but cannot be read: it may hold live threads. */
+export function unreadableFailure(handle: string, read: Extract<PlaceRead, { kind: 'unreadable' }>): RuntimeFailure {
+  return {
+    code: 'journal_unreadable',
+    message: `Runtime t3 cannot read its record of ${handle}, ${read.file} (${read.why.replace(/\.$/, '')}), so it cannot tell which T3 threads it launched there, and it keeps the place. Stop that run's threads in T3 Code (their titles end with "teamai" and the run id), then delete the file and cancel the run again.`,
   };
 }
