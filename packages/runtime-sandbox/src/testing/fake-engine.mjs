@@ -60,6 +60,16 @@ const containers = path.join(state, 'containers');
 
 fs.mkdirSync(containers, { recursive: true });
 
+/**
+ * A `-v SOURCE:TARGET[:MODE]`, as docker reads it on any host: a source may start with a Windows drive (`C:\\…`,
+ * `C:/…`), whose colon is not a separator.
+ */
+function mountOf(volume) {
+  const [, source, target, mode = ''] = /^((?:[A-Za-z]:[\\/])?[^:]*):([^:]+)(?::([^:]*))?$/.exec(volume) ?? fail(`invalid volume specification: '${volume}'`, 125);
+
+  return { source, target, readonly: mode.split(',').includes('ro') };
+}
+
 function fail(message, code = 1) {
   process.stderr.write(`${message}\n`);
   process.exit(code);
@@ -323,11 +333,7 @@ function docker() {
         id, name, image, running: true,
         labels: Object.fromEntries(all(found, '--label').map((label) => label.split(/=(.*)/s).slice(0, 2))),
         env: Object.fromEntries(all(found, '--env').map((pair) => pair.split(/=(.*)/s).slice(0, 2))),
-        mounts: all(found, '-v').map((volume) => {
-          const [source, target, mode] = volume.split(':');
-
-          return { source, target, readonly: mode.split(',').includes('ro') };
-        }),
+        mounts: all(found, '-v').map(mountOf),
       });
 
       seedHome(id, image);

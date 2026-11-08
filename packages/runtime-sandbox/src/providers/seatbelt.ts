@@ -2,7 +2,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
-import { SYSTEM_BIN } from './system-bin.js';
+import { SYSTEM_BIN } from '../this-machine.js';
 
 // ─── seatbelt: macOS's own sandbox, through sandbox-exec ───
 //

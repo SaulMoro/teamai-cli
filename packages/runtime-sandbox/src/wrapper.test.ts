@@ -213,6 +213,36 @@ describe('teamai-sandbox-<tool> as teamai-cli installs it', () => {
   });
 });
 
+describe('teamai-sandbox-<tool> on Windows', () => {
+  const ON_WINDOWS = { SANDBOX_TEST_PLATFORM: 'win32' };
+
+  it('refuses, naming why and WSL2, even for --version', async () => {
+    for (const args of [['-p', 'Review it.'], ['--version']]) {
+      const ran = await wrapper('claude', args, { cwd: dir, env: ON_WINDOWS });
+
+      expect(ran.code).toBe(2);
+      expect(ran.stdout).toBe('');
+      expect(ran.stderr).toContain('does not run on Windows');
+      expect(ran.stderr).toContain('WSL');
+    }
+  });
+
+  it('refuses as an npm .cmd shim runs it, with no name of its own, rather than wait for runtime protocol on stdin', async () => {
+    // An npm shim runs `node <bundle> <args>`: argv[1] is the bundle, never the bin's name.
+    const ran = await new Promise<Ran>((resolve) => {
+      const child = spawn(process.execPath, [executable, '-p', 'Review it.'], { cwd: dir, env: { PATH: '/usr/bin:/bin', HOME: path.join(dir, 'home'), ...ON_WINDOWS }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8').on('data', (data: string) => { stdout += data; });
+      child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
+      child.on('close', (code, ended) => resolve({ code, signal: ended, stdout, stderr }));
+    });
+
+    expect(ran.code).toBe(2);
+    expect(ran.stderr).toContain('does not run on Windows');
+  });
+});
+
 describe('teamai-sandbox-<tool> outside an attempt', () => {
   it("prints the host tool's own version, with no attempt and no sandbox", async () => {
     const ran = await wrapper('claude', ['--version'], { cwd: dir });

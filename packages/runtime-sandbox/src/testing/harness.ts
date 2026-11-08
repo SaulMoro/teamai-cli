@@ -20,11 +20,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_ENGINE = path.join(HERE, 'fake-engine.mjs');
 const ENTRY = path.join(HERE, '..', 'main.ts');
 
-/** Swaps `providers/system-bin.ts` for `testing/system-bin.ts`, so a test may run stand-ins for macOS's own tools. */
-export const SYSTEM_BIN_STAND_INS: Plugin = {
-  name: 'system-bin-stand-ins',
+/** Swaps `this-machine.ts` for `testing/this-machine.ts`, so a test may run stand-ins for macOS's own tools, or name the OS. */
+export const THIS_MACHINE_STAND_IN: Plugin = {
+  name: 'this-machine-stand-in',
   setup(bundler) {
-    bundler.onResolve({ filter: /\/system-bin\.js$/ }, () => ({ path: path.join(HERE, 'system-bin.ts') }));
+    bundler.onResolve({ filter: /\/this-machine\.js$/ }, () => ({ path: path.join(HERE, 'this-machine.ts') }));
   },
 };
 
@@ -34,7 +34,7 @@ export async function bundleRuntime(dir: string): Promise<string> {
 
   await build({
     entryPoints: [ENTRY], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    plugins: [SYSTEM_BIN_STAND_INS],
+    plugins: [THIS_MACHINE_STAND_IN],
     banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
   });
 

@@ -597,3 +597,4 @@ sbx ls -q
 - 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
 - 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。只有评判的网络会被过滤。
 - 用工具登录的评判。评判用环境变量凭据登录。
+- Windows。沙箱把尝试的每个路径挂载到同一路径上，而 `C:\` 路径在 Linux 沙箱里不存在，所以在 Windows 上，每个提供方的 `init` 都以 `sandbox_unavailable` 失败，`teamai-sandbox-<tool>` 以退出码 2 结束。请在 WSL2 里运行 teamai 和使用包装器的应用，或者用 `--driver local` 运行步骤。

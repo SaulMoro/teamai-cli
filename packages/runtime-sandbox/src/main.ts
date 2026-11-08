@@ -4,7 +4,7 @@ import { getUserHome } from '@teamai/tool-core/home';
 import { journal } from './journal.js';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { SandboxOptions } from './options.js';
-import type { Provider } from './provider.js';
+import { unreachable, type Provider } from './provider.js';
 import { bwrap } from './providers/bwrap.js';
 import { containerProvider } from './providers/container.js';
 import { nativeProvider } from './providers/native.js';
@@ -12,6 +12,7 @@ import { sbxProvider } from './providers/sbx.js';
 import { seatbelt } from './providers/seatbelt.js';
 import { vercelProvider } from './providers/vercel.js';
 import { serve } from './runtime.js';
+import { PLATFORM } from './this-machine.js';
 import { toolExec } from './wrapper.js';
 
 // teamai-runtime-sandbox: teamai spawns it for a driver definition that uses runtime `sandbox`, and speaks runtime
@@ -31,6 +32,12 @@ const gid = process.getgid?.();
 const journalRoot = path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox');
 const sandboxJournal = journal(journalRoot);
 
+/**
+ * Why nothing of the sandbox runs on Windows: a sandbox mounts each path of the attempt at that same path, and a Linux
+ * sandbox has no `C:\\` path; an app reaches the attempt over a Unix socket, through a link named after the tool.
+ */
+const NOT_ON_WINDOWS = 'A sandbox mounts each path of the attempt at that same path, which a Windows path cannot be in a Linux sandbox, and teamai-sandbox-<tool> finds its tool by the name of a link, which an npm shim on Windows does not keep.';
+
 // Called as `teamai-sandbox-<tool>` (a `bin` of teamai-cli, or a link named after an instance), or as
 // `teamai-runtime-sandbox tool-exec <tool> …`, it is the sandbox wrapper an app runs in place of a tool (wrapper.ts).
 const WRAPPER_PREFIX = 'teamai-sandbox-';
@@ -41,7 +48,13 @@ const wrapper = calledAs.startsWith(WRAPPER_PREFIX)
   ? { name: calledAs.slice(WRAPPER_PREFIX.length), args: process.argv.slice(2) }
   : mode === 'tool-exec' && wrapped !== undefined ? { name: wrapped, args: process.argv.slice(4) } : undefined;
 
-if (wrapper === undefined) {
+if (PLATFORM === 'win32' && (wrapper !== undefined || process.argv.length > 2)) {
+  // teamai starts the runtime with no argument; an app starts the wrapper with the tool's, through an npm .cmd shim
+  // that keeps no name of its own, so any argument here is an app's.
+  process.stderr.write(`teamai-sandbox${wrapper === undefined ? '' : `-${wrapper.name}`} (sandbox_unavailable): it does not run on Windows. ${NOT_ON_WINDOWS} Run the app and teamai inside WSL2, or give the app the plain tool.\n`);
+  // No exit: on Windows a write to a pipe is asynchronous, and the message must reach the app.
+  process.exitCode = 2;
+} else if (wrapper === undefined) {
   serve({
     input: process.stdin,
     write: (message: RuntimeMessage) => {
@@ -62,6 +75,10 @@ if (wrapper === undefined) {
 }
 
 function providerOf(options: SandboxOptions): Provider {
+  if (PLATFORM === 'win32') {
+    return unreachable({ code: 'sandbox_unavailable', message: `The sandbox runtime does not run on Windows. ${NOT_ON_WINDOWS} Run teamai inside WSL2 (\`wsl --install\`, then install teamai there), or run the steps with --driver local` }, options.provider === 'vercel' ? 'copy' : 'bind');
+  }
+
   switch (options.provider) {
     case 'sbx':
       return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env, warm: options.warm });

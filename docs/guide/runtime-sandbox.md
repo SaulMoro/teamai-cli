@@ -597,3 +597,4 @@ sbx ls -q
 - Codex on a login dedicated to teamai in a container. On `sbx`, Codex signs in with `sbx secret set openai --oauth`.
 - Network rules for steps. `requires.network: false` is listed in `unenforced`, and a strict one waits for a driver that declares it. Only a judge's network is filtered.
 - A judge on a tool login. A judge signs in with an env credential.
+- Windows. A sandbox mounts each path of the attempt at that same path, which a `C:\` path cannot be in a Linux sandbox, so on Windows `init` fails `sandbox_unavailable` for every provider and `teamai-sandbox-<tool>` exits 2. Run teamai, and the app that uses the wrapper, inside WSL2, or run the steps with `--driver local`.
