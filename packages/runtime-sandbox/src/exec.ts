@@ -250,8 +250,8 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
     // sandbox names it, which teamai cannot know, so that value is masked here first.
     const rewritten = rewrittenMasks(request.credentials, scoped);
     const streams = { stdout: maskedStream(rewritten), stderr: maskedStream(rewritten) };
-    // The stdout the exec ends with is what it streamed, joined: past protocol 1's bound, its end, which the ledger
-    // marks as cut, so teamai gives the step what it streamed. Two characters over the bound tell a cut apart.
+    // The stdout the exec ends with is what it streamed, joined: past protocol 1's bound, its end, marked as cut, so
+    // teamai gives the step what it streamed. Two characters over the bound tell a cut apart.
     const stdout = boundedTail(EXITED_STDOUT_CHARS + 2);
 
     const stream = (name: 'stdout' | 'stderr', data: string): void => {
@@ -265,9 +265,9 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
     stream('stdout', streams.stdout.flush());
     stream('stderr', streams.stderr.flush());
 
-    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : ran.kind === 'failed' ? { state: 'failed', failure: ran.failure } : { state: 'exited', code: ran.code, stdout: stdout.text() };
+    const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : ran.kind === 'failed' ? { state: 'failed', failure: ran.failure } : { state: 'exited', code: ran.code, stdout: boundedStdout(stdout.text()) };
     // teamai masks the stdout itself; the journal never holds a credential the tool printed, so a repeated id is
-    // answered with it masked.
+    // answered with it masked. It is cut first: a credential masked shorter must not make a cut stdout look whole.
     finish(op, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(outcome.stdout, { envSecrets: maskedAsGiven(request.credentials, scoped), patterns: false }) } : outcome);
   };
 
