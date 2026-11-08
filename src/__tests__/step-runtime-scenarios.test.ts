@@ -18,7 +18,7 @@ import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
-import { dirs, git, pull, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
+import { dirs, git, pull, receiveHook, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
 import { fakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext } from '../workflow/engine.js';
@@ -2087,6 +2087,66 @@ steps:
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
     expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
   }, 90_000);
+
+  it('keeps the gate a member asks open to the owner\'s person while a read of the record fails, and puts it to the person once', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const clone = owner.alice.config.repo.localPath;
+    const asked: ExecQuestion[] = [];
+    const closedWhileAsked: boolean[] = [];
+    const ended = exec(newOpId(), 'workflow', { ask: async (question, closed) => {
+      asked.push(question);
+
+      if (asked.length > 1) return { choice: 'yes' };
+      // Alice's reads of teamai-reports fail while her person thinks: her wait reads the record about every second.
+      git(clone, 'remote', 'set-url', 'origin', path.join(path.dirname(clone), 'gone.git'));
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      git(clone, 'remote', 'set-url', 'origin', owner.alice.config.repo.remote);
+      closedWhileAsked.push(closed.aborted);
+
+      return { choice: 'yes' };
+    } });
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(closedWhileAsked).toEqual([false]);
+    expect(asked).toHaveLength(1);
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
+  }, 90_000);
+
+  it('writes the owner\'s answer at a later read when a write of teamai-reports fails, rather than failing the step while the member waits', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const origin = owner.alice.config.repo.remote;
+    const refusing = path.join(path.dirname(origin), 'refuse-answer');
+    const refused = path.join(path.dirname(origin), 'answer-refused');
+    fs.writeFileSync(refusing, '');
+    // teamai-reports refuses the push of the owner's answer while `refusing` is there.
+    receiveHook(origin, `while read old new ref; do
+  if [ -f ${JSON.stringify(refusing)} ] && git log -1 --format=%s "$new" | grep -q 'Answer attempt'; then touch ${JSON.stringify(refused)}; echo busy >&2; exit 1; fi
+done`);
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId(), 'workflow', { ask: async () => ({ choice: 'yes' }) });
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+    // A while after the first refusal, teamai-reports takes the answer again.
+    const reopened = eventually(async () => (fs.existsSync(refused) ? true : undefined), 60_000).then(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      fs.rmSync(refusing);
+    });
+
+    const taken = takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
+    expect(await taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    await reopened;
+  }, 120_000);
 
   it('fails a member\'s whole workflow at its gate when nobody answers where the run is driven', async () => {
     const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });

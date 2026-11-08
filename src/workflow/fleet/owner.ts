@@ -557,8 +557,9 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       pollMs = RECORD_POLL_MS;
     }
 
-    // A question closes once the record no longer asks it: the member read the answer, or the claim ended.
-    if (asked !== undefined && (record === undefined || (record.state !== 'asking' && record.state !== 'answered') || JSON.stringify(record.question) !== asked.question)) {
+    // A question closes once a read shows the record no longer asks it: the member read the answer, or the claim ended.
+    // A read that failed shows nothing, and the person's answer, given or on its way, is kept for the next.
+    if (asked !== undefined && read.ok && (record === undefined || (record.state !== 'asking' && record.state !== 'answered') || JSON.stringify(record.question) !== asked.question)) {
       asked.closed.abort();
       asked = undefined;
     }
@@ -569,12 +570,33 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     if (record?.state === 'asking' && asked?.answer !== undefined) {
       const written = await answerQuestion(config, record, asked.answer);
 
-      if (!written.ok && written.error.code !== 'state_moved') return failed(fleetFailure(written.error));
-
       // Once written, the answer is spent: the member asking the same again, as when its run did not take the answer,
       // asks the person again.
-      if (written.ok) asked = undefined;
-      continue;
+      if (written.ok) {
+        asked = undefined;
+        continue;
+      }
+
+      const { error } = written;
+
+      switch (error.code) {
+        // The member's progress landed first: the answer goes over the record read next.
+        case 'state_moved':
+          continue;
+        // teamai-reports was busy or out of reach: the answer is kept and written at the next poll, while the member waits.
+        case 'reports_failed':
+        case 'reports_unreachable':
+          break;
+        case 'fleet_unpublishable':
+        case 'fleet_record_unreadable':
+        case 'fleet_record_newer':
+          return failed(fleetFailure(error));
+        default: {
+          const unhandled: never = error;
+
+          return unhandled;
+        }
+      }
     }
 
     if ((record !== undefined && (isHeld(record) || record.state === 'cancelling')) && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
@@ -600,7 +622,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       }
     }
 
-    const woken = AbortSignal.any([cancel, leave, ...(asked ? [asked.answered.signal] : [])]);
+    // An answer kept from a failed write waits for the next poll, not for the person.
+    const woken = AbortSignal.any([cancel, leave, ...(asked !== undefined && asked.answer === undefined ? [asked.answered.signal] : [])]);
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
