@@ -132,7 +132,14 @@ export default defineRule({
             context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio, and reads its lines with @teamai/runtime-protocol. ${from} -> ${specifier}.` });
           }
 
-          if (FAMILY.test(folder) && own !== DEFINITIONS && own !== folder) {
+          // A family's ./testing entry holds its recordings for the fake agents tests run; nothing that ships loads it.
+          const familyTesting = FAMILY.test(folder) && specifier === `${name}/testing`;
+
+          if (familyTesting && !isTest && own !== folder) {
+            context.report({ node, message: `${specifier} is test-only: import it from a *.test.ts file, so a family's recordings never ship in teamai-cli. ${from} -> ${specifier}.` });
+          }
+
+          if (FAMILY.test(folder) && own !== DEFINITIONS && own !== folder && !(familyTesting && isTest)) {
             context.report({ node, message: `Only @teamai/tool-definitions imports a tool family: the app reads tools through it, and a family depends on tool-core alone. ${from} -> ${specifier}.` });
           }
 

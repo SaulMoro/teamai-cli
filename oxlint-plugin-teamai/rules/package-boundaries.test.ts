@@ -81,6 +81,16 @@ import { family as codex } from '@teamai/tool-codex';`, inWorkspace('packages/to
 
 rule.valid('allows a family test importing the test kit', `import { describeFamily } from '@teamai/tool-testing/conformance';`, inWorkspace('packages/tool-claude/src/conformance.test.ts'));
 
+rule.valid("allows a test importing a family's test-only recordings", `import { claudeFake } from '@teamai/tool-claude/testing';`, inWorkspace('src/__tests__/e2e/codebase-enrich-workflow.test.ts'));
+
+rule.valid("allows the test kit's tests importing a family's test-only recordings", `import { claudeFake } from '@teamai/tool-claude/testing';`, inWorkspace('packages/tool-testing/src/fake-agent.test.ts'));
+
+rule.invalid("rejects production code importing a family's test-only recordings", `import { claudeFake } from '@teamai/tool-claude/testing';`, (output) => {
+  expect(output).toContain("@teamai/tool-claude/testing is test-only");
+}, inWorkspace('src/tools.ts'));
+
+rule.invalid('still rejects a test importing the rest of a family', `import { family } from '@teamai/tool-claude';`, undefined, inWorkspace('src/__tests__/e2e/codebase-enrich-workflow.test.ts'));
+
 rule.valid('allows a package importing its own files', `import { definition } from './definition.js';`, inWorkspace('packages/tool-core/src/sessions.ts'));
 
 rule.valid('allows a package importing another package by name', `import { definition } from '@teamai/tool-core/definition';`, inWorkspace('packages/runtime-sandbox/src/index.ts'));
