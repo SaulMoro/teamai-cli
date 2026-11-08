@@ -217,4 +217,21 @@ describe('the evidence a step left beside a pushed session', () => {
     expect(prompt).toContain('## evidence/logs/check.log\n\nchecked with <REDACTED:KEY>');
     expect(prompt).not.toContain('s3cr3t-value');
   });
+  it('keeps the end of a long transcript in the prompt beside a long log, which it cuts to its share, and writes the log whole', async () => {
+    const long = (word: string): string => `${word} `.repeat(60_000);
+    const session: Session = {
+      sessionId: SESSION, title: 'check', cwd: '/tmp/proj', platform: 'claude-code', createdAt: NOW, updatedAt: NOW,
+      messages: [{ role: 'user', content: [{ type: 'text', text: `${long('work')}TRANSCRIPT-END` }], timestamp: NOW }],
+    };
+    const log = `${long('line')}LOG-END`;
+    const evidence: ArchivedEvidence = { version: 1, files: [{ kind: 'text', path: 'run.log', type: 'text/plain', size: log.length, text: log, cut: false }] };
+    const dir = path.join(root, 'long-evidence');
+
+    await writeSessionEvidence(dir, judgeSession({ platform: 'claude-code', found: { session }, captures: [], mask: (text) => text, evidence }), rubrics);
+
+    const prompt = fs.readFileSync(path.join(dir, 'prompt.md'), 'utf8');
+    expect(prompt).toContain('TRANSCRIPT-END');
+    expect(prompt).toContain('LOG-END');
+    expect(fs.readFileSync(path.join(dir, 'evidence', 'run.log'), 'utf8')).toBe(log);
+  });
 });

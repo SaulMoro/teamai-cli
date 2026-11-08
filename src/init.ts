@@ -173,7 +173,7 @@ import {
   CLAUDE_TOOL_ID,
   detectToolRoot,
   isAgentExcluded,
-  recordedToolHomeDir,
+  isOutsideUserHome,
   RELOCATABLE_TOOLS,
   resolveHookScope,
   scopedToolPaths,
@@ -284,7 +284,7 @@ function recordToolRoots(localConfig: LocalConfig): void {
     const rejection = toolRootRejection(root);
 
     // Session lookups read a root anywhere; the sync addresses only roots in the home directory.
-    if (rejection && recordedToolHomeDir(tool, { [tool]: root }) === root) {
+    if (rejection && isOutsideUserHome(root)) {
       localConfig.toolRoots = { ...localConfig.toolRoots, [tool]: root };
       log.info(`Recorded ${envVar} as the ${label} root: ${root}`);
       warnSessionsOnlyToolRoot(tool, root);

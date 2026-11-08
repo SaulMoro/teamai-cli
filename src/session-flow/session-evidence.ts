@@ -13,7 +13,7 @@ import { errnoCode } from '../utils/fs.js';
 /** Text kinds whose content is archived, masked, by extension, with the media type the judge is told. */
 const TEXT_TYPES = new Map(Object.entries({
   '.txt': 'text/plain', '.log': 'text/plain', '.json': 'application/json', '.jsonl': 'application/jsonl', '.md': 'text/markdown',
-  '.html': 'text/html', '.xml': 'application/xml', '.csv': 'text/csv', '.yaml': 'application/yaml',
+  '.html': 'text/html', '.xml': 'application/xml', '.csv': 'text/csv', '.yaml': 'application/yaml', '.yml': 'application/yaml',
 }));
 
 /** Media types of the listed kinds a judge is likely to meet, by extension; any other is `application/octet-stream`. */
