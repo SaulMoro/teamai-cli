@@ -661,6 +661,15 @@ describe('teamai-runtime-t3', () => {
         expect(settingsNow()).not.toHaveProperty(['providerInstances', 'teamai-sandbox-claude']);
       });
 
+      it('ends the step\'s registration on the attempt socket when the open fails after registering it', async () => {
+        t3.config({ projects: [], projectAddFails: 4 });
+        const runtime = await throughSandbox();
+
+        expect(await openThrough(runtime)).toMatchObject({ event: 'failed', failure: { code: 'not_a_t3_project' } });
+        await expect.poll(() => lines).toHaveLength(1);
+        await expect.poll(() => clients.size).toBe(0);
+      });
+
       it('fails the open, naming the command, when teamai\'s wrapper for the tool is not on PATH', async () => {
         fs.rmSync(path.join(bin, 'teamai-sandbox-claude'));
         const runtime = await throughSandbox();

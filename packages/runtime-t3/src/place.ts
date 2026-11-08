@@ -144,7 +144,6 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       const wrapped = await adder.wrapperFor(session, request.tool, { op: request.op });
 
       if (!wrapped.ok) {
-        unregister(handle);
         fail(request.op, { code: 'open_failed', message: adder.notAdded(`teamai-sandbox-${request.tool}`, undefined, wrapped) });
 
         return;
@@ -271,7 +270,6 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     };
 
     if (places.isReleased(handle)) {
-      unregister(handle);
       fail(request.op, { code: 'open_failed', message: `teamai released ${handle} while T3 Code was still opening it, so the runtime does not keep it.` });
 
       return;
@@ -556,7 +554,10 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   };
 
   return {
-    open: (request: Extract<RuntimeRequest, { type: 'open' }>) => places.track(handleFor(request), open(request)),
+    // An open that keeps no place, failed or released, ends the registration it took on the sandbox's attempt socket.
+    open: (request: Extract<RuntimeRequest, { type: 'open' }>) => places.track(handleFor(request), open(request).finally(() => {
+      if (journal.read(handleFor(request)).kind !== 'found') unregister(handleFor(request));
+    })),
     collect,
     reattach,
     close: (request: Extract<RuntimeRequest, { type: 'close' }>) => close(request.handle, { release: request.release === true }),
