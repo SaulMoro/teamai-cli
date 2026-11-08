@@ -59,6 +59,23 @@ describe('a call that must reply with a value', () => {
     expect({ reply: called.reply, asked: called.asked, calls: agent.calls().length }).toEqual({ reply: undefined, asked: 3, calls: 3 });
   });
 
+  it('keeps the last answer when asking again fails', async () => {
+    const { root, caller } = only(claudeFake, { answer: 'no JSON here', before: "if (prompt.includes('Retries remaining')) { process.stderr.write('rate limited'); process.exit(2); }" });
+
+    const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 2 });
+
+    expect({ reply: called.reply, text: called.text, asked: called.asked }).toEqual({ reply: undefined, text: 'no JSON here', asked: 2 });
+  });
+
+  it('asks again only within the time the call was given', async () => {
+    const { root, agent, caller } = only(claudeFake, { answer: 'no JSON here', always: ['slow'], slowMs: 700 });
+    const started = performance.now();
+
+    const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 5, timeout: 2000 });
+
+    expect({ reply: called.reply, tooLong: performance.now() - started > 4000, calls: agent.calls().length < 6 }).toEqual({ reply: undefined, tooLong: false, calls: true });
+  });
+
   it('resumes an OpenCode session by its id', async () => {
     const { root, agent, caller } = only(opencodeFake, { answers: [{ when: 'Retries remaining', answer: '{"color":"red"}' }], answer: 'red' });
 

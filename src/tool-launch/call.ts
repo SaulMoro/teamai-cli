@@ -207,14 +207,26 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     const chosen = await pick(options.scope);
     // A tool whose call cannot continue its session is asked once: a fresh session would redo the work.
     const cap = 'resume' in launchAdapterOf(chosen.tool).call ? retries : 0;
+    // Asking again spends the time the call was given, not a fresh timeout each time.
+    const deadline = Date.now() + (options.timeout ?? DEFAULT_TIMEOUT_MS);
     let answer = await callOnce(chosen, prompt, options);
     let reply = extractReply(answer.text, schema);
     let asked = 1;
     let tokens = answer.tokens;
 
-    for (; reply === undefined && answer.session !== undefined && asked <= cap; asked++) {
+    for (; reply === undefined && answer.session !== undefined && asked <= cap && Date.now() < deadline; asked++) {
       log.debug(`[tool-launch] ${chosen.tool} replied with no value the call accepts; asking again (${asked} of ${cap})`);
-      answer = await callOnce(chosen, retryPrompt(answer.text, cap - asked), options, answer.session);
+
+      try {
+        answer = await callOnce(chosen, retryPrompt(answer.text, cap - asked), { ...options, timeout: Math.max(1, deadline - Date.now()) }, answer.session);
+      } catch (cause) {
+        // The answer already given stays the result: the caller reports it held no value.
+        if (!(cause instanceof CallError)) throw cause;
+        log.debug(`[tool-launch] asking ${chosen.tool} again failed: ${cause.message}`);
+        asked++;
+        break;
+      }
+
       reply = extractReply(answer.text, schema);
 
       if (answer.tokens) tokens = addTokens(tokens, answer.tokens);
