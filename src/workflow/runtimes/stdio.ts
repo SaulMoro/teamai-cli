@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
 import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
-import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
 
@@ -321,7 +321,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       if (dead) return { ok: false, failure: dead };
 
       try {
-        child = crossSpawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        child = crossSpawn(command, args, { cwd, env: { ...process.env, [RUNTIME_PROTOCOL_ENV]: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       } catch (error) {
         return { ok: false, failure: { code: 'runtime_exited', message: `Step runtime "${name}" could not start: ${error instanceof Error ? error.message : String(error)}` } };
       }

@@ -508,7 +508,7 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
   }
 }
 
-export function serve(options: ServeOptions): Promise<void> {
+export function serve(options: ServeOptions): Promise<number> {
   const { journal } = options;
   const ledger = opLedger({ name: 't3', write: options.write });
   const { write } = ledger;
@@ -1940,6 +1940,7 @@ export function serve(options: ServeOptions): Promise<void> {
   return serveRuntime({
     name: 't3',
     input: options.input,
+    env: options.env,
     ledger,
     handlers: {
       init,

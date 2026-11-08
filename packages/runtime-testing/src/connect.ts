@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import readline from 'node:readline';
+import { RUNTIME_PROTOCOL_ENV } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 
 const LineSchema = z.record(z.string(), z.json());
@@ -19,9 +20,12 @@ export interface Connection {
   close(): Promise<number | null>;
 }
 
-/** Starts the runtime bundled at `executable` with exactly `env`, in `cwd`, and speaks protocol 1 to it as JSON lines. */
+/**
+ * Starts the runtime bundled at `executable` with exactly `env`, in `cwd`, as teamai starts one (with
+ * `RUNTIME_PROTOCOL_ENV`, unless `env` gives it), and speaks protocol 1 to it as JSON lines.
+ */
 export function connectRuntime({ executable, env, cwd }: { executable: string; env: Record<string, string>; cwd?: string }): Connection {
-  const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [executable], { env, ...(cwd && { cwd }) });
+  const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [executable], { env: { [RUNTIME_PROTOCOL_ENV]: '1', ...env }, ...(cwd && { cwd }) });
   const lines: Line[] = [];
   const pending: Line[] = [];
   const waiters: Array<() => void> = [];

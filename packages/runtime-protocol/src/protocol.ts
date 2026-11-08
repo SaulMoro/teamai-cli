@@ -57,12 +57,22 @@ import { z } from 'zod';
 //  command that prints more than the bound still gets its outputs; an `exited` teamai saw no output of, as one a
 //  runtime reports after teamai restarted, gives only the end.
 //
+//  teamai starts every runtime with TEAMAI_RUNTIME_PROTOCOL=1 (`RUNTIME_PROTOCOL_ENV`); a runtime started without it
+//  serves nothing.
+//
 //  `max_parallel` and `credentials` in a driver definition's options are teamai's: it strips them before `init`, so a
 //  runtime never sees or validates them. The credential values travel only in requests, in memory: on `open` for the
 //  attempt, and on each `exec` and `prompt` that gets them, so a runtime that restarted holds none and needs none.
 //
 
 export const RUNTIME_PROTOCOL = 1;
+
+/**
+ * The variable teamai sets to `1` on each runtime process it starts. A runtime serves protocol 1 only with it, and
+ * gives none of its own processes it, so an executable that is also a wrapper an app runs in place of a tool (an npm
+ * `.cmd` shim on Windows keeps no name of its own) never reads an app's stdin as requests.
+ */
+export const RUNTIME_PROTOCOL_ENV = 'TEAMAI_RUNTIME_PROTOCOL';
 
 /** The most of a command's stdout an `exited` carries, in UTF-16 code units: 64 KiB of text, far above any answer. */
 export const EXITED_STDOUT_CHARS = 64 * 1024;

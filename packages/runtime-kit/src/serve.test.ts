@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { RuntimeMessageSchema, type OpId, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { RUNTIME_PROTOCOL_ENV, RuntimeMessageSchema, type OpId, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { opLedger } from './ledger.js';
 import { serveRuntime, type RuntimeHandlers } from './serve.js';
 
@@ -9,7 +9,7 @@ const OP = 'op-0123abcd' as OpId;
 const HELD = 'op-89abcdef' as OpId;
 
 /** A runtime served over an in-memory stdin, with the handlers `make` gives over a set that answers nothing. */
-function served(make: (write: (message: RuntimeMessage) => void) => Partial<RuntimeHandlers> = () => ({})) {
+function served(make: (write: (message: RuntimeMessage) => void) => Partial<RuntimeHandlers> = () => ({}), env: NodeJS.ProcessEnv = { [RUNTIME_PROTOCOL_ENV]: '1' }) {
   const input = new PassThrough();
   const written: RuntimeMessage[] = [];
   const debugged: string[] = [];
@@ -20,6 +20,7 @@ function served(make: (write: (message: RuntimeMessage) => void) => Partial<Runt
   const done = serveRuntime({
     name: 'fake',
     input,
+    env,
     ledger,
     handlers: { init: nothing, open: nothing, exec: nothing, prompt: nothing, cancel: nothing, collect: nothing, reattach: nothing, close: nothing, ...make(write) },
     holds: (op) => op === HELD,
@@ -50,11 +51,11 @@ describe('serving runtime protocol 1', () => {
     expect(runtime.written).toEqual([]);
   });
 
-  it('ends once teamai closes its stdin', async () => {
+  it('ends with status 0 once teamai closes its stdin', async () => {
     const runtime = served();
     runtime.input.end();
 
-    await expect(runtime.done).resolves.toBeUndefined();
+    await expect(runtime.done).resolves.toBe(0);
   });
 
   it.each([
@@ -110,5 +111,27 @@ describe('serving runtime protocol 1', () => {
     await runtime.send(request);
 
     expect(runtime.written).toEqual([end]);
+  });
+});
+
+describe('a runtime process teamai did not start', () => {
+  it('reads no request, says why on stderr, and ends with status 2', async () => {
+    const runtime = served(() => ({}), {});
+
+    await runtime.send({ type: 'reattach', handle: 'h-1', credentials: 'none' });
+
+    expect(await runtime.done).toBe(2);
+    expect(runtime.written).toEqual([]);
+    expect(runtime.debugged).toEqual(['Runtime fake serves runtime protocol 1 only when teamai starts it, with TEAMAI_RUNTIME_PROTOCOL=1, so it reads nothing. Run it as the runtime of a workflow driver, not by itself.']);
+  });
+
+  it('is served once teamai started it, and gives no process it starts the variable that says so', async () => {
+    const env: NodeJS.ProcessEnv = { TEAMAI_RUNTIME_PROTOCOL: '1', PATH: '/usr/bin' };
+    const runtime = served(() => ({}), env);
+
+    runtime.input.end();
+
+    expect(await runtime.done).toBe(0);
+    expect(env).toEqual({ PATH: '/usr/bin' });
   });
 });

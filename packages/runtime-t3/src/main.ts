@@ -126,7 +126,7 @@ const connect: ServeOptions['connect'] = async (how) => {
 
 const startedFrom = process.env['T3CODE_THREAD_ID'];
 
-await serve({
+const status = await serve({
   input: process.stdin,
   write,
   journal: journal(path.join(state, 'places')),
@@ -143,4 +143,4 @@ await serve({
   ...(startedFrom && { startedFrom }),
 });
 
-process.exit(0);
+process.exit(status);

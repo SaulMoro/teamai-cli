@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { CANCEL_FAILED, OpIdSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type OpId, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, OpIdSchema, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type OpId, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import type { OpLedger } from './ledger.js';
 
@@ -18,6 +18,11 @@ export interface ServeRuntime {
   /** The runtime's name as its messages give it, such as `t3` in "Runtime t3 could not start". */
   name: string;
   input: NodeJS.ReadableStream;
+  /**
+   * The runtime process's environment. It serves only when teamai started it, which sets `RUNTIME_PROTOCOL_ENV`, and
+   * then removes that variable, so no process it starts inherits it.
+   */
+  env: NodeJS.ProcessEnv;
   /** What every line goes through, the handlers' too: it counts each op's ends. */
   ledger: OpLedger;
   handlers: RuntimeHandlers;
@@ -63,11 +68,20 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<v
 }
 
 /**
- * Serves runtime protocol 1 on `input` until teamai closes it. Each request runs as it comes, without waiting for the
+ * Serves runtime protocol 1 on `input` until teamai closes it, and resolves to the exit status the process ends with:
+ * 2 when teamai did not start it, which reads nothing then. Each request runs as it comes, without waiting for the
  * ones before it: a slow prompt never holds a cancel.
  */
-export function serveRuntime({ name, input, ledger, handlers, holds, stopped, debug }: ServeRuntime): Promise<void> {
+export function serveRuntime({ name, input, env, ledger, handlers, holds, stopped, debug }: ServeRuntime): Promise<number> {
   const { write } = ledger;
+
+  if (env[RUNTIME_PROTOCOL_ENV] !== '1') {
+    debug(`Runtime ${name} serves runtime protocol 1 only when teamai starts it, with TEAMAI_RUNTIME_PROTOCOL=1, so it reads nothing. Run it as the runtime of a workflow driver, not by itself.`);
+
+    return Promise.resolve(2);
+  }
+
+  delete env[RUNTIME_PROTOCOL_ENV];
 
   /**
    * Answers a request that threw with a failure of its own: teamai fails every request it waits on when a line names
@@ -146,6 +160,6 @@ export function serveRuntime({ name, input, ledger, handlers, holds, stopped, de
     });
 
     // teamai is gone: what still runs keeps going, and a later teamai reattaches to it.
-    lines.on('close', () => resolve());
+    lines.on('close', () => resolve(0));
   });
 }
