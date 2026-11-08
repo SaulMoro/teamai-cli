@@ -15,14 +15,17 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** The command lines of this process's children, as the system lists them. */
+/**
+ * The command lines of this process's children that still run, as the system lists them. A zombie has ended: esbuild's
+ * stop kills its service without waiting, and Node reads the exit a moment later.
+ */
 function childCommands(): string[] {
-  const table = execFileSync('ps', ['-A', '-o', 'ppid=,command='], { encoding: 'utf8' });
+  const table = execFileSync('ps', ['-A', '-o', 'ppid=,stat=,command='], { encoding: 'utf8' });
 
   return table.split('\n').flatMap((line) => {
-    const [ppid, ...command] = line.trim().split(/\s+/);
+    const [ppid, stat = '', ...command] = line.trim().split(/\s+/);
 
-    return Number(ppid) === process.pid ? [command.join(' ')] : [];
+    return Number(ppid) === process.pid && !stat.startsWith('Z') ? [command.join(' ')] : [];
   });
 }
 
