@@ -8,8 +8,11 @@ import type { Limit, TurnLimits } from './requirements.js';
 import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './scope.js';
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
+import type { LocalConfig } from '../types.js';
+import { durationMs } from './parse.js';
+import { z } from 'zod';
 import type { WorkflowResult } from './engine.js';
-import { isWorkflowFile, workflowRunBy, type RunState, type WorkflowStep } from './types.js';
+import { isWorkflowFile, workflowRunBy, type RunState, type WorkflowFailure, type WorkflowStep } from './types.js';
 
 function after(from: string, ms: number): string {
   return new Date(Date.parse(from) + ms).toISOString();
@@ -300,4 +303,22 @@ export function spendAllowances(run: RunState, scope: Scope, limits: TurnLimits,
 
     if (state?.status === 'running' && remainder !== undefined && remainder <= leased) state.allowanceSpent = true;
   }
+}
+
+/**
+ * `workflows.idle_timeout` in milliseconds, unset when the member set none; a value that is no duration fails the step.
+ * The one reading of it, for an answer step's call and a prompt step's launch alike.
+ */
+export function idleLimit(config: LocalConfig): { ms?: number } | { failure: WorkflowFailure } {
+  const idle = config.workflows?.idle_timeout;
+
+  if (idle === undefined) return {};
+  const text = z.string().safeParse(idle);
+  const ms = text.success ? durationMs(text.data) : undefined;
+
+  if (ms === undefined) {
+    return { failure: { code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` } };
+  }
+
+  return { ms };
 }

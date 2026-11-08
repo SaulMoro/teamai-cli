@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { StartDriver } from '../workflow/conformance-interpreter.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
-import { createLocalToolAdapter, type ToolSpawn } from '../workflow/drivers/local/local-tool-adapter.js';
+import { createLocalToolAdapter, type ToolSpawn } from '../workflow/steps/local-tool-adapter.js';
 import { startRun } from '../workflow/engine.js';
 import { RunIdSchema } from '../workflow/store.js';
 import { knownSecrets } from '../env-resolution.js';

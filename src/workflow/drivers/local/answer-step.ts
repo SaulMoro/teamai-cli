@@ -7,7 +7,7 @@ import { createToolCaller, type CallOptions, type ToolCallerDeps } from '../../.
 import { JsonValueSchema, type JsonValue, type LocalConfig } from '../../../types.js';
 import type { ReportInput } from '../../engine.js';
 import { expectedOutput, outputMismatch } from '../../output.js';
-import { durationMs } from '../../parse.js';
+import { idleLimit } from '../../limits.js';
 import { z } from 'zod';
 import type { OutputSchema, WorkflowFailure } from '../../types.js';
 
@@ -40,23 +40,6 @@ const FAILURE_OF = {
   call_failed: 'tool_failed',
 } as const satisfies Record<CallErrorKind, WorkflowFailure['code']>;
 
-/**
- * `workflows.idle_timeout` in milliseconds, unset when the member set none; a value that is no duration fails the step.
- * The one reading of it, for an answer step's call and a prompt step's launch alike.
- */
-export function idleLimit(config: LocalConfig): { ms?: number } | { failure: WorkflowFailure } {
-  const idle = config.workflows?.idle_timeout;
-
-  if (idle === undefined) return {};
-  const text = z.string().safeParse(idle);
-  const ms = text.success ? durationMs(text.data) : undefined;
-
-  if (ms === undefined) {
-    return { failure: { code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` } };
-  }
-
-  return { ms };
-}
 
 function failed(failure: WorkflowFailure): AnswerReport {
   return { outcome: 'failed', message: failure.message, failure };

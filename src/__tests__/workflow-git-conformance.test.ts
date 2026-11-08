@@ -10,7 +10,7 @@ import { workflowGitConformanceScenarios, type GitConformanceName } from '../wor
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { claimRun, publishRun } from '../workflow/handoff.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
-import type { LocalToolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
+import type { LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
 import { inProcessClient } from '../workflow/protocol.js';
 import type { StepState } from '../workflow/step-state.js';
 import { readRun } from '../workflow/store.js';

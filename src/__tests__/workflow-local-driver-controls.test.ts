@@ -13,7 +13,7 @@ import { getDataHome, getReportsDir, type LocalConfig, type TeamaiConfig } from 
 import { log } from '../utils/logger.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
-import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from '../workflow/drivers/local/local-tool-adapter.js';
+import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { driverIdentity } from '../driver-identity.js';
 import { driverLockPath, readRun } from '../workflow/store.js';
