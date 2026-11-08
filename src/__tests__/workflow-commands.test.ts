@@ -258,7 +258,10 @@ describe('workflow start and resume --driver', () => {
 
     expect(await capture(() => workflowStart('mark', { driver: 'acme-sandbox' }))).toEqual(refused);
     expect(await capture(() => workflowResume('r00000000', { driver: 'acme-sandbox' }))).toEqual(refused);
-    expect(await capture(() => workflowResume(undefined, { driver: 'acme-sandbox', next: true }))).toEqual(refused);
+    // A run taken for another member reads no definition of this member's own, and the refusal says so.
+    expect(await capture(() => workflowResume(undefined, { driver: 'acme-sandbox', next: true }))).toEqual({
+      error: { code: 'driver_not_found', message: expect.stringContaining('No driver definition of the team or teamai is named "acme-sandbox", and a definition in ~/.teamai/drivers/ does not count here.') },
+    });
   });
 
   it.each(['fleet', 'none', 'acme sandbox'])('refuses --driver %s, which no driver of this machine is', async (named) => {

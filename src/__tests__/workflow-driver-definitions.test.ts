@@ -35,6 +35,17 @@ describe('driver definition names', () => {
     expect(await resolveDriver(project, 'payments.ci', { personal: true })).toMatchObject({ ok: true, driver: { name: 'payments.ci', source: 'team' } });
   });
 
+  it('reads no definition of the member\'s own where personal ones do not count, and does not tell the member to add one there', async () => {
+    const team = teamWith([]);
+    fs.mkdirSync(path.join(getTeamaiHomeDir(), 'drivers'), { recursive: true });
+    fs.writeFileSync(path.join(getTeamaiHomeDir(), 'drivers', 'my_box.yaml'), definition('my_box'));
+
+    expect(await resolveDriver(team, 'my_box', { personal: false })).toEqual({ ok: false, failure: {
+      code: 'driver_not_found',
+      message: 'No driver definition of the team or teamai is named "my_box", and a definition in ~/.teamai/drivers/ does not count here. Add drivers/my_box.yaml to the team repo and run teamai pull, or use --driver local.',
+    } });
+  });
+
   it.each(['none', 'local', 'skill', 'fleet'])('refuses a definition named %s, a name teamai keeps for its own driver', async (name) => {
     const team = teamWith([name]);
 
