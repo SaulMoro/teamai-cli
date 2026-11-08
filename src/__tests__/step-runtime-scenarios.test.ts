@@ -644,8 +644,10 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const handle = await opened(runtime);
     const request = promptRequest(handle);
     let accepted = false;
-    const ended = runtime.prompt(request, { onAccepted: () => { accepted = true; } });
-    expect(await until(() => accepted)).toBe(true);
+    let shown = false;
+    const ended = runtime.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
+    // A runtime that shows its agent has journaled that agent by then: only the end is left to journal.
+    expect(await until(() => accepted && (subject.display === undefined || shown))).toBe(true);
     const journal = subject.journal(state);
 
     try {
