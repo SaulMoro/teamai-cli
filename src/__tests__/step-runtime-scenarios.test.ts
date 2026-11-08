@@ -1960,6 +1960,29 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(await readRun(expanded.alice.config, expanded.run)).toMatchObject({ steps: [{ id: 'work', status: 'running' }, { id: 'work.write', status: 'leased' }, { id: 'work.count', status: 'pending' }] });
   }, 60_000);
 
+  it('starts a workflow step that could go whole at reconcile on a run whose driver has no runtime that runs it whole, so a gate first inside it is asked before any slot frees', async () => {
+    const gateFirst = `schemaVersion: v1alpha1
+name: pair
+description: Asks to go on, then writes a mark.
+inputs: { mark: string }
+steps:
+  - id: confirm
+    approve: "Go on?"
+  - id: write
+    needs: [confirm]
+    workspace: continue
+    command: echo written > made.txt
+`;
+    const acme = team({ slow: WHOLE, pair: gateFirst });
+    const alice = await acme.member('alice');
+    const run = await startIn(alice, 'slow', { mark: 'made.txt' });
+
+    const next = await leaseNext(alice.config, run, alice.driver, { canTakeLease: false, can: { workspace: [...WORKSPACES], hitl: true } });
+
+    expect(next).toMatchObject({ data: { hitl: { step: 'work.confirm', message: 'Go on?' } } });
+    expect(await readRun(alice.config, run)).toMatchObject({ steps: [{ id: 'work', status: 'running' }, { id: 'work.confirm' }, { id: 'work.write', status: 'pending' }] });
+  }, 60_000);
+
   it('offers a whole workflow step as one attempt, which a member runs as a nested run from its own copy of the workflow, then ends with the workflow\'s outputs and its work in the place', async () => {
     const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: PAIR }, inputs: { mark: 'made.txt' }, isWhole: true });
     const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
