@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { trackDetachedProcesses } from './helpers/detached-processes.js';
+import { groupRunning } from './helpers/skill-runners.js';
 
 it('waits for a detached writer after its spawning parent has exited', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-detached-fixture-'));
@@ -44,15 +45,6 @@ it('forgets a pid the runner cannot signal, as macOS answers EPERM for a recycle
   }
 });
 
-function groupAlive(pid: number): boolean {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 it.skipIf(process.platform === 'win32')('stops a skill runner it waited on, and the command group the runner started, then fails naming the runner', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-detached-runner-'));
   const tracker = trackDetachedProcesses(root);
@@ -73,8 +65,8 @@ it.skipIf(process.platform === 'win32')('stops a skill runner it waited on, and 
   const [left = 0, step = 0] = started();
   try {
     await expect(tracker.waitForExit({ runnerExitMs: 200 })).rejects.toThrow(`Skill runners outlived the test and were stopped: ${left}.`);
-    expect(groupAlive(left), 'the runner was stopped').toBe(false);
-    expect(groupAlive(step), 'the command the runner started was stopped').toBe(false);
+    expect(groupRunning(left), 'the runner was stopped').toBe(false);
+    expect(groupRunning(step), 'the command the runner started was stopped').toBe(false);
   } finally {
     for (const pid of [left, step]) {
       try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }

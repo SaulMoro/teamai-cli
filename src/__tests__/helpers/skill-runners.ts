@@ -49,8 +49,12 @@ export function stopLeftSkillRunners(running: () => number[], options: { exitMs?
   for (const pid of left) steps.delete(pid);
   for (const pid of left) signalGroup(pid, 'SIGTERM');
   const killAt = now() + KILL_MS;
-  while (left.some(groupAlive) && now() < killAt) pause(POLL_MS);
-  for (const pid of [...left.filter(groupAlive), ...steps]) signalGroup(pid, 'SIGKILL');
+  while (left.some(groupRunning) && now() < killAt) pause(POLL_MS);
+  const killed = [...left.filter(groupRunning), ...steps];
+  for (const pid of killed) signalGroup(pid, 'SIGKILL');
+  // A killed process ends a moment later, so the groups are stopped only once none of them runs.
+  const goneAt = now() + KILL_MS;
+  while (killed.some(groupRunning) && now() < goneAt) pause(POLL_MS);
   return left;
 }
 
@@ -120,13 +124,12 @@ export function processTable(): ProcessRow[] {
   });
 }
 
-function groupAlive(pid: number): boolean {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+/**
+ * Whether a process of the group `pgid` still runs. A zombie has ended: it only waits for its parent, or init once its
+ * parent is gone, to read its exit, which a signal to its group still reaches.
+ */
+export function groupRunning(pgid: number): boolean {
+  return processTable().some((row) => row.pgid === pgid && !row.zombie);
 }
 
 function pause(ms: number): void {

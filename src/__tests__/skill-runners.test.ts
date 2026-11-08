@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { stopLeftSkillRunners } from './helpers/skill-runners.js';
+import { groupRunning, stopLeftSkillRunners } from './helpers/skill-runners.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -27,15 +27,6 @@ function runner(root: string, args: string[], cwd = root): { pid: number; step: 
   return { pid, step: Number(fs.readFileSync(pids, 'utf8').trim()) };
 }
 
-function groupAlive(pid: number): boolean {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 it.skipIf(process.platform === 'win32')('stops the process group of a skill runner that outlived its test and the command it started, and leaves another process alone', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-skill-runners-'));
   roots.push(root);
@@ -43,10 +34,10 @@ it.skipIf(process.platform === 'win32')('stops the process group of a skill runn
   const other = runner(root, ['workflow', 'next', 'r0123456789abcdef']);
   try {
     expect(stopLeftSkillRunners(() => [left.pid, other.pid], { exitMs: 500 })).toEqual([left.pid]);
-    expect(groupAlive(left.pid), 'the runner and its child were stopped').toBe(false);
-    expect(groupAlive(left.step), 'the command the runner started was stopped').toBe(false);
-    expect(groupAlive(other.pid), 'a process that is no runner is not signalled').toBe(true);
-    expect(groupAlive(other.step), 'nor the groups it started').toBe(true);
+    expect(groupRunning(left.pid), 'the runner and its child were stopped').toBe(false);
+    expect(groupRunning(left.step), 'the command the runner started was stopped').toBe(false);
+    expect(groupRunning(other.pid), 'a process that is no runner is not signalled').toBe(true);
+    expect(groupRunning(other.step), 'nor the groups it started').toBe(true);
     expect(stopLeftSkillRunners(() => [left.pid, other.pid], { exitMs: 0 })).toEqual([]);
   } finally {
     for (const pid of [left.pid, left.step, other.pid, other.step]) {
@@ -66,8 +57,8 @@ it.skipIf(process.platform === 'win32')('stops only the skill runners working in
   const away = runner(root, [...args, 'a00000002'], outside);
   try {
     expect(stopLeftSkillRunners(() => [working.pid, away.pid], { exitMs: 0, workingIn: path.join(root, 'checkout') })).toEqual([working.pid]);
-    expect(groupAlive(working.pid), 'the runner working in the directory was stopped').toBe(false);
-    expect(groupAlive(away.pid), 'a runner working elsewhere is left alone').toBe(true);
+    expect(groupRunning(working.pid), 'the runner working in the directory was stopped').toBe(false);
+    expect(groupRunning(away.pid), 'a runner working elsewhere is left alone').toBe(true);
   } finally {
     for (const pid of [working.pid, working.step, away.pid, away.step]) {
       try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
@@ -83,7 +74,7 @@ it.skipIf(process.platform === 'win32')('stops a runner working in a directory i
   const untracked = runner(root, ['workflow', 'report', 'r0123456789abcdef', '--driver', 'skill', '--attempt', 'a00000003'], checkout);
   try {
     expect(stopLeftSkillRunners(() => [], { exitMs: 0, workingIn: checkout })).toEqual([untracked.pid]);
-    expect(groupAlive(untracked.pid), 'the untracked runner was stopped').toBe(false);
+    expect(groupRunning(untracked.pid), 'the untracked runner was stopped').toBe(false);
   } finally {
     for (const pid of [untracked.pid, untracked.step]) {
       try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
@@ -103,8 +94,8 @@ it.skipIf(process.platform === 'win32')('stops, besides the tracked runners, eve
   const foreign = runner(root, [...args, 'a00000006'], elsewhere);
   try {
     expect(stopLeftSkillRunners(() => [tracked.pid], { exitMs: 0, alsoWorkingIn: [owned] }).sort((a, b) => a - b)).toEqual([tracked.pid, untracked.pid].sort((a, b) => a - b));
-    expect(groupAlive(untracked.pid), 'the untracked runner under an owned directory was stopped').toBe(false);
-    expect(groupAlive(foreign.pid), 'an untracked runner elsewhere is left alone').toBe(true);
+    expect(groupRunning(untracked.pid), 'the untracked runner under an owned directory was stopped').toBe(false);
+    expect(groupRunning(foreign.pid), 'an untracked runner elsewhere is left alone').toBe(true);
   } finally {
     for (const pid of [tracked.pid, tracked.step, untracked.pid, untracked.step, foreign.pid, foreign.step]) {
       try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
