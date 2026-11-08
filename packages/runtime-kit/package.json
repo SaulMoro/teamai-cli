@@ -7,6 +7,7 @@
     "./answering": "./src/answering.ts",
     "./journal": "./src/journal.ts",
     "./ledger": "./src/ledger.ts",
+    "./outer": "./src/outer.ts",
     "./serve": "./src/serve.ts"
   }
 }
