@@ -9,7 +9,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { CanSchema, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CanSchema, ISOLATION_LEVELS, WORKSPACE_MODES, type Can, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { getRepoIdentity } from '../../session-flow/sync.js';
 import { readableReportsWorktree } from '../../utils/reports-branch.js';
 import type { LocalConfig } from '../../types.js';
@@ -53,6 +53,54 @@ export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z
   const [issue] = parsed.error.issues;
 
   return { ok: false, failure: { key: issue?.path.join('.') || 'pool', message: issue?.message ?? 'not valid' } };
+}
+
+/** The flags a step may need, which an entry that offers them takes it for. */
+const NEEDED_FLAGS = ['hitl', 'network', 'tokens', 'max_turns', 'setup', 'end_turn', 'unattended', 'role'] as const;
+
+/** How far an entry's `env` reaches, none first. */
+const ENV_REACH = [false, 'commands', true] as const;
+
+/**
+ * Whether a fleet entry that offers `earlier` takes every step one that offers `later` could take, so the later one never
+ * gets a step. What cannot be ordered, the tools and the confined offers, must be the same.
+ */
+function coversCan(earlier: Can, later: Can): boolean {
+  if (NEEDED_FLAGS.some((flag) => later[flag] === true && earlier[flag] !== true)) return false;
+
+  // A runtime runs commands unless it says it does not.
+  if (later.exec !== false && earlier.exec === false) return false;
+
+  if (ISOLATION_LEVELS.indexOf(later.isolation ?? 'none') > ISOLATION_LEVELS.indexOf(earlier.isolation ?? 'none')) return false;
+
+  if (ENV_REACH.indexOf(later.env ?? false) > ENV_REACH.indexOf(earlier.env ?? false)) return false;
+
+  return isDeepStrictEqual(earlier.tools, later.tools) && isDeepStrictEqual(earlier.confined, later.confined);
+}
+
+/**
+ * A warning for each fleet entry of `runtimes`, a driver definition's, that an earlier fleet entry shadows: the first
+ * entry whose `can` fits a step takes it, so an entry whose `can` an earlier one covers never gets one. An entry whose
+ * options do not parse is left to its own check.
+ */
+export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; through?: string; options?: RuntimeOptions }>): string[] {
+  const seen: Array<{ pool: string; can: Can }> = [];
+  const warnings: string[] = [];
+
+  for (const entry of runtimes) {
+    if (entry.use !== 'fleet' || entry.through !== undefined) continue;
+    const { max_parallel: _parallel, ...options } = entry.options ?? {};
+    const parsed = parseFleetOptions(options);
+
+    if (!parsed.ok) continue;
+    const { pool, can = {} } = parsed.value;
+    const earlier = seen.find((one) => coversCan(one.can, can));
+
+    if (earlier) warnings.push(`The fleet entry for pool "${pool}" never gets a step: the fleet entry for pool "${earlier.pool}" before it offers everything it does, and takes each step first. Put the more specific entry first.`);
+    seen.push({ pool, can });
+  }
+
+  return warnings;
 }
 
 /** How the owner's wait on an attempt ended: as the member's command did, cancelled, failed, or left out as this teamai stops. */

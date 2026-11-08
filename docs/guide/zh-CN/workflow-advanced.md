@@ -1664,6 +1664,8 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 目前只接命令步骤。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
+每个 fleet 条目在自己的 `pool` 里提供尝试，第一个 `can` 适合某步骤的条目接走它。多个 pool 就是多个 fleet 条目，更具体的放在前面：`can` 被前面某个条目覆盖的 fleet 条目永远拿不到步骤，`workflow start` 会对此发出警告。
+
 你不必一直在线。驱动发出尝试后就可以停掉，之后运行 `teamai workflow resume <run>`：它读取尝试的记录，成员完成时取回产出，没完成就继续等。尝试在外期间，不依赖它的步骤照常在本机运行。
 
 领取尝试的成员每个 `stale_after` 内会写三次自己仍在运行，并附上到目前为止推送的产出。你的驱动超过 `stale_after` 没有收到它的消息时，尝试以 `fleet_member_gone` 失败。它最后一次推送之前的产出留在步骤的位置里，`teamai workflow retry <run> <step>` 会从那里再次发布这个步骤。

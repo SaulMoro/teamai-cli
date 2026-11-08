@@ -1670,6 +1670,8 @@ It prints `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}
 
 Which steps go to the fleet follows the usual routing, with no step key: the order of `runtimes`, what `can` under the fleet's `options` promises (the members' machines give it; teamai does not check it), the step's `requires` and `strict`, and the steps that always stay on this machine. The fleet takes command steps for now. Each ready step, and each item of a `for_each`, is an attempt of its own, up to the fleet's `max_parallel`. Give such a step a workspace, such as `workspace: new`: a step with none runs in your checkout, and a member's changes to it fail the step `read_only_dirty`.
 
+Each fleet entry offers in its own `pool`, and the first entry whose `can` fits a step takes it. Several pools are several fleet entries, the more specific first: a fleet entry whose `can` an earlier one covers never gets a step, and `workflow start` warns about it.
+
 You need not stay up. Stop your driver once it offered the attempt, and run `teamai workflow resume <run>` later: it reads the attempt's record, takes the member's work when it finished, and waits otherwise. Steps that do not need the attempt keep running here while it is out.
 
 A member that took an attempt writes that it is still there, with the work it pushed so far, three times per `stale_after`. When your driver sees no word from it for longer than `stale_after`, the attempt fails `fleet_member_gone`. Its work up to the last push stays in the step's place, and `teamai workflow retry <run> <step>` offers the step again from there.

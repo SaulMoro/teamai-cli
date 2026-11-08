@@ -8,6 +8,8 @@ import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
+import { shadowedFleetEntries } from '../workflow/fleet/owner.js';
+import { RuntimeOptionsSchema } from '@teamai/runtime-protocol';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import type { StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { readableReportsWorktree, updateReports } from '../utils/reports-branch.js';
@@ -653,5 +655,26 @@ describe('the gone work a retry goes on from', () => {
     await readableReportsWorktree(alice.config);
 
     expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: OTHER, pushed: 'e'.repeat(40) });
+  });
+});
+
+describe('fleet entries of one driver definition', () => {
+  const fleet = (options: Record<string, unknown>) => ({ use: 'fleet', options: RuntimeOptionsSchema.parse(options) });
+
+  it('names a fleet entry an earlier one takes every step from, and only that one', () => {
+    expect(shadowedFleetEntries([
+      fleet({ pool: 'default' }),
+      fleet({ pool: 'e2e', can: { network: true } }),
+      { use: 'local' },
+      fleet({ pool: 'spare' }),
+    ])).toEqual([
+      'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+    ]);
+  });
+
+  it('names a specific fleet entry a general one before it covers', () => {
+    expect(shadowedFleetEntries([fleet({ pool: 'any', can: { network: true, isolation: 'sandbox' } }), fleet({ pool: 'box', can: { isolation: 'worktree' } })])).toEqual([
+      'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+    ]);
   });
 });
