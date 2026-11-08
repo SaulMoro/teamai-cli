@@ -3,8 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
+import { bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
 import { connectRuntime, type Connection as RuntimeConnection, type Line } from '@teamai/runtime-testing/connect';
-import { build, type BuildOptions, type Plugin } from 'esbuild';
+import type { BuildOptions, Plugin } from 'esbuild';
 import { z } from 'zod';
 
 // ─── Test support: the runtime over its stdio, on a fake container engine ───
@@ -27,18 +28,9 @@ export const THIS_MACHINE_STAND_IN: Plugin = {
   },
 };
 
-/**
- * Builds the runtime's executable into `outfile`, as `@teamai/runtime-testing/bundle` does, with what a test swaps in:
- * `alias` replaces a package with a stand-in, and `plugins` a module of the runtime's own, which an alias cannot name.
- */
-export async function bundleRuntimeWith({ outfile, alias, plugins }: { outfile: string } & Pick<BuildOptions, 'alias' | 'plugins'>): Promise<string> {
-  await build({
-    entryPoints: [ENTRY], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    ...(alias && { alias }), ...(plugins && { plugins }),
-    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
-  });
-
-  return outfile;
+/** Builds the runtime's executable into `outfile`, with what a test swaps in (`@teamai/runtime-testing/bundle`). */
+export function bundleRuntimeWith({ outfile, alias, plugins }: { outfile: string } & Pick<BuildOptions, 'alias' | 'plugins'>): Promise<string> {
+  return bundleRuntimeAt({ entry: ENTRY, outfile, ...(alias && { alias }), ...(plugins && { plugins }) });
 }
 
 /** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
