@@ -223,6 +223,23 @@ describe('teamai-runtime-paseo', () => {
     expect(fs.existsSync(ran)).toBe(false);
   });
 
+  it('serves only when teamai starts it, and passes no sign of that on to what it runs', async () => {
+    const refused = start({ TEAMAI_RUNTIME_PROTOCOL: '' });
+    const status = await new Promise<number | null>((resolve) => refused.child.once('exit', resolve));
+    expect(status).toBe(2);
+    expect(refused.lines).toEqual([]);
+
+    // The codex whose sign-in init reads records whether it inherited the variable teamai starts the runtime with.
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const marker = path.join(dir, 'marker');
+    fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nprintf '%s\\n' "\${TEAMAI_RUNTIME_PROTOCOL+set}" >> ${marker}\necho 'Logged in using ChatGPT' >&2\n`, { mode: 0o755 });
+    behave({ models: { codex: ['gpt-6.1-sol'] }, codex_path: path.join(bin, 'codex') });
+
+    expect(await ready(start())).toMatchObject({ type: 'init', ok: true, can: { tools: ['codex'] } });
+    expect(fs.readFileSync(marker, 'utf8')).toBe('\n');
+  });
+
   it('does not offer a Codex the daemon has not installed, though this machine has a signed-in codex', async () => {
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
@@ -2637,12 +2654,12 @@ describe('teamai-runtime-paseo', () => {
     runtime.child.stdin?.write(`${JSON.stringify({ type: 'prompt', op: 'op-0000000b', handle })}\n`);
     runtime.child.stdin?.write(`${JSON.stringify({ type: 'shut', handle: 'worktree/r4567cdef/a4567cdef' })}\n`);
 
-    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'bad_request', message: expect.stringMatching(/^teamai-runtime-paseo could not read the prompt request for op-0000000b: /) } });
-    expect(await runtime.next((line) => 'handle' in line && line.handle === 'worktree/r4567cdef/a4567cdef')).toMatchObject({ event: 'failed', failure: { code: 'bad_request' } });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'runtime_protocol', message: expect.stringMatching(/^Not a protocol 1 request: /) } });
+    expect(await runtime.next((line) => 'handle' in line && line.handle === 'worktree/r4567cdef/a4567cdef')).toMatchObject({ event: 'failed', failure: { code: 'runtime_protocol' } });
     expect(runtime.lines.filter((line) => 'event' in line && line.event === 'error')).toEqual([]);
   });
 
-  it('drops a request it cannot read for a prompt it already runs, so that prompt still ends once, and fails no other request', async () => {
+  it('drops a request it cannot read for a prompt it already runs, so that prompt still ends once, and fails no other request than the unreadable ones', async () => {
     const release = path.join(dir, 'release');
     behave({ release, output: { ok: true } });
     const runtime = start();
@@ -2659,7 +2676,10 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
     await delay(500);
     expect(runtime.lines.filter(isEnd('op-0000000b'))).toHaveLength(1);
-    expect(runtime.lines.filter((line) => 'event' in line && (line.event === 'error' || ('handle' in line && !('op' in line) && line.event === 'failed')))).toEqual([]);
+    // The line it cannot read for the place gets that line's own failure; nothing else fails.
+    expect(runtime.lines.filter((line) => 'event' in line && (line.event === 'error' || ('handle' in line && !('op' in line) && line.event === 'failed')))).toEqual([
+      { event: 'failed', handle, failure: { code: 'runtime_protocol', message: expect.stringMatching(/^Not a protocol 1 request: /) } },
+    ]);
   });
 
   it('keeps running, and ends its prompt, when it notes a dropped request after teamai stopped reading its stderr', async () => {

@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  CANCEL_FAILED, fitReason, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, fitReason, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
+import { opLedger } from '@teamai/runtime-kit/ledger';
+import { serveRuntime, type RuntimeHandlers } from '@teamai/runtime-kit/serve';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -231,6 +232,8 @@ function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): s
 
 export interface Serving {
   input: Readable;
+  /** The runtime process's environment: it serves only when teamai started it (`serveRuntime`). */
+  env: NodeJS.ProcessEnv;
   write(message: RuntimeMessage): void;
   /** Writes a line for a person, never for teamai: stderr. */
   note(text: string): void;
@@ -239,24 +242,12 @@ export interface Serving {
   startedFrom?: string;
 }
 
-/** What a request line names, read without the rest of the request, so a line that cannot be read is answered on its own. */
-const NamedSchema = z.object({
-  type: z.string().catch('request'),
-  op: OpIdSchema.optional().catch(undefined),
-  handle: RuntimeHandleSchema.optional().catch(undefined),
-});
-
 /** What init offered of an installed tool: its steps and judges, its steps only, or nothing, with why not. */
 type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } | { runs: 'nothing'; reason: string };
 
-export function serve({ input, write: emit, note, journal, startedFrom }: Serving): Promise<void> {
-  /** How many lines ended each op in this process: a request that throws ends its op only when nothing else did meanwhile. */
-  const ends = new Map<OpId, number>();
-
-  const write = (message: RuntimeMessage): void => {
-    if ('op' in message && 'event' in message && (message.event === 'finished' || message.event === 'failed' || message.event === 'cancelled')) ends.set(message.op, (ends.get(message.op) ?? 0) + 1);
-    emit(message);
-  };
+export async function serve({ input, env, write: emit, note, journal, startedFrom }: Serving): Promise<number> {
+  const ledger = opLedger({ name: 'paseo', write: emit });
+  const { write } = ledger;
 
   let daemon: Daemon | undefined;
   let mode: 'attended' | 'unattended' = 'attended';
@@ -1394,7 +1385,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     if (outcome) journal.savePrompt(op, { ...found, outcome: undefined });
     journal.cancel(op);
     const following = waiting.get(op);
-    const endsBefore = ends.get(op) ?? 0;
+    const endsBefore = ledger.endsOf(op);
     stopping.add(op);
 
     try {
@@ -1435,7 +1426,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
       stopping.delete(op);
       // Another process recorded its end while this one cancelled it, as the runtime a prompt was resent to does when it
       // sees the agent stop: this cancel answers with that end, since teamai waits for one, and the follow here sends none.
-      const recorded = (ends.get(op) ?? 0) === endsBefore ? journal.prompt(op) : undefined;
+      const recorded = ledger.endsOf(op) === endsBefore ? journal.prompt(op) : undefined;
 
       if (recorded && recorded.kind !== 'refused' && recorded.outcome) {
         waiting.delete(op);
@@ -1638,7 +1629,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     // Its agents stopped: a prompt that has not ended ends cancelled, once, before its record goes. One this process
     // already ended, and no request of which is still answered, was ended by a failure its record could not keep.
     for (const { op, record } of journal.promptsOf(handle)) {
-      if (record.outcome || ((ends.get(op) ?? 0) > 0 && !inFlight.has(op))) continue;
+      if (record.outcome || (ledger.endsOf(op) > 0 && !inFlight.has(op))) continue;
       const following = waiting.get(op);
       settle(op, { op, state: 'cancelled' });
       following?.stop();
@@ -1756,9 +1747,9 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
   /** The ops of the requests this process is answering, each with how many. */
   const inFlight = new Map<OpId, number>();
 
-  /** Whether `op` is one this runtime runs or ran: an answer of its own would end it a second time. One it cannot tell is. */
+  /** Whether `op` is one this runtime runs or answered: an answer of its own would end it a second time. One it cannot tell is. */
   const holdsOp = (op: OpId): boolean => {
-    if (inFlight.has(op) || creates.has(op)) return true;
+    if (inFlight.has(op) || creates.has(op) || ledger.endsOf(op) > 0) return true;
 
     try {
       return journal.prompt(op) !== undefined;
@@ -1767,66 +1758,9 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     }
   };
 
-  /** Whether `handle` is a place this runtime holds or is opening. One it cannot tell is. */
-  const holdsHandle = (handle: string): boolean => {
-    if (opens.has(handle)) return true;
-
-    try {
-      return journal.place(handle) !== undefined;
-    } catch {
-      return true;
-    }
-  };
-
-  /**
-   * Answers a request line it cannot read: on its own op or handle when this runtime holds neither, so no other request
-   * fails. One it holds already has its answer coming, and a failure would end it twice, so that line is dropped with a
-   * note on stderr. A line that names neither gets the error line, the only answer it can have.
-   */
-  const unreadable = (line: string, reason: string): void => {
-    let named: z.infer<typeof NamedSchema> = { type: 'request' };
-
-    try {
-      named = NamedSchema.catch({ type: 'request' }).parse(JSON.parse(line));
-    } catch {
-      // Not JSON: it names nothing.
-    }
-
-    const { type, op, handle } = named;
-    const subject = op ?? handle;
-
-    if (subject === undefined) {
-      write({ event: 'error', message: `teamai-runtime-paseo could not read a request: ${reason}` });
-
-      return;
-    }
-
-    if (op ? holdsOp(op) : handle !== undefined && holdsHandle(handle)) {
-      note(`teamai-runtime-paseo dropped a ${type} request it could not read for ${subject}, which it already holds, so as not to answer it twice: ${reason}`);
-
-      return;
-    }
-
-    const failure = { code: 'bad_request', message: `teamai-runtime-paseo could not read the ${type} request for ${subject}: ${reason}` };
-
-    if (op) fail(op, failure);
-    else if (handle !== undefined) write({ event: 'failed', handle, failure });
-  };
-
-  const lines = readline.createInterface({ input });
-
-  lines.on('line', (line) => {
-    let request: RuntimeRequest;
-
-    try {
-      request = RuntimeRequestSchema.parse(JSON.parse(line));
-    } catch (error) {
-      unreadable(line, error instanceof Error ? error.message : String(error));
-
-      return;
-    }
-
-    const endsBefore = 'op' in request ? (ends.get(request.op) ?? 0) : 0;
+  /** Answers `request` as its type asks, and a request that threw with its own failure: never a second end of its op. */
+  const answerOne = async (request: RuntimeRequest): Promise<void> => {
+    const endsBefore = 'op' in request ? ledger.endsOf(request.op) : 0;
 
     if ('op' in request) inFlight.set(request.op, (inFlight.get(request.op) ?? 0) + 1);
 
@@ -1845,7 +1779,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
         // keeps its place.
         if (request.type === 'prompt' || request.type === 'cancel') {
           // Ended meanwhile, by this request or another: a second line would end it twice.
-          if ((ends.get(request.op) ?? 0) !== endsBefore) return;
+          if (ledger.endsOf(request.op) !== endsBefore) return;
           // This line is the op's one end: its follow, taken from `waiting`, ends nothing after it.
           const following = waiting.get(request.op);
           waiting.delete(request.op);
@@ -1874,28 +1808,31 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     })();
 
     answering.add(answered);
-    void answered.finally(() => {
+
+    try {
+      await answered;
+    } finally {
       answering.delete(answered);
 
-      if (!('op' in request)) return;
-      const left = (inFlight.get(request.op) ?? 1) - 1;
+      if ('op' in request) {
+        const left = (inFlight.get(request.op) ?? 1) - 1;
 
-      if (left > 0) inFlight.set(request.op, left);
-      else inFlight.delete(request.op);
-    });
-  });
+        if (left > 0) inFlight.set(request.op, left);
+        else inFlight.delete(request.op);
+      }
+    }
+  };
+
+  const handlers: RuntimeHandlers = { init: answerOne, open: answerOne, exec: answerOne, prompt: answerOne, cancel: answerOne, collect: answerOne, reattach: answerOne, close: answerOne };
+  const status = await serveRuntime({ name: 'paseo', input, env, ledger, handlers, holds: holdsOp, stopped: 'its Paseo agent', debug: note });
 
   // teamai is gone once stdin ends: the requests in flight get their answers, and an agent goes on in Paseo, which keeps
   // how it ended for the next reattach.
-  return new Promise((resolve) => {
-    lines.on('close', () => {
-      closing = true;
+  closing = true;
 
-      for (const following of waiting.values()) following.stop();
-      void Promise.allSettled(answering).then(async () => {
-        await daemon?.close();
-        resolve();
-      });
-    });
-  });
+  for (const following of waiting.values()) following.stop();
+  await Promise.allSettled(answering);
+  await daemon?.close();
+
+  return status;
 }
