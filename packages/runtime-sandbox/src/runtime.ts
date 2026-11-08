@@ -141,8 +141,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
   /** The ops whose stop this process asked for and has not confirmed or failed yet, so a second cancel starts no second stop. */
   const pendingStops = new Set<OpId>();
-  /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
-  const followers = new Map<OpId, { handle: string; end: (outcome: Outcome) => void }>();
+  /** The ops this process answers but does not run, each with its handle and what stops following it. */
+  const followers = new Map<OpId, { handle: string; stop: () => void }>();
   /**
    * The sandboxes and judges' containers this process is creating, each with its place's handle and what settles once
    * that creation did.
@@ -191,35 +191,24 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   };
 
   /**
-   * Keeps `kept` as op's outcome, unless the journal holds one already or `close` forgot the op, and returns the outcome
-   * to answer: `outcome`, or, when it cannot be kept, a failure naming the record. A stop it could not confirm stays
-   * `cancel_failed`, the one failure a later cancel retries.
+   * Keeps `kept` as op's outcome, unless the journal holds one already or `close` forgot the op; throws when the journal
+   * cannot be read or written.
    */
-  const keep = (op: OpId, outcome: Outcome, kept: Outcome): Outcome => {
-    try {
-      const record = journal.exec(op);
+  const keep = (op: OpId, kept: Outcome): void => {
+    const record = journal.exec(op);
 
-      if (record !== undefined && record.outcome === undefined) journal.saveExec(op, { ...record, outcome: kept });
-
-      return outcome;
-    } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-
-      return outcome.state === 'failed' && outcome.failure.code === CANCEL_FAILED
-        ? { state: 'failed', failure: { code: CANCEL_FAILED, message: `${outcome.failure.message} ${why}` } }
-        : { state: 'failed', failure: { code: 'runtime_failed', message: `The sandbox runtime could not record how ${op} ended. ${why}` } };
-    }
+    if (record !== undefined && record.outcome === undefined) journal.saveExec(op, { ...record, outcome: kept });
   };
 
   /**
-   * Ends `op`, which this process claimed: settles what the journal keeps first, then writes its one end. Only an op's
-   * first end counts, so an exec that ends after its cancel already failed it writes nothing more.
+   * Ends `op`, which this process claimed, with its true outcome once the journal keeps `kept`: one the journal cannot
+   * keep is answered all the same, and the ledger remembers it until the place closes. Only an op's first end counts,
+   * so an exec that ends after its cancel already failed it writes nothing more.
    */
   const finish = (op: OpId, outcome: Outcome, kept: Outcome = outcome): void => {
     if (!running.has(op)) return;
-    const answered = keep(op, outcome, kept);
+    ledger.settle({ op, ...outcome }, () => keep(op, kept));
     release(op);
-    endWith(op, answered);
   };
 
   /**
@@ -232,12 +221,15 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   /** `credentials` as a sandbox gets them: a URL on this machine itself at the name `host` gives it there. */
   const inSandbox = (credentials: Record<string, string>, host: HostRoute): Record<string, string> => (host.ok ? toAlias(credentials, host.alias) : credentials);
 
-  /** Writes the end of an op this process does not run: through its follower here when it has one. */
-  const conclude = (op: OpId, outcome: Outcome): void => {
-    const follower = followers.get(op);
+  /**
+   * Writes the end of an op this process does not run, and stops following it here. With `keepIt`, the end is answered
+   * once that kept it in the journal, or all the same, remembered by the ledger, when it could not.
+   */
+  const conclude = (op: OpId, outcome: Outcome, keepIt?: () => void): void => {
+    followers.get(op)?.stop();
 
-    if (follower) follower.end(outcome);
-    else endWith(op, outcome);
+    if (keepIt === undefined) endWith(op, outcome);
+    else ledger.settle({ op, ...outcome }, keepIt);
   };
 
   /** The place's sandbox: the id the journal kept, or the one its labels find when a runtime died before keeping it. */
@@ -527,10 +519,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const follow = (op: OpId, handle: string): Promise<void> => new Promise((resolve, reject) => {
     let timer: NodeJS.Timeout | undefined;
 
-    const ended = (outcome: Outcome): void => {
+    const stop = (): void => {
       clearTimeout(timer);
       followers.delete(op);
-      endWith(op, outcome);
       resolve();
     };
 
@@ -539,8 +530,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         const now = journal.exec(op);
 
         // A close forgot it once its sandbox, and whatever ran there, was removed.
-        if (now === undefined) ended({ state: 'cancelled' });
-        else if (now.outcome) ended(now.outcome);
+        if (now === undefined) conclude(op, { state: 'cancelled' });
+        else if (now.outcome) conclude(op, now.outcome);
         else timer = setTimeout(look, FOLLOW_MS).unref();
       } catch (error) {
         followers.delete(op);
@@ -548,7 +539,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       }
     };
 
-    followers.set(op, { handle, end: ended });
+    followers.set(op, { handle, stop });
     look();
   });
 
@@ -557,6 +548,15 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * a new id. It decides without awaiting, so the caller claims a new id before anything else is read.
    */
   const replay = (op: OpId): Promise<void> | undefined => {
+    const unkept = ledger.unkept(op);
+
+    if (unkept !== undefined) {
+      write({ op, event: 'accepted' });
+      ledger.end(unkept);
+
+      return Promise.resolve();
+    }
+
     const record = journal.exec(op);
 
     if (record?.outcome) {
@@ -826,14 +826,16 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
   const cancel = async (op: OpId, provider: Provider): Promise<void> => {
     const record = journal.exec(op);
+    // An end this process answered and could not journal stands in for the record's.
+    const ended = ledger.unkept(op) ?? record?.outcome;
     // A stop this runtime could not confirm is the one outcome a later cancel replaces.
-    const isRetried = record?.outcome?.state === 'failed' && record.outcome.failure.code === CANCEL_FAILED;
+    const isRetried = ended?.state === 'failed' && ended.failure.code === CANCEL_FAILED;
 
     if (!record || pendingStops.has(op)) return;
 
     // A cancel of an op that already ended answers that end again.
-    if (record.outcome !== undefined && !isRetried) {
-      conclude(op, record.outcome);
+    if (ended !== undefined && !isRetried) {
+      conclude(op, ended);
 
       return;
     }
@@ -864,8 +866,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         const now = journal.exec(op);
 
         if (now === undefined || now.outcome !== undefined) return;
-        journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
-        conclude(op, outcome);
+        conclude(op, outcome, () => journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome }));
 
         return;
       }
@@ -875,8 +876,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       const now = journal.exec(op);
 
       if (now === undefined || now.outcome !== undefined) return;
-      journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome: { state: 'cancelled' } });
-      conclude(op, { state: 'cancelled' });
+      conclude(op, { state: 'cancelled' }, () => journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome: { state: 'cancelled' } }));
     } finally {
       pendingStops.delete(op);
 
@@ -951,7 +951,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       if (!served.ok) warn(`teamai-runtime-sandbox: warning: ${served.failure.message}. The step's tool cannot start in its sandbox until it can.`);
     }
 
-    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => stateOf({ op, ...record })), display: provider.display(place) });
+    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => ledger.unkept(op) ?? stateOf({ op, ...record })), display: provider.display(place) });
   };
 
   /** Removes the place's sandbox, and a judge's filter and network: ok once the provider confirmed they are gone. */
@@ -974,9 +974,16 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const ops = journal.opsOf(handle);
     const known = journal.place(handle);
 
+    /** Forgets the place, and the ends of its ops the ledger remembers. */
+    const forget = (): void => {
+      journal.forget(handle);
+
+      for (const { op } of ops) ledger.forget(op);
+    };
+
     const failed = (failure: RuntimeFailure): void => {
       if (isReleased) {
-        journal.forget(handle);
+        forget();
         void unserveSocket(handle);
       }
 
@@ -1031,8 +1038,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // The sandbox is gone, so an op answered here but run by no live process ended with it, unless its runner recorded
     // its own end since this process last looked.
-    for (const [op, follower] of followers) if (follower.handle === handle) follower.end(journal.exec(op)?.outcome ?? { state: 'cancelled' });
-    journal.forget(handle);
+    for (const [op, follower] of followers) if (follower.handle === handle) conclude(op, journal.exec(op)?.outcome ?? { state: 'cancelled' });
+    forget();
     await unserveSocket(handle);
     write({ event: 'closed', handle: given });
   };
@@ -1138,7 +1145,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
           const outcome: Outcome = { state: 'failed', failure: { code: CANCEL_FAILED, message: `Exec ${op} may still run: the sandbox runtime could not stop it. ${error instanceof Error ? error.message : String(error)}` } };
 
           if (running.has(op)) finish(op, outcome);
-          else if (ledger.endsOf(op) === endsBefore) conclude(op, keep(op, outcome, outcome));
+          else if (ledger.endsOf(op) === endsBefore) conclude(op, outcome, () => keep(op, outcome));
         }
       },
       collect: ({ handle }) => collect(handle, ready.provider),
@@ -1162,7 +1169,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       },
     },
     // An op this process runs, follows or stops, or one the journal holds or may hold, gets its end from what runs it.
-    holds: (op) => running.has(op) || followers.has(op) || pendingStops.has(op) || journal.exec(op) !== undefined,
+    holds: (op) => running.has(op) || followers.has(op) || pendingStops.has(op) || ledger.unkept(op) !== undefined || journal.exec(op) !== undefined,
     stopped: 'what it ran in the sandbox',
     debug: warn,
   });

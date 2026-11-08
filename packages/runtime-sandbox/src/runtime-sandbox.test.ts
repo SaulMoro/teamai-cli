@@ -1198,7 +1198,7 @@ describe('a prompt attempt in a container', () => {
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
   });
 
-  it('ends an exec it cannot record the end of once, failed and naming the record, never first as exited', async () => {
+  it('ends an exec it cannot record the end of once, with its true end, and says so in a notice naming the record', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
     const at = place();
@@ -1212,7 +1212,8 @@ describe('a prompt attempt in a container', () => {
     keep(HANDLE);
     fs.writeFileSync(path.join(at.worktree, 'release'), '');
 
-    expect(await connection.next(ended(op), 10_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
+    expect(await connection.next(ended(op), 10_000)).toEqual({ op, event: 'exited', code: 0, stdout: 'finished\n' });
+    expect(connection.messages.filter((message) => message.op === op && message.event === 'notice')).toEqual([{ event: 'notice', op, message: expect.stringContaining(record) }]);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(connection.messages.filter(ended(op))).toHaveLength(1);
   });

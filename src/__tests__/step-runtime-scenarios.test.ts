@@ -69,7 +69,6 @@ const SUBJECTS: Subject[] = [
     options: () => docker.options,
     retains: true,
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox')],
-    unjournaledEnd: 'failed runtime_failed',
     display: { label: 'teamai-r0123abcd-a0123abcd (docker)', fields: { container: 'teamai-r0123abcd-a0123abcd', image: 'scenario/agent:1' } },
   },
   {
@@ -78,7 +77,6 @@ const SUBJECTS: Subject[] = [
     options: () => sbx.options,
     retains: true,
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox')],
-    unjournaledEnd: 'failed runtime_failed',
     // An sbx sandbox's name starts with its journal's id, which follows the subject's HOME.
     display: { label: expect.stringMatching(/^teamai-[0-9a-f]{16}-r0123abcd-a0123abcd \(sbx\)$/), fields: { sandbox: expect.stringMatching(/^teamai-[0-9a-f]{16}-r0123abcd-a0123abcd$/), agent: 'claude' } },
   },
