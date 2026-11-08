@@ -436,11 +436,11 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，你主目录之外的仓库（比如 `/opt` 或 `/Volumes` 下的）仍然可读。
+- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
 - 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
 - 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
-- `seatbelt` 只通过 `sandbox-exec` 限制文件访问。带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
+- `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号或列出它们，不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
 
 当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行：
 

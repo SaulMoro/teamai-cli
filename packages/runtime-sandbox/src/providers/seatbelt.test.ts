@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -92,7 +93,7 @@ describe('seatbelt: init', () => {
 });
 
 describe('seatbelt: a step', () => {
-  it('runs the step under a profile that denies the home and every write outside its place, on a home and temp directory of its own', async () => {
+  it('runs the step under a profile that denies what it does not allow, on a home and temp directory of its own', async () => {
     const connection = start();
     await init(connection, { provider: 'seatbelt' }, { env: ['ANTHROPIC_API_KEY'], logins: [] });
     const at = placeIn(host.dir);
@@ -107,8 +108,9 @@ describe('seatbelt: a step', () => {
     const { profile, params, command } = lastProfile();
 
     expect(command).toEqual(['claude', '-p', 'Review it.']);
-    expect(profile).toContain('(deny file-write* (subpath "/"))');
-    expect(Object.values(params)).toEqual(expect.arrayContaining([fs.realpathSync(at.worktree), fs.realpathSync(at.git), fs.realpathSync(host.home)]));
+    expect(profile).toContain('(deny default)');
+    expect(Object.values(params)).toEqual(expect.arrayContaining([fs.realpathSync(at.worktree), fs.realpathSync(at.git), path.join(fs.realpathSync(host.home), '.docker')]));
+    expect(Object.values(params)).not.toContain(fs.realpathSync(host.home));
     // No credential value ever reaches the sandbox's argv.
     expect(JSON.stringify(host.calls())).not.toContain('step-key');
   });
@@ -232,6 +234,121 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(tries).map(([name, 
 
     expect(end).toMatchObject({ event: 'exited', code: 0 });
     expect(JSON.parse(output)).toEqual(['ok', 'EPERM', 'EPERM']);
+  });
+
+  /** Each named try's outcome, `ok` or its error code, as one JSON line. */
+  const TRIES = `
+const fs = require('node:fs'); const net = require('node:net'); const { execFileSync } = require('node:child_process');
+const connects = (at) => new Promise((resolve) => { const socket = net.connect(at); socket.on('data', () => { socket.destroy(); resolve('ok'); }); socket.on('error', (error) => resolve(error.code)); });
+const tries = JSON.parse(process.argv[2]);
+(async () => {
+  const out = {};
+  for (const [name, op, ...args] of tries) {
+    try {
+      if (op === 'kill') { process.kill(Number(args[0]), args[1]); out[name] = 'ok'; }
+      else if (op === 'connect') out[name] = await connects(args[0]);
+      else if (op === 'ps') out[name] = execFileSync('/bin/ps', ['-p', args[0], '-o', 'pid='], { encoding: 'utf8' }).trim() === args[0] ? 'ok' : 'unseen';
+      else if (op === 'rename') { fs.renameSync(args[0], args[1]); out[name] = 'ok'; }
+      else if (op === 'write') { fs.mkdirSync(require('node:path').dirname(args[0]), { recursive: true }); fs.writeFileSync(args[0], 'planted'); out[name] = 'ok'; }
+      else if (op === 'remove') { fs.rmSync(args[0], { recursive: true }); out[name] = 'ok'; }
+    } catch (error) { out[name] = error.code ?? String(error.status ?? error.message); }
+  }
+  console.log(JSON.stringify(out));
+})();`;
+
+  /** A server on the Unix socket `at` that greets each client, closed by the returned function. */
+  async function listenOn(at: string): Promise<() => Promise<void>> {
+    fs.mkdirSync(path.dirname(at), { recursive: true });
+    const server = net.createServer((socket) => socket.end('hi\n'));
+    await new Promise<void>((resolve) => { server.listen(at, resolve); });
+
+    return () => new Promise((resolve) => { server.close(() => resolve()); });
+  }
+
+  /** The runtime on the real sandbox-exec, with node on its PATH, and `extra` over its environment; its place under `root`. */
+  async function onThisMac(extra: NodeJS.ProcessEnv = {}, root = host.dir): Promise<{ connection: Connection; at: ReturnType<typeof placeIn> }> {
+    host.tool('tries', TRIES);
+    const connection = startOn(executable, host, open, { PATH: [host.tools, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), ...extra });
+    expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
+
+    return { connection, at: placeIn(root) };
+  }
+
+  it('keeps a step from signalling or listing a process it did not start, and from a Unix socket outside its place', async () => {
+    // A short place, so a socket in its worktree fits the Unix limit.
+    const short = fs.realpathSync(fs.mkdtempSync('/tmp/tsp-'));
+    const { connection, at } = await onThisMac({}, short);
+    await openPlace(connection, at);
+    const sleeper = spawn('sleep', ['61'], { detached: true, stdio: 'ignore' });
+    const outside = fs.mkdtempSync('/tmp/tsb-');
+    const closeOutside = await listenOn(path.join(outside, 's.sock'));
+    const closeInside = await listenOn(path.join(at.worktree, 's.sock'));
+
+    try {
+      const { end, output } = await exec(connection, {
+        argv: ['tries', JSON.stringify([['signal', 'kill', String(sleeper.pid), 'SIGCONT'], ['probe', 'kill', String(sleeper.pid), 0], ['list', 'ps', String(sleeper.pid)], ['outside', 'connect', path.join(outside, 's.sock')], ['inside', 'connect', path.join(at.worktree, 's.sock')]])],
+        cwd: at.worktree,
+      });
+
+      expect(end).toMatchObject({ event: 'exited', code: 0 });
+      expect(JSON.parse(output)).toMatchObject({ signal: 'EPERM', probe: 'EPERM', outside: 'EPERM', inside: 'ok' });
+      expect(JSON.parse(output).list).not.toBe('ok');
+    } finally {
+      sleeper.kill('SIGKILL');
+      await closeOutside();
+      await closeInside();
+      connection.send({ type: 'close', handle: HANDLE });
+      await connection.next((message) => message.event === 'closed' && message.handle === HANDLE);
+      fs.rmSync(outside, { recursive: true, force: true });
+      fs.rmSync(short, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a step from a container engine's socket in the member's home", async () => {
+    // A short home, so the socket's path fits the Unix limit.
+    const home = fs.realpathSync(fs.mkdtempSync('/tmp/tsh-'));
+    const sockets = ['.docker/run/docker.sock', '.colima/default/docker.sock', '.orbstack/run/docker.sock', '.lima/default/sock/docker.sock', '.rd/docker.sock'].map((at) => path.join(home, at));
+    const closes = await Promise.all(sockets.map(listenOn));
+
+    try {
+      const { connection, at } = await onThisMac({ HOME: home });
+      await openPlace(connection, at);
+      const { end, output } = await exec(connection, { argv: ['tries', JSON.stringify(sockets.map((at, index) => [String(index), 'connect', at]))], cwd: at.worktree });
+
+      expect(end).toMatchObject({ event: 'exited', code: 0 });
+      expect(Object.values(JSON.parse(output))).toEqual(sockets.map(() => 'EPERM'));
+      connection.send({ type: 'close', handle: HANDLE });
+      await connection.next((message) => message.event === 'closed' && message.handle === HANDLE);
+    } finally {
+      await Promise.all(closes.map((close) => close()));
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a step from moving aside, or removing, a folder that holds a git file it may only read', async () => {
+    const { connection, at } = await onThisMac();
+    // A clone's own git directory inside the worktree, one folder down.
+    const gitDir = path.join(at.worktree, 'repo', '.git');
+    fs.mkdirSync(path.join(gitDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(gitDir, 'config'), '[core]\n');
+    await openPlace(connection, at, { readonly: [at.git, at.dotGit, gitDir] });
+
+    const { end, output } = await exec(connection, {
+      argv: ['tries', JSON.stringify([
+        ['config', 'write', path.join(gitDir, 'config')],
+        ['hook', 'write', path.join(gitDir, 'hooks', 'pre-commit')],
+        ['moveGit', 'rename', gitDir, path.join(at.worktree, 'repo', 'aside')],
+        ['moveParent', 'rename', path.join(at.worktree, 'repo'), path.join(at.worktree, 'aside')],
+        ['removeParent', 'remove', path.join(at.worktree, 'repo')],
+        ['ownFile', 'write', path.join(at.worktree, 'repo', 'file.txt')],
+      ])],
+      cwd: at.worktree,
+    });
+
+    expect(end).toMatchObject({ event: 'exited', code: 0 });
+    expect(JSON.parse(output)).toEqual({ config: 'EPERM', hook: 'EPERM', moveGit: 'EPERM', moveParent: 'EPERM', removeParent: 'EPERM', ownFile: 'ok' });
+    expect(fs.readFileSync(path.join(gitDir, 'config'), 'utf8')).toBe('[core]\n');
+    expect(fs.existsSync(path.join(gitDir, 'hooks', 'pre-commit'))).toBe(false);
   });
 });
 

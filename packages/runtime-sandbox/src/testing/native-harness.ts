@@ -120,8 +120,8 @@ export async function init(connection: Connection, options: Message, credentials
 }
 
 /** Opens the attempt's place and waits until it is ready, or failed. */
-export async function openPlace(connection: Connection, at: Place, { op = newOp(), tool, credentials = {} }: { op?: string; tool?: string; credentials?: Record<string, string> } = {}): Promise<{ accepted: Message; ready: Message }> {
-  connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, ...(tool && { tool }), credentials, view: { worktree: at.worktree, readonly: [at.git, at.dotGit], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+export async function openPlace(connection: Connection, at: Place, { op = newOp(), tool, credentials = {}, readonly = [at.git, at.dotGit] }: { op?: string; tool?: string; credentials?: Record<string, string>; readonly?: string[] } = {}): Promise<{ accepted: Message; ready: Message }> {
+  connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, ...(tool && { tool }), credentials, view: { worktree: at.worktree, readonly, result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
   const accepted = await connection.next((message) => message.op === op && (message.event === 'accepted' || message.event === 'failed'));
   const ready = accepted.event === 'failed' ? accepted : await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
 
