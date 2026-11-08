@@ -127,8 +127,8 @@ ${fields}`;
 
   /** The prompt every tool receives for `text`, with the result instruction the adapter adds. */
   const prompt = (text: string) => expect.stringMatching(new RegExp(`^${text.replaceAll('.', '\\.')}\\n\\nWrite the workflow result as JSON to .+result\\.json\\. Use this shape`, 's'));
-  /** Claude's allow rule for the result file, and only it. */
-  const resultGrant = expect.stringMatching(/^--allowedTools=Edit\(\/.+\/out\/result\.json\)$/);
+  /** Claude's allow rule for the attempt's out/ directory, which holds the result file, and only it. */
+  const resultGrant = expect.stringMatching(/^--allowedTools=Edit\(\/.+\/attempts\/[^/]+\/out\/\*\*\)$/);
 
   it('launches claude with --model and --effort of the alias for claude', async () => {
     const { argv, run } = await runOn('claude', oneStep('    model: strong\n'));

@@ -267,8 +267,10 @@ describe('local tool adapter', () => {
 
   // Claude's default mode asks before every write, so an attended step asked for this one and an unattended one failed.
   // CodeBuddy takes the same --allowedTools rule (codebuddy.ai/docs/cli/iam: `Edit(//abs/path)`).
-  it.each([['headless', 'claude', false], ['interactive', 'claude', true], ['headless', 'codebuddy', false], ['interactive', 'codebuddy', true]] as const)('lets %s %s write the result file, and only it, without asking', async (_, tool, interactive) => {
-    const resultPath = path.join(os.tmpdir(), `teamai-workflow-grant-${tool}-${String(interactive)}-${Date.now()}.json`);
+  // The result file's directory is the attempt's out/, where the step also leaves the evidence archived with its session.
+  it.each([['headless', 'claude', false], ['interactive', 'claude', true], ['headless', 'codebuddy', false], ['interactive', 'codebuddy', true]] as const)('lets %s %s write in the result file\'s directory, and only there, without asking', async (_, tool, interactive) => {
+    const out = path.join(os.tmpdir(), `teamai-workflow-grant-${tool}-${String(interactive)}-${Date.now()}`);
+    const resultPath = path.join(out, 'result.json');
     files.push(resultPath);
     const spawnTool = vi.fn(() => child(interactive ? '' : claudeStream('claude-sonnet', { result: JSON.stringify({ ok: true }) }))) as unknown as ToolSpawn;
     const adapter = createLocalToolAdapter(spawnTool, () => tool);
@@ -278,7 +280,7 @@ describe('local tool adapter', () => {
 
     const args = vi.mocked(spawnTool).mock.calls[0]?.[1] ?? [];
     // One argument: the flag is variadic, so a separate value would take the interactive prompt after it as a rule too.
-    expect(args).toContain(`--allowedTools=Edit(/${resultPath})`);
+    expect(args).toContain(`--allowedTools=Edit(/${out}/**)`);
     expect(interactive ? args.at(-1) : args[args.indexOf('-p') + 1]).toContain('Plan.');
     expect(args).not.toContain('--permission-mode');
     expect(args).not.toContain('--dangerously-skip-permissions');

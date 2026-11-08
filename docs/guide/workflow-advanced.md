@@ -2035,7 +2035,7 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | --- | --- |
 | `step`, `tool` | The step and the tool to start the agent on, one of your `can.tools` |
 | `model` | `name` and optional `effort` to launch on: the step's, or else its agent definition's; absent means the tool's default |
-| `prompt`, `result` | The whole prompt, and the file the agent writes the result to. Let the agent write that one file without asking, as teamai's own launch does: for Claude, `--allowedTools=Edit(/<result>)`. Change no mode for it |
+| `prompt`, `result` | The whole prompt, and the file the agent writes the result to. Let the agent write in that file's directory without asking, as teamai's own launch does: for Claude, `--allowedTools=Edit(/<result's directory>/**)`. The step leaves there the files archived with its session as its evidence. Change no mode for it |
 | `resume` | A session id of the same tool to continue, for a later pass. Say `"resumed":true` in `finished` when the agent continued it. Leave it out, or say `false`, when you started a new session, and teamai does not link the new session to the old one |
 | `permissions` | `approval-required`, or `unattended` when your `can.unattended` took such a step |
 | `interactive` | `true` when a person works in the step; only a runtime with `can.hitl` gets one |
