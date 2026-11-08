@@ -68,6 +68,9 @@ async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awa
     if (!offered.ok) return fleetFailure(offered.error);
   }
 
+  // Staleness counts on this machine's clock, from when it last saw the record change: a member's clock may be off.
+  let seen: { write: string; at: number } | undefined;
+
   for (;;) {
     if (signal.aborted) return stopped(lease.step, pool);
     const read = await readAttemptRecord(config, run, attempt);
@@ -86,7 +89,9 @@ async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awa
 
     if (record?.state === 'expired') return gone(record, { config, run, root, dir, ref, staleAfterMs });
 
-    if (record?.state === 'claimed' && Date.now() - Date.parse(record.progressAt) > staleAfterMs) {
+    if (record !== undefined && record.write !== seen?.write) seen = { write: record.write, at: Date.now() };
+
+    if (record?.state === 'claimed' && seen !== undefined && Date.now() - seen.at > staleAfterMs) {
       const expired = await expireClaim(config, record);
 
       // The member wrote meanwhile: it is still there.
