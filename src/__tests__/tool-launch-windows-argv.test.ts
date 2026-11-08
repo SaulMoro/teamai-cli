@@ -162,6 +162,7 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, 'claude'), 'npm\'s sh shim, which cmd.exe cannot start\n');
     fs.writeFileSync(path.join(bin, 'claude.cmd'), NPM_CMD_SHIM);
+    fs.copyFileSync(path.join(dir, 'argv.js'), path.join(bin, 'argv.js'));
     const child = spawnCommand('claude', [PROMPT, ...NASTY_ARGS], { cwd: dir, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ''}` }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
 
@@ -179,6 +180,7 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, 'claude'), 'npm\'s sh shim, which cmd.exe cannot start\n');
     fs.writeFileSync(path.join(bin, 'claude.cmd'), NPM_CMD_SHIM);
+    fs.copyFileSync(path.join(dir, 'argv.js'), path.join(bin, 'argv.js'));
 
     const run = await runTool({ executable: 'claude', args: [PROMPT, ...NASTY_ARGS], cwd: dir, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ''}` }, stdin: '', timeoutMs: 30_000, detached: false });
 
