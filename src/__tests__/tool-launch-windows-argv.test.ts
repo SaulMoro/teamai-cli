@@ -156,10 +156,11 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
     expect(Printed.parse(JSON.parse(stdout))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
   });
 
-  it('finds a bare name on the child\'s PATH, as env exec passes it, and delivers its arguments verbatim', async () => {
+  it('finds the .cmd shim of a bare name on the child\'s PATH, past npm\'s extensionless sh shim, and delivers its arguments verbatim', async () => {
     const bin = path.join(dir, 'npm-global');
 
     fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'claude'), 'npm\'s sh shim, which cmd.exe cannot start\n');
     fs.writeFileSync(path.join(bin, 'claude.cmd'), NPM_CMD_SHIM);
     const child = spawnCommand('claude', [PROMPT, ...NASTY_ARGS], { cwd: dir, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ''}` }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
