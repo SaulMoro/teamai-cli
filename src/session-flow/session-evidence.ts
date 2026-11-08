@@ -22,11 +22,17 @@ const LISTED_TYPES = new Map(Object.entries({
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.pdf': 'application/pdf', '.zip': 'application/zip',
 }));
 
+/** A file's path inside the `out/` directory, `/`-separated: one that would leave the directory it is written to never parses. */
+const EvidencePathSchema = z.string().min(1).refine(
+  (value) => !value.includes('\\') && value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
+  'expected a relative path inside the out/ directory',
+);
+
 const EvidenceFileSchema = z.discriminatedUnion('kind', [
   /** A text file, masked, cut to what the caps leave of it. `size` is the file's own, in bytes. */
-  z.object({ kind: z.literal('text'), path: z.string().min(1), type: z.string(), size: z.number().int().nonnegative(), text: z.string(), cut: z.boolean() }).strict(),
+  z.object({ kind: z.literal('text'), path: EvidencePathSchema, type: z.string(), size: z.number().int().nonnegative(), text: z.string(), cut: z.boolean() }).strict(),
   /** A file whose content stays on the machine that ran the step. */
-  z.object({ kind: z.literal('listed'), path: z.string().min(1), type: z.string(), size: z.number().int().nonnegative(), sha256: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
+  z.object({ kind: z.literal('listed'), path: EvidencePathSchema, type: z.string(), size: z.number().int().nonnegative(), sha256: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
 ]);
 
 export const ArchivedEvidenceSchema = z.object({ version: z.literal(1), files: z.array(EvidenceFileSchema) }).strict();
@@ -134,7 +140,8 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
     files.push({ kind: 'listed', path: mask(name), type: textType ?? LISTED_TYPES.get(extension) ?? 'application/octet-stream', size, sha256: await sha256Of(file) });
   }
 
-  return { version: 1, files };
+  // What leaves for the archive parses as what the archive reads back, or nothing leaves.
+  return ArchivedEvidenceSchema.parse({ version: 1, files });
 }
 
 export const SessionEvidence = { collect } as const;

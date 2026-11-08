@@ -15,7 +15,10 @@ import { syncScorerDefinitions } from '../scorers/cache.js';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { FinishedSessions } from '../session-flow/finished-sessions.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
-import { judgeSession } from '../session-flow/session-work.js';
+import { judgeSession, writeSessionEvidence } from '../session-flow/session-work.js';
+import type { ArchivedEvidence } from '../session-flow/session-evidence.js';
+import { parseScorer } from '../scorers/definition.js';
+import type { Rubrics } from '../scorers/evidence.js';
 import { redact } from '@teamai/shared/redact';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 
@@ -182,5 +185,36 @@ describe('the transcript a judge reads', () => {
 
     expect(judged.body).not.toContain('w0rd');
     expect(judged.body).toContain('<REDACTED:DB_PASSWORD>');
+  });
+});
+
+describe('the evidence a step left beside a pushed session', () => {
+  const parsed = parseScorer('quality.md', SESSION_SCORER);
+  if (!parsed.ok) throw new Error('the scorer does not parse');
+  const rubrics: Rubrics = [parsed.definition];
+
+  it('is written for the judge as masked text files, with every file listed in evidence.json and the text fenced in the prompt', async () => {
+    const session: Session = {
+      sessionId: SESSION, title: 'check', cwd: '/tmp/proj', platform: 'claude-code', createdAt: NOW, updatedAt: NOW,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Check the page.' }], timestamp: NOW }],
+    };
+    const evidence: ArchivedEvidence = { version: 1, files: [
+      { kind: 'text', path: 'logs/check.log', type: 'text/plain', size: 30, text: 'checked with s3cr3t-value', cut: false },
+      { kind: 'listed', path: 'screen.png', type: 'image/png', size: 4, sha256: 'b'.repeat(64) },
+    ] };
+    const judged = judgeSession({ platform: 'claude-code', found: { session }, captures: [], mask: (text) => text.split('s3cr3t-value').join('<REDACTED:KEY>'), evidence });
+    const dir = path.join(root, 'evidence-dir');
+
+    await writeSessionEvidence(dir, judged, rubrics);
+
+    expect(fs.readFileSync(path.join(dir, 'evidence', 'logs', 'check.log'), 'utf8')).toBe('checked with <REDACTED:KEY>');
+    expect(fs.existsSync(path.join(dir, 'evidence', 'screen.png'))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'evidence.json'), 'utf8')).evidence).toEqual([
+      { kind: 'text', path: 'evidence/logs/check.log', type: 'text/plain', size: 30, cut: false },
+      { kind: 'listed', path: 'screen.png', type: 'image/png', size: 4, sha256: 'b'.repeat(64) },
+    ]);
+    const prompt = fs.readFileSync(path.join(dir, 'prompt.md'), 'utf8');
+    expect(prompt).toContain('## evidence/logs/check.log\n\nchecked with <REDACTED:KEY>');
+    expect(prompt).not.toContain('s3cr3t-value');
   });
 });

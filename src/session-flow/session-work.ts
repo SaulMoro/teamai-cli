@@ -31,6 +31,7 @@ import { redact } from '@teamai/shared/redact';
 import { AgentSession, sessionKey } from './agent-session.js';
 import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
+import type { ArchivedEvidence } from './session-evidence.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 
 /** `value` with `mask` applied to each string in it, object keys included. */
@@ -147,12 +148,20 @@ export function firstPromptOnly(found: { session: Session }): PromptOnlyRead {
   return { session: { ...session, messages: first && typed ? [{ ...first, content: typed }] : [] }, subagents: { status: 'read', agents: [] } };
 }
 
+/**
+ * A file of the evidence the session's step left, as `evidence.json` lists it: a text file by its path in the evidence
+ * directory, a listed one, whose content never left the machine that ran the step, by its path there.
+ */
+export type StepEvidenceListing = { kind: 'text'; path: string; type: string; size: number; cut: boolean } | { kind: 'listed'; path: string; type: string; size: number; sha256: string };
+
 /** A session as one read gives it to a judge. In memory only: its body is the session's redacted text. */
 export interface JudgedSession {
   subject: SessionSubject;
   /** The redacted transcript and its subagents', kept to the evidence cap with the evidence framing. */
   body: string;
-  manifest: { subject: SessionSubject; kind: 'session'; gaps: EvidenceGap[]; skills?: SkillsEvidence };
+  /** The text files of the evidence its step left, masked, by their path in the evidence directory. */
+  stepEvidence: Array<{ path: string; text: string }>;
+  manifest: { subject: SessionSubject; kind: 'session'; gaps: EvidenceGap[]; skills?: SkillsEvidence; evidence?: StepEvidenceListing[] };
   context: SessionLabelContext;
   /** The owning scope's mask: the rubric prompt goes through it too, since a scorer may quote a team secret. */
   mask: (text: string) => string;
@@ -162,13 +171,15 @@ export interface JudgedSession {
  * Reads `found` for a judge once: its transcript with its subagents', its first prompt, the agent its captures agree on
  * with the one model its messages name, and the team skills it used, all redacted with `mask`.
  */
-export function judgeSession({ platform, found, captures, mask, agent: archived }: {
+export function judgeSession({ platform, found, captures, mask, agent: archived, evidence }: {
   platform: string;
   found: { session: Session; subagents?: SubagentsRead };
   captures: readonly SessionCapture[];
   mask: (text: string) => string;
   /** What a pushed session ran as, as its archive records it: it has no captures here. */
   agent?: AgentObservation;
+  /** The evidence its step left, as the archive keeps it beside a pushed session. */
+  evidence?: ArchivedEvidence;
 }): JudgedSession {
   const { session } = found;
   const transcript = judgedTranscript(found, { session: Number.POSITIVE_INFINITY, subagent: Number.POSITIVE_INFINITY }, mask);
@@ -182,6 +193,9 @@ export function judgeSession({ platform, found, captures, mask, agent: archived 
   };
 
   if ('skills' in skills) manifest.skills = skills.skills;
+  const step = stepEvidenceOf(evidence, mask);
+
+  if (evidence) manifest.evidence = step.listing;
 
   const framing = `## evidence.json\n\n${JSON.stringify(manifest)}\n\n## transcripts/session.md\n\n`.length;
   const agent = archived ?? SessionCaptures.agentOf(captures, SessionCaptures.reportedModelOf(session));
@@ -195,6 +209,7 @@ export function judgeSession({ platform, found, captures, mask, agent: archived 
   return {
     subject,
     body: keepEnds(mask(transcript.body), EVIDENCE_MAX_CHARS - framing),
+    stepEvidence: step.files,
     manifest,
     context,
     mask,
@@ -202,12 +217,44 @@ export function judgeSession({ platform, found, captures, mask, agent: archived 
 }
 
 /**
+ * `evidence` as a judge reads it, each text and path masked with `mask`: its text files under `evidence/`, and every
+ * file listed for `evidence.json`.
+ */
+function stepEvidenceOf(evidence: ArchivedEvidence | undefined, mask: (text: string) => string) {
+  const files: JudgedSession['stepEvidence'] = [];
+  const listing: StepEvidenceListing[] = [];
+
+  for (const file of evidence?.files ?? []) {
+    switch (file.kind) {
+      case 'text': {
+        const at = `evidence/${mask(file.path)}`;
+        files.push({ path: at, text: mask(file.text) });
+        listing.push({ kind: 'text', path: at, type: file.type, size: file.size, cut: file.cut });
+        break;
+      }
+
+      case 'listed':
+        listing.push({ kind: 'listed', path: mask(file.path), type: file.type, size: file.size, sha256: file.sha256 });
+        break;
+      default: {
+        const unhandled: never = file;
+
+        return unhandled;
+      }
+    }
+  }
+
+  return { files, listing };
+}
+
+/**
  * Writes the evidence of one judge call of `rubrics` on `judged` into `dir`, `.ready` last, with `files`, which its
- * questions pinned to be read beside the transcript, by their path in `dir`, masked as the transcript is.
+ * questions pinned to be read beside the transcript, by their path in `dir`, masked as the transcript is, and the text
+ * files of the evidence its step left.
  */
 export async function writeSessionEvidence(dir: string, judged: JudgedSession, rubrics: Rubrics, files: Readonly<Record<string, string>> = {}): Promise<void> {
-  const { body, manifest, mask } = judged;
-  const pinned = Object.entries(files).map(([file, text]) => ({ title: file, body: mask(text) }));
+  const { body, manifest, mask, stepEvidence } = judged;
+  const pinned = [...Object.entries(files).map(([file, text]) => ({ title: file, body: mask(text) })), ...stepEvidence.map((file) => ({ title: file.path, body: file.text }))];
 
   await writeEvidence(dir, async (tmp) => {
     await fs.mkdir(path.join(tmp, 'transcripts'));

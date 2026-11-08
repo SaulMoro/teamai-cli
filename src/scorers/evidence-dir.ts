@@ -113,7 +113,12 @@ async function sessionRead(attempt: ScoreAttempt, subject: Exclude<Subject, { ki
 
   if ('error' in pushed) return refused(pushed.error.code, pushed.error.message);
   const envSecrets = await knownSecrets(pushed.config);
-  const read = { platform: pushed.platform, found: control ? firstPromptOnly(pushed.found) : pushed.found, captures: [], mask: (text: string) => redact(text, { envSecrets }) };
+
+  // The control reads the first prompt alone, so none of the step's evidence either.
+  const read = {
+    platform: pushed.platform, found: control ? firstPromptOnly(pushed.found) : pushed.found, captures: [], mask: (text: string) => redact(text, { envSecrets }),
+    ...(pushed.evidence && !control && { evidence: pushed.evidence }),
+  };
 
   return { ok: true, judged: judgeSession(pushed.agent ? { ...read, agent: pushed.agent } : read) };
 }

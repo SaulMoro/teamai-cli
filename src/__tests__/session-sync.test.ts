@@ -420,6 +420,17 @@ describe('evidence archived beside a session', () => {
     expect(fs.readdirSync(path.join(repoDirOf(identity), 'alice'))).toEqual([]);
   });
 
+  it('refuses archived evidence whose file path leaves the directory it is written to', async () => {
+    const mgr = new SyncManager(repoRoot);
+    const name = named(written(await mgr.saveSession(mkSession(), mkMeta(), { evidence: evidence('first') })));
+    const file = path.join(repoDirOf(identity), 'alice', `${name}.evidence.json`);
+
+    for (const escaping of ['../../outside.log', '/etc/outside.log', 'logs/../../outside.log', 'logs\\..\\outside.log']) {
+      fs.writeFileSync(file, JSON.stringify({ version: 1, files: [{ kind: 'text', path: escaping, type: 'text/plain', size: 1, text: 'x', cut: false }] }));
+      expect(() => mgr.loadEvidence(identity, name, 'alice'), escaping).toThrow(/does not hold evidence teamai archived/);
+    }
+  });
+
   it('holds none for a session pushed without evidence', async () => {
     const mgr = new SyncManager(repoRoot);
     const name = named(written(await mgr.saveSession(mkSession(), mkMeta())));
