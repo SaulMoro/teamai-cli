@@ -270,6 +270,34 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
 
     expect(end).toMatchObject({ kind: 'lost' });
   });
+
+  it('leaves the exec at a stop on a runtime whose execs go on without teamai, and a restarted teamai sends it again by the same id, cancelling nothing', async () => {
+    const sent: string[] = [];
+    let cancels = 0;
+    const seeing = runtimeSeeing([running]);
+    const runtime: StepRuntime = {
+      ...seeing,
+      isExecReconnected: true,
+      exec: async (request, events) => {
+        sent.push(request.op);
+
+        return seeing.exec(request, events);
+      },
+      cancel: async () => { cancels += 1; },
+    };
+    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
+    const left = before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
+    await seeing.received;
+
+    await before.stop();
+
+    expect(await left).toEqual({ kind: 'left' });
+    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toBe(sent[0]);
+    expect(cancels).toBe(0);
+  });
 });
 
 describe('an open that failed, or that a killed teamai left unanswered', () => {
