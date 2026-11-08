@@ -150,7 +150,12 @@ export interface ServeOptions {
    * Connects to the environment for a run in `mode`, signing in when it has no valid sign-in. `recover`
    * signs in never: it only stops what an earlier run left. A failure names why and what the person does about it.
    */
-  connect(how: { mode: RuntimeMode; access: SignInAccess }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  connect(how: { mode: WorkMode | 'recover'; access: SignInAccess }): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  /**
+   * Whether a run could start now with `access`, for a `check` init: T3 Code answers, and teamai keeps a sign-in that
+   * grants it or finds a `t3` command to sign in with. It signs in never, runs no command and writes nothing.
+   */
+  canStart(how: { access: SignInAccess }): Promise<{ ok: true } | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
   /** T3 Code's data directory, where the member's settings are. */
@@ -882,16 +887,19 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    if (request.mode === 'check') {
-      write({ type: 'init', ok: false, error: { code: 'check_unsupported', message: 'This T3 runtime does not answer a check yet.' } });
-
-      return;
-    }
-
     const parsed = parseOptions(request.options);
 
     if (!parsed.ok) {
       write({ type: 'init', ok: false, error: parsed.failure });
+
+      return;
+    }
+
+    // A check connects to nothing: it runs no step, so it adds no project or provider instance and starts no sign-in.
+    if (request.mode === 'check') {
+      const can = await options.canStart({ access: parsed.options.runtime_mode === 'full-access' ? 'full-access' : 'auto' });
+
+      write(can.ok ? { type: 'init', ok: true, prompt: true, can: { exec: false, env: false } } : { type: 'init', ok: false, error: can.error });
 
       return;
     }

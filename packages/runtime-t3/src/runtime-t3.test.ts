@@ -218,6 +218,65 @@ describe('teamai-runtime-t3', () => {
       expect(t3.commandRuns()).toEqual([]);
     });
 
+    // describe sends `check` from a T3 thread to ask whether a run could start there now, and opens nothing after it.
+    describe('in check mode', () => {
+      const couldStart = { type: 'init', ok: true, prompt: true, can: { exec: false, env: false } };
+      const check = (runtime: Connection): void => runtime.send({
+        type: 'init', protocol: 1, mode: 'check', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: path.join(dir, 'acme-claude') }],
+      });
+
+      it('answers that a run could start on the sign-in it keeps, asking T3 nothing and writing none of its settings', async () => {
+        signIn(t3);
+        t3.settings({ providerInstances: {} });
+        const settings = path.join(t3.t3Home, 'userdata', 'settings.json');
+        const before = fs.readFileSync(settings);
+        const runtime = start();
+
+        check(runtime);
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toEqual(couldStart);
+        expect(t3.calls()).toEqual([]);
+        expect(t3.commandRuns()).toEqual([]);
+        expect(fs.readFileSync(settings).equals(before)).toBe(true);
+      });
+
+      it('answers that a run could start with no sign-in kept when there is a t3 command to sign in with, and runs it never', async () => {
+        const runtime = start();
+
+        check(runtime);
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toEqual(couldStart);
+        expect(t3.commandRuns()).toEqual([]);
+        expect(t3.pairingCodes()).toEqual([]);
+        expect(fs.existsSync(credentialsFile(t3.home))).toBe(false);
+      });
+
+      it('fails login_required, saying how to sign in, with no sign-in kept and no t3 command', async () => {
+        const runtime = start({ PATH: PATH_WITHOUT_T3 });
+
+        check(runtime);
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
+          type: 'init', ok: false,
+          error: { code: 'login_required', message: expect.stringContaining('Start any workflow with --driver t3 from a terminal on this machine once') },
+        });
+        expect(t3.calls()).toEqual([]);
+      });
+
+      it('fails t3_unavailable when T3 Code is not running', async () => {
+        signIn(t3);
+        await t3.stop();
+        fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
+        const runtime = start();
+
+        check(runtime);
+
+        expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
+          type: 'init', ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, or run `t3 serve`, then start the workflow again.' },
+        });
+      });
+    });
+
     // T3 issues no refresh token, so a credential about to expire is replaced by signing in again.
     it('signs in again with no page when its sign-in has expired, in an unattended run, and keeps the new credential', async () => {
       signIn(t3, 'fake-t3-token-expired-0000000000', 60);

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RuntimeMessage } from '@teamai/runtime-protocol';
+import type { RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/tool-core/home';
 import { z } from 'zod';
 import { addedProjects } from './added-projects.js';
@@ -47,7 +47,8 @@ const write = (message: RuntimeMessage): void => {
   if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
 };
 
-const connect: ServeOptions['connect'] = async (how) => {
+/** The MCP endpoint of the T3 Code server on this machine when it answers at all, else why it is not reached. */
+async function reach(): Promise<{ ok: true; resource: URL } | { ok: false; error: RuntimeFailure }> {
   const resource = localEndpoint();
 
   if (!resource) return { ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, or run `t3 serve`, then start the workflow again.' } };
@@ -58,6 +59,30 @@ const connect: ServeOptions['connect'] = async (how) => {
   } catch {
     return { ok: false, error: { code: 't3_unavailable', message: `T3 Code at ${resource.origin} does not answer. Open T3 Code, or run \`t3 serve\`, then start the workflow again.` } };
   }
+
+  return { ok: true, resource };
+}
+
+const canStart: ServeOptions['canStart'] = async ({ access }) => {
+  const reached = await reach();
+
+  if (!reached.ok) return reached;
+  const { resource } = reached;
+
+  // An unattended run signs in through the t3 command when it keeps no sign-in; the check only looks for that command.
+  if (validToken(state, resource.href, access) || t3Cli.locate() !== undefined) return { ok: true };
+
+  return {
+    ok: false,
+    error: { code: 'login_required', message: `teamai has no valid T3 Code sign-in for ${resource.origin} and found no t3 command to sign in through. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again.` },
+  };
+};
+
+const connect: ServeOptions['connect'] = async (how) => {
+  const reached = await reach();
+
+  if (!reached.ok) return reached;
+  const { resource } = reached;
 
   // A run signs in again when its kept sign-in does not grant the access it needs.
   const { access } = how;
@@ -106,6 +131,7 @@ await serve({
   write,
   journal: journal(path.join(state, 'places')),
   connect,
+  canStart,
   t3Home,
   t3UserHome: t3UserHomeOf(t3Home, getUserHome()),
   home: getUserHome(),

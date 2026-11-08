@@ -39,6 +39,8 @@ export interface T3Command {
    * `name` is the subcommand, as the reason says it.
    */
   run(input: { name: string; args: string[]; signal?: AbortSignal }): Promise<string>;
+  /** The first `t3` command `run` would try that exists and may be run, without running it; none when there is none. */
+  locate(): string | undefined;
 }
 
 /** The `t3` command: `$T3CODE_CLI_PATH`, then `t3` on PATH, then `<T3 home>/bin/t3`, the first one there is. */
@@ -61,7 +63,20 @@ export function t3Command(env: NodeJS.ProcessEnv, t3Home: string): T3Command {
     });
   });
 
+  const runnable = (file: string): boolean => {
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+
+  const onPath = (env['PATH'] ?? '').split(path.delimiter).filter((dir) => dir !== '').map((dir) => path.join(dir, 't3'));
+
   return {
+    locate: () => [...(env['T3CODE_CLI_PATH'] ? [env['T3CODE_CLI_PATH']] : []), ...onPath, atHome].find(runnable),
     async run({ name, args, signal }) {
       for (const command of candidates) {
         const ran = await runOne({ command, name, args, signal });
