@@ -152,9 +152,10 @@ export interface WorkflowClient {
   resume(runId: RunId, options: { lock: RunLock; claim: 'none' | ResumeClaim; takeover: Pick<InvokeCaller, 'mode' | 'confirmed'>; checkout: string; ceiling: number; can: DriverCan; tool?: string }): Promise<RunReadied>;
   /**
    * Run `runId` as it stands before `resume` changes anything, as `resumeRefusal` reads it: its own definition described
-   * as `describe` does, and its status. Undefined when this machine cannot read it.
+   * as `describe` does, and its status; `absent` when neither this machine nor, when `published`, teamai-reports holds
+   * it; or why it could not be read.
    */
-  carried(runId: RunId, options: { published: boolean; claim: boolean; ceiling: number; can: DriverCan }): Promise<{ description: WorkflowDescription; status: RunStatus } | undefined>;
+  carried(runId: RunId, options: { published: boolean; claim: boolean; ceiling: number; can: DriverCan }): Promise<CarriedRunView>;
   /** Why `caller` may not continue run `runId`, by a resume or a takeover, as `resumeRefusal` decides it. */
   resumeRefusal(runId: RunId, options: { caller: InvokeCaller; published: boolean; claim?: boolean }): Promise<WorkflowFailure | undefined>;
 }
@@ -182,6 +183,12 @@ function readiedHere(config: LocalConfig, runId: RunId, { claim, takeover, check
     }
   }
 }
+
+/** Run a resume would take, as it stands before the claim, as `WorkflowClient.carried` reads it. */
+export type CarriedRunView =
+  | { kind: 'carried'; description: WorkflowDescription; status: RunStatus }
+  | { kind: 'absent' }
+  | { kind: 'failed'; failure: WorkflowFailure };
 
 /**
  * What `resume` made of a run: ready to drive here, with `installed` true when the published state replaced this
@@ -779,10 +786,12 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
     carried: async (runId, { published, claim, ceiling, can }) => {
       const carried = await carriedRun(config, runId, { published, claim });
 
-      if (!carried.ok || carried.value === undefined) return undefined;
+      if (!carried.ok) return { kind: 'failed', failure: { code: carried.error.code, message: carried.error.message } };
+
+      if (carried.value === undefined) return { kind: 'absent' };
       const { definition, workflows, source, status } = carried.value;
 
-      return { description: describeWorkflow({ definition, source, workflows, ceiling, can, allow: config.workflows?.allow ?? {}, env: env.facts }), status };
+      return { kind: 'carried', description: describeWorkflow({ definition, source, workflows, ceiling, can, allow: config.workflows?.allow ?? {}, env: env.facts }), status };
     },
     resumeRefusal: (runId, { caller, published, claim }) => resumeRefusal(config, runId, caller, { published, claim }),
   };
