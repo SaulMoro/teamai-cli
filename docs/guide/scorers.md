@@ -247,7 +247,7 @@ Names only: a value that is not a skill name, such as a path, is dropped. A repo
 
 ```console
 $ teamai score --run r5863… --scorer review-quality                                        # the one step that lists it, latest succeeded pass
-ℹ Run rd4894… started. If it stops before it ends, continue it with: teamai workflow resume rd4894…
+ℹ Run rd4894… started. If it stops before it ends, continue it here with: teamai workflow resume rd4894…, or hand it to another machine with: teamai workflow publish rd4894…
 ℹ review-quality: good (score 1, passed). Reasoning: ~/.teamai/scores/reasoning/d3ce….md
 $ teamai score --run r3f9… --step review --pass 2 --scorer review-quality --driver none   # any driver's workflow next takes it
 ```
@@ -364,7 +364,7 @@ The teamai-score run of an automatic pass fails it with `check_could_not_run` an
 $ teamai score --session 7c1e… --scorer review-quality          # in your own terminal
 ℹ Scoring claude-code session 7c1e… in /work/app
 ℹ First prompt: Add retries to the client
-ℹ Run r2b7… started. If it stops before it ends, continue it with: teamai workflow resume r2b7…
+ℹ Run r2b7… started. If it stops before it ends, continue it here with: teamai workflow resume r2b7…, or hand it to another machine with: teamai workflow publish r2b7…
 ℹ review-quality: bad (score 0, did not pass). Reasoning: ~/.teamai/scores/reasoning/9f2c….md
 ℹ To share what went wrong, ask your agent to read ~/.teamai/scores/reasoning/9f2c….md and share it with the team (teamai contribute --session-id 7c1e…).
 $ teamai score --session 7c1e… --source codex --scorer review-quality --push
@@ -388,7 +388,7 @@ The agent just said the retry loop is fixed, and it is not. In your own terminal
 $ teamai score --session 7c1e… --scorer review-quality --label missed-bug --push
 ℹ Labelling claude-code session 7c1e… in /work/app
 ℹ First prompt: Fix the retry loop in sync.ts
-ℹ Run rfc5… started. If it stops before it ends, continue it with: teamai workflow resume rfc5…
+ℹ Run rfc5… started. If it stops before it ends, continue it here with: teamai workflow resume rfc5…, or hand it to another machine with: teamai workflow publish rfc5…
 ℹ review-quality: missed-bug (score 0, did not pass), by hand. No judge ran.
 ```
 
@@ -420,7 +420,7 @@ $ teamai score --session 7c1e… --scorer review-quality --label good       # in
 $ teamai score --run r24df… --step review --pass 1 --scorer review-quality --label missed-bug
 {"error":{"code":"invalid_arguments","message":"--label labels a session. To label pass 1 of step review of run r24df… by hand, run in your own terminal: teamai workflow start teamai-score --driver local --inputs '{\"subject\":\"run:r24df…:review:1\",\"scorers\":[\"review-quality\"],\"label\":\"missed-bug\",\"batch\":false,\"demand\":\"named\"}'"}}
 $ teamai workflow start teamai-score --driver local --inputs '{"subject":"run:r24df…:review:1","scorers":["review-quality"],"label":"missed-bug","batch":false,"demand":"named"}'
-ℹ Run re440… started. If it stops before it ends, continue it with: teamai workflow resume re440…
+ℹ Run re440… started. If it stops before it ends, continue it here with: teamai workflow resume re440…, or hand it to another machine with: teamai workflow publish re440…
 {"data":{"done":{"run":"re440…","outcome":"succeeded","outputs":{"labels":[{…,"outputs":{"labels":[{"scorer":"review-quality","label":"missed-bug","code":""}],"written":["9c41…"]}}]}},"cancelled":[]}}
 ```
 

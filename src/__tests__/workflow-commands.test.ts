@@ -431,7 +431,7 @@ steps:
     expect(started).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const done = started.data?.done;
     const runId = typeof done === 'object' && done !== null && 'run' in done ? String(done.run) : '';
-    expect(printed).toContainEqual({ line: expect.stringMatching(new RegExp(`Run ${runId} started\\. .*teamai workflow resume ${runId}$`)), ran: false });
+    expect(printed).toContainEqual({ line: expect.stringMatching(new RegExp(`Run ${runId} started\\. If it stops before it ends, continue it here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}$`)), ran: false });
     expect(fs.existsSync(path.join(work, 'ran.marker'))).toBe(true);
   });
 
@@ -1210,7 +1210,7 @@ steps:
 
   it('keeps --sandbox for a resume on this install, so the resume the start prints works as printed', async () => {
     const { config, runId, printed } = await started('sealed', sealed, { sandbox: true });
-    expect(printed).toContainEqual(expect.stringMatching(new RegExp(`continue it with: teamai workflow resume ${runId}$`)));
+    expect(printed).toContainEqual(expect.stringMatching(new RegExp(`continue it here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}$`)));
     fs.writeFileSync(path.join(process.cwd(), 'built'), '');
 
     await capture(() => workflowRetry(runId, 'build'));

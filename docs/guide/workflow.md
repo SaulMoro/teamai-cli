@@ -233,7 +233,7 @@ The run is stored in its owning scope's TeamAI data directory. `next`, `report`,
 
 ```text
 $ teamai workflow start build --driver local
-ℹ Run re907e4818f6db47b started. If it stops before it ends, continue it with: teamai workflow resume re907e4818f6db47b
+ℹ Run re907e4818f6db47b started. If it stops before it ends, continue it here with: teamai workflow resume re907e4818f6db47b, or hand it to another machine with: teamai workflow publish re907e4818f6db47b
 {"data":{"done":{"run":"re907e4818f6db47b","outcome":"failed","record":"published"},"cancelled":[]}}
 ✖ Step "test" failed: command exited with status 1: FAIL parseVersion handles a leading v: expected "1.2.0", got "v1.2.0"
 ℹ Retry it with teamai workflow retry re907e4818f6db47b test, then continue the run with teamai workflow resume re907e4818f6db47b
@@ -243,7 +243,7 @@ A limit of the whole run, such as its `timeout` or `budget`, fails no step. stde
 
 ```text
 $ teamai workflow start nightly-small --driver local --tools default=claude
-ℹ Run rdcfd8a2eb4ffe5ca started. If it stops before it ends, continue it with: teamai workflow resume rdcfd8a2eb4ffe5ca
+ℹ Run rdcfd8a2eb4ffe5ca started. If it stops before it ends, continue it here with: teamai workflow resume rdcfd8a2eb4ffe5ca, or hand it to another machine with: teamai workflow publish rdcfd8a2eb4ffe5ca
 {"data":{"done":{"run":"rdcfd8a2eb4ffe5ca","outcome":"failed","failure":{"code":"budget_exceeded","message":"workflow \"nightly-small\" spent 350 of its 300-token budget"}},"cancelled":[]}}
 ✖ Run rdcfd8a2eb4ffe5ca failed with budget_exceeded: workflow "nightly-small" spent 350 of its 300-token budget
 ```
@@ -266,7 +266,7 @@ teamai commits and pushes each step's work itself, with git hooks turned off, on
 
 ```text
 $ teamai workflow start fix-date --driver local
-ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it with: teamai workflow resume r7c1d2e3f4a5b6c7d --driver local
+ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it here with: teamai workflow resume r7c1d2e3f4a5b6c7d --driver local, or hand it to another machine with: teamai workflow publish r7c1d2e3f4a5b6c7d
 {"data":{"done":{"run":"r7c1d2e3f4a5b6c7d","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -337,7 +337,7 @@ Started on its own, the run opens the copy on `teamai/<run>/_run`. `review` read
 
 ```text
 $ teamai workflow start review-and-fix --driver local --tools default=claude
-ℹ Run r3f9a1c27d4e8b605 started. If it stops before it ends, continue it with: teamai workflow resume r3f9a1c27d4e8b605
+ℹ Run r3f9a1c27d4e8b605 started. If it stops before it ends, continue it here with: teamai workflow resume r3f9a1c27d4e8b605, or hand it to another machine with: teamai workflow publish r3f9a1c27d4e8b605
 {"data":{"done":{"run":"r3f9a1c27d4e8b605","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ℹ Run r3f9a1c27d4e8b605 left its changes on branch teamai/r3f9a1c27d4e8b605/_run. Bring them in with: git merge teamai/r3f9a1c27d4e8b605/_run
 ```
@@ -899,7 +899,7 @@ The job runs `build`, reaches `ship`, publishes the run offered on `teamai-repor
 
 ```console
 $ teamai workflow start release --driver local                 # in CI
-ℹ Run r6aa0e2c0927ff266 started. If it stops before it ends, continue it with: teamai workflow resume r6aa0e2c0927ff266
+ℹ Run r6aa0e2c0927ff266 started. If it stops before it ends, continue it here with: teamai workflow resume r6aa0e2c0927ff266, or hand it to another machine with: teamai workflow publish r6aa0e2c0927ff266
 ℹ Step "ship" needs a person, so run r6aa0e2c0927ff266 is offered on teamai-reports. A person continues it with: teamai workflow resume r6aa0e2c0927ff266 --claim
 {"data":{"handoff":{"run":"r6aa0e2c0927ff266","steps":["ship"],"resume":"teamai workflow resume r6aa0e2c0927ff266 --claim"}}}
 ```
@@ -1153,7 +1153,7 @@ teamai ships workflows a team gets without writing them:
 A command that starts a default workflow, such as `teamai recall promote <id>`, prints what the command always printed. It names its run only when it stops before the run ends, such as on Ctrl-C:
 
 ```text
-ℹ Run r706cf485d20bb53e is still open. Continue it with: teamai workflow resume r706cf485d20bb53e
+ℹ Run r706cf485d20bb53e is still open. Continue it here with: teamai workflow resume r706cf485d20bb53e, or hand it to another machine with: teamai workflow publish r706cf485d20bb53e
 ```
 
 A team file with the same name replaces a default:

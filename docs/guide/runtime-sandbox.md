@@ -60,7 +60,7 @@ teamai workflow start review --driver containers
 ```
 
 ```text
-ℹ Run r7c41d09e2b6a5f13 started. If it stops before it ends, continue it with: teamai workflow resume r7c41d09e2b6a5f13 --driver containers
+ℹ Run r7c41d09e2b6a5f13 started. If it stops before it ends, continue it here with: teamai workflow resume r7c41d09e2b6a5f13 --driver containers, or hand it to another machine with: teamai workflow publish r7c41d09e2b6a5f13
 {"data":{"done":{"run":"r7c41d09e2b6a5f13","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -217,7 +217,7 @@ teamai workflow start review --driver containers
 ```
 
 ```text
-ℹ Run ra0a53357b53c5ca7 started. If it stops before it ends, continue it with: teamai workflow resume ra0a53357b53c5ca7
+ℹ Run ra0a53357b53c5ca7 started. If it stops before it ends, continue it here with: teamai workflow resume ra0a53357b53c5ca7, or hand it to another machine with: teamai workflow publish ra0a53357b53c5ca7
 ℹ run:ra0a53357b53c5ca7:review:1: review-quality good (teamai-score run rabebd844f8554e81).
 {"data":{"done":{"run":"ra0a53357b53c5ca7","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```

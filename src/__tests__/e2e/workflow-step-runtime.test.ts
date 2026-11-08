@@ -278,7 +278,7 @@ Judge the review.
     const killed = await runCLI(['workflow', 'start', 'onecommand', '--driver', 'toyrecorded'], repo, { ...env(), RUNS_FILE: runs });
     expect(killed.signal, killed.stderr).toBe('SIGKILL');
     const runId = startedRun(killed);
-    expect(killed.stderr).toContain(`continue it with: teamai workflow resume ${runId}\n`);
+    expect(killed.stderr).toContain(`continue it here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}\n`);
 
     const resumed = await runCLI(['workflow', 'resume', runId], repo, { ...env(), RUNS_FILE: runs });
 

@@ -593,7 +593,7 @@ A matrix entry whose suite the pull request does not touch tries nothing and pas
 
 ```console
 $ teamai benchmark run fix-auth --sandbox
-ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it with: teamai workflow resume r38302f8e6a18c377
+ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it here with: teamai workflow resume r38302f8e6a18c377, or hand it to another machine with: teamai workflow publish r38302f8e6a18c377
 ```
 
 `benchmark run` plans the suite first, so a suite that cannot run leaves no run. It then starts the workflow `teamai-benchmark` with the suite's `timeout`, on the driver `--driver` names, else the one [`workflows.driver`](reference.md#member-settings) names, else the local driver, which drives it here.
