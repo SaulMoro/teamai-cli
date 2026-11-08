@@ -88,6 +88,25 @@ const BodySchema = z.object({
 export type SnapshotBody = z.infer<typeof BodySchema>;
 
 /**
+ * Which definitions a run executes, as another install finds them (`definitionsOf`): the run's workflow, a hash of its
+ * parsed definitions, and the team commit or teamai release that holds them. Never the definitions themselves.
+ */
+export const RunDefinitionSchema = BodySchema.pick({ name: true, sourceHash: true, definitionHash: true, teamRevision: true, origin: true });
+
+export type RunDefinition = z.infer<typeof RunDefinitionSchema>;
+
+/** Which definitions `run` executes, as a published run names them. */
+export function runDefinition(run: Pick<RunState, 'name' | 'sourceHash' | 'teamRevision' | 'origin' | 'definition' | 'workflows'>): RunDefinition {
+  const named: RunDefinition = { name: run.name, sourceHash: run.sourceHash, definitionHash: definitionHash(run.definition, run.workflows) };
+
+  if (run.teamRevision !== undefined) named.teamRevision = run.teamRevision;
+
+  if (run.origin !== undefined) named.origin = run.origin;
+
+  return named;
+}
+
+/**
  * What a publish says of the run beside its state: the business repository it works in, as `host/owner/repo`, and, while
  * it runs, that its owner offers it to whoever takes it next with `teamai workflow resume --next`. A claim drops the offer.
  */

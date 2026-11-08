@@ -11,10 +11,13 @@ import type { HandoffOwner } from '../../snapshot.js';
 import type { LocalConfig } from '../../../types.js';
 import { log } from '../../../utils/logger.js';
 import { startGroupedCommand } from '../../../tool-launch/process-stop.js';
-import { attemptRef, claimAttempt, finishAttempt, fleetFailure, listOffers, recordProgress, type Claimed, type FleetResult } from '../../fleet.js';
+import { retryCommand } from '../../engine.js';
+import { attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, listOffers, recordProgress, type Claimed, type FleetResult } from '../../fleet.js';
+import { definitionsOf, type Definitions } from '../../handoff.js';
 import { commandOutputs } from '../../protocol.js';
+import { parseStepPath } from '../../step-path.js';
 import { attemptDir, takeRunLock } from '../../store.js';
-import type { WorkflowEnvelope } from '../../types.js';
+import { workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../../types.js';
 import { git, hostGitEnv, keptOrigin, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../../worktree.js';
 
 /**
@@ -69,6 +72,12 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
     return { data: { ran: { run, attempt, step: lease.step, exit_code: ended.exitCode } } };
   };
 
+  const trusted = await trustedLease(config, claim);
+
+  if ('refused' in trusted) {
+    return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": ${trusted.refused} Once the owner ran teamai pull, ${retryCommand(run, lease.step)} offers it again.` });
+  }
+
   const fetched = await git(root, ['fetch', '--quiet', 'origin', ref]);
 
   if (fetched.code !== 0) return finish({ exitCode: 1, stderr: `The member could not fetch ${ref}: ${fetched.stderr.trim()}` });
@@ -93,9 +102,9 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
   };
 
   try {
-    const env = { ...process.env, ...lease.env };
+    const env = { ...process.env, ...trusted.env };
 
-    const command = startGroupedCommand({ command: lease.command, cwd: work, env, detached: process.platform !== 'win32', group: dir });
+    const command = startGroupedCommand({ command: trusted.command, cwd: work, env, detached: process.platform !== 'win32', group: dir });
     let gone: string | undefined;
     let beating: Promise<void> | undefined;
 
@@ -137,6 +146,54 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
   } finally {
     await git(root, ['worktree', 'remove', '--force', work]);
   }
+}
+
+/**
+ * The command and env the team's workflow defines for the step `claim` offers, its env rendered from the offer's values,
+ * or why this member does not run it. Anyone who can write to teamai-reports can write a record, so the member runs
+ * only what the definitions the run executes say, read from its own team repository, as a claimer of a published run
+ * does; a lease that says otherwise is refused, not corrected.
+ */
+async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ command: string; env: Record<string, string> } | { refused: string }> {
+  const { run, lease, definition, values } = claim;
+  const found = await definitionsOf(config, { run, ...definition });
+
+  if (!found.ok) return { refused: found.error.message };
+  const step = definedStep(found.value, lease.step);
+
+  if (step?.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
+
+  if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
+  const rendered = leaseEnv(step, values, run);
+
+  if ('error' in rendered) return { refused: `workflow "${definition.name}" ${rendered.error}.` };
+  const names = [...new Set([...Object.keys(rendered.env), ...Object.keys(lease.env)])];
+  const differs = names.filter((name) => rendered.env[name] !== lease.env[name]).sort();
+
+  if (differs.length > 0) return { refused: `the offer's env ${differs.join(', ')} differs from what workflow "${definition.name}" renders from the offer's values.` };
+
+  return { command: step.command, env: rendered.env };
+}
+
+/**
+ * The step at instance path `stepPath` in `definitions`, as `locateStep` finds it in a run: a `finally` step at the top, and
+ * nested workflows inline or by name. A workflow a `from` step admitted is in no definition, so it finds none there.
+ */
+function definedStep({ definition, workflows }: Definitions, stepPath: string): WorkflowStep | undefined {
+  const segments = parseStepPath(stepPath);
+  let steps = definition.finally?.some((step) => step.id === segments[0]?.id) ? definition.finally : definition.steps;
+
+  for (const [index, segment] of segments.entries()) {
+    const step = steps.find((item) => item.id === segment.id);
+
+    if (!step || index === segments.length - 1) return step;
+    const child = workflowRunBy({ workflows }, step, '');
+
+    if (!child) return undefined;
+    steps = child.steps;
+  }
+
+  return undefined;
 }
 
 /**

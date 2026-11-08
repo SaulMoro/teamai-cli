@@ -9,8 +9,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { getRepoIdentity } from '../../../session-flow/sync.js';
 import { readableReportsWorktree } from '../../../utils/reports-branch.js';
 import type { LocalConfig } from '../../../types.js';
-import { attemptRef, expireClaim, fleetFailure, lastGoneWork, markOffered, offerAttempt, readAttemptRecord, type Claimed, type FleetLease } from '../../fleet.js';
-import { installOwner, type AttemptId, type RunId } from '../../store.js';
+import { leaseContext } from '../../engine.js';
+import { attemptRef, expireClaim, fleetFailure, lastGoneWork, leaseValues, markOffered, offerAttempt, readAttemptRecord, type Claimed, type FleetLease } from '../../fleet.js';
+import { runDefinition } from '../../snapshot.js';
+import { installOwner, readRun, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { copyGit } from '../../place/place.js';
 import { git } from '../../worktree.js';
@@ -54,6 +56,14 @@ async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awa
     const repository = getRepoIdentity(root);
 
     if (repository === null) return { code: 'origin_unavailable', message: `${root} has no origin, so no fleet member can take step "${lease.step}". Add origin, or run the step on another runtime.` };
+    // A member renders the step itself from the run's definitions and these values; the lease it is checked against.
+    const state = await readRun(config, run);
+    const leased = state === 'missing' || state === 'corrupt' ? undefined : leaseContext(state, lease.step);
+
+    if (state === 'missing' || state === 'corrupt' || leased === undefined) return { code: 'run_unreadable', message: `Run ${run} has no definition for step "${lease.step}" here, so it was not offered to the fleet.` };
+    const values = leaseValues(leased.step, leased.context);
+
+    if ('error' in values) return { code: 'invalid_template', message: values.error };
     const resumed = await goOnFromGoneWork({ config, run, root, dir, step: lease.step });
 
     if (resumed) return resumed;
@@ -63,7 +73,7 @@ async function offerAndWait(input: FleetInput, signal: AbortSignal): Promise<Awa
 
     if (pushed.code !== 0) return { code: 'push_failed', message: `Step "${lease.step}" could not push its start commit to ${ref} on origin, so no fleet member can take it: ${pushed.stderr.trim()}` };
     await markOffered(config, run, attempt, pool);
-    const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, secrets });
+    const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, definition: runDefinition(state), values: values.values, secrets });
 
     if (!offered.ok) return fleetFailure(offered.error);
   }

@@ -13,10 +13,13 @@ import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getReportsDir, type LocalConfig } from '../types.js';
 import { gitRoot } from '../utils/branch-worktree.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../utils/reports-branch.js';
+import { isJsonObject } from '../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../utils/json.js';
-import { firstUnfit, type HandoffOwner } from './snapshot.js';
+import { expressionPaths, isIndex } from './expression.js';
+import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from './snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from './store.js';
-import type { WorkflowFailure } from './types.js';
+import { parseTemplate, renderText, templateExpressions, type TemplateContext } from './template.js';
+import type { WorkflowFailure, WorkflowStep } from './types.js';
 
 /** Where the records of every offered attempt live on `teamai-reports`. */
 const ATTEMPTS_DIR = 'workflows/attempts';
@@ -37,6 +40,19 @@ const FleetLeaseSchema = z.object({
 });
 
 export type FleetLease = z.infer<typeof FleetLeaseSchema>;
+
+/**
+ * What the step's env reads, which a member renders the env from with its own copy of the step: the inputs it reads, by
+ * name, the outputs of the steps it reads, by step id, and the item. Values only: the command and the env's templates
+ * come from the team's workflow, never from the record.
+ */
+const LeaseValuesSchema = z.object({
+  inputs: JsonValueSchema.optional(),
+  outputs: z.record(z.string(), JsonValueSchema).optional(),
+  item: JsonValueSchema.optional(),
+});
+
+export type LeaseValues = z.infer<typeof LeaseValuesSchema>;
 
 /**
  * How a member's run of the lease ended: its command's exit code, the JSON its stdout held, and the start of its stderr,
@@ -68,6 +84,9 @@ const OfferedSchema = z.object({
   /** How long a claim may go without progress before the owner gives it up, in milliseconds. */
   staleAfterMs: z.number().int().positive(),
   lease: FleetLeaseSchema,
+  /** The definitions the run executes, which a member reads from its own team repository and checks the lease against. */
+  definition: RunDefinitionSchema,
+  values: LeaseValuesSchema,
   state: z.literal('offered'),
 });
 
@@ -126,9 +145,92 @@ function unpublishable(record: FleetRecord, secrets: Record<string, string>): Fl
   return { code: 'fleet_unpublishable', message: `Attempt ${record.attempt} of run ${record.run} was not written to teamai-reports: its "${field}" holds ${what}.` };
 }
 
+/**
+ * What the env of command step `step` reads in `context`, the context its lease rendered the env in, or why a member
+ * could not render the env from values: it reads something besides inputs, the item, the run's id and steps' outputs.
+ */
+export function leaseValues(step: Pick<WorkflowStep, 'id' | 'env'>, context: TemplateContext): { values: LeaseValues } | { error: string } {
+  const inputs = new Set<string>();
+  const outputs = new Set<string>();
+  let wholeInputs = false;
+  let readsItem = false;
+
+  for (const [name, text] of Object.entries(step.env ?? {})) {
+    const parsed = parseTemplate(text, Object.hasOwn(context, 'item'));
+
+    if (!parsed.ok) return { error: `Step "${step.id}" env ${name} does not parse: ${parsed.errors[0]?.message ?? ''}` };
+
+    for (const read of templateExpressions(parsed.template).flatMap(expressionPaths)) {
+      if (read.root === 'steps' && read.field !== 'outputs') {
+        return { error: `Step "${step.id}" env ${name} reads steps.${read.step}.${read.field}, which a fleet member cannot render: on the fleet a step's env reads only inputs, item, run.id and steps' outputs.` };
+      }
+
+      const [first] = read.fields;
+
+      if (read.root === 'inputs') {
+        if (first === undefined || isIndex(first)) wholeInputs = true;
+        else inputs.add(first);
+      }
+
+      if (read.root === 'steps') outputs.add(read.step);
+
+      if (read.root === 'item') readsItem = true;
+    }
+  }
+
+  const values: LeaseValues = {};
+  const given = JsonValueSchema.safeParse(context.inputs ?? {});
+  const all = given.success ? given.data : {};
+
+  if (wholeInputs || !isJsonObject(all)) values.inputs = all;
+  else if (inputs.size > 0) {
+    values.inputs = Object.fromEntries([...inputs].flatMap((name) => {
+      const value = all[name];
+
+      return value === undefined ? [] : [[name, value]];
+    }));
+  }
+
+  if (outputs.size > 0) {
+    values.outputs = Object.fromEntries([...outputs].flatMap((id) => {
+      const read = JsonValueSchema.safeParse(context.steps[id]?.outputs);
+
+      return read.success ? [[id, read.data]] : [];
+    }));
+  }
+
+  const item = JsonValueSchema.safeParse(context.item);
+
+  if (readsItem && item.success) values.item = item.data;
+
+  return { values };
+}
+
+/** The env of command step `step` in run `run`, rendered from `values` as its owner's lease rendered it from the run. */
+export function leaseEnv(step: Pick<WorkflowStep, 'id' | 'env'>, values: LeaseValues, run: RunId): { env: Record<string, string> } | { error: string } {
+  const context: TemplateContext = {
+    inputs: values.inputs ?? {},
+    steps: Object.fromEntries(Object.entries(values.outputs ?? {}).map(([id, outputs]) => [id, { outputs }])),
+    run: { id: run },
+    ...(Object.hasOwn(values, 'item') && { item: values.item }),
+  };
+
+  const env: Record<string, string> = {};
+
+  for (const [name, text] of Object.entries(step.env ?? {})) {
+    const parsed = parseTemplate(text, Object.hasOwn(context, 'item'));
+
+    if (!parsed.ok) return { error: `env ${name} does not parse: ${parsed.errors[0]?.message ?? ''}` };
+    env[name] = renderText(parsed.template, context);
+  }
+
+  return { env };
+}
+
 /** Offers `lease` of attempt `attempt` to pool `pool`, once its start commit is on the attempt's ref. */
 export async function offerAttempt(config: LocalConfig, input: {
-  run: RunId; attempt: AttemptId; pool: string; repository: string; owner: HandoffOwner; start: string; staleAfterMs: number; lease: FleetLease; secrets: Record<string, string>;
+  run: RunId; attempt: AttemptId; pool: string; repository: string; owner: HandoffOwner; start: string; staleAfterMs: number; lease: FleetLease;
+  definition: Offered['definition']; values: LeaseValues; secrets: Record<string, string>;
 }): Promise<Written<Offered>> {
   const { secrets, ...fields } = input;
   const record: Offered = { version: 1, ...fields, write: randomUUID(), offeredAt: new Date().toISOString(), state: 'offered' };

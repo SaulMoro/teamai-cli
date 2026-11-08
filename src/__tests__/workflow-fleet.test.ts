@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { leaseNext } from '../workflow/engine.js';
+import { leaseNext, startRun } from '../workflow/engine.js';
 import { claimAttempt, expireClaim, finishAttempt, lastGoneWork, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
 import { publishRun } from '../workflow/handoff.js';
-import { AttemptIdSchema, installOwner, RunIdSchema, takeRunLock } from '../workflow/store.js';
+import { definitionHash } from '../workflow/snapshot.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt } from '../workflow/drivers/local/fleet-member.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
-import { dirs, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
+import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -20,6 +21,7 @@ async function offer(owner: Member, input: { secrets?: Record<string, string>; l
   return offerAttempt(owner.config, {
     run: RUN, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(owner.config),
     start: input.start ?? 'f'.repeat(40), staleAfterMs: 60_000, lease: input.lease ?? LEASE, secrets: input.secrets ?? {},
+    definition: { name: 'build', sourceHash: 'a'.repeat(64), definitionHash: 'b'.repeat(64) }, values: {},
   });
 }
 
@@ -129,6 +131,79 @@ describe('fleet attempts on teamai-reports', () => {
     expect(refused).toMatchObject({ ok: false, error: { code: 'fleet_unpublishable' } });
     expect(refused.ok ? '' : refused.error.message).not.toContain('swordfish');
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toEqual({ ok: true, value: 'absent' });
+  });
+});
+
+/** A command whose env reads an input: the member renders the env from the input's value, with its own copy of the step. */
+const MARK = `schemaVersion: v1alpha1
+name: mark
+description: Writes the file an input names.
+inputs: { mark: string }
+steps:
+  - id: write
+    workspace: new
+    env:
+      MARK: "{{ inputs.mark }}"
+    command: echo written > "$MARK"
+`;
+
+/**
+ * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
+ * takes it. Answers what Bob's take answered, and the record Alice reads then.
+ */
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void) {
+  const acme = team({ mark: MARK });
+  const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+  const started = await startRun(alice.config, 'mark', { mark: 'made.txt' }, { secrets: {} });
+  if (!('data' in started)) throw new Error(started.error.message);
+  const run = RunIdSchema.parse(String(started.data.run));
+  const state = await readRun(alice.config, run);
+  if (state === 'missing' || state === 'corrupt') throw new Error(`run ${run} is ${state}`);
+  const startCommit = git(alice.checkout, 'rev-parse', 'HEAD');
+  git(alice.checkout, 'push', '-q', 'origin', `HEAD:refs/heads/teamai/attempts/${run}/${ATTEMPT}`);
+  const forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'> = {
+    lease: { step: 'write', command: 'echo written > "$MARK"', env: { MARK: 'made.txt' } },
+    definition: { name: state.name, sourceHash: state.sourceHash, definitionHash: definitionHash(state.definition, state.workflows), teamRevision: state.teamRevision, origin: state.origin },
+    values: { inputs: { mark: 'made.txt' } },
+  };
+  forge(forged);
+  const offered = await offerAttempt(alice.config, {
+    run, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(alice.config),
+    start: startCommit, staleAfterMs: 60_000, secrets: {}, ...forged,
+  });
+  if (!offered.ok) throw new Error(offered.error.message);
+  await readableReportsWorktree(bob.config);
+
+  const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+  const record = await readAttemptRecord(alice.config, run, ATTEMPT);
+
+  return { taken, record: record.ok && record.value !== 'absent' ? record.value : undefined };
+}
+
+describe('a member taking an attempt', () => {
+  it('runs the command and env the team\'s workflow defines for the step, rendered from the offer\'s values', async () => {
+    const { taken, record } = await takeForged(() => undefined);
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, to: expect.any(String) } });
+  });
+
+  it('refuses an offer whose command is not the one the team\'s workflow defines for the step, and runs nothing', async () => {
+    const { taken, record } = await takeForged((forged) => { forged.lease.command = 'echo forged > forged.txt'; });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
+    expect(record?.state === 'finished' && record.result.to).toBeFalsy();
+    expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*command.*teamai pull/s);
+  });
+
+  it('refuses an offer whose definition hash is not the one of the team\'s workflow, and runs nothing', async () => {
+    const { taken, record } = await takeForged((forged) => { forged.definition.definitionHash = 'f'.repeat(64); });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
+    expect(record?.state === 'finished' && record.result.to).toBeFalsy();
+    expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*teamai pull/s);
   });
 });
 

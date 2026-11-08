@@ -24,7 +24,7 @@ import { publishPendingRecords, publishRunRecords, queueRunRecord, runRecordStat
 import { resolveRetention, retentionEnds } from './retention.js';
 import {
   parseTemplate, renderLeaseText, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
-  type StepExpression, type TemplateError,
+  type StepExpression, type TemplateContext, type TemplateError,
 } from './template.js';
 import { stageSettledEvidence } from './place/place.js';
 import { parseStepPath } from './step-path.js';
@@ -255,6 +255,14 @@ export function locateStep(run: RunState, path: string): { scope: Scope; step: W
   }
 
   return undefined;
+}
+
+/** The step instance at `path` and what its lease's templates read, or undefined when the run holds no such instance. */
+export function leaseContext(run: RunState, path: string): { step: WorkflowStep; context: TemplateContext } | undefined {
+  const located = locateStep(run, path);
+  const state = run.steps.find((item) => item.id === path);
+
+  return located && state ? { step: located.step, context: contextOf(located.scope, statesIn(run, located.scope), state) } : undefined;
 }
 
 /** The requirements in effect at each `from` step that runs the workflow producer `path` outputs. */

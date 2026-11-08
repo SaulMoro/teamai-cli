@@ -17,7 +17,7 @@ import { stepLoops } from './loop.js';
 import { pendingRecords, publishPendingRecords, type RecordDelivery } from './records.js';
 import {
   definitionHash, parseSnapshot, projectRun, snapshotBody, snapshotPath, snapshotText,
-  type Handoff, type HandoffOwner, type RunSnapshot, type SnapshotBody, type SnapshotError,
+  type Handoff, type HandoffOwner, type RunDefinition, type RunSnapshot, type SnapshotBody, type SnapshotError,
 } from './snapshot.js';
 import { openPrivateStep } from './scope.js';
 import { takeOver, type UnleasedStep } from './step-state.js';
@@ -1240,7 +1240,7 @@ export function handedRun(snapshot: RunSnapshot, definitions: Definitions, hande
  * The definitions run `snapshot` executes, exactly as the machine that ran it had them: this machine's cache when it holds
  * the same ones, else the team commit the run ran at.
  */
-export async function definitionsOf(config: LocalConfig, snapshot: RunSnapshot): Promise<Result<Definitions>> {
+export async function definitionsOf(config: LocalConfig, snapshot: { run: string } & RunDefinition): Promise<Result<Definitions>> {
   const same = (bundle: WorkflowBundle): boolean => bundle.sourceHash === snapshot.sourceHash
     && definitionHash(bundle.definition, bundle.workflows) === snapshot.definitionHash;
 
