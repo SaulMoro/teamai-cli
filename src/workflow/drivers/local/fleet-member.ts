@@ -8,6 +8,7 @@
 import path from 'node:path';
 import type { HandoffOwner } from '../../snapshot.js';
 import type { LocalConfig } from '../../../types.js';
+import { log } from '../../../utils/logger.js';
 import { startGroupedCommand } from '../../../tool-launch/process-stop.js';
 import { attemptRef, claimAttempt, finishAttempt, fleetFailure, listOffers, recordProgress, type Claimed, type FleetResult } from '../../fleet.js';
 import { commandOutputs } from '../../protocol.js';
@@ -25,17 +26,24 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
   let moved = 0;
 
   for (const offer of offers) {
-    const claimed = await claimAttempt(config, offer, member);
+    // The run's lock comes first: a claim this machine could not run at once would wait for nobody until stale_after.
+    const held = await takeRunLock(config, offer.run, async (): Promise<WorkflowEnvelope | 'moved'> => {
+      const claimed = await claimAttempt(config, offer, member);
 
-    if (!claimed.ok && claimed.error.code === 'state_moved') {
-      moved += 1;
+      if (claimed.ok) return runClaim(config, { claim: claimed.value, root, secrets });
+
+      return claimed.error.code === 'state_moved' ? 'moved' : { error: fleetFailure(claimed.error) };
+    }, { waitMs: 0 });
+
+    if (held.kind === 'busy') {
+      log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: ${held.error.message}`);
       continue;
     }
 
-    if (!claimed.ok) return { error: fleetFailure(claimed.error) };
-    const held = await takeRunLock(config, claimed.value.run, async () => runClaim(config, { claim: claimed.value, root, secrets }), { waitMs: 0 });
-
-    if (held.kind === 'busy') return { error: held.error };
+    if (held.value === 'moved') {
+      moved += 1;
+      continue;
+    }
 
     return held.value;
   }

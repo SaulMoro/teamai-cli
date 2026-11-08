@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext } from '../workflow/engine.js';
 import { claimAttempt, expireClaim, finishAttempt, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
 import { publishRun } from '../workflow/handoff.js';
-import { AttemptIdSchema, installOwner, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, installOwner, RunIdSchema, takeRunLock } from '../workflow/store.js';
+import { takeFleetAttempt } from '../workflow/drivers/local/fleet-member.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { dirs, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
 
@@ -74,6 +75,20 @@ describe('fleet attempts on teamai-reports', () => {
     const finished = await readAttemptRecord(alice.config, RUN, ATTEMPT);
     expect(finished).toMatchObject({ ok: true, value: { state: 'finished', result: { exitCode: 0, to: 'e'.repeat(40), outputs: { built: true } } } });
     expect(JSON.stringify(finished)).not.toContain('/home/bob');
+  });
+
+  it('leaves an offer for another member while this machine already drives its run', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    await readableReportsWorktree(bob.config);
+    const member = await installOwner(bob.config);
+
+    const taken = await takeRunLock(bob.config, RUN, async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member, secrets: {} }), { waitMs: 0 });
+
+    expect(taken).toMatchObject({ kind: 'held', value: { data: { idle: { offered: 1 } } } });
+    expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered' } });
   });
 
   it('offers a command that names absolute paths, as shell commands do', async () => {
