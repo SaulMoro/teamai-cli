@@ -12,7 +12,8 @@ import type { WorkflowFailure } from '../types.js';
 import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
-import { fleetStepRuntime } from '../fleet/owner.js';
+import { fleetStepRuntime, shadowedFleetEntries } from '../fleet/owner.js';
+import { log } from '../../utils/logger.js';
 import { stdioStepRuntime } from './stdio.js';
 import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
@@ -579,6 +580,8 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
   const { driver } = resolved;
   const opened: OpenedRuntime[] = [];
   const how = { mode, canAsk, purpose, checkout };
+
+  if (purpose === 'run') for (const warning of shadowedFleetEntries(driver.definition.runtimes)) log.warn(`Driver definition ${driver.file}: ${warning}`);
 
   for (const entry of driver.definition.runtimes) {
     const one = entry.through === undefined

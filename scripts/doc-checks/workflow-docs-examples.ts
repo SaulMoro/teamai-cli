@@ -22,7 +22,7 @@ import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
 import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
 import { engineOptions } from '../../src/workflow/runtimes/sources.js';
-import { parseFleetOptions } from '../../src/workflow/fleet/owner.js';
+import { parseFleetOptions, shadowedFleetEntries } from '../../src/workflow/fleet/owner.js';
 import { nestedOptions } from '../../src/workflow/runtimes/composed.js';
 import { localStepRuntime } from '../../src/workflow/runtimes/local.js';
 import { parseOptions as parsePaseoOptions } from '../../packages/runtime-paseo/src/options.js';
@@ -736,6 +736,9 @@ async function definitionProblem(example: Example): Promise<string | undefined> 
   const parsed = parseDriverDefinition(`drivers/${named ?? (isJsonObject(shown) ? String(shown.name) : 'unnamed')}.yaml`, example.source);
 
   if (!parsed.ok) return parsed.failure.message;
+  const [shadowed] = shadowedFleetEntries(parsed.definition.runtimes);
+
+  if (shadowed !== undefined) return shadowed;
 
   for (const [index, { use, through, options }] of parsed.definition.runtimes.entries()) {
     // An entry through another nests each runtime's options under its name, as the engine splits them at the start.
