@@ -143,3 +143,14 @@ it('check refuses a deployed stub that pre-approves starting any workflow', () =
   expect(checked.status).toBe(1);
   expect(checked.output).toContain('pre-approves only read-only skill and workflow calls');
 });
+it('check refuses a workflow skill whose run-next rule stops naming a refusal only the person may confirm', () => {
+  const root = checkout();
+  const skill = path.join(root, 'skill-data/workflow/SKILL.md');
+  const text = fs.readFileSync(skill, 'utf8');
+  const rule = 'and an `owner_active` or a `confirm_needed` whose `next` carries `--confirmed`.';
+  expect(text).toContain(rule);
+  fs.writeFileSync(skill, text.replace(rule, 'and a `confirm_needed` whose `next` carries `--confirmed`.'));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('owner_active');
+});

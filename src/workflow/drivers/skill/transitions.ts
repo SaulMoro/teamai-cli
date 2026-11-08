@@ -496,13 +496,24 @@ export function unattendedRow(state: SkillState, answers: ResumeAnswers): Moved<
 }
 
 /**
+ * The refusals of a resume or a takeover whose `next` is the same call with `--confirmed`, by the run mode in which it
+ * is, `any` for every mode. Only the person's yes lifts them, so the workflow skill names each where it tells the agent
+ * which `next` not to run; `node scripts/check-docs.mjs` fails until it does.
+ */
+export const CONFIRMABLE_REFUSALS: ReadonlyMap<string, RunMode | 'any'> = new Map<string, RunMode | 'any'>([
+  ['confirm_needed', 'any'],
+  ['owner_active', 'attended'],
+]);
+
+/**
  * R22: the refusal `WorkflowClient.resumeRefusal` gave a resume or a takeover in run mode `mode`, which only the
  * person's yes, carried by `--confirmed`, can lift: an `invoke: ask`, or, attended, a takeover of a run its owner may
  * still drive. Undefined when it gave none.
  */
 export function invokeRow(refusal: WorkflowFailure | undefined, mode: RunMode): Answered<'R22', Relayed> | undefined {
   if (refusal === undefined) return undefined;
-  const confirmable = refusal.code === 'confirm_needed' || (refusal.code === 'owner_active' && mode !== 'unattended');
+  const confirmableIn = CONFIRMABLE_REFUSALS.get(refusal.code);
+  const confirmable = confirmableIn === 'any' || confirmableIn === mode;
 
   return { row: 'R22', answer: { kind: 'engine-error', error: refusal, next: confirmable ? 'same' : null } };
 }
