@@ -191,6 +191,35 @@ describe('a toy through a toy, over stdio', () => {
     expect(asked().slice(2).map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['inner close']);
     expect(await runtime.reattach(opened.handle)).toMatchObject({ kind: 'alive' });
   });
+
+  it('records only the outer\'s place when the outer fails its open, so the close removes it without the inner, which was never asked', async () => {
+    const runtime = composedStepRuntime({ outer: toy('sandboxtoy'), inner: toy('apptoy'), innerCredentials: {} });
+    started.push(runtime);
+    await runtime.init({ options: { sandboxtoy: { state: path.join(dir, 'outer'), calls, open_fails: { code: 'sandbox_failed', message: 'The image cannot be pulled.' } }, apptoy: { state: path.join(dir, 'inner'), calls, agent: { output: { ok: true } } } }, mode: 'unattended' });
+    let recorded = '';
+
+    expect(await runtime.open(openRequest(), async (handle) => { recorded = handle; })).toMatchObject({ kind: 'failed', failure: { code: 'sandbox_failed' } });
+    expect(await runtime.close(recorded)).toEqual({ ok: true });
+    expect(asked().map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['outer open', 'outer close']);
+  });
+
+  it('records only the outer\'s place when the inner refuses its open before it makes one, so the close removes the outer', async () => {
+    const runtime = await start({ open_refuses: { code: 'bad_option', message: 'No such model.' } });
+    let recorded = '';
+
+    expect(await runtime.open(openRequest(), async (handle) => { recorded = handle; })).toMatchObject({ kind: 'failed', failure: { code: 'bad_option' } });
+    expect(await runtime.close(recorded)).toEqual({ ok: true });
+    expect(asked().map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['outer open', 'inner open', 'outer close']);
+  });
+
+  it('keeps both places and says the inner may hold one teamai never recorded, when the inner stopped while it opened', async () => {
+    const runtime = await start({ open_refuses: { code: 'runtime_exited', message: 'Step runtime "apptoy" stopped.' } });
+    let recorded = '';
+
+    await runtime.open(openRequest(), async (handle) => { recorded = handle; });
+    expect(await runtime.close(recorded)).toMatchObject({ ok: false, failure: { code: 'runtime_lost', message: expect.stringContaining('apptoy may hold a place for this attempt that teamai never recorded') } });
+    expect(asked().map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['outer open', 'inner open']);
+  });
 });
 
 describe('the options of a runtime through another', () => {

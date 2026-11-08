@@ -3070,6 +3070,26 @@ span('end');
       expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
     });
 
+    it('keeps the outer place of a composed attempt whose inner place teamai never recorded, and says so, until the person releases it', async () => {
+      throughDefinition('throughinner', { die_at: 'open-accepted' });
+      const { runId, attempt } = await killedStart('throughinner', innerState);
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env(tokens));
+
+      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId}`);
+      expect(cancelled.stderr).toContain(`teamai workflow cancel ${runId} --release ${attempt}`);
+      expect(steps()).not.toContain('outer close');
+      expect(Object.keys(placesOf(outerState))).toEqual([`${runId}/${attempt}`]);
+      expect(runtimeRecord(runId, attempt)?.phase).not.toBe('closed');
+
+      const released = await runCLI(['workflow', 'cancel', runId, '--release', attempt], repo, env(tokens));
+
+      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${runId}`);
+      expect(steps()).toContain('outer close');
+      expect(placesOf(outerState)).toEqual({});
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+    });
+
     it('says it cannot confirm the place of an attempt whose handle teamai never recorded, and keeps it until the person releases it', async () => {
       writeDefinition('throughouter', [{
         use: 'toy', through: 'sandboxtoy',

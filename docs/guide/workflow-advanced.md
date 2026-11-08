@@ -1632,7 +1632,7 @@ runtimes:
 
 The entry is one runtime to the run, named `my-app through my-sandbox` in its messages. Where the tool runs comes from the outer runtime (`my-sandbox`): the isolation, env credentials, setup and command steps. How the tool is launched comes from the inner one (`my-app`): its tools, workspaces, HITL and turn ending. The entry also takes the `clone` and `team` workspaces the outer prepares. It offers `permissions: unattended` only for a tool the inner runs in full access, and runs no confined step. The step's sign-in goes to the outer, which hands it to the tool; the inner gets only its own credentials.
 
-teamai opens the outer, then the inner. It stops and closes the inner first, and keeps the outer's place while the inner cannot confirm its stop.
+teamai opens the outer, then the inner. It stops and closes the inner first, and keeps the outer's place while the inner cannot confirm its stop. That includes a teamai killed while the inner opened its place: no handle teamai recorded names that place, so `workflow cancel` keeps the outer's place and says so until you close the inner's yourself and release the attempt.
 
 A runtime takes part only when it supports it, and the runtimes teamai ships do not yet: until their pages say so, such an entry is for runtimes you write. The inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer; after a restart, the outer's `reattach` carries the prompt's `credentials` again, since it keeps them only in memory.
 

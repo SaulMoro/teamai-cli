@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { RuntimeOptionsSchema, type OpId, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { DriverCan } from '../requirements.js';
-import type { Initialized, Reattached, StepRuntime } from './step-runtime.js';
+import { isUnansweredFailure, type Initialized, type Reattached, type StepRuntime } from './step-runtime.js';
 
 // ─── A runtime through another ───────────────────────────
 //
@@ -66,10 +66,21 @@ export function composedOffer(outer: Offer, inner: Offer): Offer {
   };
 }
 
-/** The handle of a composed place: the outer's, then the inner's once the inner accepted its open. */
-const ComposedHandleSchema = z.object({ outer: z.string().min(1), inner: z.string().min(1).optional() }).strict();
+/**
+ * The handle of a composed place: the outer's, then the inner's once the inner accepted its open. `innerOpening` says
+ * the inner was asked to open a place this handle does not name yet, as a teamai stopped in between leaves it.
+ */
+const ComposedHandleSchema = z.union([
+  z.object({ outer: z.string().min(1), inner: z.string().min(1).optional() }).strict(),
+  z.object({ outer: z.string().min(1), innerOpening: z.literal(true) }).strict(),
+]);
 
 type ComposedHandle = z.infer<typeof ComposedHandleSchema>;
+
+/** The inner's handle a composed handle names, if any. */
+function innerOf(handle: ComposedHandle | undefined): string | undefined {
+  return handle !== undefined && 'inner' in handle ? handle.inner : undefined;
+}
 
 function handleOf(handle: string): ComposedHandle | undefined {
   try {
@@ -137,16 +148,43 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
     },
 
     async open(request, onAccepted) {
-      const outerOpened = await outer.open(request, async (handle) => onAccepted(JSON.stringify({ outer: handle } satisfies ComposedHandle)));
+      // A place whose prompt runs a tool opens the inner next: the handle says so until the inner's is known.
+      let outerAccepted: string | undefined;
 
-      if (outerOpened.kind !== 'ready') return outerOpened;
+      const outerOpened = await outer.open(request, async (handle) => {
+        outerAccepted = handle;
+        await onAccepted(JSON.stringify((request.tool === undefined ? { outer: handle } : { outer: handle, innerOpening: true }) satisfies ComposedHandle));
+      });
+
+      // The handle stops saying the inner opens once the inner answered that it made no place, or was never asked.
+      const outerOnly = async (handle: string | undefined): Promise<void> => {
+        if (handle !== undefined && request.tool !== undefined) await onAccepted(JSON.stringify({ outer: handle } satisfies ComposedHandle));
+      };
+
+      if (outerOpened.kind !== 'ready') {
+        await outerOnly(outerAccepted);
+
+        return outerOpened;
+      }
+
       openedWith.set(outerOpened.handle, request.credentials);
 
       // A command step's place runs no tool, so the inner, which launches tools, has no place to make for it.
       if (request.tool === undefined) return { kind: 'ready', handle: JSON.stringify({ outer: outerOpened.handle } satisfies ComposedHandle), ...(outerOpened.display && { display: outerOpened.display }) };
-      const innerOpened = await inner.open({ ...request, credentials: innerCredentials, outer: outerOpened.handle }, async (handle) => onAccepted(JSON.stringify({ outer: outerOpened.handle, inner: handle } satisfies ComposedHandle)));
+      let innerAccepted = false;
 
-      if (innerOpened.kind !== 'ready') return innerOpened;
+      const innerOpened = await inner.open({ ...request, credentials: innerCredentials, outer: outerOpened.handle }, async (handle) => {
+        innerAccepted = true;
+        await onAccepted(JSON.stringify({ outer: outerOpened.handle, inner: handle } satisfies ComposedHandle));
+      });
+
+      if (innerOpened.kind !== 'ready') {
+        // An inner that did not answer may hold a place it never named, so the handle keeps saying it opens one.
+        if (!innerAccepted && !isUnansweredFailure(innerOpened.failure)) await outerOnly(outerOpened.handle);
+
+        return innerOpened;
+      }
+
       const display = innerOpened.display ?? outerOpened.display;
 
       return { kind: 'ready', handle: JSON.stringify({ outer: outerOpened.handle, inner: innerOpened.handle } satisfies ComposedHandle), ...(display && { display }) };
@@ -164,10 +202,12 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
     async prompt(request, events) {
       const handle = handleOf(request.handle);
 
-      if (handle?.inner === undefined) return { kind: 'failed', failure: unknownHandle(request.handle) };
+      const innerHandle = innerOf(handle);
+
+      if (innerHandle === undefined) return { kind: 'failed', failure: unknownHandle(request.handle) };
       ranBy.set(request.op, inner);
 
-      return inner.prompt({ ...request, handle: handle.inner, credentials: innerCredentials }, events);
+      return inner.prompt({ ...request, handle: innerHandle, credentials: innerCredentials }, events);
     },
 
     async cancel(op) {
@@ -183,8 +223,10 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
 
       if (!parsed) return { ok: false, failure: unknownHandle(handle) };
 
-      if (parsed.inner !== undefined) {
-        const collected = await inner.collect(parsed.inner);
+      const innerHandle = innerOf(parsed);
+
+      if (innerHandle !== undefined) {
+        const collected = await inner.collect(innerHandle);
 
         if (!collected.ok) return collected;
       }
@@ -201,7 +243,8 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       const outerSeen = await outer.reattach(parsed.outer, credentials && Object.keys(credentials).length > 0 ? { credentials } : undefined);
 
       if (outerSeen.kind === 'failed') return outerSeen;
-      const innerSeen: Reattached = parsed.inner === undefined ? { kind: 'gone' } : await inner.reattach(parsed.inner);
+      const innerHandle = innerOf(parsed);
+      const innerSeen: Reattached = innerHandle === undefined ? { kind: 'gone' } : await inner.reattach(innerHandle);
 
       if (innerSeen.kind === 'failed') return innerSeen;
 
@@ -218,7 +261,10 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       const parsed = handleOf(handle);
 
       if (!parsed) return { ok: true };
-      const innerClosed = parsed.inner === undefined ? { ok: true as const } : await inner.close(parsed.inner, how);
+      // Only the inner knows a place it made before teamai recorded it, and no request of teamai names that place.
+      const unrecorded: RuntimeFailure = { code: 'runtime_lost', message: `${inner.name} may hold a place for this attempt that teamai never recorded, since teamai was stopped while ${inner.name} opened it, so teamai cannot ask ${inner.name} to close it. Close it in ${inner.name} yourself if it is there.` };
+      const innerHandle = innerOf(parsed);
+      const innerClosed = 'innerOpening' in parsed ? { ok: false as const, failure: unrecorded } : innerHandle === undefined ? { ok: true as const } : await inner.close(innerHandle, how);
 
       // The outer's place stays while the inner has not confirmed its stop, unless the person let the attempt go.
       if (!innerClosed.ok && how?.release !== true) return innerClosed;

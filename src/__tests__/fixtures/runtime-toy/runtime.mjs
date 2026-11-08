@@ -54,7 +54,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -237,6 +237,8 @@ function noteCredentials(request, handle) {
 const openCredentials = new Map();
 
 function open(request) {
+  // `open_refuses` is the failure every open answers before it makes a place, as a runtime that cannot make one.
+  if (options.open_refuses !== undefined) return send({ op: request.op, event: 'failed', failure: options.open_refuses });
   const handles = readHandles();
   const key = `${request.run}/${request.attempt}`;
   const handle = handles[key] ?? `toy-${request.run}-${request.attempt}`;
