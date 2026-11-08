@@ -279,9 +279,12 @@ export function askSocket(socketPath: string, ask: Ask): Promise<Answer | { unre
 
   return new Promise((resolve) => {
     const client = net.connect(socketPath);
+    const lines = readline.createInterface({ input: client });
+    // readline re-emits the socket's errors, such as a write to a peer that hung up, and throws them when nothing listens.
+    lines.on('error', (error) => resolve({ unreachable: error.message }));
     client.on('error', (error) => resolve({ unreachable: error.message }));
     client.on('connect', () => client.write(`${JSON.stringify({ ask } satisfies SocketRequest)}\n`));
-    readline.createInterface({ input: client }).once('line', (line) => {
+    lines.once('line', (line) => {
       client.destroy();
 
       try {

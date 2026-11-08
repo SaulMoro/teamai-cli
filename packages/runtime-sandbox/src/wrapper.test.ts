@@ -486,6 +486,29 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(execsIn()).toEqual([]);
   });
 
+  it('says the sandbox runtime does not answer, and runs nothing, when the socket closes while the wrapper asks', async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at);
+    await register(handle, null);
+    // A peer that hangs up on each connection at once, so the wrapper's ask is written to a closed socket.
+    const socket = socketOf(handle);
+    fs.rmSync(socket);
+    const hangingUp = net.createServer((client) => client.destroy());
+    await new Promise<void>((resolve) => hangingUp.listen(socket, resolve));
+
+    try {
+      const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+
+      expect(ran).toMatchObject({ code: 2, stdout: '' });
+      expect(ran.stderr).toContain(`does not answer on ${socket}`);
+      expect(execsIn()).toEqual([]);
+    } finally {
+      await new Promise((resolve) => hangingUp.close(resolve));
+    }
+  });
+
   it("serves its socket at 0600 in a 0700 directory, and removes it at close, though a client sits on it saying nothing", async () => {
     const connection = start();
     await init(connection);
