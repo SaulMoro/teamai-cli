@@ -678,6 +678,12 @@ describe('fleet entries of one driver definition', () => {
       'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the more specific entry first.',
     ]);
   });
+
+  it('names a shadowed fleet entry that also sets the options teamai takes for itself', () => {
+    expect(shadowedFleetEntries([fleet({ pool: 'default' }), fleet({ pool: 'spare', max_parallel: 2, credentials: { GH_TOKEN: 'env:GH_TOKEN' } })])).toEqual([
+      'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+    ]);
+  });
 });
 
 describe('where a member runs an attempt', () => {
