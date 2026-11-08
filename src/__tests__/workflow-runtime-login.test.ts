@@ -66,6 +66,17 @@ describe('the dedicated Codex login lock', () => {
     expect(notBack).toBeUndefined();
     expect(createHash('sha256').update(fs.readFileSync(dedicated())).digest('hex')).toBe(createHash('sha256').update(auth('r2')).digest('hex'));
   });
+
+  it('keeps the token the tool refreshed when a restarted teamai holds the login again for the same attempt', async () => {
+    plantDedicated('r1');
+    const toolHome = path.join(root, FIRST);
+    expect(await hold(FIRST, new AbortController().signal)).toEqual({ ok: true });
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), auth('r2'));
+
+    expect(await hold(FIRST, new AbortController().signal)).toEqual({ ok: true });
+
+    expect(fs.readFileSync(path.join(toolHome, 'auth.json'), 'utf8')).toBe(auth('r2'));
+  });
 });
 
 describe('an attempt a killed teamai left running on its step runtime', () => {
