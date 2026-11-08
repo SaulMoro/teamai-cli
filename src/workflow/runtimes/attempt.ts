@@ -355,6 +355,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   let running: { op: OpId } | undefined;
   // Ends the exec running now as `left`, while one runs.
   let leave: (() => void) | undefined;
+  // An exec ended `left` goes on on its runtime: its place stays open, for a later teamai to reconnect to or cancel.
+  let isLeft = false;
   // Why an exec or prompt of this attempt may still run, once one ended `lost`: its place is not closed under it.
   let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
@@ -584,6 +586,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       leave = undefined;
       await acceptance.kept();
       running = undefined;
+      isLeft = end.kind === 'left';
 
       return end.kind === 'left' ? end : ended(end);
     },
@@ -710,7 +713,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     async close(how) {
       const before = await current();
 
-      if (!before || before.phase === 'closed') return undefined;
+      if (!before || before.phase === 'closed' || isLeft) return undefined;
       const handle = before.open.handle;
 
       // An open sent whose handle teamai never recorded, as when teamai or the runtime stopped in between: the runtime
