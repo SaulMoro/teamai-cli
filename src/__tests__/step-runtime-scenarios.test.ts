@@ -1976,6 +1976,25 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
   }, 90_000);
 
+  it('leaves a whole workflow step one of whose steps requires env this member\'s workflows.allow.env does not allow, as the owner\'s negotiation judges each step, rather than claiming and failing it', async () => {
+    const owner = await ownerOf({
+      workflow: WHOLE, workflows: { pair: PAIR.replace('    command: echo written > "$MARK"', '    requires: { env: [DEPLOY_URL] }\n    command: echo written > "$MARK"') },
+      files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, inputs: { mark: 'made.txt' }, isWhole: true, isSandbox: true,
+    });
+    const { exec } = await owner.open();
+    void exec(newOpId(), 'workflow');
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+    owner.bob.config.workflows = { tools: {}, allow: { env: ['NPM_TOKEN'] } };
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { workflow: { kind: 'here' } } });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+    expect(infos).toHaveBeenCalledWith(`Left attempt ${owner.attempt} of run ${owner.run} for another member: its step "write" requires env DEPLOY_URL, which workflows.allow.env on this machine does not allow.`);
+  }, 60_000);
+
   it('leases a whole workflow step with a gate inside to a runtime that runs whole workflows', async () => {
     const whole = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
 

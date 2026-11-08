@@ -74,7 +74,7 @@ import type {
   WorkflowStep,
 } from './types.js';
 import { hasAction, onlyPersonAnswers, stepWorkflow, workflowRunBy } from './types.js';
-import { notWhole } from './whole-workflow.js';
+import { wholeFit } from './whole-workflow.js';
 import { Writes } from './writes.js';
 import { describeWorkflow } from './describe.js';
 import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
@@ -1162,7 +1162,7 @@ function advanceInstance(
 
   // A workflow a runtime can run whole waits unstarted for `next`, which leases it whole or starts it for its asker. One
   // whose inputs do not fit starts here, and fails as any workflow step does, at the same point of the run.
-  if (notWhole(definition, workflowRunBy(run, definition, scope.prefix)) === undefined && !('code' in childInputs(scope, states, state, definition, child))) {
+  if ('runs' in wholeFit(definition, workflowRunBy(run, definition, scope.prefix), mergeRequirements(scope.requires, definition.requires)) && !('code' in childInputs(scope, states, state, definition, child))) {
     return { ready: [{ lease: state, definition, rendered: {} }] };
   }
 
@@ -1787,17 +1787,16 @@ function wholeNegotiation(
 ): Exclude<Negotiation, { kind: 'grant' }> | undefined {
   const state = run.steps.find((item) => item.id === id);
   const child = state && childScope(run, scope, statesIn(run, scope), state, step);
+  const fit = child && wholeFit(step, workflowRunBy(run, step, scope.prefix), mergeRequirements(scope.requires, step.requires));
 
-  if (!child) return { kind: 'fail', failure: { code: 'run_unreadable', message: `Run ${run.id} step "${id}" runs workflow ${JSON.stringify(step.workflow)}, which the run did not keep` } };
+  if (!child || !fit) return { kind: 'fail', failure: { code: 'run_unreadable', message: `Run ${run.id} step "${id}" runs workflow ${JSON.stringify(step.workflow)}, which the run did not keep` } };
+
+  if ('unfit' in fit) return { kind: 'fail', failure: { code: 'runtime_protocol', message: `Run ${run.id} step "${id}" was leased whole, but does not run whole: ${fit.unfit}` } };
   const missing = new Set<Missing>();
 
-  for (const inner of child.definition.steps) {
-    // A gate step runs nothing: the member asks its question through the attempt's record.
-    if (inner.command === undefined && inner.prompt === undefined) continue;
-    const innerExecutor = inner.command !== undefined ? 'command' : 'prompt';
-
+  for (const { step: inner, executor: innerExecutor, requires } of fit.runs) {
     const judged = negotiate({
-      step: `${child.prefix}${inner.id}`, executor: innerExecutor, requires: mergeRequirements(child.requires, inner.requires), interactive: false,
+      step: `${child.prefix}${inner.id}`, executor: innerExecutor, requires, interactive: false,
       hasContract: plan?.contract !== undefined, envKeys: Object.keys(inner.env ?? {}), runEnvKeys: context.runEnvKeys,
       budgeted: inner.prompt !== undefined && child.budgeted, maxTurns: inner.maxTurns, tool: promptTool(inner, context.toolFor),
       unattended: inner.permissions === 'unattended', clone: false, prepare: context.prepare, pinned: false, answer: false,
