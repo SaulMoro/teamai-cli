@@ -274,12 +274,15 @@ export interface ToolProcess {
   stop(signal?: NodeJS.Signals): Promise<void>;
 }
 
-/** Starts a tool process: here with `spawn`, or through a step runtime's `exec`. `onStdout` gets each decoded chunk. */
-export type ToolLauncher = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStdout: (text: string) => void }) => ToolProcess;
+/**
+ * Starts a tool process: here with `spawn`, or through a step runtime's `exec`. `onStart` is called once the process
+ * started, after any place and setup before it; `onStdout` gets each decoded chunk.
+ */
+export type ToolLauncher = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStart: () => void; onStdout: (text: string) => void }) => ToolProcess;
 
 /** The launcher that spawns the tool on this machine, in a process group of its own unless it is interactive. */
 function spawnLauncher(spawnTool: ToolSpawn): ToolLauncher {
-  return ({ executable, args, cwd, env, interactive, onStdout }) => {
+  return ({ executable, args, cwd, env, interactive, onStart, onStdout }) => {
     let started = false;
     let childProcess: ChildProcess | undefined;
 
@@ -304,7 +307,10 @@ function spawnLauncher(spawnTool: ToolSpawn): ToolLauncher {
       childProcess = child;
       let stdout = '';
       const decoder = new StringDecoder('utf8');
-      child.on('spawn', () => { started = true; });
+      child.on('spawn', () => {
+        started = true;
+        onStart();
+      });
       child.stdout?.on('data', (chunk: Buffer) => {
         const text = decoder.write(chunk);
         stdout += text;
@@ -406,7 +412,8 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       if (input.launch) Object.assign(env, launchEnv(input.launch));
       env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
 
-      // Each chunk the tool prints restarts the idle limit, so a tool that streams lives and a silent one is stopped.
+      // The idle limit starts with the tool, and each chunk it prints restarts it, so a tool that streams lives and a
+      // silent one is stopped.
       const idleMs = !interactive && launchAdapterIdOf(tool) === 'claude' && input.idleTimeoutMs !== undefined && input.idleTimeoutMs <= MAX_TIMER_DELAY ? input.idleTimeoutMs : undefined;
       let idleTimer: NodeJS.Timeout | undefined;
 
@@ -437,7 +444,7 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         if (budgeted(metered) > input.budget) stopAt('budget');
       };
 
-      const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStdout });
+      const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStart: active, onStdout });
 
       function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {
         stopCause ??= limit;
@@ -447,8 +454,6 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_DELAY
         ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
         : undefined;
-
-      active();
 
       const abort = (): void => {
         const reason: unknown = signal?.reason;
