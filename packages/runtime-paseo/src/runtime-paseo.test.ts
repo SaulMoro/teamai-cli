@@ -2836,6 +2836,15 @@ describe('teamai-runtime-paseo', () => {
       expect(received().map((request) => request.type)).toEqual(['agent.create.request', 'cancel_agent_request']);
     });
 
+    it('reads the JSON answer of a judge that explains itself around it', async () => {
+      behave({ reply: 'I read the diff.\n\n```json\n{"label": "pass"}\n```\n\nThe tests cover the change.' });
+      const runtime = start();
+      await ready(runtime);
+      runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b'));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { label: 'pass' } } });
+    });
+
     it('fails a judge whose reply is no JSON value', async () => {
       behave({ reply: 'The pass looks good to me.' });
       const runtime = start();

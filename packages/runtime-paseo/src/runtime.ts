@@ -7,6 +7,8 @@ import {
   CANCEL_FAILED, fitReason, isUsageLimitText, OpIdSchema, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
+import { JsonValueSchema } from '@teamai/tool-core/json';
+import { extractReply } from '@teamai/tool-core/reply';
 import { z } from 'zod';
 import { loadClient } from './client.js';
 import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, paseoHome, type Creation, type Daemon, type Model, type PaseoTool, type ProviderToAdd, type Target } from './daemon.js';
@@ -183,22 +185,6 @@ function usageLimited(tool: string, said: string | null | undefined): RuntimeFai
  */
 function usageLimitedReply(tool: string, said: string | null | undefined): RuntimeFailure | undefined {
   return said?.trim().includes('\n') ? undefined : usageLimited(tool, said);
-}
-
-/** A confined prompt's answer: the JSON value its agent replied with. */
-const ReplySchema = z.json();
-
-/** The JSON value a confined prompt's agent replied with, in a code fence or not, or undefined when it replied with none. */
-function parseReply(text: string | null): z.infer<typeof ReplySchema> | undefined {
-  if (!text) return undefined;
-
-  try {
-    const parsed = ReplySchema.safeParse(JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')));
-
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** The result the agent wrote, or undefined when it wrote none teamai can read. */
@@ -1309,7 +1295,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
           const session = end.final?.runtimeInfo?.sessionId;
 
           if (record.answer.kind === 'reply') {
-            const output = parseReply(end.lastMessage);
+            const output = end.lastMessage ? extractReply(end.lastMessage, JsonValueSchema) : undefined;
 
             if (end.final?.status === 'closed' && output === undefined) {
               settle(op, {
