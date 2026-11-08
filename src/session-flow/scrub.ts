@@ -276,6 +276,26 @@ export function titleSpellsLocalPath(title: string, roots: LocalPathRoots, cwd: 
   return pathRewriter(roots, cwd).title(title) !== title;
 }
 
+/** The masks of a session's text: the team's `secrets` and the environment's, then, when given, this machine's paths. */
+function textScrubbing(cwd: string, opts: { secrets?: Record<string, string>; localPaths?: LocalPathRoots }) {
+  const envSecrets = { ...collectEnvSecrets(), ...opts.secrets };
+  const mask = (text: string): string => redact(text, { envSecrets });
+  const paths = opts.localPaths ? pathRewriter(opts.localPaths, cwd) : undefined;
+  const rewrite = paths?.text ?? ((text: string): string => text);
+
+  return { envSecrets, mask, paths, rewrite };
+}
+
+/**
+ * Scrubs text that travels with a session, such as the evidence its step left, as `scrubSession` scrubs the session's
+ * own text blocks: secrets masked, then this machine's paths rewritten as seen from `cwd`.
+ */
+export function textScrubber(cwd: string, opts: { secrets?: Record<string, string>; localPaths?: LocalPathRoots } = {}): (text: string) => string {
+  const { mask, rewrite } = textScrubbing(cwd, opts);
+
+  return (text) => rewrite(mask(text));
+}
+
 /**
  * Redact a session (pure function; the input is not mutated).
  *
@@ -299,10 +319,7 @@ export function scrubSession(
   opts: { dropImagePaths?: boolean; secrets?: Record<string, string>; localPaths?: LocalPathRoots } = {},
 ): ScrubResult {
   const dropImagePaths = opts.dropImagePaths !== false;
-  const envSecrets = { ...collectEnvSecrets(), ...opts.secrets };
-  const mask = (text: string): string => redact(text, { envSecrets });
-  const paths = opts.localPaths ? pathRewriter(opts.localPaths, session.cwd) : undefined;
-  const rewrite = paths?.text ?? ((text: string): string => text);
+  const { envSecrets, mask, paths, rewrite } = textScrubbing(session.cwd, opts);
   let redactedCount = 0;
 
   const messages: Message[] = session.messages.map((msg) => {
