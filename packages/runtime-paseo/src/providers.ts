@@ -1,7 +1,11 @@
 import path from 'node:path';
+import type { OpId, RuntimeFailure } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/tool-core/home';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import type { InitInstance } from '@teamai/runtime-protocol';
+import { paseoHome } from './daemon/address.js';
+import type { Daemon } from './daemon/connect.js';
+import type { ProcessState } from './process-state.js';
 import { z } from 'zod';
 
 // ─── Paseo's providers ───────────────────────────────────
@@ -201,3 +205,78 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
   };
 }
 
+/**
+ * What the person reads once teamai added a Paseo provider for instance `name`: what it holds, that it stays, and how to
+ * remove it: in the Paseo app, or, as Paseo's CLI cannot unset one provider (0.14 refuses `config unset` on a dynamic
+ * key), by editing the config of the Paseo home the member's Paseo uses and reloading the daemon.
+ */
+function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): string {
+  const runs = entry.command ? entry.command[0] : `${entry.extends}'s own command`;
+  const home = Object.entries(entry.env ?? {}).map(([variable, dir]) => `, with ${variable}=${dir}`).join('');
+  const paseoDir = paseoHome(process.env);
+  const homeFlag = process.env.PASEO_HOME ? ` --home ${paseoDir}` : '';
+
+  return `teamai added the Paseo provider ${id} to the daemon at ${url} for its ${name} steps: it extends ${entry.extends} and runs ${runs}${home}. It stays for later runs; to remove it, choose Remove provider on ${id} in the Paseo app's provider settings, or delete agents.providers.${id} from ${path.join(paseoDir, 'config.json')}, then run \`paseo daemon reload${homeFlag}\`. Paseo cannot show its agents' logs once it is gone, so read them first.`;
+}
+
+/** Adds the Paseo providers init offered team instances on before they existed, once across the runtimes on this journal. */
+export function providerAdds(state: ProcessState) {
+  const { journal, write, toAdd, targets, sessionHomes, providerHomes } = state;
+  /** The adds this process runs, by instance name: two opens of one instance wait for the same add. */
+  const adding = new Map<string, Promise<RuntimeFailure | undefined>>();
+
+  /**
+   * Adds the Paseo provider of instance `name` when init offered it before it existed, once across the runtimes on this
+   * journal, and says so once on `op`; or why the instance cannot run, which fails `op`. Nothing for any other tool.
+   */
+  const ensureProvider = (live: Daemon, name: string, op: OpId): Promise<RuntimeFailure | undefined> => {
+    const pending = toAdd.get(name);
+
+    if (!pending) return Promise.resolve(undefined);
+    const { planned, instance } = pending;
+    const cannot = (why: string): RuntimeFailure => ({ code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run ${name} on the Paseo daemon at ${live.url}: ${why}. Then run the step again.` });
+
+    const running = adding.get(name) ?? (async (): Promise<RuntimeFailure | undefined> => {
+      let release: () => void;
+
+      try {
+        release = await journal.holdProviders(live.url);
+      } catch (error) {
+        adding.delete(name);
+
+        return cannot(`it could not hold the daemon's providers in ${journal.root} to add one for it (${error instanceof Error ? error.message : String(error)}); make that directory writable`);
+      }
+
+      try {
+        const added = await live.addProvider(planned, instance);
+
+        // A provider it added stays, so the person is told how to remove it: one the instance runs on, or one Paseo
+        // would not remove again when the instance cannot run on it.
+        if (added.added) write({ event: 'notice', op, message: addedNotice(live.url, planned, name) });
+
+        if ('cannot' in added) return cannot(added.cannot);
+        toAdd.delete(name);
+        const target = targets.get(name);
+
+        if (target) targets.set(name, { ...target, provider: added.provider });
+
+        if (added.home !== undefined) sessionHomes.set(name, added.home);
+
+        if (added.providerHome !== undefined) providerHomes.set(name, added.providerHome);
+
+        return undefined;
+      } finally {
+        adding.delete(name);
+        release();
+      }
+    })();
+
+    adding.set(name, running);
+
+    return running;
+  };
+
+  return ensureProvider;
+}
+
+export type EnsureProvider = ReturnType<typeof providerAdds>;
