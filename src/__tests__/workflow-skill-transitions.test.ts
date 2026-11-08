@@ -1662,6 +1662,31 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
+    name: 'a resume of a run this session drives is handed to the person\'s local resume when its definition has a local route here, as for a run it does not drive',
+    rows: ['R8'],
+    run: async () => {
+      // As after an upgrade that takes from this driver what a step of the run's workspace needs.
+      let routed = false;
+      const made = await harness({ check: CHECK }, {
+        client: (client) => ({
+          ...client,
+          resume: async (run, options) => {
+            const readied = await client.resume(run, options);
+            if (!routed || readied.kind !== 'ready') return readied;
+            const { facts } = readied.description;
+            return { ...readied, description: { ...readied.description, facts: { ...facts, localRoute: { copy: 'run', held: 'test', missing: 'env' }, held: [{ step: 'test', missing: ['env'], env: ['SIGNING_KEY'] }] } } };
+          },
+        }),
+      });
+      const { run } = await started(made);
+      routed = true;
+      expect(await made.call({ kind: 'resume', run, claim: 'lacking', confirmed: false, answers: {} })).toMatchObject({
+        error: { code: 'needs_local_driver', message: expect.stringContaining(`teamai workflow resume ${run}`), next: null },
+      });
+      return made.rows;
+    },
+  },
+  {
     name: 'a second session is refused with how long the owner has been idle, however long that is, and --takeover takes over at once',
     rows: ['S2', 'S4'],
     run: async () => {

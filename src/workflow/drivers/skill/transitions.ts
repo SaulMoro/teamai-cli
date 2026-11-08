@@ -462,11 +462,11 @@ export interface ResumeAnswers { parallel?: number; hitl?: HitlMode; judge?: fal
 
 /**
  * The row of a resume, or of a takeover of a run this machine keeps no skill state of, once `WorkflowClient.resume`
- * answered `readied`: R20 or R21 when it refused the run, R8 for a run with a local route, R24 for an unattended run
- * that needs a person, as `attended` says, else R19 and the run this session drives anew in run mode `mode`. An
- * unattended call first takes R8 or R24 from the run as `WorkflowClient.carried` reads it, before any claim. Undefined
- * for a resume of a run whose skill state is `kept` here, as the claim installed nothing over it: the session rows take
- * the call as a `next`.
+ * answered `readied`: R20 or R21 when it refused the run, R8 for a run with a local route, also one whose skill state is
+ * kept here, R24 for an unattended run that needs a person, as `attended` says, else R19 and the run this session drives
+ * anew in run mode `mode`. An unattended call first takes R8 or R24 from the run as `WorkflowClient.carried` reads it,
+ * before any claim. Undefined for a resume of a run whose skill state is `kept` here, as the claim installed nothing
+ * over it, and R8 does not apply: the session rows take the call as a `next`.
  */
 export function readiedRow(input: { run: RunId; readied: RunReadied; kept: boolean; local?: string; mode: RunMode; attended?: string; needsTool: boolean; answers: ResumeAnswers; confirmed: boolean }):
   | { row: 'R19'; start: StartRun }
@@ -484,10 +484,12 @@ export function readiedRow(input: { run: RunId; readied: RunReadied; kept: boole
     case 'failed':
       return { row: 'R21', answer: { kind: 'engine-error', error: readied.failure, next: null } };
     case 'ready': {
-      if (input.kept && !readied.installed) return undefined;
       const { description, judging } = readied;
 
+      // A run only the local driver may go on in is refused even when this session drives it, so one driver runs it.
       if (input.local !== undefined) return { row: 'R8', answer: { kind: 'error', refusal: { code: 'needs_local_driver', name: description.name, reason: input.local, run } } };
+
+      if (input.kept && !readied.installed) return undefined;
 
       if (unattended && input.attended !== undefined) return { row: 'R24', answer: { kind: 'engine-error', error: { code: 'unattended_denied', message: input.attended }, next: null } };
 
