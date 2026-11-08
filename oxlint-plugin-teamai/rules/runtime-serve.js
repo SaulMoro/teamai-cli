@@ -14,8 +14,6 @@ const ENDS = new Set(['exited', 'finished', 'cancelled', 'failed']);
  * this list only shrinks, and an entry that no longer serves the protocol itself fails until it is removed.
  */
 const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
-  // Until Paseo adopts serveRuntime and the ledger.
-  'packages/runtime-paseo/src/runtime.ts',
   // Until the sandbox adopts them.
   'packages/runtime-sandbox/src/runtime.ts',
 ]));

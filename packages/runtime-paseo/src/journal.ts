@@ -1,6 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { hold } from '@teamai/runtime-kit/journal';
 import { ConfinedKeptSchema, OpIdSchema, OpStateSchema, RUN_DIR_ENV, type OpId } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 
@@ -163,151 +163,6 @@ function write(file: string, value: Place | PromptRecord): void {
   fs.renameSync(temporary, file);
 }
 
-/** Whether a process runs, as a runtime holding an open: one another user runs is alive though it cannot be signalled. */
-const HoldPidSchema = z.coerce.number().int().positive();
-
-/**
- * How old a hold on a directory's open may grow before another open takes it over: its runtime gives up on each question
- * to Paseo after 20 s, so one older than this is stuck past that, or gone with its pid in use since. Whichever of the two journals first whether the workspace is the
- * member's decides it for the other, which reads it before it decides.
- */
-const HOLD_STALE_MS = 60_000;
-
-/**
- * The hold on a directory's open: its text, the pid of the runtime that holds it when it names one, and when it was
- * taken; none once released.
- */
-function holdAt(file: string): { text: string; pid: number | undefined; takenAt: number } | undefined {
-  let text: string;
-  let takenAt: number;
-
-  try {
-    text = fs.readFileSync(file, 'utf8');
-    takenAt = fs.statSync(file).mtimeMs;
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
-    throw error;
-  }
-
-  const pid = HoldPidSchema.safeParse(text.split(' ')[0]);
-
-  return { text, pid: pid.success ? pid.data : undefined, takenAt };
-}
-
-/**
- * Removes the hold at `file` when it is still the one whose text is `text`: one another open took over since is put
- * back. It is moved aside first, so no hold is removed between the read and the removal.
- */
-function releaseHold({ file, text }: { file: string; text: string }): void {
-  const aside = path.join(path.dirname(file), `.${process.pid}.${randomUUID()}.aside`);
-
-  try {
-    fs.renameSync(file, aside);
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
-    throw error;
-  }
-
-  try {
-    if (fs.readFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
-  } finally {
-    fs.rmSync(aside, { force: true });
-  }
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
-}
-
-/**
- * The last hold this process took or waits for, by hold file. The file names the process that holds it, so it cannot
- * tell two holds of one process apart: a second one waits here for the first instead.
- */
-const queued = new Map<string, Promise<void>>();
-
-/**
- * Holds `key` in `dir` for one caller at a time across the runtimes on a journal and within this process, waiting while
- * another holds it, and taking it from a runtime that died or has held it for `HOLD_STALE_MS`. Resolves to its release,
- * which leaves a hold another runtime took over; rejects when the hold cannot be written.
- */
-async function hold(dir: string, key: string): Promise<() => void> {
-  const file = path.join(dir, createHash('sha256').update(key).digest('hex').slice(0, 32));
-  let leave = (): void => {};
-  const left = new Promise<void>((resolve) => { leave = resolve; });
-  const turn = queued.get(file) ?? Promise.resolve();
-  const mine = turn.then(() => left);
-  queued.set(file, mine);
-
-  const done = (): void => {
-    leave();
-
-    if (queued.get(file) === mine) queued.delete(file);
-  };
-
-  // A caller that never releases is waited for no longer than one that died would be: its hold is then taken over.
-  let timer: NodeJS.Timeout | undefined;
-  await Promise.race([turn, new Promise<void>((resolve) => { timer = setTimeout(resolve, HOLD_STALE_MS); })]);
-  clearTimeout(timer);
-
-  try {
-    const release = await holdFile(dir, file);
-
-    return () => {
-      release();
-      done();
-    };
-  } catch (error) {
-    done();
-    throw error;
-  }
-}
-
-/** Holds `file` in `dir` for one runtime at a time, as `hold` does across processes. */
-async function holdFile(dir: string, file: string): Promise<() => void> {
-  fs.mkdirSync(dir, { recursive: true });
-  // Written whole, then linked into place, so another runtime never reads a hold with no pid in it. Each hold is told
-  // apart from every other, so a hold found stale is never mistaken for one another runtime took since.
-  const mine = path.join(dir, `.${process.pid}.${randomUUID()}.tmp`);
-  const text = `${process.pid} ${randomUUID()}`;
-
-  try {
-    for (;;) {
-      try {
-        // Written again before each try, so a hold's age counts from when it was taken, not from when it began to wait
-        // for it.
-        fs.writeFileSync(mine, text, { mode: 0o600 });
-        fs.linkSync(mine, file);
-
-        return () => releaseHold({ file, text });
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      }
-
-      const held = holdAt(file);
-
-      // Released since the link failed: try again.
-      if (held === undefined) continue;
-
-      if (held.pid !== undefined && held.pid !== process.pid && isAlive(held.pid) && Date.now() - held.takenAt < HOLD_STALE_MS) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        continue;
-      }
-
-      // Its runtime is gone, or held it too long. A hold another runtime took in its place since it was read is put
-      // back, so two runtimes that both found it stale never both hold.
-      releaseHold({ file, text: held.text });
-    }
-  } finally {
-    fs.rmSync(mine, { force: true });
-  }
-}
-
 export function journal(root: string) {
   const placeFile = (handle: string): string => path.join(root, 'places', `${encodeURIComponent(handle)}.json`);
   const promptFile = (op: OpId): string => path.join(root, 'ops', `${op}.json`);
@@ -372,8 +227,10 @@ export function journal(root: string) {
       .find((member) => member !== undefined),
     /**
      * Holds `directory` for one open at a time across the runtimes on this journal, waiting while another live runtime
-     * holds it, and taking it from one that died or has held it for `HOLD_STALE_MS`. Resolves to its release, which
-     * leaves a hold another open took over; rejects when the hold cannot be written.
+     * holds it, and taking it from one that died or has held it too long: its runtime gives up on each question to Paseo
+     * after 20 s, well within that. Whichever of two opens journals first whether the workspace is the member's decides it
+     * for the other, which reads it before it decides. Resolves to its release, which leaves a hold another open took
+     * over; rejects when the hold cannot be written.
      */
     holdOpen: (directory: string): Promise<() => void> => hold(path.join(root, 'opening'), resolvedDir(directory)),
     /**

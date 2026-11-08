@@ -6,8 +6,9 @@ import {
   CANCEL_FAILED, fitReason, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
-import { opLedger } from '@teamai/runtime-kit/ledger';
-import { serveRuntime, type RuntimeHandlers } from '@teamai/runtime-kit/serve';
+import { answering } from '@teamai/runtime-kit/answering';
+import { opLedger, type OpEnd } from '@teamai/runtime-kit/ledger';
+import { serveRuntime } from '@teamai/runtime-kit/serve';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -358,12 +359,10 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     return turn;
   }
 
-  /** The requests this process is answering. */
-  const answering = new Set<Promise<void>>();
   /** teamai closed stdin: a prompt's agent goes on in Paseo, and this process stops following it. */
   let closing = false;
 
-  const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
+  const fail = (op: OpId, failure: RuntimeFailure): void => ledger.end({ op, state: 'failed', failure });
 
   /** The team instances init offered whose Paseo provider teamai adds at the first open or prompt that runs them, by name. */
   let toAdd = new Map<string, { planned: ProviderToAdd; instance: InitInstance }>();
@@ -421,29 +420,15 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     return running;
   };
 
-  const send = (op: OpId, outcome: OpState): void => {
-    switch (outcome.state) {
-      case 'finished':
-        write({ op, event: 'finished', session: outcome.session, result: outcome.result, ...(outcome.usage && { usage: outcome.usage }), ...(outcome.confined && { confined: outcome.confined }) });
+  /** An outcome a prompt ended with, which only a prompt still running is not. */
+  const endOf = (outcome: OpState): OpEnd => {
+    if (outcome.state === 'running') throw new Error(`A Paseo prompt's record says ${outcome.op} still runs, where it says how it ended`);
 
-        return;
-      case 'cancelled':
-        write({ op, event: 'cancelled' });
-
-        return;
-      case 'failed':
-        fail(op, outcome.failure);
-
-        return;
-      case 'running':
-      case 'exited':
-        throw new Error(`A Paseo prompt never ends ${outcome.state}`);
-      default: {
-        const unhandled: never = outcome;
-        throw new Error(`Unknown outcome ${JSON.stringify(unhandled)}`);
-      }
-    }
+    return outcome;
   };
+
+  /** Answers how `outcome`'s prompt ended, as its record or this process holds it. */
+  const send = (outcome: OpState): void => ledger.end(endOf(outcome));
 
   /**
    * The creates of the prompts this process launched, each settled once no create of it can still be sent. Kept apart
@@ -492,14 +477,14 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
 
     // Another process ended it first, as a recover-mode cancel does: a prompt this one follows ends as that one recorded.
     if (record.outcome) {
-      if (waiting.delete(op)) send(op, record.outcome);
+      if (waiting.delete(op)) send(record.outcome);
 
       return;
     }
 
-    journal.savePrompt(op, { ...record, outcome });
+    // An end the record cannot keep is answered all the same, and this process remembers it until the place closes.
     waiting.delete(op);
-    send(op, outcome);
+    ledger.settle(endOf(outcome), () => journal.savePrompt(op, { ...record, outcome }));
   };
 
   /** Records whether a prompt sent its create, on its record as it stands: one a close removed is not written again. */
@@ -1106,7 +1091,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
 
     // A repeated id: the same acceptance, then the outcome it ended with, or a reconnect to its agent.
     if (known?.kind === 'refused') {
-      send(op, known.outcome);
+      send(known.outcome);
 
       return;
     }
@@ -1114,7 +1099,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     if (known?.outcome || (known && waiting.has(op))) {
       accept(op, known, live, { exists: Boolean(known.outcome) || waiting.get(op)?.created === true });
 
-      if (known.outcome) send(op, known.outcome);
+      if (known.outcome) send(known.outcome);
 
       return;
     }
@@ -1363,10 +1348,10 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     const deadline = Date.now() + STOP_SETTLE_MS;
     // A prompt that already ended, as one whose end teamai lost, answers that end again and stops nothing. Only a stop that
     // failed is tried again; until it is confirmed or fails again, reattach reports the prompt running.
-    const unrecorded = unkept.get(op);
+    const unrecorded = ledger.unkept(op);
 
     if (unrecorded) {
-      send(op, unrecorded);
+      ledger.end(unrecorded);
 
       return;
     }
@@ -1377,7 +1362,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     const { outcome } = found;
 
     if (found.kind === 'refused' || (outcome && !isFailedStop(outcome))) {
-      if (outcome) send(op, outcome);
+      if (outcome) send(outcome);
 
       return;
     }
@@ -1430,7 +1415,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
 
       if (recorded && recorded.kind !== 'refused' && recorded.outcome) {
         waiting.delete(op);
-        send(op, recorded.outcome);
+        send(recorded.outcome);
       }
     }
 
@@ -1551,6 +1536,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
       const following = waiting.get(op);
       waiting.delete(op);
       following?.stop();
+      ledger.forget(op);
     }
 
     journal.forget(handle);
@@ -1627,15 +1613,19 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     }
 
     // Its agents stopped: a prompt that has not ended ends cancelled, once, before its record goes. One this process
-    // already ended, and no request of which is still answered, was ended by a failure its record could not keep.
-    for (const { op, record } of journal.promptsOf(handle)) {
-      if (record.outcome || (ledger.endsOf(op) > 0 && !inFlight.has(op))) continue;
+    // already ended with an end its record could not keep ended so.
+    const ops = journal.promptsOf(handle);
+
+    for (const { op, record } of ops) {
+      if (record.outcome || ledger.unkept(op) !== undefined) continue;
       const following = waiting.get(op);
       settle(op, { op, state: 'cancelled' });
       following?.stop();
     }
 
     journal.forget(handle);
+
+    for (const { op } of ops) ledger.forget(op);
     write({ event: 'closed', handle });
   }
 
@@ -1664,7 +1654,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
           return;
         }
 
-        const ops = journal.promptsOf(request.handle).map(({ op, record }): OpState => record.outcome ?? unkept.get(op) ?? { op, state: 'running' });
+        const ops = journal.promptsOf(request.handle).map(({ op, record }): OpState => record.outcome ?? ledger.unkept(op) ?? { op, state: 'running' });
         const display = live && displayOf(request.handle, live);
         write({ event: 'alive', handle: request.handle, ops, ...(display && { display }) });
 
@@ -1726,30 +1716,9 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     }
   };
 
-  /** The outcomes this process sent but could not record, until a later prompt or cancel of the op: a reattach here reports them. */
-  const unkept = new Map<OpId, OpState>();
-
-  /**
-   * Records the outcome a failed prompt or cancel request sends, so a reattach or a repeated prompt reports it, when the
-   * prompt's record can still be read and written. One that cannot is only sent, once, and only a reattach in this
-   * process reports it.
-   */
-  const keep = (op: OpId, outcome: OpState): void => {
-    try {
-      const record = journal.prompt(op);
-
-      if (record && record.kind !== 'refused' && !record.outcome) journal.savePrompt(op, { ...record, outcome });
-    } catch {
-      unkept.set(op, outcome);
-    }
-  };
-
-  /** The ops of the requests this process is answering, each with how many. */
-  const inFlight = new Map<OpId, number>();
-
   /** Whether `op` is one this runtime runs or answered: an answer of its own would end it a second time. One it cannot tell is. */
   const holdsOp = (op: OpId): boolean => {
-    if (inFlight.has(op) || creates.has(op) || ledger.endsOf(op) > 0) return true;
+    if (requests.isAnswering(op) || creates.has(op) || ledger.endsOf(op) > 0) return true;
 
     try {
       return journal.prompt(op) !== undefined;
@@ -1762,76 +1731,61 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
   const answerOne = async (request: RuntimeRequest): Promise<void> => {
     const endsBefore = 'op' in request ? ledger.endsOf(request.op) : 0;
 
-    if ('op' in request) inFlight.set(request.op, (inFlight.get(request.op) ?? 0) + 1);
-
     // A prompt sent again, or a cancel that tries a failed stop again, may end the op otherwise, so the outcome it could
     // not record is no longer its state. A cancel of any other end answers that end.
-    if (request.type === 'prompt' || (request.type === 'cancel' && isFailedStop(unkept.get(request.op)))) unkept.delete(request.op);
-
-    const answered = (async () => {
-      try {
-        await answer(request);
-      } catch (error) {
-        const message = `Paseo failed: ${error instanceof Error ? error.message : String(error)}`;
-
-        // Each request gets its own failure, since an error line would fail every request teamai is waiting on. A prompt
-        // whose agent exists, or may, ends as an unconfirmed stop, since the agent may still run. A close that failed
-        // keeps its place.
-        if (request.type === 'prompt' || request.type === 'cancel') {
-          // Ended meanwhile, by this request or another: a second line would end it twice.
-          if (ledger.endsOf(request.op) !== endsBefore) return;
-          // This line is the op's one end: its follow, taken from `waiting`, ends nothing after it.
-          const following = waiting.get(request.op);
-          waiting.delete(request.op);
-          following?.stop();
-          const agent = agentNamed(request.op);
-          const failure = agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message };
-
-          keep(request.op, { op: request.op, state: 'failed', failure });
-          fail(request.op, failure);
-        } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
-        else if (request.type === 'close') {
-          // A released place is forgotten though its close failed; a journal that cannot remove it is named.
-          let kept = '';
-
-          try {
-            if (request.release) forgetReleased(request.handle);
-          } catch (forgetting) {
-            kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} readable and writable, then release it again.`;
-          }
-
-          write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${kept}` } });
-        }
-        else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });
-        else write({ event: 'failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
-      }
-    })();
-
-    answering.add(answered);
+    if (request.type === 'prompt' || (request.type === 'cancel' && isFailedStop(ledger.unkept(request.op)))) ledger.forget(request.op);
 
     try {
-      await answered;
-    } finally {
-      answering.delete(answered);
+      await answer(request);
+    } catch (error) {
+      const message = `Paseo failed: ${error instanceof Error ? error.message : String(error)}`;
 
-      if ('op' in request) {
-        const left = (inFlight.get(request.op) ?? 1) - 1;
+      // Each request gets its own failure, since an error line would fail every request teamai is waiting on. A prompt
+      // whose agent exists, or may, ends as an unconfirmed stop, since the agent may still run. A close that failed
+      // keeps its place.
+      if (request.type === 'prompt' || request.type === 'cancel') {
+        // Ended meanwhile, by this request or another: a second line would end it twice.
+        if (ledger.endsOf(request.op) !== endsBefore) return;
+        // This line is the op's one end: its follow, taken from `waiting`, ends nothing after it.
+        const following = waiting.get(request.op);
+        waiting.delete(request.op);
+        following?.stop();
+        const agent = agentNamed(request.op);
+        const failure = agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message };
 
-        if (left > 0) inFlight.set(request.op, left);
-        else inFlight.delete(request.op);
+        // Kept on its record when that can still be read and written, so a reattach or a repeated prompt reports it.
+        ledger.settle({ op: request.op, state: 'failed', failure }, () => {
+          const record = journal.prompt(request.op);
+
+          if (record && record.kind !== 'refused' && !record.outcome) journal.savePrompt(request.op, { ...record, outcome: { op: request.op, state: 'failed', failure } });
+        });
+      } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
+      else if (request.type === 'close') {
+        // A released place is forgotten though its close failed; a journal that cannot remove it is named.
+        let kept = '';
+
+        try {
+          if (request.release) forgetReleased(request.handle);
+        } catch (forgetting) {
+          kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} readable and writable, then release it again.`;
+        }
+
+        write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${kept}` } });
       }
+      else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });
+      else write({ event: 'failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
     }
   };
 
-  const handlers: RuntimeHandlers = { init: answerOne, open: answerOne, exec: answerOne, prompt: answerOne, cancel: answerOne, collect: answerOne, reattach: answerOne, close: answerOne };
-  const status = await serveRuntime({ name: 'paseo', input, env, ledger, handlers, holds: holdsOp, stopped: 'its Paseo agent', debug: note });
+  const requests = answering({ init: answerOne, open: answerOne, exec: answerOne, prompt: answerOne, cancel: answerOne, collect: answerOne, reattach: answerOne, close: answerOne });
+  const status = await serveRuntime({ name: 'paseo', input, env, ledger, handlers: requests.handlers, holds: holdsOp, stopped: 'its Paseo agent', debug: note });
 
   // teamai is gone once stdin ends: the requests in flight get their answers, and an agent goes on in Paseo, which keeps
   // how it ended for the next reattach.
   closing = true;
 
   for (const following of waiting.values()) following.stop();
-  await Promise.allSettled(answering);
+  await requests.settled();
   await daemon?.close();
 
   return status;
