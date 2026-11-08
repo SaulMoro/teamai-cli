@@ -37,6 +37,34 @@ export const read = (input: NodeJS.ReadableStream, other: NodeJS.EventEmitter) =
   expect(output).toContain(MESSAGE);
 });
 
+rule.invalid('rejects an interface whose name only another function\'s interface listens for errors on', `import readline from 'node:readline';
+export const safe = (input: NodeJS.ReadableStream) => {
+  const lines = readline.createInterface({ input });
+  lines.on('error', () => {});
+  return lines;
+};
+export const unsafe = (input: NodeJS.ReadableStream) => {
+  const lines = readline.createInterface({ input });
+  lines.on('line', () => {});
+};`, (output) => {
+  expect(output.match(/readline re-emits/g)).toHaveLength(1);
+  expect(output).toContain('"line":8,"column":17');
+});
+
+rule.invalid('rejects the positional form with no error listener', `import readline from 'node:readline';
+export const read = (input: NodeJS.ReadableStream) => readline.createInterface(input).on('line', () => {});`, (output) => {
+  expect(output).toContain(MESSAGE);
+});
+
+rule.valid('allows an error listener added in a callback inside the function that made the interface', `import readline from 'node:readline';
+export const read = (input: NodeJS.ReadableStream) => {
+  const lines = readline.createInterface({ input });
+  return new Promise((resolve, reject) => {
+    lines.on('error', reject);
+    lines.on('close', resolve);
+  });
+};`);
+
 rule.valid('allows an error listener chained on the interface', `import readline from 'node:readline';
 export const read = (input: NodeJS.ReadableStream) => readline.createInterface({ input }).on('line', () => {}).once('error', () => {});`);
 

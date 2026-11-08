@@ -9,14 +9,36 @@ const LISTENS = new Set(['on', 'once', 'addListener', 'prependListener', 'prepen
 const MESSAGE = 'Listen for errors on this interface: readline re-emits its input\'s errors on the interface, which throws them when nothing listens there, so a socket or stream that fails ends the process. Add .on(\'error\', …) to it, or read it with for await, which rejects instead.';
 
 /**
- * The `input` an options object gives `createInterface`, when it gives one.
- * @param {ESTree.Node | undefined} options
+ * The `input` `createInterface` reads: its options object's `input`, or its first argument itself, as the positional
+ * form passes the stream, or an options object the rule cannot see into, which it checks all the same.
+ * @param {ESTree.Node | undefined} first
  */
-function inputOf(options) {
-  if (options?.type !== 'ObjectExpression') return undefined;
-  const input = options.properties.find((candidate) => candidate.type === 'Property' && !candidate.computed && candidate.key.type === 'Identifier' && candidate.key.name === 'input');
+function inputOf(first) {
+  if (first === undefined || first.type === 'SpreadElement') return undefined;
+
+  if (first.type !== 'ObjectExpression') return first;
+  const input = first.properties.find((candidate) => candidate.type === 'Property' && !candidate.computed && candidate.key.type === 'Identifier' && candidate.key.name === 'input');
 
   return input?.type === 'Property' ? input.value : undefined;
+}
+
+/** The node types that start a scope of their own for a name bound with `const` or `let` inside them. */
+const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+
+/**
+ * The functions `node` is in, innermost first, then the program: the scopes a name it uses may be bound in.
+ * @param {ESTree.Node} node
+ * @returns {ESTree.Node[]}
+ */
+function scopesOf(node) {
+  /** @type {ESTree.Node[]} */
+  const scopes = [];
+
+  for (let current = node.parent; current; current = current.parent) {
+    if (FUNCTIONS.has(current.type) || current.type === 'Program') scopes.push(current);
+  }
+
+  return scopes;
 }
 
 /**
@@ -116,19 +138,26 @@ export default defineRule({
     docs: { description: 'Listen for errors on every readline interface over a socket or stream: readline re-emits its input\'s errors there and throws them when nothing listens.' },
   },
   create(context) {
-    /** @type {Array<{ node: ESTree.Node; name: string }>} */
+    /** @type {Array<{ node: ESTree.Node; name: string; scope: ESTree.Node | undefined }>} */
     const bound = [];
-    /** @type {Set<string>} */
-    const handled = new Set();
+    /**
+     * Where a name is handled: the name, and the scopes of the code that handles it, innermost first.
+     * @type {Array<{ name: string; scopes: ESTree.Node[] }>}
+     */
+    const handlers = [];
+
+    /**
+     * @param {string | undefined} name
+     * @param {ESTree.Node} node
+     */
+    const handles = (name, node) => {
+      if (name !== undefined) handlers.push({ name, scopes: scopesOf(node) });
+    };
 
     return {
       /** @param {ESTree.CallExpression} node */
       CallExpression(node) {
-        if (listensForErrors(node) && node.callee.type === 'MemberExpression') {
-          const name = rootName(node.callee.object);
-
-          if (name !== undefined) handled.add(name);
-        }
+        if (listensForErrors(node) && node.callee.type === 'MemberExpression') handles(rootName(node.callee.object), node);
 
         if (!isCreateInterface(node)) return;
         const input = inputOf(node.arguments[0]);
@@ -137,19 +166,27 @@ export default defineRule({
         const name = boundName(node);
 
         if (name === undefined) context.report({ node, message: MESSAGE });
-        else bound.push({ node, name });
+        else bound.push({ node, name, scope: scopesOf(node)[0] });
       },
       /** @param {ESTree.ForOfStatement} node */
       ForOfStatement(node) {
-        if (node.await && node.right.type === 'Identifier') handled.add(node.right.name);
+        if (node.await && node.right.type === 'Identifier') handles(node.right.name, node);
       },
       /** @param {ESTree.MemberExpression} node */
       MemberExpression(node) {
-        if (isAsyncIterator(node) && node.object.type === 'Identifier') handled.add(node.object.name);
+        if (isAsyncIterator(node) && node.object.type === 'Identifier') handles(node.object.name, node);
       },
       'Program:exit'() {
-        for (const { node, name } of bound) {
-          if (!handled.has(name)) context.report({ node, message: MESSAGE });
+        // A handler reaches the interface bound to its name in the innermost scope around it that binds one, as the
+        // name itself resolves: an interface of the same name in another function is another interface.
+        const reached = new Set(handlers.flatMap(({ name, scopes }) => {
+          const scope = scopes.find((candidate) => bound.some((each) => each.name === name && each.scope === candidate));
+
+          return bound.filter((each) => each.name === name && each.scope === scope);
+        }));
+
+        for (const each of bound) {
+          if (!reached.has(each)) context.report({ node: each.node, message: MESSAGE });
         }
       },
     };
