@@ -1210,13 +1210,18 @@ describe('a prompt attempt in a container', () => {
     const at = place();
     await openPlace(connection, at);
     const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`)) ?? '';
+    const intact = fs.readFileSync(record, 'utf8');
     fs.writeFileSync(record, '{"run":');
     const op = newOp();
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
     expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
     connection.send({ type: 'close', handle: HANDLE });
-    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    const closeFailed = await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000);
+
+    expect(closeFailed).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    // Not released: the place stays for a close once the journal is mended, so nothing is left on purpose.
+    expect(closeFailed).not.toHaveProperty('kept');
     connection.send({ type: 'reattach', handle: HANDLE });
     expect(await connection.next((message) => message.handle === HANDLE, 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
     // An error line would fail every other request teamai is waiting on.
@@ -1224,6 +1229,8 @@ describe('a prompt attempt in a container', () => {
     // Nothing is taken as absent: the container and its record stay for a close once the journal is mended.
     expect(engine.containers()).toEqual([HANDLE]);
     expect(fs.existsSync(record)).toBe(true);
+    // Mended, the place closes as any other.
+    fs.writeFileSync(record, intact);
   });
 
   it('answers a resent exec whose own record it cannot read with that exec\'s failure, never silence', async () => {
@@ -1234,12 +1241,15 @@ describe('a prompt attempt in a container', () => {
     const op = newOp();
     await exec(connection, { argv: ['/bin/sh', '-c', 'echo ran'], cwd: at.worktree }, op);
     const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
+    const intact = fs.readFileSync(record, 'utf8');
     fs.writeFileSync(record, '{"handle":');
     const before = connection.messages.length;
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
     expect(await connection.next((message) => message.op === op && connection.messages.indexOf(message) >= before && message.event !== 'output', 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
+    // Mended, the place closes as any other.
+    fs.writeFileSync(record, intact);
   });
 
   it('ends an exec it cannot record the end of once, with its true end, and says so in a notice naming the record', async () => {
@@ -1252,6 +1262,7 @@ describe('a prompt attempt in a container', () => {
     await connection.next((message) => message.op === op && message.event === 'accepted');
     await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
     const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
+    const intact = fs.readFileSync(record, 'utf8');
     fs.writeFileSync(record, '{"handle":');
     fs.writeFileSync(path.join(at.worktree, 'release'), '');
 
@@ -1259,6 +1270,8 @@ describe('a prompt attempt in a container', () => {
     expect(connection.messages.filter((message) => message.op === op && message.event === 'notice')).toEqual([{ event: 'notice', op, message: expect.stringContaining(record) }]);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(connection.messages.filter(ended(op))).toHaveLength(1);
+    // Mended, the place closes as any other.
+    fs.writeFileSync(record, intact);
   });
 
   it("reattaches and closes a healthy place whatever another attempt's damaged record holds, and still fails that attempt until it is mended", async () => {
@@ -1988,10 +2001,13 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     await init(connection, { provider: 'docker', image: IMAGE });
     await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
     const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`)) ?? '';
+    const intact = fs.readFileSync(record, 'utf8');
     fs.writeFileSync(record, '{"run":');
 
     expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, ms: 5_000 })).toMatchObject({ event: 'failed', failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
+    // Mended, the place closes as any other.
+    fs.writeFileSync(record, intact);
   });
 
   it('leaves no container, filter, network or record when teamai closes a judge while its container is being created', async () => {
