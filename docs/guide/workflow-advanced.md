@@ -1769,7 +1769,7 @@ teamai writes each operation id to `attempts/<attempt>/runtime.json` before it s
 | Killed | On resume |
 | --- | --- |
 | After the runtime accepted `open` | The same handle; no second place |
-| After the runtime accepted `open`, then failed it | The same failure; the `open` is not sent again, and the place is closed |
+| After the runtime accepted `open`, then failed it | The same failure; the `open` is not sent again |
 | After `open` was sent, before teamai recorded its handle | `workflow cancel` keeps the attempt and says the runtime may hold a place teamai cannot close: close it there yourself, then run `teamai workflow cancel <run> --release <attempt>` |
 | After an exec finished | Its output, session and usage, read from what the runtime kept; the tool does not run again |
 | While an exec ran | It is stopped and the step fails `runtime_interrupted`; its work is kept |

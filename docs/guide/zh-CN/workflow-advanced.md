@@ -1763,7 +1763,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 | 被杀掉的时机 | 继续运行时 |
 | --- | --- |
 | 运行时接受 `open` 之后 | 同一个句柄，不会打开第二个位置 |
-| 运行时接受 `open` 后又让它失败 | 同一个失败；不会再次发送 `open`，位置会被关闭 |
+| 运行时接受 `open` 后又让它失败 | 同一个失败；不会再次发送 `open` |
 | 已发送 `open`，但 teamai 还没记下它的句柄 | `workflow cancel` 保留这次尝试，并说明运行时可能留着一个 teamai 无法关闭的位置：请自己在那里关闭它，然后运行 `teamai workflow cancel <run> --release <attempt>` |
 | 一次 exec 结束之后 | 从运行时保存的内容读取它的输出、会话和用量，工具不会再次运行 |
 | exec 运行期间 | 它被停止，步骤失败为 `runtime_interrupted`，工作会保留 |
