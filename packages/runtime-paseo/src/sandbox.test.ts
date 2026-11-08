@@ -129,6 +129,21 @@ describe('teamai-runtime-paseo', () => {
     await expect.poll(() => received().filter((request) => request.type === 'delete_agent_request')).toMatchObject([{ agentId: createdAgent('op-0000000b') }]);
   });
 
+  it('refuses to open a place through a sandbox that serves no attempt socket, as seatbelt\'s plain handle, naming those that do, and adds no provider', async () => {
+    attempt = await serveAttemptSocket();
+    const { runtime } = startThrough(attempt);
+    await ready(runtime);
+    const request = openRequest('op-0000000a', 'a0123abcd', 'claude');
+    runtime.send({ ...request, outer: 'teamai-r0123abcd-a0123abcd' });
+    await runtime.next(isOp('op-0000000a', 'accepted'));
+
+    expect(await runtime.next((line) => isOp('op-0000000a', 'ready')(line) || isOp('op-0000000a', 'failed')(line))).toMatchObject({
+      event: 'failed',
+      failure: { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, podman, sbx or bwrap.' },
+    });
+    expect(received().map((crossed) => crossed.type)).not.toContain('set_daemon_config_request');
+  });
+
   it('refuses to open an OpenCode place through the sandbox, since Paseo may serve several agents from one OpenCode server', async () => {
     attempt = await serveAttemptSocket();
     const { runtime } = startThrough(attempt);

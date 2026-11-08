@@ -48,10 +48,11 @@ const PlaceSchema = z.discriminatedUnion('kind', [
     /** The run's scratch directory, which the place's agents write at its own path. */
     runDir: z.string(),
     /**
-     * For a place teamai runs through a sandbox (`through: sandbox`): the attempt socket each agent here registers on,
-     * the Paseo provider that runs the tool as teamai's wrapper, and the attempt's tool home, which keeps its sessions.
+     * For a place teamai runs through a sandbox (`through: sandbox`): the outer runtime's handle, which names the attempt
+     * socket each agent here registers on, the Paseo provider that runs the tool as teamai's wrapper, and the attempt's
+     * tool home, which keeps its sessions.
      */
-    through: z.object({ socket: z.string(), provider: z.string(), home: z.string().optional() }).optional(),
+    through: z.object({ outer: z.string(), provider: z.string(), home: z.string().optional() }).optional(),
   }),
   z.object({ kind: z.literal('confined'), run: z.string(), attempt: z.string(), workspace: WorkspaceSchema.optional() }),
 ]);
