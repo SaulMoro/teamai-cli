@@ -103,11 +103,14 @@ export function isWithin(inner: string, outer: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+/** WSL2's Windows drives and interop, which WSL puts on PATH: never a tool root, so no planted `.exe` runs (sandcastle's `bwrapSandbox.ts`). */
+const WINDOWS_ROOTS = ['/mnt', '/run/WSL'];
+
 /**
  * The directories of this machine a step reads its tools from: each PATH directory, and its install root (the parent of
  * a `bin`), and the install root of each executable `argv[0]`, `node` and `git` resolve to through their links. Under the
  * member's home only the directory itself, never its install root: beside `~/.local/bin` sit logins. Never the home or
- * a directory above it, nor one holding `.git`, whose history is the member's.
+ * a directory above it, nor one holding `.git`, whose history is the member's, nor WSL's Windows drives.
  */
 export function toolRoots(argv0: string, pathVariable: string | undefined, home: string): string[] {
   const entries = (pathVariable ?? '').split(path.delimiter).filter((dir) => path.isAbsolute(dir));
@@ -122,7 +125,7 @@ export function toolRoots(argv0: string, pathVariable: string | undefined, home:
 
   const candidates = [...entries.map(realOf), ...executables].flatMap((dir) => (path.basename(dir) === 'bin' && !isWithin(dir, realHome) ? [dir, path.dirname(dir)] : [dir]));
 
-  return [...new Set(candidates)].filter((dir) => fs.existsSync(dir) && !isWithin(realHome, dir) && !fs.existsSync(path.join(dir, '.git')));
+  return [...new Set(candidates)].filter((dir) => fs.existsSync(dir) && !isWithin(realHome, dir) && !fs.existsSync(path.join(dir, '.git')) && !WINDOWS_ROOTS.some((root) => isWithin(dir, root)));
 }
 
 const PidSchema = z.coerce.number().int().positive();
