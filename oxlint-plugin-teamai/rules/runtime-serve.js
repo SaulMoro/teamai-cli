@@ -20,8 +20,7 @@ const PROCESS_MODULES = new Set(['process', 'node:process']);
  * runtime starts on the kit; this list only shrinks, and an entry that no longer does either fails until it is removed.
  */
 const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
-  // Until Paseo adopts serveRuntime and the ledger.
-  'packages/runtime-paseo/src/runtime.ts',
+  // Until Paseo reads no process input of its own: serveRuntime reads it.
   'packages/runtime-paseo/src/main.ts',
   // Until the sandbox adopts them, and reads its attempt socket through the kit's eachLine.
   'packages/runtime-sandbox/src/runtime.ts',

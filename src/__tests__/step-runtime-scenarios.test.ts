@@ -491,7 +491,6 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     reportsUsage: false,
     failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
-    unjournaledEnd: 'failed cancel_failed',
   },
 ];
 
