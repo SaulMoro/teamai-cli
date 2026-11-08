@@ -202,7 +202,14 @@ export const seatbelt: NativeSandbox = {
     if (onPath(SANDBOX_EXEC, undefined) === undefined) return { ok: false, message: `${SANDBOX_EXEC}, which macOS ships, is missing. Use provider: sbx or docker` };
     const probe = await run(SANDBOX_EXEC, ['-p', '(version 1)(allow default)', 'true'], env);
 
-    return probe.ok ? { ok: true } : { ok: false, message: `${SANDBOX_EXEC} could not start a sandbox (${probe.message}). Run \`${SANDBOX_EXEC} -p '(version 1)(allow default)' true\` to see why, and start again` };
+    if (probe.ok) return { ok: true };
+
+    // macOS does not start a sandbox inside another: the runtime then runs under an app's or a tool's own.
+    if (/Operation not permitted/i.test(probe.message)) {
+      return { ok: false, message: `${SANDBOX_EXEC} could not start a sandbox (${probe.message}). This process already runs inside a macOS sandbox, such as one an app or another tool started it in, and macOS does not start one inside another. Start teamai from a terminal outside it, or use provider: sbx or docker` };
+    }
+
+    return { ok: false, message: `${SANDBOX_EXEC} could not start a sandbox (${probe.message}). Run \`${SANDBOX_EXEC} -p '(version 1)(allow default)' true\` to see why, and start again` };
   },
 
   wrap(sandboxed) {
