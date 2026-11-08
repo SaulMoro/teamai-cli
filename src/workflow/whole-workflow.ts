@@ -7,15 +7,41 @@ import { z } from 'zod';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { JsonValueSchema, type JsonValue } from '../utils/json.js';
 import { isRecord } from './expression.js';
+import { mergeRequirements, type InEffect } from './requirements.js';
 import { renderStrings, type TemplateContext } from './template.js';
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowStep } from './types.js';
+
+/** A step of a workflow that goes whole that runs something, with the `requires` in effect for it. */
+export type WholeRun = { step: WorkflowStep; executor: 'command' | 'prompt'; requires: InEffect };
+
+/**
+ * Whether workflow step `step`, which runs workflow `child` with `requires` in effect, goes whole: why not, or its
+ * workflow and the steps of it that run something, each with the `requires` in effect for it. The one fit rule: the
+ * owner's engine leaves only such a step unexpanded and judges a runtime's offer on these steps, and a fleet member
+ * judges whether it can run them before it claims the step.
+ */
+export function wholeFit(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined, requires: InEffect): { unfit: string } | { child: WorkflowDefinition; runs: WholeRun[] } {
+  const unfit = notWhole(step, child);
+
+  if (unfit !== undefined || child === undefined || !isWorkflowFile(child)) return { unfit: unfit ?? 'it is not a workflow file' };
+  const inEffect = (inner: WorkflowStep): InEffect => mergeRequirements(requires, child.defaults?.requires, inner.requires);
+
+  // A gate step runs nothing: the member asks its question through the attempt's record.
+  const runs = child.steps.flatMap((inner): WholeRun[] => {
+    if (inner.command !== undefined) return [{ step: inner, executor: 'command', requires: inEffect(inner) }];
+
+    return inner.prompt === undefined ? [] : [{ step: inner, executor: 'prompt', requires: inEffect(inner) }];
+  });
+
+  return { child, runs };
+}
 
 /**
  * Why the workflow `child`, which step `step` runs, does not go whole, or undefined when it does: it is a workflow file
  * whose children are command, prompt or gate steps that work in the copy the step works in, with nothing a member
  * cannot run on its own: a gate the member asks the owner through the attempt's record.
  */
-export function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined): string | undefined {
+function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined): string | undefined {
   // An inline workflow reads the steps and the item around it (scope.ts childScope), which a nested run has none of.
   if (child === undefined || !isWorkflowFile(child)) return 'it is not a workflow file';
 

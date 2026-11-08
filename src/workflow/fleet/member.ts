@@ -18,7 +18,7 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
@@ -27,14 +27,14 @@ import { cancelRun } from '../run-controls.js';
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-resolution.js';
 import { sameEnvName } from '../../resources/env-key.js';
 import { runCopyBranch } from '../workspace.js';
-import { notWhole } from '../whole-workflow.js';
+import { wholeFit, type WholeRun } from '../whole-workflow.js';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
+import { stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { launchToolFor, runPromptStep, type StagedLease } from '../steps/prompt.js';
@@ -138,8 +138,10 @@ function declaredLabels(config: LocalConfig, at: NonNullable<MemberPlace[keyof M
 
 /**
  * What keeps this member from the step `offer` leases where `at` would run it, as its own copy of the team's workflows
- * defines the step, never as the record says: a label not declared there, or for a prompt step, a tool its setup does not
- * have. Undefined when nothing does, also when the member finds no definition: claiming the attempt refuses it then.
+ * defines the step, never as the record says: a label not declared there, env its policy does not allow, or for a prompt
+ * step, a tool its setup does not have. A whole workflow is judged step by step on the steps the one fit rule
+ * (`wholeFit`) gives, as the owner's negotiation judged them. Undefined when nothing does, also when the member finds no
+ * definition: claiming the attempt refuses it then.
  */
 async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<MemberPlace[keyof MemberPlace]>): Promise<string | undefined> {
   const found = await teamDefinitions(config, offer);
@@ -148,20 +150,47 @@ async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<Me
   const defined = definedStep(found.definitions, offer.lease.step);
 
   if (defined.kind !== 'step') return undefined;
+  const runs = runsOf(offer.lease.kind, defined, found.definitions);
+
+  if ('unfit' in runs) return `its step does not run whole here: ${runs.unfit}`;
   const declared = declaredLabels(config, at);
-  // A whole workflow needs what each of its steps requires, as the owner's negotiation reduced it.
-  const child = offer.lease.kind === 'workflow' ? workflowRunBy(found.definitions, defined.step, '') : undefined;
-  const inner = child !== undefined && isWorkflowFile(child) ? child.steps.map((step) => mergeRequirements(defined.requires, child.defaults?.requires, step.requires)) : [];
-  const lacked = [...new Set([defined.requires, ...inner].flatMap((requires) => lackedLabels(requires, declared.labels)))];
+  const lacked = [...new Set([defined.requires, ...runs.map(({ requires }) => requires)].flatMap((requires) => lackedLabels(requires, declared.labels)))];
 
   if (lacked.length > 0) return `its step requires labels ${lacked.join(', ')}, which ${declared.where} does not declare`;
-  // The member's own policy holds a step as the local driver's negotiation does; a whole workflow's nested run applies it.
+  // The member's own policy holds a step as the local driver's negotiation does, each step of a whole workflow too.
   const allowed = config.workflows?.allow?.env;
-  const denied = allowed === undefined || offer.lease.kind === 'workflow' ? [] : envScopeOf(defined.requires.env ?? [], { ...(defined.requires.floor && { floor: defined.requires.floor }), guarded: [] }).provide.filter((key) => sameEnvName(allowed, key) === undefined);
 
-  if (denied.length > 0) return `its step requires env ${denied.join(', ')}, which workflows.allow.env on this machine does not allow`;
+  for (const { step, requires } of allowed === undefined ? [] : runs) {
+    const denied = envScopeOf(requires.env ?? [], { ...(requires.floor && { floor: requires.floor }), guarded: [] }).provide.filter((key) => sameEnvName(allowed ?? [], key) === undefined);
+    const which = offer.lease.kind === 'workflow' ? `its step "${step.id}"` : 'its step';
+
+    if (denied.length > 0) return `${which} requires env ${denied.join(', ')}, which workflows.allow.env on this machine does not allow`;
+  }
 
   return offer.lease.kind === 'prompt' && (at.kind === 'here' || at.kind === 'runtime') ? promptToolLack(config, defined.step, at) : undefined;
+}
+
+/**
+ * The steps a member runs for a lease of `kind` on step `defined`: the step itself, or for a whole workflow, the steps
+ * of its workflow that run something, as the one fit rule gives them, or why it does not run whole.
+ */
+function runsOf(kind: FleetLease['kind'], defined: Extract<ReturnType<typeof definedStep>, { kind: 'step' }>, definitions: Definitions): WholeRun[] | { unfit: string } {
+  switch (kind) {
+    case 'command':
+    case 'prompt':
+      return [{ step: defined.step, executor: kind, requires: defined.requires }];
+    case 'workflow': {
+      const fit = wholeFit(defined.step, workflowRunBy(definitions, defined.step, ''), defined.requires);
+
+      return 'unfit' in fit ? fit : fit.runs;
+    }
+
+    default: {
+      const unhandled: never = kind;
+
+      return unhandled;
+    }
+  }
 }
 
 /**
@@ -870,13 +899,12 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
 
   switch (lease.kind) {
     case 'workflow': {
-      const child = step.workflow === undefined ? undefined : workflowRunBy(found.definitions, step, '');
-
-      if (step.workflow === undefined || child === undefined || !isWorkflowFile(child)) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
+      if (step.workflow === undefined) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
       // A member runs only the sub-graph it was offered whole, as its own copy of the team's workflows defines it.
-      const unfit = notWhole(step, child);
+      const fit = wholeFit(step, workflowRunBy(found.definitions, step, ''), requires);
 
-      if (unfit !== undefined) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${unfit}.` };
+      if ('unfit' in fit) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${fit.unfit}.` };
+      const { child } = fit;
       const inputs = leaseInputs(step, child, values, run);
 
       if ('error' in inputs) return { refused: `workflow "${definition.name}" step "${lease.step}" ${inputs.error}.` };
