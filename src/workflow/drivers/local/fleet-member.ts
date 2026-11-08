@@ -15,7 +15,7 @@ import { attemptRef, claimAttempt, finishAttempt, fleetFailure, listOffers, reco
 import { commandOutputs } from '../../protocol.js';
 import { attemptDir, takeRunLock } from '../../store.js';
 import type { WorkflowEnvelope } from '../../types.js';
-import { git, hostGitEnv, readMemberConfig, untrustedGit, type MemberConfig } from '../../worktree.js';
+import { git, hostGitEnv, keptOrigin, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../../worktree.js';
 
 /**
  * Takes and runs the oldest attempt pool `pool` offers for `repository` that another member did not claim first, from
@@ -159,7 +159,11 @@ async function pushWork({ work, ref, message, memberConfig, parent, index }: { w
 
   if (committed.code !== 0) return { error: `The member could not commit the step's work: ${committed.stderr.trim()}` };
   const to = committed.stdout.trim();
-  const pushed = await snapshotGit(work, ['push', '--quiet', 'origin', `${to}:${ref}`]);
+  // The origin this checkout named before the step, never the one the step's copy names now.
+  const url = keptOrigin(memberConfig);
+
+  if (url === undefined) return { error: `The member could not push the step's work to ${ref}: its checkout names no origin.` };
+  const pushed = await remoteGit(work, { kept: memberConfig, env: hostGitEnv() }, ['push', '--quiet', url, `${to}:${ref}`], snapshotGit);
 
   return pushed.code === 0 ? { to } : { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
 }

@@ -8,7 +8,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readMemberConfig, untrustedGit } from '../workflow/worktree.js';
+import { pushIfOrigin, readMemberConfig, untrustedGit } from '../workflow/worktree.js';
 
 const roots: string[] = [];
 
@@ -164,6 +164,26 @@ describe('untrustedGit in a copy a step controlled', () => {
     await memberGit(at.dir, ['diff', 'HEAD']);
 
     expect(ran(at)).toBe('passing\n');
+  });
+
+  it('pushes to the origin the member\'s checkout named before the run, never to a repository a step pointed origin at, whose hooks never run', async () => {
+    const at = repo();
+    const origin = bare(at);
+    at.git(['remote', 'add', 'origin', origin]);
+    const kept = await readMemberConfig(at.dir);
+    if ('error' in kept) throw new Error(kept.error);
+    const elsewhere = path.join(at.root, 'elsewhere.git');
+    execFileSync('git', ['init', '-q', '--bare', elsewhere], { env: at.env });
+    fs.writeFileSync(path.join(elsewhere, 'hooks', 'pre-receive'), `#!/bin/sh\necho pre-receive >> ${JSON.stringify(at.mark)}\n`, { mode: 0o755 });
+    at.git(['config', '--local', 'remote.origin.url', elsewhere]);
+    at.git(['config', '--local', `url.${elsewhere}.insteadOf`, origin]);
+    const tip = at.git(['rev-parse', 'HEAD']);
+
+    const pushed = await pushIfOrigin(at.dir, 'main', [tip], untrustedGit(at.env, undefined, new Set(kept)), { kept: new Set(kept), env: at.env });
+
+    expect(pushed).toBe('pushed');
+    expect(ran(at)).toBe('');
+    expect(execFileSync('git', ['--git-dir', origin, 'rev-parse', 'refs/heads/main'], { env: at.env, encoding: 'utf8' }).trim()).toBe(tip);
   });
 });
 

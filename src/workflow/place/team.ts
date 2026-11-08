@@ -17,7 +17,7 @@ import { checkoutCredentials, getConfiguredRemoteUrl, redactGitCredentials } fro
 import type { StepChanges } from '../workspace.js';
 import { runsDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
-import { commitWork, git, untrustedGit, type Git, type UntrustedGit } from '../worktree.js';
+import { commitWork, git, remoteGit, untrustedGit, type Git, type UntrustedGit } from '../worktree.js';
 
 /** How long one git call that reaches origin may take. */
 const ORIGIN_TIMEOUT_MS = 120_000;
@@ -250,7 +250,6 @@ export async function finishTeamClone(input: {
 }): Promise<{ changes: StepChanges } | WorkflowFailure> {
   const { root, dir, step, branch, base, found } = input;
   const run = stepGit(input.env);
-  const originGit = stepGit(process.env);
   const committed = await commitWork(root, `teamai: ${step}`, input.start, run);
 
   if ('error' in committed) return { code: 'push_failed', message: `Step "${step}" could not commit its work in the team repo clone ${root}: ${committed.error}` };
@@ -276,10 +275,14 @@ export async function finishTeamClone(input: {
   }
 
   const helpers = await checkoutHelpers(input.config.repo.localPath);
-  const pushed = await originGit(root, [...helpers, 'push', '-q', `--force-with-lease=refs/heads/${branch}:${found ?? ''}`, 'origin', `HEAD:refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
+  // The origin the clone was made from, as the member's team checkout names it: a step may have repointed the clone's.
+  const remote = await getConfiguredRemoteUrl(input.config.repo.localPath) ?? input.config.repo.remote;
+  const member = { kept: new Set<string>(), env: { ...process.env, ...NON_INTERACTIVE_GIT_ENV } };
+  const reach = (args: string[]): ReturnType<Git> => remoteGit(root, member, [...helpers, ...args], run, { timeoutMs: ORIGIN_TIMEOUT_MS });
+  const pushed = await reach(['push', '-q', `--force-with-lease=refs/heads/${branch}:${found ?? ''}`, remote, `${committed.to}:refs/heads/${branch}`]);
 
   if (pushed.code === 0) return { changes };
-  const tip = await originGit(root, [...helpers, 'ls-remote', 'origin', `refs/heads/${branch}`], { timeoutMs: ORIGIN_TIMEOUT_MS });
+  const tip = await reach(['ls-remote', remote, `refs/heads/${branch}`]);
   const now = tip.code === 0 ? tip.stdout.split('\t')[0]?.trim() ?? '' : undefined;
 
   if (now !== undefined && now !== (found ?? '')) {
@@ -289,5 +292,5 @@ export async function finishTeamClone(input: {
     };
   }
 
-  return { code: 'push_failed', message: `Step "${step}" could not push ${branch} to the team repo's origin: ${said(pushed)}. Its commit ${committed.to} stays in ${root}.` };
+  return { code: 'push_failed', message: `Step "${step}" could not push ${branch} to the team repo's origin: ${said(pushed).replaceAll(remote, redactGitCredentials(remote))}. Its commit ${committed.to} stays in ${root}.` };
 }

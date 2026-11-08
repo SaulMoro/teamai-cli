@@ -148,9 +148,25 @@ export type MemberConfig = ReadonlySet<string>;
 
 const NO_MEMBER_CONFIG: MemberConfig = new Set();
 
+/**
+ * Where a copy's remote work goes, as the member's checkout said before a run's first step: what it kept
+ * (`readMemberConfig`), origin's URL among it, and the environment git runs with there.
+ */
+export interface MemberRemote {
+  kept: MemberConfig;
+  env: NodeJS.ProcessEnv;
+}
+
+/** The URL `kept` names for pushing to origin: its first push URL, else its first URL. */
+export function keptOrigin(kept: MemberConfig): string | undefined {
+  const first = (key: string): string | undefined => [...kept].find((entry) => entry.startsWith(`${key}\n`))?.slice(key.length + 1);
+
+  return first('remote.origin.pushurl') ?? first('remote.origin.url');
+}
+
 /** Reads `MemberConfig` in checkout `dir`, for a run to keep before its first step. */
 export async function readMemberConfig(dir: string): Promise<string[] | { error: string }> {
-  const listed = await spawnGit(dir, ['config', '--null', '--show-scope', '--get-regexp', PLANTABLE], undefined, hostGitEnv());
+  const listed = await spawnGit(dir, ['config', '--null', '--show-scope', '--get-regexp', KEPT], undefined, hostGitEnv());
 
   if (listed.code === 1) return [];
 
@@ -239,6 +255,47 @@ const PACK_PROGRAM = /^remote\..+\.(uploadpack|receivepack)$/;
 
 /** The keys `plantedOff` reads, as one `git config --get-regexp` pattern. */
 const PLANTABLE = '^hook\\..*\\.|^credential\\..*helper$|^gpg\\.|^core\\.(sshcommand|askpass|editor|pager|gitproxy)$|^sequence\\.editor$|^pager\\.|^filter\\.|^diff\\.|^merge\\..*\\.driver$|^protocol\\.|^remote\\..*\\.(uploadpack|receivepack)$';
+
+/** What `readMemberConfig` keeps besides `PLANTABLE`: where origin is, and the URL rewrites, which `remoteGit` takes from it. */
+const KEPT = `${PLANTABLE}|^remote\\.origin\\.(url|pushurl)$|^url\\..*\\.(insteadof|pushinsteadof)$`;
+
+/** The kept keys `remoteGit` gives the git it runs: how the member signs in and reaches a host, never a hook or a filter. */
+const REMOTE_KEYS = /^credential\.|^core\.(sshcommand|askpass|gitproxy)$|^url\..*\.(insteadof|pushinsteadof)$|^protocol\./;
+
+/**
+ * Runs git `args`, which reach a remote by its URL, from a bare repository of teamai's own that reads the objects of
+ * checkout `dir` through its alternates. Nothing the config of `dir` names takes part, as a step in `dir` could have
+ * written it: no remote, so a URL that names one is still that URL, no URL rewrite, no hook and no program. Only the
+ * member's system and global config, and `member.kept`'s keys for signing in and reaching a host, apply.
+ */
+export async function remoteGit(dir: string, member: MemberRemote, args: string[], runGit: Git, options?: GitOptions): Promise<GitResult> {
+  const common = await runGit(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+
+  if (common.code !== 0) return common;
+  const neutral = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-remote-'));
+
+  try {
+    const made = await spawnGit(neutral, ['init', '-q', '--bare', '--template=', neutral], undefined, member.env);
+
+    if (made.code !== 0) return made;
+    await fs.writeFile(path.join(neutral, 'objects', 'info', 'alternates'), `${path.join(common.stdout.trim(), 'objects')}\n`);
+    const values: Record<string, string> = {};
+
+    const given = [...member.kept].flatMap((entry) => {
+      const key = entry.slice(0, entry.indexOf('\n'));
+
+      if (!REMOTE_KEYS.test(key)) return [];
+      const name = `${TRUSTED_VALUE}${Object.keys(values).length}`;
+      values[name] = entry.slice(key.length + 1);
+
+      return [`--config-env=${key}=${name}`];
+    });
+
+    return await spawnGit(neutral, ['--git-dir', neutral, ...UNTRUSTED_CONFIG, ...given, ...args], options, { ...member.env, ...values });
+  } finally {
+    await fs.rm(neutral, { recursive: true, force: true });
+  }
+}
 
 /**
  * The options that keep what the config in `cwd` and its submodules names from running (`plantableIn`):
@@ -1207,20 +1264,37 @@ export async function commitWork(
 }
 
 /**
- * Pushes when `origin` exists and the branch is ahead of the copy `origin` has.
+ * Pushes when the member's checkout named an origin before the run, and the branch is ahead of the copy `origin` has.
+ * It pushes to that URL (`remoteGit`), never to one the copy's config names now, and records what `push -u origin`
+ * would: the remote-tracking ref and the branch's upstream.
  * A retry that adds no commit still pushes when an earlier attempt left commits unpublished,
  * including a first push that never created the remote branch.
  * No origin is not a failure. `runGit` runs each git call: a step ran in `dir`, so `untrustedGit`.
  */
-export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: UntrustedGit): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
-  const origin = await runGit(dir, ['remote', 'get-url', 'origin']);
+export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: UntrustedGit, member: MemberRemote): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
+  const url = keptOrigin(member.kept);
 
-  if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';
+  if (url === undefined) {
+    const origin = await runGit(dir, ['remote', 'get-url', 'origin']);
+
+    if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';
+
+    return { error: `the checkout this copy was made from named no origin before the run's first step, so teamai does not push to the one the copy names now. Push ${branch} yourself, or start the run again` };
+  }
 
   if (commits.length === 0 && !await branchNeedsPush(dir, branch, runGit)) return 'unchanged';
-  const pushed = await runGit(dir, ['push', '-u', 'origin', `${branch}:${branch}`]);
+  const tip = await runGit(dir, ['rev-parse', '--verify', `refs/heads/${branch}^{commit}`]);
 
-  return pushed.code === 0 ? 'pushed' : { error: (pushed.stderr || pushed.stdout).trim() || 'git push failed' };
+  if (tip.code !== 0) return { error: tip.stderr.trim() || `${branch} has no commit` };
+  const commit = tip.stdout.trim();
+  const pushed = await remoteGit(dir, member, ['push', '--quiet', url, `${commit}:refs/heads/${branch}`], runGit);
+
+  if (pushed.code !== 0) return { error: (pushed.stderr || pushed.stdout).trim() || 'git push failed' };
+  await runGit(dir, ['update-ref', `refs/remotes/origin/${branch}`, commit]);
+  await runGit(dir, ['config', `branch.${branch}.remote`, 'origin']);
+  await runGit(dir, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]);
+
+  return 'pushed';
 }
 
 /**

@@ -210,7 +210,7 @@ export async function finishWriter(input: {
 
   if ('error' in committed) return { failure: { code: 'push_failed', message: committed.error } };
   await clearRememberedConflicts(dir, hookSafe);
-  const pushed = await pushIfOrigin(dir, workspace.branch, committed.commits, hookSafe);
+  const pushed = await pushIfOrigin(dir, workspace.branch, committed.commits, hookSafe, { kept: memberConfig, env: hostGitEnv() });
   const changes = { branch: workspace.branch, base: workspace.base.commit, from: committed.from, to: committed.to, commits: committed.commits };
 
   if (!(pushed instanceof Object)) return { changes };
