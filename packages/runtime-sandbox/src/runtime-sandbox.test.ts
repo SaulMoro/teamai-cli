@@ -150,6 +150,28 @@ describe('init', () => {
   });
 });
 
+describe('how teamai starts it', () => {
+  it('serves nothing when teamai did not start it: with no TEAMAI_RUNTIME_PROTOCOL it reads no request and exits 2, naming the variable', () => {
+    const request = { type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'docker', image: IMAGE } };
+    const ran = spawnSync(process.execPath, [executable], { env: { ...engine.env(), HOME: path.join(dir, 'home') }, input: `${JSON.stringify(request)}\n`, encoding: 'utf8', timeout: 20_000 });
+
+    expect(ran.status).toBe(2);
+    expect(ran.stdout).toBe('');
+    expect(ran.stderr).toContain('TEAMAI_RUNTIME_PROTOCOL=1');
+    expect(engine.calls()).toEqual([]);
+  });
+
+  it('leaves the variable teamai starts it with out of what it starts, so an engine command it runs never serves runtime protocol 1', async () => {
+    const seen = path.join(dir, 'seen-by-docker');
+    const shim = path.join(dir, 'shim-bin');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, 'docker'), `#!/bin/sh\necho "\${TEAMAI_RUNTIME_PROTOCOL-unset}" >> "${seen}"\nexec "${path.join(engine.bin, 'docker')}" "$@"\n`, { mode: 0o755 });
+
+    expect(await init(start({ PATH: `${shim}${path.delimiter}${String(engine.env().PATH)}` }), { provider: 'docker', image: IMAGE })).toMatchObject({ ok: true });
+    expect([...new Set(fs.readFileSync(seen, 'utf8').trim().split('\n'))]).toEqual(['unset']);
+  });
+});
+
 /** A team's Claude instance: its own command, and its own home under its own variable. */
 const ACME_CLAUDE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } } satisfies InitInstance;
 

@@ -244,6 +244,19 @@ describe('teamai-sandbox-<tool> on Windows', () => {
     expect(ran.code).toBe(2);
     expect(ran.stderr).toContain('does not run on Windows');
   });
+
+  it('refuses as an npm .cmd shim runs it with no argument at all, rather than wait for runtime protocol on stdin', async () => {
+    // With no argument, only the variable teamai sets on a runtime it starts tells a runtime from a wrapper.
+    const child = spawn(process.execPath, [executable], { cwd: dir, env: { PATH: '/usr/bin:/bin', HOME: path.join(dir, 'home'), ...ON_WINDOWS }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    const code = await new Promise<number | null>((resolve) => child.on('close', (exited) => resolve(exited)));
+    clearTimeout(timer);
+
+    expect(code).toBe(2);
+    expect(stderr).toContain('does not run on Windows');
+  });
 });
 
 describe('teamai-sandbox-<tool> outside an attempt', () => {
