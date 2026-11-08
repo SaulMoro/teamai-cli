@@ -1,10 +1,10 @@
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import { z } from 'zod';
+import { bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
+import { connectRuntime, type Connection, type Line } from '@teamai/runtime-testing/connect';
 import type { StepMode } from '../t3.js';
 
 // ─── Test support: the runtime over its stdio, on a fake T3 Code server ───
@@ -20,14 +20,7 @@ const ENTRY = path.join(HERE, '..', 'main.ts');
 
 /** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
 export async function bundleRuntime(dir: string): Promise<string> {
-  const outfile = path.join(dir, 'teamai-runtime-t3.mjs');
-
-  await build({
-    entryPoints: [ENTRY], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
-  });
-
-  return outfile;
+  return bundleRuntimeAt({ entry: ENTRY, outfile: path.join(dir, 'teamai-runtime-t3.mjs') });
 }
 
 export interface FakeAgent {
@@ -335,75 +328,14 @@ export function signIn(t3: FakeT3, token = 'fake-t3-token-0123456789', expiresIn
   }), { mode: 0o600 });
 }
 
-const LineSchema = z.record(z.string(), z.json());
-
-export type Line = z.infer<typeof LineSchema>;
-
-export interface Connection {
-  child: ChildProcessWithoutNullStreams;
-  send(request: Line): void;
-  /** The first line the runtime wrote that `match` accepts and no earlier `next` took, waiting up to `ms` for it. */
-  next(match: (line: Line) => boolean, ms?: number): Promise<Line>;
-  lines: Line[];
-  stderr(): string;
-  close(): Promise<number | null>;
-}
+export type { Connection, Line };
 
 /**
  * Starts the runtime at `executable` against `t3`, with `env` over a plain environment whose `t3` command is the fake's,
  * in `cwd`, where teamai starts it: the run's checkout.
  */
 export function connect(executable: string, t3: FakeT3, env: Record<string, string> = {}, cwd?: string): Connection {
-  const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [executable], {
-    env: { PATH: `${t3.bin}${path.delimiter}${PATH_WITHOUT_T3}`, HOME: t3.home, T3CODE_HOME: t3.t3Home, ...env }, ...(cwd && { cwd }),
-  });
-
-  const lines: Line[] = [];
-  const pending: Line[] = [];
-  const waiters: Array<() => void> = [];
-  let stderr = '';
-  child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
-  readline.createInterface({ input: child.stdout }).on('line', (text) => {
-    const line = LineSchema.parse(JSON.parse(text));
-    lines.push(line);
-    pending.push(line);
-
-    for (const wake of waiters.splice(0)) wake();
-  });
-
-  const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => {
-    resolve(code);
-
-    for (const wake of waiters.splice(0)) wake();
-  }));
-
-  return {
-    child,
-    lines,
-    send: (request) => { child.stdin.write(`${JSON.stringify(request)}\n`); },
-    async next(match, ms = 10_000) {
-      const deadline = Date.now() + ms;
-
-      for (;;) {
-        const index = pending.findIndex(match);
-        const [found] = index === -1 ? [] : pending.splice(index, 1);
-
-        if (found) return found;
-
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`No matching line from the runtime. Lines: ${JSON.stringify(lines)}\nstderr: ${stderr}`);
-        await Promise.race([new Promise<void>((resolve) => waiters.push(resolve)), new Promise((resolve) => setTimeout(resolve, 50))]);
-      }
-    },
-    stderr: () => stderr,
-    async close() {
-      child.stdin.end();
-      const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
-      const code = await exited;
-      clearTimeout(timer);
-
-      return code;
-    },
-  };
+  return connectRuntime({ executable, env: { PATH: `${t3.bin}${path.delimiter}${PATH_WITHOUT_T3}`, HOME: t3.home, T3CODE_HOME: t3.t3Home, ...env }, ...(cwd && { cwd }) });
 }
 
 /**

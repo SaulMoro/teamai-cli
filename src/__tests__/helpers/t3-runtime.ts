@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import { z } from 'zod';
 import type { RuntimeOptions } from '@teamai/runtime-protocol';
+import { bundleRuntime } from '@teamai/runtime-testing/bundle';
 import type { JsonValue } from '../../types.js';
 
 const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'runtime-t3', 'src');
@@ -36,10 +36,7 @@ export async function t3OnFakeServer(): Promise<{
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-t3-runtime-')));
   const executable = path.join(dir, 'teamai-runtime-t3.mjs');
 
-  await build({
-    entryPoints: [path.join(PACKAGE, 'main.ts')], outfile: executable, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
-  });
+  await bundleRuntime({ entry: path.join(PACKAGE, 'main.ts'), outfile: executable });
 
   const servers = new Map<string, Promise<void>>();
 

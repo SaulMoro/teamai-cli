@@ -6,6 +6,7 @@ import { RuntimeMessageSchema, UNAVAILABLE_REASON_MAX } from '@teamai/runtime-pr
 import { sessionSince } from './sessions.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
 import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, PATH_WITHOUT_T3, signIn, type Connection, type FakeT3, type FakeT3Config, type Line } from './testing/harness.js';
 
 // teamai-runtime-t3 through its stdio entry, against a fake T3 Code server (testing/fake-t3.mjs).
@@ -53,11 +54,17 @@ describe('teamai-runtime-t3', () => {
   });
 
   afterEach(async () => {
-    await Promise.all(connections.splice(0).map((runtime) => runtime.close()));
+    const closed = connections.splice(0);
+    await Promise.all(closed.map((runtime) => runtime.close()));
     await t3.stop();
-    // A judge's copy left unclosed is read-only.
-    execFileSync('chmod', ['-R', 'u+w', dir]);
-    fs.rmSync(dir, { recursive: true, force: true });
+
+    try {
+      await expectNothingLeft({ dir, connections: closed });
+    } finally {
+      // A judge's copy left unclosed is read-only.
+      execFileSync('chmod', ['-R', 'u+w', dir]);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   describe('init', () => {
