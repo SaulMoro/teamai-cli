@@ -2,9 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-// oxlint-disable-next-line teamai/workflow-boundaries -- places a stop after setup and before the exec, which no CLI run can time
 import { runtimeCommand, runtimeLauncher } from '../workflow/drivers/local/runtime-steps.js';
-// oxlint-disable-next-line teamai/workflow-boundaries -- runs a prompt's tool through the runtime launcher, whose setup no CLI run can time
 import { toolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
 import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 
