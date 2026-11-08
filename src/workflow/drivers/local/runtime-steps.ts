@@ -301,7 +301,7 @@ function promptFailure(failure: RuntimeFailure, retry: { run: string; step: stri
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, provided, unset, credentials, setUp }: {
+export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, provided, unset, credentials, setUp, isThroughOuter }: {
   view: PlaceView;
   runId: RunId;
   step: string;
@@ -311,12 +311,14 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
   unset: string[];
   credentials: Record<string, string>;
   setUp: SetUp;
+  /** The runtime runs through another, whose open is told what the prompt goes without, since the tool runs in its place. */
+  isThroughOuter?: boolean;
 }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
   // `extended` is the shipped tool `tool` is, or extends; a runtime may report the session under either name.
   const launch = async (extended: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
-    const opened = await run.open(view, { tool, credentials: given });
+    const opened = await run.open(view, { tool, credentials: given, ...(isThroughOuter && { unset }) });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
     const unready = await setUp(undefined);

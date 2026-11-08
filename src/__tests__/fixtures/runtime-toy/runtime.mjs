@@ -42,8 +42,9 @@
 // writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
 //
 // `calls` names a file, which two toys may share, that each request after init is appended to, in the order the toy
-// reads them: the toy's state directory's name, the request's type, operation and handle, an open's `outer`, and the
-// names of the credentials it brought, never a value.
+// reads them: the toy's state directory's name, the request's type, operation and handle, an open's `outer` and the
+// tool home its view gives, the names an open or a reattach says the step goes without (`unset`), and the names of the
+// credentials it brought, never a value.
 //
 // `notice` sends a notice before it answers a request, by request type (`{"init":"…","exec":"…"}`), naming the
 // request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, or of
@@ -713,7 +714,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
 
   if (request.type !== 'init' && typeof options.calls === 'string') {
-    const call = { toy: path.basename(options.state), type: request.type, op: request.op, handle: request.handle, outer: request.outer, credentials: request.credentials && Object.keys(request.credentials).sort() };
+    const call = {
+      toy: path.basename(options.state), type: request.type, op: request.op, handle: request.handle, outer: request.outer, credentials: request.credentials && Object.keys(request.credentials).sort(),
+      ...(request.type === 'open' && { toolHome: request.view?.toolHome }), ...((request.type === 'open' || request.type === 'reattach') && { unset: request.unset }),
+    };
     fs.appendFileSync(options.calls, `${JSON.stringify(call)}\n`);
   }
 

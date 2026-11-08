@@ -125,7 +125,7 @@ export interface StepRuntime {
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */
   collect(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** `credentials`: as the outer of a runtime through it, the prompt's credentials again, which it keeps only in memory. */
-  reattach(handle: string, how?: { credentials: Record<string, string> }): Promise<Reattached>;
+  reattach(handle: string, how?: { credentials: Record<string, string>; unset?: string[] }): Promise<Reattached>;
   /**
    * Ends the handle: the runtime may drop its retained outcomes. A failure says the place, and what runs in it, may
    * remain. `release` says the person let the attempt go, so the runtime forgets the place even when it cannot end it.

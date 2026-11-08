@@ -126,9 +126,9 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
   const name = composedName(inner.name, outer.name);
   // Which runtime runs each operation, so a cancel reaches it: an exec the outer, a prompt the inner.
   const ranBy = new Map<OpId, StepRuntime>();
-  // The prompt's credentials each place was opened with, by the outer's handle, in memory only, which the outer's
-  // reattach of that place carries again. One composed runtime serves every attempt of its entry.
-  const openedWith = new Map<string, Record<string, string>>();
+  // The prompt's credentials each place was opened with, none too, and the names it goes without, by the outer's handle,
+  // in memory only, which the outer's reattach of that place carries again. One composed runtime serves every attempt.
+  const openedWith = new Map<string, { credentials: Record<string, string>; unset?: string[] }>();
 
   const unknownHandle = (handle: string): RuntimeFailure => ({ code: 'runtime_protocol', message: `Step runtime "${name}" was given handle ${handle}, which is not one it made.` });
 
@@ -167,13 +167,15 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
         return outerOpened;
       }
 
-      openedWith.set(outerOpened.handle, request.credentials);
+      openedWith.set(outerOpened.handle, { credentials: request.credentials, ...(request.unset && { unset: request.unset }) });
 
       // A command step's place runs no tool, so the inner, which launches tools, has no place to make for it.
       if (request.tool === undefined) return { kind: 'ready', handle: JSON.stringify({ outer: outerOpened.handle } satisfies ComposedHandle), ...(outerOpened.display && { display: outerOpened.display }) };
       let innerAccepted = false;
+      // The names the prompt goes without are the outer's to keep from the tool it starts; the inner gets none.
+      const { unset: _outerOnly, ...forInner } = request;
 
-      const innerOpened = await inner.open({ ...request, credentials: innerCredentials, outer: outerOpened.handle }, async (handle) => {
+      const innerOpened = await inner.open({ ...forInner, credentials: innerCredentials, outer: outerOpened.handle }, async (handle) => {
         innerAccepted = true;
         await onAccepted(JSON.stringify({ outer: outerOpened.handle, inner: handle } satisfies ComposedHandle));
       });
@@ -239,8 +241,7 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
 
       // A handle it never made has no place, as a runtime's journal without it says.
       if (!parsed) return { kind: 'gone' };
-      const credentials = openedWith.get(parsed.outer);
-      const outerSeen = await outer.reattach(parsed.outer, credentials && Object.keys(credentials).length > 0 ? { credentials } : undefined);
+      const outerSeen = await outer.reattach(parsed.outer, openedWith.get(parsed.outer));
 
       if (outerSeen.kind === 'failed') return outerSeen;
       const innerHandle = innerOf(parsed);

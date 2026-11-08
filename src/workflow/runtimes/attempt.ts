@@ -272,9 +272,10 @@ export interface AttemptRun {
   /**
    * Opens the place, with what of the host it gets, or with nothing for a confined prompt's place. `toolHome` is the
    * tool home a prompt's tool keeps its session in, recorded for every later lookup; `credentials` are the values its
-   * tool gets, sent and never recorded; `tool` is the tool its prompt runs, which the runtime is told.
+   * tool gets, sent and never recorded; `tool` is the tool its prompt runs, which the runtime is told; `unset`, for an
+   * entry through another runtime, the names its prompt goes without, which the outer keeps from the tool.
    */
-  open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
+  open(view: PlaceView | undefined, place?: { tool?: string; toolHome?: z.infer<typeof ToolHomeSchema>; credentials?: Record<string, string>; unset?: string[] }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Runs the workflow's setup as an exec of the open place, recorded apart from the step's exec, under a new id. A setup
@@ -463,7 +464,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   };
 
   return {
-    async open(view, { tool, toolHome: home, credentials = {} } = {}) {
+    async open(view, { tool, toolHome: home, credentials = {}, unset } = {}) {
       openedWith = credentials;
       const found = await current();
       // A place closed on another runtime, or an open the runtime refused before it made a place, holds nothing of this
@@ -500,7 +501,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       // A place opened again keeps the handle it recorded until it is ready: one made in steps (a runtime through
       // another) is accepted first with part of its handle, which must not replace the whole one if the rest fails.
-      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(deadline !== undefined && { deadline }), ...(view && { view }) }, async (handle) => {
+      const opened = await runtime.open({ op, run, attempt, credentials, ...(tool !== undefined && { tool }), ...(deadline !== undefined && { deadline }), ...(view && { view }), ...(unset && { unset }) }, async (handle) => {
         const now = await current();
 
         if (now) await save({ ...now, open: { op, handle: before?.open.handle ?? handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });

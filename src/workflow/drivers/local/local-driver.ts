@@ -254,6 +254,8 @@ interface SlotBase {
   found: readonly string[];
   /** The tools it cannot run now, with the runtime's reason. */
   unavailable?: Record<string, string>;
+  /** The runtime its prompts' tools run in, for an entry through another (`use: t3, through: sandbox`). */
+  through?: string;
 }
 
 /** A lease as this driver runs it: what the engine sent, and what staging it adds. A step staged after `expiresAt` does not start. */
@@ -538,6 +540,19 @@ async function usedInSession(tool: string, sessionId: string, cwd: string, teamS
     : undefined;
 }
 
+/**
+ * The home at `dir` the tool of a prompt through another runtime keeps its session in, in the outer's place, under
+ * `variable`: made, and started on the member's model choices from `memberHome`, as an exec runtime's is. None for a
+ * tool no step runtime execs.
+ */
+async function outerToolHome({ dir, tool, variable, memberHome }: { dir: string; tool: string; variable: string | undefined; memberHome: () => string }): Promise<{ variable: string; dir: string } | undefined> {
+  if (variable === undefined || !isExecRuntimeTool(tool)) return undefined;
+  await fs.mkdir(dir, { recursive: true });
+  await seedMemberModel({ tool, dir, memberHome: memberHome() });
+
+  return { variable, dir };
+}
+
 async function promptReport(
   config: LocalConfig,
   lock: RunLock,
@@ -551,7 +566,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv; through?: string } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -639,7 +654,9 @@ async function promptReport(
   // an instance's own `home.env`, else the one of the tool it extends. A runtime that launches agents its own way gives
   // the tool its own home, where the member's sessions are found.
   const execs = onRuntime && !onRuntime.launchesAgents ? onRuntime : undefined;
-  const variable = execs ? target.instance?.home?.env ?? toolHomeVariable(selected) : undefined;
+  const homeVariable = target.instance?.home?.env ?? toolHomeVariable(selected);
+  const variable = execs ? homeVariable : undefined;
+  const memberHome = () => (target.instance?.home ? instanceHomeDir(target.instance.home, target.instance.extends) : memberToolHome(selected));
 
   if (execs && (variable === undefined || !isExecRuntimeTool(selected))) {
     return giveUp({
@@ -663,7 +680,7 @@ async function promptReport(
     const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: launched, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
 
     // The tool starts on the member's own model choices, from their home of it, or of the instance.
-    if (isExecRuntimeTool(selected)) await seedMemberModel({ tool: selected, dir: toolHome.dir, memberHome: target.instance?.home ? instanceHomeDir(target.instance.home, target.instance.extends) : memberToolHome(selected) });
+    if (isExecRuntimeTool(selected)) await seedMemberModel({ tool: selected, dir: toolHome.dir, memberHome: memberHome() });
 
     if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
   } else {
@@ -763,7 +780,10 @@ async function promptReport(
   if (onRuntime?.launchesAgents) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched });
+    // Through another runtime, the app's tool runs in the outer's place, on a home of the attempt's, as an exec runtime's does.
+    const throughHome = onRuntime.through === undefined ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
+    const isThroughOuter = onRuntime.through !== undefined;
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd, throughHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
@@ -1174,7 +1194,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
-          ...(entry.unavailable && { unavailable: entry.unavailable }),
+          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.through !== undefined && { through: entry.through }),
           can: {
             ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
             ...(unproven(entry.can) && { isolation: 'none' as const }),
@@ -1808,7 +1828,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.through !== undefined && { through: slot.through }) });
         })() });
       }
 

@@ -386,6 +386,11 @@ export const OpenRequestSchema = z.object({
    * runtime, the attempt socket's path). teamai never reads it. Absent for every other runtime.
    */
   outer: RuntimeHandleSchema.optional(),
+  /**
+   * The names the attempt's prompt goes without, as its `prompt` lists them in `unset`, for the outer runtime of an entry
+   * that runs another through it: the tool the app starts in its place gets none of them. Absent for every other runtime.
+   */
+  unset: z.array(z.string()).optional(),
 });
 
 export const ExecRequestSchema = z.object({
@@ -451,8 +456,9 @@ export const RuntimeRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('cancel'), op: OpIdSchema }),
   z.object({ type: z.literal('collect'), handle: RuntimeHandleSchema }),
   // `credentials`: for the outer runtime of an entry that runs another through it, the prompt's credentials again,
-  // since it keeps them only in memory and a restarted teamai reaches a restarted runtime. Absent for every other runtime.
-  z.object({ type: z.literal('reattach'), handle: RuntimeHandleSchema, credentials: EnvSchema.optional() }),
+  // since it keeps them only in memory and a restarted teamai reaches a restarted runtime, `{}` when it had none, and the
+  // names the prompt goes without (`unset`), as its open gave them. Absent for every other runtime.
+  z.object({ type: z.literal('reattach'), handle: RuntimeHandleSchema, credentials: EnvSchema.optional(), unset: z.array(z.string()).optional() }),
   // `release: true`: the person let the attempt go after checking nothing of it runs (`workflow cancel --release`).
   // The runtime forgets the place, whether or not it can end it, and still answers `closed` or `close_failed`.
   z.object({ type: z.literal('close'), handle: RuntimeHandleSchema, release: z.literal(true).optional() }),

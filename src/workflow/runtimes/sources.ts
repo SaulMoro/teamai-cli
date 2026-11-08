@@ -313,7 +313,7 @@ export type OpenedRuntime =
    * which go only to the tool each signs in (`credentialsForTool`). `unavailable`: the tools it cannot run now, with why.
    * `optionsFrom`: where its options were set, for the person: the definition's file, and the member's config when it sets them too.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string> }
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; through?: string }
   /**
    * Built in: each command step it takes is offered to the members of `pool` on teamai-reports, and one of them runs it
    * (`fleet.ts`). `can` is what the definition promises the members' own drivers give: nothing checks it here.
@@ -581,7 +581,7 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
     opened: {
       kind: 'external', use: name, runtime: composedStepRuntime({ outer: outerOpened.runtime, inner: innerOpened.runtime, innerCredentials: innerOpened.credentials }),
       can: offer.can, launchesAgents: offer.launchesAgents, engine, credentials: outerOpened.credentials, found: outerOpened.found, masks: { ...outerOpened.masks, ...innerOpened.masks }, optionsFrom: innerOpened.optionsFrom,
-      ...(offer.unavailable && { unavailable: offer.unavailable }),
+      through: names.outer, ...(offer.unavailable && { unavailable: offer.unavailable }),
     },
   };
 }

@@ -2947,7 +2947,7 @@ span('end');
   });
 
   describe('a runtime through another', () => {
-    type Call = { toy: string; type: string; handle?: string; outer?: string; credentials?: string[] };
+    type Call = { toy: string; type: string; handle?: string; outer?: string; credentials?: string[]; toolHome?: Record<string, string>; unset?: string[] };
 
     let calls: string;
     let outerState: string;
@@ -3044,6 +3044,42 @@ span('end');
       expect(reattaches).toMatchObject([{ toy: 'outer', credentials: ['CLAUDE_CODE_OAUTH_TOKEN'] }, { toy: 'inner' }]);
       expect(reattaches[1]?.credentials).toBeUndefined();
       expect(asked().filter((call) => call.type === 'prompt')).toEqual([]);
+    });
+
+    // The sandbox runs the app's tool for the inner, so it gets what the tool gets on any step runtime: the attempt's tool
+    // home, the names the step goes without, and, after a restart, the credentials the place was opened with, none too.
+    it('opens the outer with the attempt\'s tool home and the names the prompt goes without, and reattaches it with those names and the no credentials it opened with', async () => {
+      writeDefinition('throughhome', [{
+        use: 'toy', through: 'sandboxtoy',
+        options: { toy: { state: innerState, calls, agent: { output: { ok: true } }, die_at: 'prompt-finished' }, sandboxtoy: { state: outerState, calls, can: { isolation: 'sandbox' } } },
+      }]);
+      writeFlow('homeprompt', `  - id: review
+    tool: claude
+    prompt: Review the repository in a sandbox.
+    requires: { isolation: sandbox, strict: true }
+    output:
+      ok: boolean
+  - id: deploy
+    needs: [review]
+    command: node -e "process.exit(0)"
+    requires: { env: [DEPLOY_TOKEN] }`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      const tokensAndDeploy = { ...tokens, DEPLOY_TOKEN: 'deploy-value' };
+
+      const killed = await runCLI(['workflow', 'start', 'homeprompt', '--driver', 'throughhome'], repo, env(tokensAndDeploy));
+
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const opened = asked().find((call) => call.toy === 'outer' && call.type === 'open');
+      const [runId = '', attempt = ''] = Object.keys(JSON.parse(fs.readFileSync(path.join(innerState, 'handles.json'), 'utf8')) as Record<string, string>)[0]?.split('/') ?? [];
+      const home = path.join(attemptDir(runId, attempt), 'tool-home', 'claude');
+      expect(opened).toMatchObject({ toolHome: { CLAUDE_CONFIG_DIR: home }, unset: expect.arrayContaining(['DEPLOY_TOKEN', 'GITHUB_TOKEN']), credentials: [] });
+      expect(fs.statSync(home).isDirectory()).toBe(true);
+      fs.writeFileSync(calls, '');
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'throughhome'], repo, env(tokensAndDeploy));
+
+      expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(asked().filter((call) => call.type === 'reattach')).toMatchObject([{ toy: 'outer', credentials: [], unset: expect.arrayContaining(['DEPLOY_TOKEN', 'GITHUB_TOKEN']) }, { toy: 'inner' }]);
     });
 
     /** The places a toy's journal still holds, by `<run>/<attempt>`. */
