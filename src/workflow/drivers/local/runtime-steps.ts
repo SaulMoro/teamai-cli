@@ -237,7 +237,7 @@ function interrupted(): WorkflowFailure {
 export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, credentials, setUp }: { view: PlaceView; tool: string; toolHome: { tool: string; dir: string }; unset: string[]; credentials: Record<string, string>; setUp: SetUp }): ToolLauncher {
   const given = toolCredentials(credentials, unset);
 
-  return ({ executable, args, cwd, env, onStdout }) => {
+  return ({ executable, args, cwd, env, onStart, onStdout }) => {
     let accepted = false;
     let stdout = '';
     // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent.
@@ -254,7 +254,10 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
       if (isStopRequested) return { exitCode: 143, stdout };
 
       const end = await run.exec({ argv: [executable, ...args], env: stringEnv(env), unset, credentials: given, cwd }, {
-        onAccepted: () => { accepted = true; },
+        onAccepted: () => {
+          accepted = true;
+          onStart();
+        },
         onOutput: (stream, data) => {
           if (stream !== 'stdout') return;
           stdout += data;
