@@ -16,7 +16,7 @@ import { type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe,
 import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers } from './tool-registry.js';
 import {
   CURSOR_CONFIG_TOOL_ID, CURSOR_DATA_TOOL_ID,
-  DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, recordedToolRootDir, resolveBaseDir, scopedToolPaths, toolGateRoot,
+  DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, recordedToolHomeDir, recordedToolRootDir, resolveBaseDir, scopedToolPaths, toolGateRoot,
   WORKBUDDY_NEW_GENERATION_ROOT, WORKBUDDY_TOOL_ID, WORKBUDDY_TOOL_ROOT,
   type HomePaths, type LocalConfig, type Scope, type TeamaiConfig,
 } from './types.js';
@@ -1507,7 +1507,7 @@ export function sessionStoreDir(
 
   switch (store.in) {
     case 'tool-home': {
-      const dir = recordedToolRootDir('root' in store ? store.root : store.home, root.toolRoots, host)
+      const dir = recordedToolHomeDir('root' in store ? store.root : store.home, root.toolRoots, host)
         ?? toolHome(store.home, { ...host, home: host.profileHome });
 
       if (platform === 'pi') {

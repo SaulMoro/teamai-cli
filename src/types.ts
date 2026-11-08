@@ -2998,6 +2998,13 @@ function isUnderUserHome(dir: string, at: HomePaths): boolean {
   return rel !== '' && !rel.startsWith('..') && !at.path.isAbsolute(rel);
 }
 
+/** True when `dir` resolves to somewhere neither the home directory nor inside it. */
+function isOutsideUserHome(dir: string, at: HomePaths): boolean {
+  const rel = at.path.relative(at.home, at.path.resolve(dir));
+
+  return rel === '..' || rel.startsWith(`..${at.path.sep}`) || at.path.isAbsolute(rel);
+}
+
 /**
  * Root shapes a member may record: a single directory in HOME
  * (`.claude-work`), or a directory under `.config/` at any depth
@@ -3848,6 +3855,24 @@ export function resolveToolRootDir(
   at: HomePaths = processHomePaths(),
 ): string {
   return recordedToolRootDir(tool, toolRoots, at) ?? at.path.join(at.home, ...defaultRoot.split('/'));
+}
+
+/**
+ * Where the member's recorded root of `tool` sits for the tool itself, which keeps its sessions there: under `at.home`
+ * as `recordedToolRootDir` gives it, or outside it, where teamai syncs none of its other files. Null when none is
+ * recorded or it is ignored.
+ */
+export function recordedToolHomeDir(
+  tool: string,
+  toolRoots: Readonly<Record<string, string>> | undefined,
+  at: HomePaths = processHomePaths(),
+): string | null {
+  const configured = toolRoots?.[tool];
+
+  if (configured === undefined || !(tool in RELOCATABLE_TOOLS)) return null;
+  const resolved = at.path.resolve(expandHomeAt(configured, at));
+
+  return isOutsideUserHome(resolved, at) ? resolved : recordedToolRootDir(tool, toolRoots, at);
 }
 
 /** The member's recorded root of `tool` under `at.home`, or null when none is recorded or it is ignored (and warned). */
