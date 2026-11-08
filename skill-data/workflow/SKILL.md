@@ -123,13 +123,15 @@ The `done` action carries the `outcome`, the pull requests the run opened in `pr
 
 ## Errors
 
-A reply with `error` carries `code`, `message` and `next`. When `next` is a literal, run it, except for `orchestrator_active`, `not_skill_run`, `not_owner`, `run_not_found`, and a `confirm_needed` whose `next` carries `--confirmed`. When `next` holds `{tool}`, replace it with the id of the tool you work in before you run it, as for `ask.kind: tool`. When it is null, tell the person `message`: only they can act on it.
+A reply with `error` carries `code`, `message` and `next`. When `next` is a literal, run it, except for `orchestrator_active`, `not_skill_run`, `not_owner`, `run_not_found`, and an `owner_active` or a `confirm_needed` whose `next` carries `--confirmed`. When `next` holds `{tool}`, replace it with the id of the tool you work in before you run it, as for `ask.kind: tool`. When it is null, tell the person `message`: only they can act on it.
 
 `agent_in_path` means an answer only the person can give came from your session. Hand the person the command `message` names, for their own terminal.
 
 `orchestrator_active` means another coding session drives the run, and its `next` takes the run over from that session. Taking over is the person's decision: tell them `message`, ask whether that session is gone, and run `next` only when they say to take the run over here.
 
 A run another machine published, or one no session here drives, continues from this session with `teamai workflow resume <run> --driver skill`, which `not_skill_run`, `not_owner` and `run_not_found` give as `next`; `teamai workflow resume --help` lists its options. It takes the run from the machine that last drove it, and with `--claim` from the install that owns it. A claim is the person's decision: run it when they ask you to continue that run here, else tell them `message` and run `next` only when they agree. Its reply is a turn: go on with the loop.
+
+`owner_active` means the install that owns the run wrote it within the last hour, so its driver may still be running a step, and taking the run over now would run that step twice. Tell the person `message`, which names how the owner stops and hands it over, and run `next` only when they say the owner has stopped.
 
 A resume or a takeover follows the workflow's `invoke` as a start does. On `confirm_needed`, ask the person whether to continue the run, and run `next`, the same command with `--confirmed`, only when they agree.
 

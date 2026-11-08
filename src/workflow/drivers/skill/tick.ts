@@ -579,7 +579,7 @@ async function invokeRefused(context: SkillContext, run: RunId, call: Extract<Fo
 
   if (drivesRun(read.kind === 'found' ? read.state : undefined, context.session)) return undefined;
   const caller = { evidence: context.evidence, confirmed: call.confirmed, mode: context.mode };
-  const refused = traced(context, invokeRow(await context.client.resumeRefusal(run, { caller, published: call.kind === 'resume', claim: call.kind === 'resume' && call.claim === 'any' })));
+  const refused = traced(context, invokeRow(await context.client.resumeRefusal(run, { caller, published: call.kind === 'resume', claim: call.kind === 'resume' && call.claim === 'any' }), context.mode));
 
   if (!refused) return undefined;
   const confirmed = literalOf(context.invocation, run, { ...call, confirmed: true });
