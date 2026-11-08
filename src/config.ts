@@ -387,7 +387,7 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
 
   const settings: RawMapping = {};
 
-  for (const key of ['max_parallel', 'auto_approve', 'sandbox'] as const) {
+  for (const key of ['max_parallel', 'auto_approve', 'sandbox', 'labels'] as const) {
     const value = memberSettingAt(workflow, key, MemberWorkflowSettingsSchema.shape[key], configPath);
 
     if (value !== undefined) settings[key] = value;
