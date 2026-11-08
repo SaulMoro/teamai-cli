@@ -7,10 +7,8 @@ export interface ToolRun {
   stdout: string;
   stderr: string;
   code: number;
-  /** Whether the run was stopped at `timeoutMs`. */
-  timedOut: boolean;
-  /** Whether the run was stopped for printing nothing for `idleTimeoutMs`. */
-  idle: boolean;
+  /** Why teamai stopped the run, when it did: its `timeoutMs` passed, or it printed nothing for `idleTimeoutMs`. */
+  stopped?: 'timeout' | 'idle';
 }
 
 /**
@@ -21,7 +19,7 @@ export interface ToolRun {
 export async function runTool(input: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; idleTimeoutMs?: number; detached: boolean; group?: string; signal?: AbortSignal }): Promise<ToolRun> {
   const batch = process.platform === 'win32' ? batchLaunchOf(input.executable, input.args, input.env.ComSpec ?? input.env.COMSPEC ?? 'cmd.exe') : undefined;
 
-  if (batch?.ok === false) return { stdout: '', stderr: batch.message, code: 1, timedOut: false, idle: false };
+  if (batch?.ok === false) return { stdout: '', stderr: batch.message, code: 1 };
   const detached = input.detached && process.platform !== 'win32';
   const options: SpawnOptions = { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true };
   // A batch file gets the command line escaped here, as cross-spawn escapes only one under node_modules/.bin twice.
@@ -30,7 +28,7 @@ export async function runTool(input: { executable: string; args: string[]; cwd: 
   if (detached && input.group !== undefined) recordGroup(child, input.group);
   const stdout: string[] = [];
   const stderr: string[] = [];
-  let idle = false;
+  let stopped: ToolRun['stopped'];
   let idleTimer: NodeJS.Timeout | undefined;
 
   // Each line the tool prints restarts the idle limit, so a tool that streams lives and a silent one is stopped.
@@ -38,15 +36,14 @@ export async function runTool(input: { executable: string; args: string[]; cwd: 
     if (input.idleTimeoutMs === undefined) return;
 
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { idle = true; void stop(); }, input.idleTimeoutMs);
+    idleTimer = setTimeout(() => { stopped ??= 'idle'; void stop(); }, input.idleTimeoutMs);
   };
 
   child.stdout?.setEncoding('utf8').on('data', (text: string) => { stdout.push(text); active(); });
   child.stderr?.setEncoding('utf8').on('data', (text: string) => { stderr.push(text); active(); });
   const exited = new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('close', (code) => resolve(code ?? 1)); });
   const stop = stopProcess(child, exited, detached);
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; void stop(); }, input.timeoutMs);
+  const timer = setTimeout(() => { stopped ??= 'timeout'; void stop(); }, input.timeoutMs);
 
   active();
   const onAbort = (): void => { void stop(); };
@@ -57,8 +54,16 @@ export async function runTool(input: { executable: string; args: string[]; cwd: 
   child.stdin?.on('error', () => {});
   child.stdin?.end(input.stdin);
 
-  try { const code = await exited;
+  try {
+    const code = await exited;
+    const run: ToolRun = { stdout: stdout.join(''), stderr: stderr.join(''), code };
 
- return { stdout: stdout.join(''), stderr: stderr.join(''), code, timedOut, idle }; }
-  finally { clearTimeout(timer); clearTimeout(idleTimer); input.signal?.removeEventListener('abort', onAbort); }
+    if (stopped !== undefined) run.stopped = stopped;
+
+    return run;
+  } finally {
+    clearTimeout(timer);
+    clearTimeout(idleTimer);
+    input.signal?.removeEventListener('abort', onAbort);
+  }
 }

@@ -9,6 +9,7 @@ import { log } from '../utils/logger.js';
 import { CallError, memberTools, type MemberTool } from './member-tools.js';
 import { runTool } from './run.js';
 import type { TokenUsage } from './stdout.js';
+import { addTokens } from '@teamai/tool-core/stdout';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf, type LaunchOrderTool } from './tools.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -54,21 +55,6 @@ export interface ToolCaller {
 }
 
 const DEFAULT_REPLY_RETRIES = 1;
-
-/** The tokens of two calls together, by kind. */
-function addTokens(first: TokenUsage | undefined, second: TokenUsage | undefined): TokenUsage | undefined {
-  if (first === undefined || second === undefined) return first ?? second;
-  const sum: TokenUsage = {};
-
-  for (const kind of ['input', 'output', 'cachedInput'] as const) {
-    const a = first[kind];
-    const b = second[kind];
-
-    if (a !== undefined || b !== undefined) sum[kind] = (a ?? 0) + (b ?? 0);
-  }
-
-  return sum;
-}
 
 /** What a tool is told when its reply held no value: what it said, and to reply with the value alone. */
 function retryPrompt(previous: string, retriesLeft: number): string {
@@ -185,10 +171,10 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
         const args = [...call.args({ prompt, promptFile, lastMessageFile }), ...resumed];
         const run = await runTool({ executable, args, cwd, env: callEnv(launchedBy, tool), stdin: call.prompt !== 'stdin' ? '' : 'stdinOf' in call ? call.stdinOf(prompt) : prompt, timeoutMs: timeout, idleTimeoutMs: idleTimeout, detached: false, signal });
 
-        if (run.timedOut) throw new CallError('call_failed', `AI call timed out after ${Math.round(timeout / 1000)}s (tool: ${tool})`);
+        if (run.stopped === 'timeout') throw new CallError('call_failed', `AI call timed out after ${Math.round(timeout / 1000)}s (tool: ${tool})`);
 
-        if (run.idle && idleTimeout !== undefined) {
-          throw new CallError('call_failed', `AI call printed nothing for ${idleTimeout / 1000}s, longer than its idle limit (tool: ${tool}). Raise the idle limit if this tool works silently for longer.`);
+        if (run.stopped === 'idle') {
+          throw new CallError('call_failed', `AI call printed nothing for ${(idleTimeout ?? 0) / 1000}s, longer than its idle limit (tool: ${tool}). Raise the idle limit if this tool works silently for longer.`);
         }
 
         const lastMessage = await fs.readFile(lastMessageFile, 'utf8').catch(() => undefined);
@@ -230,7 +216,8 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
       log.debug(`[tool-launch] ${chosen.tool} replied with no value the call accepts; asking again (${asked} of ${cap})`);
       answer = await callOnce(chosen, retryPrompt(answer.text, cap - asked), options, answer.session);
       reply = extractReply(answer.text, schema);
-      tokens = addTokens(tokens, answer.tokens);
+
+      if (answer.tokens) tokens = addTokens(tokens, answer.tokens);
     }
 
     const { session: _session, ...last } = answer;

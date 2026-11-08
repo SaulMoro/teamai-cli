@@ -543,7 +543,7 @@ async function outcomeOf({ input, tmp }: LaunchContext, launch: Launch, run: Too
     ? { ok: false, code: 'confined_failed', message: `${input.tool} reported an error: ${reported.replace(/\.?$/, '.')} Fix that, then retry or use another tool or driver.`, raw, reported, ...spent }
     : undefined;
 
-  if (run.code !== 0) return toolError ?? { ok: false, code: 'confined_failed', message: `${input.tool} exited with code ${run.code}${run.timedOut ? ` after its ${input.timeoutMs} ms limit` : ''}. See the saved output, then retry or use another tool or driver.`, raw, ...spent };
+  if (run.code !== 0) return toolError ?? { ok: false, code: 'confined_failed', message: `${input.tool} exited with code ${run.code}${run.stopped === 'timeout' ? ` after its ${input.timeoutMs} ms limit` : ''}. See the saved output, then retry or use another tool or driver.`, raw, ...spent };
   const reply = await REPLIES[family](run.stdout, tmp, input.tool);
 
   // pi exits 0 on a provider error, which its reply carries.
