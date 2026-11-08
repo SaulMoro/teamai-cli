@@ -90,3 +90,24 @@ it.skipIf(process.platform === 'win32')('stops a runner working in a directory i
     }
   }
 });
+
+it.skipIf(process.platform === 'win32')('stops, besides the tracked runners, every runner working under the directories a test owns, as one a confined tool started', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-skill-runners-'));
+  roots.push(root);
+  const owned = path.join(root, 'owned');
+  const elsewhere = path.join(root, 'elsewhere');
+  for (const dir of [path.join(owned, 'checkout'), elsewhere]) fs.mkdirSync(dir, { recursive: true });
+  const args = ['workflow', 'report', 'r0123456789abcdef', '--driver', 'skill', '--attempt'];
+  const tracked = runner(root, [...args, 'a00000004'], elsewhere);
+  const untracked = runner(root, [...args, 'a00000005'], path.join(owned, 'checkout'));
+  const foreign = runner(root, [...args, 'a00000006'], elsewhere);
+  try {
+    expect(stopLeftSkillRunners(() => [tracked.pid], { exitMs: 0, alsoWorkingIn: [owned] }).sort((a, b) => a - b)).toEqual([tracked.pid, untracked.pid].sort((a, b) => a - b));
+    expect(groupAlive(untracked.pid), 'the untracked runner under an owned directory was stopped').toBe(false);
+    expect(groupAlive(foreign.pid), 'an untracked runner elsewhere is left alone').toBe(true);
+  } finally {
+    for (const pid of [tracked.pid, tracked.step, untracked.pid, untracked.step, foreign.pid, foreign.step]) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  }
+});

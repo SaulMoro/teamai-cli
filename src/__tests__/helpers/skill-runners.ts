@@ -18,15 +18,22 @@ const now = performance.now.bind(performance);
  * for the runners to end, then stops each one left: its process group, and the groups its step's setup and command
  * lead, which outlive it. `workingIn`: the runners whose working directory is in that directory, whatever started
  * them, since `running()` misses one a process without the tracker preload started, as a confined tool, whose
- * environment drops NODE_OPTIONS. Synchronous, so a synchronous removal can call it. On Windows a runner leads no
+ * environment drops NODE_OPTIONS. `alsoWorkingIn`: besides `running()`'s runners, those working in any of these
+ * directories, whatever started them. Synchronous, so a synchronous removal can call it. On Windows a runner leads no
  * process group, so nothing is checked there.
  */
-export function stopLeftSkillRunners(running: () => number[], options: { exitMs?: number; workingIn?: string } = {}): number[] {
-  const { exitMs = RUNNER_EXIT_MS, workingIn } = options;
+export function stopLeftSkillRunners(running: () => number[], options: { exitMs?: number; workingIn?: string; alsoWorkingIn?: readonly string[] } = {}): number[] {
+  const { exitMs = RUNNER_EXIT_MS, workingIn, alsoWorkingIn = [] } = options;
   const live = () => {
-    if (workingIn === undefined) return skillRunners(running());
+    if (workingIn !== undefined) {
+      const runners = skillRunners();
+      return runners.length === 0 ? runners : runnersWorkingIn(runners, workingIn);
+    }
+    const tracked = skillRunners(running());
+    if (alsoWorkingIn.length === 0) return tracked;
     const runners = skillRunners();
-    return runners.length === 0 ? runners : runnersWorkingIn(runners, workingIn);
+    const untracked = runners.length === 0 ? [] : alsoWorkingIn.flatMap((dir) => runnersWorkingIn(runners, dir));
+    return [...new Set([...tracked, ...untracked])];
   };
   const deadline = now() + exitMs;
   let left = live();

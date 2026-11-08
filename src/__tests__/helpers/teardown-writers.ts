@@ -20,6 +20,9 @@ import { leftSkillRunners, RUNNER_EXIT_MS, stopLeftSkillRunners } from './skill-
 // waits for those children and tries once more. One that still fails reports
 // what reappeared and which processes are still running in or on the
 // directory.
+// This worker's home and temporary directory before any other setup file isolates them.
+const startHome = process.env.HOME;
+const startTmp = os.tmpdir();
 const trackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-detached-'));
 const tracker = trackDetachedProcesses(trackerRoot);
 // Where waitForDetachedChildren finds this tracker.
@@ -104,9 +107,11 @@ syncBuiltinESMExports();
 
 // Every config loads this setup file, so each test that leaves a runner fails,
 // in whichever file. It runs after the file's own afterEach hooks, even one
-// that threw, and stops the runners still left.
+// that threw, and stops the runners still left: the tracked ones, and any
+// working under this file's own home or temporary directory, as one a confined
+// tool started without the tracker.
 beforeEach(({ onTestFinished, task }) => {
-  onTestFinished(() => failOnLeftRunners(stopLeftSkillRunners(tracker.running)), RUNNER_EXIT_MS + 10_000);
+  onTestFinished(() => failOnLeftRunners(stopLeftSkillRunners(tracker.running, { alsoWorkingIn: ownDirectories() })), RUNNER_EXIT_MS + 10_000);
   // A child the test left running, as a CLI a timed-out test never saw end, is
   // stopped with what it started, and the test fails naming it. Concurrent
   // tests share the record, so neither is checked.
@@ -129,6 +134,14 @@ function recordChild(started: unknown, args: readonly unknown[]): unknown {
   children.set(pid, child.spawnargs.join(' '));
   child.once('exit', () => children.delete(pid));
   return started;
+}
+
+/**
+ * The home and temporary directory isolate-home gave this file, which no other file's runner works in: none under a
+ * config without it, whose home and temporary directory, the ones this worker started with, every file shares.
+ */
+function ownDirectories(): string[] {
+  return [[process.env.HOME, startHome], [os.tmpdir(), startTmp]].flatMap(([dir, start]) => (dir !== undefined && dir !== start && isDirectory(dir) ? [dir] : []));
 }
 
 function isDetached(arg: unknown): boolean {
