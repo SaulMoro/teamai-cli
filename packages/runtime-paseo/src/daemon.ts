@@ -338,6 +338,8 @@ export interface ToolChoices {
   instances: readonly InitInstance[];
   /** A Paseo provider id for a tool or an instance name, over the one the runtime finds. */
   providers: Readonly<Record<string, string>>;
+  /** Only to answer a check, which runs nothing: a Codex Paseo resolves counts as one it runs, its sign-in unasked. */
+  isCheck?: boolean;
 }
 
 /**
@@ -767,7 +769,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
    * Why the daemon cannot run `tool`, or the tool home it runs it with when Paseo reports one. Paseo calls a tool
    * available once its binary is on PATH, signed in or not, so each tool's sign-in is read from what Paseo reports of it.
    */
-  const signIn = async ({ tool, provider }: Target, { runsIn, command }: { runsIn: RunsIn | undefined; command: string | undefined }): Promise<SignIn> => {
+  const signIn = async ({ tool, provider }: Target, { runsIn, command, isCheck }: { runsIn: RunsIn | undefined; command: string | undefined; isCheck: boolean }): Promise<SignIn> => {
     switch (tool) {
       case 'claude': {
         // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in, and,
@@ -816,6 +818,8 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           return { canRun: false, problem: `Paseo resolves it to "${resolved}", which is not an absolute path to a ${executable}; run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
         }
 
+        if (isCheck) return { canRun: true };
+
         let status: Awaited<ReturnType<typeof codexLoginStatus>>;
 
         try {
@@ -860,7 +864,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
     url,
     serverId,
     version,
-    async installedTools({ modes: configured, instances, providers: named }) {
+    async installedTools({ modes: configured, instances, providers: named, isCheck = false }) {
       // The snapshot carries each provider's default mode, which the member's own agents start in.
       const [{ providers }, { entries }] = await Promise.all([api.providers.listAvailable(), api.providers.snapshot()]);
       const available = new Set(providers.filter((entry) => entry.available).map((entry) => entry.provider));
@@ -937,7 +941,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         let signedIn: SignIn;
 
         try {
-          signedIn = await signIn({ name, tool, provider }, { runsIn, command: instance?.command });
+          signedIn = await signIn({ name, tool, provider }, { runsIn, command: instance?.command, isCheck });
         } catch (error) {
           signedIn = { canRun: false, problem: `Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why` };
         }
@@ -1006,7 +1010,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           return await cannotRun(`Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``);
         }
 
-        signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: shownPath(home.home) }, command: instance.command });
+        signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined || !instance.home ? undefined : { variable: home.variable, dir: home.home, shown: shownPath(home.home) }, command: instance.command, isCheck: false });
       } catch (error) {
         return cannotRun(`Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why`);
       }

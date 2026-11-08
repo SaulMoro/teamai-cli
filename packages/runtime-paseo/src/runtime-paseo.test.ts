@@ -179,10 +179,31 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it('fails a check when it can run no tool, so no run is offered where its prompt steps could not start', async () => {
+    behave({ models: { opencode: ['opencode/beam-free'] }, opencode_server: 'http://127.0.0.1:49374' });
+
+    expect(await ready(start(), { mode: 'check' })).toEqual({
+      type: 'init', ok: false,
+      error: { code: 'tool_unavailable', message: expect.stringContaining(`teamai-runtime-paseo can run no tool on the Paseo daemon at ${daemon.url} now: The Paseo daemon at ${daemon.url} cannot run claude`) },
+    });
+    expect(received()).toEqual([]);
+  });
+
   it('offers Codex on a daemon on this machine only when `codex login status` says it is signed in', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out' });
 
     expect(await ready(start())).toMatchObject({ ok: true, can: { tools: ['claude'], confined: [{ tools: ['claude'] }] } });
+  });
+
+  it('answers a check with the Codex the daemon resolves, running no `codex login status`', async () => {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const ran = path.join(dir, 'ran');
+    fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ntouch ${ran}\necho 'Logged in using ChatGPT' >&2\n`, { mode: 0o755 });
+    behave({ models: { codex: ['gpt-6.1-sol'] }, codex_path: path.join(bin, 'codex') });
+
+    expect(await ready(start(), { mode: 'check' })).toMatchObject({ type: 'init', ok: true, can: { tools: ['codex'] } });
+    expect(fs.existsSync(ran)).toBe(false);
   });
 
   it('does not offer a Codex the daemon has not installed, though this machine has a signed-in codex', async () => {
@@ -605,6 +626,18 @@ describe('teamai-runtime-paseo', () => {
       await opened(later, { attempt: 'a0123abce', tool: 'acme-claude' });
       expect(notices(later)).toEqual([]);
       expect(configChanges()).toHaveLength(1);
+    });
+
+    // describe sends `check` from a Paseo agent to ask whether a run could start there now, and opens nothing after it.
+    it('answers a check with the tools it runs, adding no provider for an instance that needs one and saying nothing', async () => {
+      const { env } = installed('acme-claude');
+      behave({ output: { ok: true } });
+      const runtime = start(env);
+
+      expect(await ready(runtime, { mode: 'check', instances: [ACME] })).toMatchObject({ type: 'init', ok: true, prompt: true, can: { tools: ['claude', 'codex', 'opencode', 'acme-claude'], hitl: false } });
+      expect(received()).toEqual([]);
+      expect(customProviders()).toEqual({});
+      expect(notices(runtime)).toEqual([]);
     });
 
     it('adds a provider once when two runtimes open the same instance together, setting no home for an instance with none of its own', async () => {

@@ -654,12 +654,6 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
       return;
     }
 
-    if (request.mode === 'check') {
-      write({ type: 'init', ok: false, error: { code: 'check_unsupported', message: 'This Paseo runtime does not answer a check yet.' } });
-
-      return;
-    }
-
     if ('code' in address) {
       write({ type: 'init', ok: false, error: address });
 
@@ -685,7 +679,7 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
     }
 
     const modes = Object.fromEntries(Object.entries(options.mode ?? {}).filter(([tool]) => isPaseoTool(tool)));
-    const installed = await connected.installedTools({ modes, instances, providers: options.providers ?? {} });
+    const installed = await connected.installedTools({ modes, instances, providers: options.providers ?? {}, isCheck: request.mode === 'check' });
     const tools = installed.flatMap((entry) => (entry.kind === 'unavailable' ? [] : [entry]));
 
     // It starts though it can run no tool, so the run's command steps still go to the next runtime: each tool it cannot
@@ -706,6 +700,16 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
 
       return [name, fitReason(`The Paseo daemon at ${connected.url} cannot run ${name}: ${why}`)];
     })));
+
+    // A check connects and lists, and keeps nothing: providers are added only by an open, and no step will follow.
+    if (request.mode === 'check') {
+      await connected.close();
+      write(tools.length > 0
+        ? { type: 'init', ok: true, prompt: true, can: { exec: false, env: false, hitl: false, unattended: false, tools: tools.map(({ name }) => name) } }
+        : { type: 'init', ok: false, error: { code: 'tool_unavailable', message: `teamai-runtime-paseo can run no tool on the Paseo daemon at ${connected.url} now: ${Object.values(unavailable).join(' ')}` } });
+
+      return;
+    }
 
     daemon = connected;
     mode = request.mode;
