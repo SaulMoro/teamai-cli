@@ -22,7 +22,8 @@ import { z } from 'zod';
 //                        (an env's names, never a value), to `calls.log`
 //    FAKE_VERCEL_IMAGE   the directory holding the image's tools
 //
-//  A file `down` in the state directory makes every call fail as an API that does not answer.
+//  A file `down` in the state directory makes every call fail as an API that does not answer, and a file `<call>.fails`
+//  makes that call alone fail with its text.
 //
 
 const state = process.env.FAKE_VERCEL_STATE ?? '/nonexistent';
@@ -55,6 +56,8 @@ function log(call: string, detail: Logged = {}): void {
   fs.appendFileSync(path.join(state, 'calls.log'), `${JSON.stringify({ call, ...detail })}\n`);
 
   if (fs.existsSync(path.join(state, 'down'))) throw new Error('Vercel API is not answering (stand-in)');
+
+  if (fs.existsSync(path.join(state, `${call}.fails`))) throw new Error(fs.readFileSync(path.join(state, `${call}.fails`), 'utf8').trim());
 }
 
 /** Moves `value` under the sandbox root when it is an absolute path, or `-C /` style root. */
