@@ -18,13 +18,14 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type Held, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
 import { runLocalDriver, type DriverRuntimes } from '../drivers/local/local-driver.js';
 import { cancelRun } from '../run-controls.js';
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-resolution.js';
+import { sameEnvName } from '../../resources/env-key.js';
 import { runCopyBranch } from '../workspace.js';
 import { notWhole } from '../whole-workflow.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -155,9 +156,17 @@ async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<Me
 
   if (defined.kind !== 'step') return undefined;
   const declared = declaredLabels(config, at);
-  const lacked = lackedLabels(defined.requires, declared.labels);
+  // A whole workflow needs what each of its steps requires, as the owner's negotiation reduced it.
+  const child = 'workflow' in offer.lease ? workflowRunBy(found.definitions, defined.step, '') : undefined;
+  const inner = child !== undefined && isWorkflowFile(child) ? child.steps.map((step) => mergeRequirements(defined.requires, child.defaults?.requires, step.requires)) : [];
+  const lacked = [...new Set([defined.requires, ...inner].flatMap((requires) => lackedLabels(requires, declared.labels)))];
 
   if (lacked.length > 0) return `its step requires labels ${lacked.join(', ')}, which ${declared.where} does not declare`;
+  // The member's own policy holds a step as the local driver's negotiation does; a whole workflow's nested run applies it.
+  const allowed = config.workflows?.allow?.env;
+  const denied = allowed === undefined || 'workflow' in offer.lease ? [] : envScopeOf(defined.requires.env ?? [], { ...(defined.requires.floor && { floor: defined.requires.floor }), guarded: [] }).provide.filter((key) => sameEnvName(allowed, key) === undefined);
+
+  if (denied.length > 0) return `its step requires env ${denied.join(', ')}, which workflows.allow.env on this machine does not allow`;
 
   return 'prompt' in offer.lease && (at.kind === 'here' || at.kind === 'runtime') ? promptToolLack(config, defined.step, at) : undefined;
 }
@@ -300,14 +309,16 @@ async function answered(config: LocalConfig, cancelling: Cancelling, pushed: str
  * the work it pushed, then pushes its work and writes how it ended. A cancel of the claim stops the step: its work is
  * pushed, and the member answers the cancel.
  */
-async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start }: { lock: RunLock; claim: Held; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
+async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start }: { lock: RunLock; claim: HeldAttempt; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
   const { run, attempt, lease } = claim;
   const ref = attemptRef(run, attempt);
   const dir = attemptDir(config, run, attempt);
   const work = path.join(dir, 'work');
-  let latest: Held = claim;
+  let latest: HeldAttempt = claim;
   // The gate the nested run of a whole workflow asks the owner: written with each progress until the answer comes.
   let asking: { question: ExecQuestion; answer: (answer: ExecAnswer) => void } | undefined;
+  // The write of the last answer handed to the nested run.
+  let heard: string | undefined;
 
   const finish = async (result: FleetResult): Promise<WorkflowEnvelope> => {
     const written = await finishAttempt(config, latest, result, secrets);
@@ -401,10 +412,16 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     }
 
     if (record?.state === 'answered') {
+      // An answer is handed once, and only to the question it answers: a read that raced another one may find it again
+      // after the member moved on, and leaves the member's later writes as they are.
+      if (record.write === heard) return;
       latest = record;
+
+      if (asking === undefined || !isDeepStrictEqual(asking.question, record.question)) return;
       const waiting = asking;
       asking = undefined;
-      waiting?.answer(record.answer);
+      heard = record.write;
+      waiting.answer(record.answer);
 
       return;
     }
@@ -423,10 +440,16 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
 
   // Writes progress naming `pushed`, with the question the member asks while it waits for the owner's answer.
   const progress = async (pushed: string): Promise<void> => {
-    const progressed = await recordProgress(config, latest, pushed, asking?.question);
+    const progressed = await recordProgress(config, latest, pushed, asking && { question: asking.question, secrets });
 
     if (progressed.ok) latest = progressed.value;
     else if (progressed.error.code === 'state_moved') await moved(progressed.error);
+    else if (progressed.error.code === 'fleet_unpublishable' && asking !== undefined) {
+      // A question the record cannot carry reaches nobody: the gate fails with why, and progress goes on without it.
+      const waiting = asking;
+      asking = undefined;
+      waiting.answer({ refused: progressed.error.message });
+    }
   };
 
   // The question goes out at once, after any beat still writing, and is read for its answer every ANSWER_READ_MS.
@@ -532,7 +555,7 @@ function commandRun(command: GroupedCommand): StepRun {
  * It ends as the member's report says: success or failure, the output, the tool and its usage.
  */
 function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, root, secrets }: {
-  lock: RunLock; claim: Held; trusted: Extract<Trusted, { kind: 'prompt' }> & { scoped: ScopedEnv }; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
+  lock: RunLock; claim: HeldAttempt; trusted: Extract<Trusted, { kind: 'prompt' }> & { scoped: ScopedEnv }; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
 }): StepRun {
   const { run, attempt } = claim;
   const { step } = trusted;
@@ -604,7 +627,7 @@ const NestedDoneSchema = z.object({
  * attempt's ref. It ends as the run did: its outcome, end and outputs.
  */
 function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, secrets, ask }: {
-  claim: Held; trusted: Extract<Trusted, { kind: 'workflow' }>; place: NonNullable<MemberPlace['workflow']>; work: string; from: string; secrets: Record<string, string>;
+  claim: HeldAttempt; trusted: Extract<Trusted, { kind: 'workflow' }>; place: NonNullable<MemberPlace['workflow']>; work: string; from: string; secrets: Record<string, string>;
   ask: (question: ExecQuestion, signal: AbortSignal) => Promise<ExecAnswer>;
 }): StepRun {
   const { definition: offered } = claim;
@@ -638,7 +661,10 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
     });
 
     if (!('data' in created)) return failed(created.error);
-    nested = String(created.data.run);
+    const id = RunIdSchema.safeParse(created.data.run);
+
+    if (!id.success) return failed({ code: 'run_unreadable', message: `The nested run of step "${claim.lease.step}" started with no run id this teamai reads.` });
+    nested = id.data;
     const driven = await runLocalDriver(config, nested, work, { hitl: true, question, autoApprove: false, ...(place.kind === 'driver' && { runtimes: place.runtimes }) });
     const ended = 'data' in driven ? NestedDoneSchema.safeParse(driven.data) : undefined;
 
@@ -646,7 +672,7 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
 
     if (!ended?.success) return failed('error' in driven ? driven.error : { code: 'run_unreadable', message: `The nested run ${nested} of step "${claim.lease.step}" did not say how it ended.` });
     const { outcome, end, failure, outputs } = ended.data.done;
-    const state = await readRun(config, RunIdSchema.parse(nested));
+    const state = await readRun(config, id.data);
     const copied = state === 'missing' || state === 'corrupt' ? undefined : state.copies?.[runCopyBranch(state.id)]?.commit;
     // The clone takes the copy's work, which the member then pushes as the attempt's.
     const taken = copied === undefined || copied === from ? undefined : await git(work, ['checkout', '--quiet', '--detach', copied]);
@@ -793,13 +819,6 @@ type Trusted =
   | { kind: 'workflow'; child: WorkflowDefinition; inputs: JsonValue; isReadOnly: boolean };
 
 /**
- * What the team's workflow defines for the step `claim` offers, its texts rendered from the offer's values, or why this
- * member does not run it. Anyone who can write to teamai-reports can write a record, so the member runs only what the
- * definitions the run executes say, read from its own team repository, as a claimer of a published run does; a lease
- * that says otherwise is refused, not corrected. Every team commit the record names counts only when this member would
- * run that commit itself: `definition.teamRevision` is the only one a record carries.
- */
-/**
  * The team's workflows the run of `offered` runs, as this member finds them: at the team commit the offer pins when the
  * member would run that commit itself, else its own copy, which must match. Or why it finds none.
  */
@@ -816,7 +835,14 @@ async function teamDefinitions(config: LocalConfig, { run, definition }: Pick<Of
   return found.ok ? { definitions: found.value } : { refused: found.error.message };
 }
 
-async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted | { refused: string; next?: string }> {
+/**
+ * What the team's workflow defines for the step `claim` offers, its texts rendered from the offer's values, or why this
+ * member does not run it. Anyone who can write to teamai-reports can write a record, so the member runs only what the
+ * definitions the run executes say, read from its own team repository, as a claimer of a published run does; a lease
+ * that says otherwise is refused, not corrected. Every team commit the record names counts only when this member would
+ * run that commit itself: `definition.teamRevision` is the only one a record carries.
+ */
+async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Trusted | { refused: string; next?: string }> {
   const { run, lease, definition, values } = claim;
   const found = await teamDefinitions(config, claim);
 

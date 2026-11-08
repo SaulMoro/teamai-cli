@@ -1657,6 +1657,26 @@ steps:
       ok: boolean
 `;
 
+/** As PAIR, with a gate step of its own between the commands, which runs no tool. */
+const ASKED = `schemaVersion: v1alpha1
+name: pair
+description: Writes a mark, asks to go on, then counts it.
+inputs: { mark: string }
+steps:
+  - id: write
+    workspace: continue
+    env:
+      MARK: "{{ inputs.mark }}"
+    command: echo written > "$MARK"
+  - id: confirm
+    needs: [write]
+    approve: "Go on?"
+  - id: count
+    needs: [confirm]
+    workspace: continue
+    command: echo counted
+`;
+
 /** The fleet runtimes a scenario opened, which teardown disposes. */
 const fleetRuntimes: StepRuntime[] = [];
 
@@ -1675,11 +1695,11 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean } = {}) {
   const acme = team({ slow: workflow, ...workflows }, files);
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }) } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }), ...(isPromptless && { prompt: false as const }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
@@ -1769,6 +1789,22 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(fs.readFileSync(path.join(place, 'env.txt'), 'utf8')).toBe('https://deploy.example|');
   }, 60_000);
 
+  it('leaves an attempt whose step requires env this member\'s workflows.allow.env does not allow for another member', async () => {
+    const owner = await ownerOf({ workflow: SCOPED, command: SCOPED_COMMAND, files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, isSandbox: true });
+    const { exec } = await owner.open();
+    void exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+    owner.bob.config.workflows = { tools: {}, allow: { env: ['NPM_TOKEN'] } };
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' } } });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+    expect(infos).toHaveBeenCalledWith(`Left attempt ${owner.attempt} of run ${owner.run} for another member: its step requires env DEPLOY_URL, which workflows.allow.env on this machine does not allow.`);
+  }, 60_000);
+
   it('runs a prompt step\'s tool with the env its lease scopes, as it does a command', async () => {
     vi.stubEnv('GH_TOKEN', 'member-token');
     const owner = await ownerOf({ workflow: SCOPED_PROMPT, tools: ['claude'], files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, isSandbox: true });
@@ -1822,6 +1858,25 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
 
   it('leases a whole workflow step with a gate inside to a runtime that runs whole workflows', async () => {
     const whole = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+
+    expect(await readRun(whole.alice.config, whole.run)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
+  }, 60_000);
+
+  it('leaves a whole workflow step one of whose steps requires a label this member does not declare for another member', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: PAIR.replace('    command: echo written > "$MARK"', '    requires: { labels: [gpu] }\n    command: echo written > "$MARK"') }, inputs: { mark: 'made.txt' }, isWhole: true, labels: ['gpu'] });
+    const { exec } = await owner.open(undefined, { stale_after: '60s' });
+    void exec(newOpId(), 'workflow');
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { workflow: { kind: 'here' } } });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+  }, 60_000);
+
+  it('leases a whole workflow step whose gate step runs no tool to a runtime that runs no prompt', async () => {
+    const whole = await ownerOf({ workflow: WHOLE, workflows: { pair: ASKED }, inputs: { mark: 'made.txt' }, isWhole: true, isPromptless: true });
 
     expect(await readRun(whole.alice.config, whole.run)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
   }, 60_000);

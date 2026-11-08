@@ -665,6 +665,16 @@ describe('cancelling an attempt through its record', () => {
     expect(execs).toBe(0);
   }, 60_000);
 
+  it('writes no question of a gate that holds a secret value to teamai-reports', async () => {
+    const { bob, offered } = await offerSlow(60_000);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const question = { step: 'keep', kind: 'approve' as const, message: 'Ship with token ghp_0123456789abcdefghijklmnopqrstuvwxyzAB?', options: ['yes', 'no'], required: false };
+
+    expect(await recordProgress(bob.config, claimed.value, 'e'.repeat(40), { question, secrets: {} })).toMatchObject({ ok: false, error: { code: 'fleet_unpublishable' } });
+    expect(await readAttemptRecord(bob.config, offered.run, offered.attempt)).toMatchObject({ ok: true, value: { state: 'claimed' } });
+  });
+
   it('goes on from the work a member pushed before a cancel it never answered', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000);
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
