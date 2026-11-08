@@ -179,7 +179,8 @@ function tokenUsage(event: MetadataEvent): TokenUsage | undefined {
   return Object.keys(tokens).length > 0 ? tokens : undefined;
 }
 
-function addTokens(current: TokenUsage | undefined, next: TokenUsage): TokenUsage {
+/** The tokens of two runs together, by kind. */
+export function addTokens(current: TokenUsage | undefined, next: TokenUsage): TokenUsage {
   const sum = (left?: number, right?: number) => (
     left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0)
   );
