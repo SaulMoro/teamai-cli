@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeFake } from '@teamai/tool-claude/testing';
 import { fakeAgent } from '@teamai/tool-testing/fake-agent';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -36,7 +37,7 @@ const fwd = (value: string): string => value.split(path.sep).join('/');
  * asks. It fails the labels in FAKE_FAIL.
  */
 function fakeClaude(bin: string, log: string): void {
-  fakeAgent('claude', {
+  fakeAgent(claudeFake, {
     bin,
     before: `
   const named = /模块名: (\\S+)/.exec(prompt);
