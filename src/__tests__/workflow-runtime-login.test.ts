@@ -117,7 +117,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   const leftRunning = async (runtime: ReturnType<typeof runtimeSeeing>): Promise<void> => {
     const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
-    void before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
+    void before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await runtime.received;
   };
 
@@ -215,10 +215,10 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     // Its reattach answers at once until just before the 15 s, then takes as long as a runtime may take to answer one.
     const runtime = {
       ...base,
-      exec: (request, events) => {
+      exec: (request, events, kind) => {
         op = request.op;
 
-        return base.exec(request, events);
+        return base.exec(request, events, kind);
       },
       cancel: async () => {
         askedToCancel();
@@ -253,7 +253,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const runtime = runtimeSeeing([running, unreachable]);
     await leftRunning(runtime);
 
-    const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
+    const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
 
     expect(end).toMatchObject({ kind: 'lost' });
   });
@@ -265,22 +265,22 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const runtime: StepRuntime = {
       ...seeing,
       isExecReconnected: true,
-      exec: async (request, events) => {
+      exec: async (request, events, kind) => {
         sent.push(request.op);
 
-        return seeing.exec(request, events);
+        return seeing.exec(request, events, kind);
       },
       cancel: async () => { cancels += 1; },
     };
     const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
-    const left = before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
+    const left = before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await seeing.received;
 
     await before.stop();
 
     expect(await left).toEqual({ kind: 'left' });
-    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
+    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toBe(sent[0]);
     expect(cancels).toBe(0);

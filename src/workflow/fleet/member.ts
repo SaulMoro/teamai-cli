@@ -342,7 +342,7 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
 
         if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
       },
-    });
+    }, 'command');
 
     const uncollected = await running.collect();
     const unclosed = await running.close();

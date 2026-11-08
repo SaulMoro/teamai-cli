@@ -214,10 +214,10 @@ describe('a member taking an attempt', () => {
   it('runs the step on the step runtime of the member\'s own driver, with the step\'s env alone, and pushes what it wrote there', async () => {
     const local = localStepRuntime({ exec: true });
     const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
-    const runtime: StepRuntime = { ...local, exec: (request, events) => {
+    const runtime: StepRuntime = { ...local, exec: (request, events, kind) => {
       execs.push({ argv: request.argv, env: request.env, cwd: request.cwd });
 
-      return local.exec(request, events);
+      return local.exec(request, events, kind);
     } };
 
     const { taken, record, alice } = await takeForged(() => undefined, undefined, MARK, { kind: 'runtime', driver: 'bobs', use: 'box', runtime });
@@ -431,10 +431,10 @@ describe('cancelling an attempt through its record', () => {
 
         return local.open(request, onAccepted);
       },
-      exec: async (request, events) => {
+      exec: async (request, events, kind) => {
         execs += 1;
 
-        return local.exec(request, events);
+        return local.exec(request, events, kind);
       },
     };
     const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
@@ -541,7 +541,7 @@ describe('a restarted member', () => {
     // runtime answers with how that exec ended, as an id sent again reconnects to its exec.
     const stoppedExec = newOpId();
     const local = localStepRuntime({ exec: true });
-    const runtime: StepRuntime = { ...local, exec: async (request, events) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events)) };
+    const runtime: StepRuntime = { ...local, exec: async (request, events, kind) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events, kind)) };
     fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
     fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
     await readableReportsWorktree(bob.config);

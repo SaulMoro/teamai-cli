@@ -22,7 +22,6 @@ import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, ty
 import type { WorkflowFailure } from '../types.js';
 import { copyGit } from '../place/place.js';
 import { git } from '../worktree.js';
-import { shellArgv } from '../shell-command.js';
 import { localStepRuntime } from '../runtimes/local.js';
 import type { ExecEnd, ExecEvents, StepRuntime } from '../runtimes/step-runtime.js';
 
@@ -214,7 +213,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       return { kind: 'ready', handle };
     },
 
-    async exec(request, events) {
+    async exec(request, events, kind) {
       const place = placeOf(request.handle);
 
       if (!place || !settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `The fleet runtime has no place ${request.handle}${settings ? '' : ', or was not initialized'}.` } };
@@ -226,14 +225,11 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
         return ended(await live.end, events);
       }
 
+      // Setup, or any exec besides the step's command, runs in the place on this host.
+      if (kind !== 'command') return local.exec({ ...request, handle: localHandle(place) }, events, kind);
       const leased = await leasedCommand(config, place);
 
-      // Setup, or any exec besides the step's command, runs in the place on this host.
-      if ('error' in leased || !isDeepStrictEqual(request.argv, shellArgv(leased.command))) {
-        if ('error' in leased && leased.isFatal) return { kind: 'failed', failure: { code: 'run_unreadable', message: leased.error } };
-
-        return local.exec({ ...request, handle: localHandle(place) }, events);
-      }
+      if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
 
       const cancel = new AbortController();
       const end = offerAndWait({ config, ...place, ...settings, ...leased, dir: request.cwd, secrets: masks, op: request.op }, { cancel: cancel.signal, leave: disposing.signal });

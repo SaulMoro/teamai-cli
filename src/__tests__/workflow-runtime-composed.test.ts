@@ -118,7 +118,7 @@ describe('a toy through a toy, over stdio', () => {
     const opened = await runtime.open({ ...request, credentials: {} }, async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
 
-    expect(await runtime.exec({ op: newOpId(), handle: opened.handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: worktree }, {})).toMatchObject({ kind: 'exited', code: 0 });
+    expect(await runtime.exec({ op: newOpId(), handle: opened.handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: worktree }, {}, 'command')).toMatchObject({ kind: 'exited', code: 0 });
     expect(await runtime.close(opened.handle)).toEqual({ ok: true });
     expect(asked().map(({ toy: which, type }) => `${which} ${type}`)).toEqual(['outer open', 'outer exec', 'outer close']);
   });
@@ -129,7 +129,7 @@ describe('a toy through a toy, over stdio', () => {
     if (opened.kind !== 'ready') throw new Error('not opened');
 
     expect(await runtime.prompt(promptRequest(opened.handle), {})).toMatchObject({ kind: 'finished' });
-    expect(await runtime.exec({ op: newOpId(), handle: opened.handle, argv: [process.execPath, '-e', 'process.stdout.write("out")'], env: {}, unset: [], credentials: {}, cwd: worktree }, {})).toMatchObject({ kind: 'exited', code: 0, stdout: 'out' });
+    expect(await runtime.exec({ op: newOpId(), handle: opened.handle, argv: [process.execPath, '-e', 'process.stdout.write("out")'], env: {}, unset: [], credentials: {}, cwd: worktree }, {}, 'command')).toMatchObject({ kind: 'exited', code: 0, stdout: 'out' });
     expect(asked().slice(2)).toEqual([{ toy: 'inner', type: 'prompt', credentials: ['INNER_TOKEN'] }, { toy: 'outer', type: 'exec', credentials: [] }]);
   });
 
