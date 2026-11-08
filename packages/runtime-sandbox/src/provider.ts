@@ -53,6 +53,7 @@ export function unreachable(failure: RuntimeFailure, family: Provider['family'] 
     stop: async (id) => kept(id),
     destroy: async (id) => kept(id),
     display: (key) => ({ label: handleOf(key) }),
+    name: handleOf,
     removal: (key) => `remove sandbox ${handleOf(key)} once the sandbox runtime reaches its engine`,
   } satisfies Sandboxing;
 
@@ -146,6 +147,8 @@ interface Sandboxing {
   /** Removes the sandbox and every process in it; ok once it is gone. It answers within COMMAND_MS. */
   destroy(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   display(key: PlaceKey): RuntimeDisplay;
+  /** What the engine names the attempt's sandbox by: a close that leaves it names that in `kept`. */
+  name(key: PlaceKey): string;
   /** How a person removes the place by hand, as the end of a sentence: "remove it with `…`". */
   removal(place: PlaceKey & { confined?: true }): string;
 }

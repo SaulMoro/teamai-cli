@@ -22,10 +22,10 @@ let executable: string;
 let dir: string;
 let engine: FakeEngine;
 const open: Connection[] = [];
-/** What a test planted, or what the runtime leaves by contract, which the leak check after it allows. */
-const allowedLeft: string[] = [];
+/** What a test planted itself, which the leak check after it allows. */
+const plantedLeft: string[] = [];
 
-const keep = (...names: string[]): void => { allowedLeft.push(...names); };
+const planted = (...names: string[]): void => { plantedLeft.push(...names); };
 
 beforeAll(async () => {
   executable = await bundleRuntime(tempDir());
@@ -46,7 +46,7 @@ afterEach(async () => {
 
   // Every line the runtime wrote is one runtime protocol 1 allows.
   expect([...connections.flatMap((connection) => connection.invalid), ...invalid]).toEqual([]);
-  await expectNothingLeft({ connections: [...connections, ...recovered], dir, containers: engine.containers, kept: allowedLeft.splice(0) });
+  await expectNothingLeft({ connections: [...connections, ...recovered], dir, containers: engine.containers, planted: plantedLeft.splice(0) });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -572,11 +572,9 @@ describe('a prompt attempt in a container', () => {
     await openPlace(connection, place());
     engine.failRemove(true);
     connection.send({ type: 'close', handle: HANDLE, release: true });
-    // Released and forgotten: the container stays, and the failure says how to remove it.
-    keep(HANDLE);
 
     expect(await connection.next((message) => message.handle === HANDLE && (message.event === 'closed' || message.event === 'close_failed'))).toMatchObject({
-      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringMatching(/docker rm --force.*You released the attempt, so this runtime no longer keeps its place\.$/) },
+      event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_failed', message: expect.stringMatching(/docker rm --force.*You released the attempt, so this runtime no longer keeps its place\.$/) }, kept: [HANDLE],
     });
     expect(journalFiles()).toEqual([]);
     connection.send({ type: 'reattach', handle: HANDLE });
@@ -592,9 +590,8 @@ describe('a prompt attempt in a container', () => {
     const record = journalFiles().find((file) => file.includes(`${path.sep}ops${path.sep}`)) ?? '';
     fs.writeFileSync(record, '{"handle":');
     connection.send({ type: 'close', handle: HANDLE, release: true });
-    keep(HANDLE);
 
-    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) }, kept: [HANDLE] });
     expect(journalFiles()).toEqual([]);
   });
 
@@ -1193,7 +1190,6 @@ describe('a prompt attempt in a container', () => {
     await openPlace(connection, at);
     const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`)) ?? '';
     fs.writeFileSync(record, '{"run":');
-    keep(HANDLE);
     const op = newOp();
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
@@ -1218,8 +1214,6 @@ describe('a prompt attempt in a container', () => {
     await exec(connection, { argv: ['/bin/sh', '-c', 'echo ran'], cwd: at.worktree }, op);
     const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
     fs.writeFileSync(record, '{"handle":');
-    // A damaged record keeps its place until it is mended.
-    keep(HANDLE);
     const before = connection.messages.length;
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
@@ -1238,7 +1232,6 @@ describe('a prompt attempt in a container', () => {
     await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
     const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
     fs.writeFileSync(record, '{"handle":');
-    keep(HANDLE);
     fs.writeFileSync(path.join(at.worktree, 'release'), '');
 
     expect(await connection.next(ended(op), 10_000)).toEqual({ op, event: 'exited', code: 0, stdout: 'finished\n' });
@@ -1447,7 +1440,7 @@ describe("the containers of one runtime's journal", () => {
     leave('a00000003', { 'teamai.owner': '0123456789abcdef' });
     leave('a00000004', {});
     // Another journal's and an unlabelled one are never this runtime's to remove.
-    keep(...named('a00000003', 'a00000004'));
+    planted(...named('a00000003', 'a00000004'));
 
     expect(await openAttempt(connection, 'a00000005')).toMatchObject({ event: 'ready' });
     await vi.waitFor(() => { expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003', 'a00000004', 'a00000005')); }, { timeout: 10_000 });
@@ -1497,7 +1490,7 @@ describe("the containers of one runtime's journal", () => {
     await openAttempt(connection, 'a00000001');
     leave('a00000002', { 'teamai.owner': engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? '' });
     engine.failRemove(true);
-    keep(...named('a00000002'));
+    planted(...named('a00000002'));
 
     expect(await openAttempt(connection, 'a00000003')).toMatchObject({ event: 'ready' });
     await vi.waitFor(() => { expect(connection.stderr()).toContain('was left by an earlier run'); }, { timeout: 10_000 });
@@ -1544,7 +1537,7 @@ describe("the containers of one runtime's journal", () => {
     await openAttempt(connection, 'a00000001');
     leave('a00000002', { 'teamai.owner': engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? '' });
     engine.failRemove(true);
-    keep(...named('a00000002'));
+    planted(...named('a00000002'));
     const at = place();
     const op = newOp();
     connection.send({ type: 'exec', op, handle: `teamai-${RUN}-a00000001`, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; while [ ! -f release ]; do sleep 0.05; done; echo finished'] });
@@ -2342,7 +2335,7 @@ describe('an attempt in an sbx sandbox', () => {
     const journalPrefix = own.slice(0, -`${RUN}-${ATTEMPT}`.length);
     // What a runtime killed while sbx created a sandbox leaves, for this journal, another journal, and an older teamai.
     const left = [`${journalPrefix}${RUN}-a00000002`, `teamai-0123456789abcdef-${RUN}-a00000003`, `teamai-${RUN}-a00000004`];
-    keep(...left.slice(1));
+    planted(...left.slice(1));
 
     for (const name of left) execFileSync(path.join(engine.bin, 'sbx'), ['create', '--name', name, '--no-progress', 'claude'], { env: engine.env() });
 
@@ -2606,7 +2599,7 @@ describe('an attempt in an sbx sandbox', () => {
 
     expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable', message: expect.stringMatching(/sbx rm --force teamai-tools-[0-9a-f]{8}/) } });
     // The member removes it with the command the failure names.
-    keep(...engine.containers().filter((name) => name.startsWith('teamai-tools-')));
+    planted(...engine.containers().filter((name) => name.startsWith('teamai-tools-')));
   });
 
   it('stops the step on cancel and keeps the sandbox for the next exec; close removes it, and reattach then says gone', async () => {
@@ -2902,7 +2895,7 @@ describe('a warm image', () => {
     leave(gone);
     leave(process.pid);
     // The scratch sandbox of a warm image whose runtime still runs is that runtime's.
-    keep(...engine.containers().filter((name) => name.includes(`warm-${process.pid}`)));
+    planted(...engine.containers().filter((name) => name.includes(`warm-${process.pid}`)));
 
     expect(await openAttempt(connection, checkout(), 'a0123abce')).toMatchObject({ event: 'ready' });
     await vi.waitFor(() => {

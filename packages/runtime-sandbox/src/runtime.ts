@@ -113,6 +113,16 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const execs = execOperations({ journal, ledger });
   const sockets = attemptSockets({ journal, ready: () => ready });
 
+  /**
+   * What an answer about `handle` names in `kept` when the runtime leaves its sandbox: the sandbox, by the name its
+   * engine knows it by. None for a handle that names no attempt.
+   */
+  const keptOf = (handle: string, provider: Provider): { kept: string[] } | Record<string, never> => {
+    const [, run = '', attempt = ''] = /^teamai-([^-]+)-([^-]+)$/.exec(placeOf(handle)) ?? [];
+
+    return RUN_ID.test(run) && ATTEMPT_ID.test(attempt) ? { kept: [provider.name({ run, attempt })] } : {};
+  };
+
   /** Ends `op` failed with `failure`, before this process ran anything of it. */
   const fail = (op: OpId, failure: RuntimeFailure): void => ledger.end({ op, state: 'failed', failure });
 
@@ -340,7 +350,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         void sockets.unserve(handle);
       }
 
-      write({ event: 'close_failed', handle: given, failure });
+      // A released place is forgotten, and its sandbox, which the failure says how to remove, is left on purpose.
+      write({ event: 'close_failed', handle: given, failure, ...(isReleased && keptOf(given, provider)) });
     };
 
     const overdue = (what: string): void => failed({
@@ -475,17 +486,17 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         try {
           await close(handle, ready.provider, isReleased === true);
         } catch (error) {
-          if (isReleased !== true) throw error;
-          // A place the person released is forgotten all the same, however much of its record can be read.
+          // A place the person released is forgotten all the same, however much of its record can be read. Either way
+          // its sandbox stays: one whose record cannot be read is kept until it can, as the failure says.
           let unforgotten = '';
 
           try {
-            journal.forget(placeOf(handle));
+            if (isReleased === true) journal.forget(placeOf(handle));
           } catch (forgetting) {
             unforgotten = ` Its records could not be removed either: ${forgetting instanceof Error ? forgetting.message : String(forgetting)}`;
           }
 
-          write({ event: 'failed', handle, failure: { code: 'runtime_error', message: `Runtime sandbox could not carry out close of ${handle}: ${error instanceof Error ? error.message : String(error)}${unforgotten}` } });
+          write({ event: 'failed', handle, failure: { code: 'runtime_error', message: `Runtime sandbox could not carry out close of ${handle}: ${error instanceof Error ? error.message : String(error)}${unforgotten}` }, ...keptOf(handle, ready.provider) });
         }
       },
     },

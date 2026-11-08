@@ -423,6 +423,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
 
     destroy: remove,
 
+    name: nameOf,
     display: (key) => ({ label: `${nameOf(key)} (sbx)`, fields: { sandbox: nameOf(key), ...(agent !== undefined && { agent: path.basename(agent) }) } }),
 
     removal: (place) => `remove it with \`sbx rm --force ${nameOf(place)}\``,
