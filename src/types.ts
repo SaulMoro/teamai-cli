@@ -879,7 +879,7 @@ export const MemberWorkflowSettingsSchema = z.object({
   /** How many command steps the local driver runs at once. Unset means 1. */
   max_parallel: z.number().int().positive().optional(),
   /**
-   * How long an answer step's tool may print nothing before the local driver stops it, as a duration. Unset means no
+   * How long a prompt step's Claude may print nothing before the local driver stops it, as a duration. Unset means no
    * limit. Kept as written, so a wrong value fails only the step that reads it.
    */
   idle_timeout: z.unknown().optional(),

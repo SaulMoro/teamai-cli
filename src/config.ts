@@ -394,7 +394,7 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
   }
 
   // Kept as written: resolveRetention and driveByDefault skip a wrong value with a warning, and the next level decides;
-  // an answer step fails on a wrong idle_timeout, naming it.
+  // a prompt step fails on a wrong idle_timeout, naming it.
   for (const key of ['retention', 'driver', 'idle_timeout'] as const) if (Object.prototype.hasOwnProperty.call(workflow, key)) settings[key] = workflow[key];
   const tools = OptionalMappingSchema.parse(workflow.tools);
 
