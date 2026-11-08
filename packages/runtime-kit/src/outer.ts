@@ -38,7 +38,7 @@ export function outerHandleOf(outer: string): OuterHandle | undefined {
 export interface Registration {
   /** Settles once the sandbox says the agent's wrapper connected, or with why it never can on this connection. */
   connected: Promise<{ ok: true } | { ok: false; why: string }>;
-  /** Ends the registration; the sandbox then serves no wrapper of this agent until one registers it again. */
+  /** Ends this connection to the socket; the sandbox goes on serving the agent registered last, until another registers. */
   close(): void;
 }
 

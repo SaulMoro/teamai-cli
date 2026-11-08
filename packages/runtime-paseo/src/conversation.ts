@@ -551,7 +551,9 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
         if (latest?.kind === 'agent') journal.savePrompt(op, { ...latest, sent: true });
       };
 
-      const handed = await handOver(live, { record, provider: sandboxed.through.provider, registration: sandboxed.registration, stopped, markSent });
+      // A cancel marks the prompt before it stops the agent, and a close of its place marks it before it stops its agents.
+      const isStillOurs = (): boolean => !journal.isCancelled(op) && !closeStops.has(op) && waiting.get(op) === following;
+      const handed = await handOver(live, { record, provider: sandboxed.through.provider, registration: sandboxed.registration, stopped, isStillOurs, markSent });
 
       if (handed !== 'sent' && handed !== 'stopped') {
         settle(op, { op, state: 'failed', failure: handed }, following);

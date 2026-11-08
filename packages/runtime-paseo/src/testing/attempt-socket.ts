@@ -37,9 +37,10 @@ export interface FakeAttemptSocket {
 
 /**
  * Serves an attempt socket in a directory of its own under /tmp (a socket path binds ~104 bytes at most). With `grants`
- * false, every ask is refused as one from an agent nobody registered.
+ * false, every ask is refused as one from an agent nobody registered. With `holdUntil`, an ask is answered only once
+ * that file exists, as a sandbox slow to start the tool.
  */
-export async function serveAttemptSocket({ grants = true }: { grants?: boolean } = {}): Promise<FakeAttemptSocket> {
+export async function serveAttemptSocket({ grants = true, holdUntil }: { grants?: boolean; holdUntil?: string } = {}): Promise<FakeAttemptSocket> {
   const dir = fs.mkdtempSync(path.join('/tmp', 'paseo-attempt-'));
   fs.chmodSync(dir, 0o700);
   const socket = path.join(dir, 'attempt.sock');
@@ -65,17 +66,34 @@ export async function serveAttemptSocket({ grants = true }: { grants?: boolean }
         return;
       }
 
-      if (!grants || registered === undefined || line.ask.agent !== registered) {
-        say(client, { refused: { code: 'isolation_unproven', message: `No inner runtime registered agent ${line.ask.agent ?? 'none'} on this attempt.` } });
+      const { ask } = line;
 
-        return;
-      }
+      const answer = (): void => {
+        if (holdUntil !== undefined && !fs.existsSync(holdUntil)) {
+          setTimeout(answer, 50);
 
-      say(client, { grant: { argv: [line.ask.tool], cwd: line.ask.cwd, env: {} } });
+          return;
+        }
 
-      for (const registration of registrations) say(registration, { connected: { agent: line.ask.agent } });
+        answerAsk(client, ask);
+      };
+
+      answer();
     });
   });
+
+  /** Grants a registered agent's ask, and says to the registrations it connected; refuses any other. */
+  const answerAsk = (client: net.Socket, ask: Extract<SocketLine, { ask: unknown }>['ask']): void => {
+    if (!grants || registered === undefined || ask.agent !== registered) {
+      say(client, { refused: { code: 'isolation_unproven', message: `No inner runtime registered agent ${ask.agent ?? 'none'} on this attempt.` } });
+
+      return;
+    }
+
+    say(client, { grant: { argv: [ask.tool], cwd: ask.cwd, env: {} } });
+
+    for (const registration of registrations) say(registration, { connected: { agent: ask.agent } });
+  };
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
