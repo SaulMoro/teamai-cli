@@ -403,7 +403,7 @@ export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z
   return { ok: false, failure: { key: issue?.path.join('.') || 'pool', message: issue?.message ?? 'not valid' } };
 }
 
-/** The `fleet` runtime of `driver`: its pool, and the `can` it promises: command steps, and prompts on the tools it lists. */
+/** The `fleet` runtime of `driver`: its pool, and the `can` it promises, which takes command steps only for now. */
 function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof engineOptions>, { ok: true }>): { ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure } {
   const parsed = parseFleetOptions(split.runtime);
 
@@ -412,8 +412,7 @@ function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof e
   if (split.credentials.length > 0 || split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, 'fleet', 'credentials', 'each member runs a step with its own driver, so fleet brings no credential') };
   const { pool, stale_after: staleAfterMs, can = {} } = parsed.value;
 
-  // A prompt runs on a member's own tool, so the fleet takes prompts only on the tools its definition promises.
-  return { ok: true, opened: { kind: 'fleet', use: 'fleet', pool, staleAfterMs, engine: split.engine, can: { ...can, ...((can.tools ?? []).length === 0 && { prompt: false as const }), confined: [], remote: true } } };
+  return { ok: true, opened: { kind: 'fleet', use: 'fleet', pool, staleAfterMs, engine: split.engine, can: { ...can, prompt: false, remote: true } } };
 }
 
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */

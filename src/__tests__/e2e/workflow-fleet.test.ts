@@ -60,16 +60,6 @@ steps:
     command: node -e "require('fs').writeFileSync('part-' + process.env.PART + '.txt', process.env.PART)"
 `;
 
-/** One prompt step, which the fleet takes on the tools its definition lists. */
-const ASK = flow('ask', `  - id: review
-    workspace: new
-    tool: claude
-    prompt: Review the change.
-`);
-
-/** The fleet takes prompts on Claude Code. */
-const PROMPT_FLEET = { schemaVersion: 'v1alpha1', name: 'prompt-fleet', runtimes: [{ use: 'fleet', options: { pool: 'build', can: { tools: ['claude'] } } }, { use: 'local' }] };
-
 const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1 } }, { use: 'local' }] };
 
 /** The default pool, two attempts out at once. */
@@ -206,9 +196,7 @@ async function join(member: string): Promise<void> {
 
 describe('the fleet', () => {
   beforeAll(async () => {
-    // A member's copy sits deep under its home, and the fake Claude names its session folder after that path in full,
-    // which overruns a file name under macOS's long temporary directory.
-    sandbox = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'win32' ? os.tmpdir() : '/tmp', 'tfe-')));
+    sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fleet-e2e-')));
     origin = path.join(sandbox, 'origin.git');
     git(sandbox, ['init', '-q', '--bare', '-b', 'main', origin]);
     const seed = path.join(sandbox, 'seed');
@@ -223,8 +211,6 @@ describe('the fleet', () => {
       'workflows/fan.yaml': FAN,
       'drivers/build-fleet.yaml': stringify(FLEET),
       'drivers/fan-fleet.yaml': stringify(FAN_FLEET),
-      'workflows/ask.yaml': ASK,
-      'drivers/prompt-fleet.yaml': stringify(PROMPT_FLEET),
     };
 
     for (const [file, text] of Object.entries(files)) {
@@ -391,23 +377,4 @@ describe('the fleet', () => {
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(records(run).map((record) => [record.state, record.lease.step]).sort()).toEqual([['finished', 'part[0]'], ['finished', 'part[1]'], ['finished', 'part[2]']]);
   }, 240_000);
-
-  it('runs a prompt step on the member\'s own tool when the fleet lists it, and the owner gets its outputs', async () => {
-    const launched = (member: string): number => (fs.existsSync(launchesOf(member)) ? fs.readFileSync(launchesOf(member), 'utf8').trim().split('\n').filter(Boolean).length : 0);
-    const [aliceBefore, bobBefore] = [launched('alice'), launched('bob')];
-    let alicePid = 0;
-    const started = teamai('alice', ['workflow', 'start', 'ask', '--driver', 'prompt-fleet'], (pid) => { alicePid = pid; });
-    const before = new Set(offeredRuns());
-    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
-    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
-    const run = fresh() ?? '';
-
-    const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']);
-    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'review', exit_code: 0 } } });
-    const done = await started;
-
-    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
-    expect([launched('alice') - aliceBefore, launched('bob') - bobBefore]).toEqual([0, 1]);
-    expect(runStateOf('alice', run).steps).toEqual([expect.objectContaining({ id: 'review', status: 'succeeded', runtime: 'fleet', outputs: { ok: true } })]);
-  }, 180_000);
 });

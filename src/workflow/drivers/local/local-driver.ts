@@ -1794,20 +1794,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           if (failure) return unstaged(lease, failure);
           interactiveIgnores = ignored;
 
-          if (slot?.kind === 'fleet' && lease.prompt !== undefined) {
-            const { step, tool, output } = lease;
-
-            const onFleet = fleetCommand({
-              config, run: runId, attempt: lease.attempt, pool: slot.pool, staleAfterMs: slot.staleAfterMs, root, dir: lease.cwd ?? root, secrets: turn.secrets,
-              lease: { step, prompt: lease.prompt, env: lease.env ?? {}, ...(tool !== undefined && { tool }), ...(output !== undefined && { output }) },
-            });
-
-            controller.signal.addEventListener('abort', () => void onFleet.stop(), { once: true });
-            const exited = await onFleet.exit;
-
-            return 'exitCode' in exited ? commandReport(config, lock, driver, lease, exited, turn.secrets) : { attempt: lease.attempt, revision: lease.revision, driver, ...failureReport(exited) };
-          }
-
           const stepRun = runOf(lease);
 
           return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }) });

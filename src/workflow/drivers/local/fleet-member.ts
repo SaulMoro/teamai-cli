@@ -8,14 +8,8 @@
 import path from 'node:path';
 import type { HandoffOwner } from '../../snapshot.js';
 import type { LocalConfig } from '../../../types.js';
-import { memberTools } from '../../../tool-launch/member-tools.js';
-import { attemptEnv } from '../../attempt-marker.js';
-import { startGroupedCommand, type CommandExit } from '../../../tool-launch/process-stop.js';
-import { JsonValueSchema } from '../../../utils/json.js';
-import { launchToolFor } from './local-driver.js';
-import { createLocalToolAdapter, type LocalToolRun } from './local-tool-adapter.js';
-import { attemptRef, claimAttempt, finishAttempt, fleetFailure, listOffers, recordProgress, type Claimed, type FleetLease, type FleetResult } from '../../fleet.js';
-import { OutputSchemaSchema } from '../../output.js';
+import { startGroupedCommand } from '../../../tool-launch/process-stop.js';
+import { attemptRef, claimAttempt, finishAttempt, fleetFailure, listOffers, recordProgress, type Claimed, type FleetResult } from '../../fleet.js';
 import { commandOutputs } from '../../protocol.js';
 import { attemptDir, takeRunLock } from '../../store.js';
 import type { WorkflowEnvelope } from '../../types.js';
@@ -81,13 +75,9 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
   const save = (message: string): Promise<{ to: string } | { error: string }> => pushWork({ work, ref, message, memberConfig });
 
   try {
-    // Marked as the attempt's runner, as the local loop marks a step it runs; no person answers here.
-    const env = { ...process.env, ...lease.env, ...attemptEnv(config, run, attempt, 'unattended') };
+    const env = { ...process.env, ...lease.env };
 
-    const command = 'command' in lease
-      ? startGroupedCommand({ command: lease.command, cwd: work, env, detached: process.platform !== 'win32', group: dir })
-      : startPrompt(config, { lease, work, dir, env, secrets });
-
+    const command = startGroupedCommand({ command: lease.command, cwd: work, env, detached: process.platform !== 'win32', group: dir });
     let gone: string | undefined;
     let beating: Promise<void> | undefined;
 
@@ -129,46 +119,6 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
   } finally {
     await git(root, ['worktree', 'remove', '--force', work]);
   }
-}
-
-/**
- * Runs prompt `lease` in `work` on this member's own tool, as `startGroupedCommand` runs a command: its outputs as the
- * stdout of a command step, and why it failed as its stderr.
- */
-function startPrompt(config: LocalConfig, { lease, work, dir, env, secrets }: { lease: Extract<FleetLease, { prompt: string }>; work: string; dir: string; env: NodeJS.ProcessEnv; secrets: Record<string, string> }) {
-  const stopping = new AbortController();
-
-  const exit = (async (): Promise<CommandExit> => {
-    const choice = launchToolFor({ tool: lease.tool }, config, {}, await memberTools(config));
-
-    if (!choice.ok) return { exitCode: 1, stdout: '', stderr: choice.failure.message, output: '' };
-    const input: LocalToolRun = { prompt: lease.prompt, cwd: work, resultPath: path.join(dir, 'result.json'), secrets, env, unattended: true };
-    const output = lease.output === undefined ? undefined : OutputSchemaSchema.safeParse(lease.output);
-
-    if (output?.success === false) return { exitCode: 1, stdout: '', stderr: `The attempt record holds an output this teamai cannot read: ${output.error.message}. Update teamai on this machine and claim the step again.`, output: '' };
-
-    if (output?.success) input.output = output.data;
-
-    if (choice.target.instance?.command !== undefined) input.command = choice.target.instance.command;
-    const ran = await createLocalToolAdapter().run(choice.tool, input, stopping.signal);
-    const outputs = ran.started ? JsonValueSchema.safeParse(ran.output) : undefined;
-
-    return {
-      exitCode: ran.failure === undefined ? ran.exitCode : ran.exitCode || 1,
-      stdout: outputs?.success ? JSON.stringify(outputs.data) : '',
-      stderr: ran.failure?.message ?? '',
-      output: '',
-    };
-  })();
-
-  return {
-    exit,
-    stop: async () => {
-      stopping.abort();
-
-      return exit;
-    },
-  };
 }
 
 /**
