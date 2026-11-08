@@ -296,3 +296,53 @@ describe('the skill driver keeps a run it drives', () => {
     expect(await made.context.runners.alive(run, attempt)).toBe(false);
   });
 });
+
+const HANDED_ON = (invoke: 'allow' | 'ask'): string => `schemaVersion: v1alpha1
+name: handed-on
+description: Two commands.
+invoke: ${invoke}
+steps:
+  - id: one
+    command: node -e "process.exit(0)"
+  - id: two
+    needs: [one]
+    command: node -e "process.exit(0)"
+`;
+
+/** Alice publishes a run of `handed-on`, takes it back and leases its first step: she drives it. Bob's skill session is next to her. */
+async function aliceDrivesForBobsSession(invoke: 'allow' | 'ask', mode: 'attended' | 'unattended' = 'attended') {
+  const shared = sharedTeam({ 'handed-on': HANDED_ON(invoke) });
+  const alice = await shared.install('alice');
+  const started = await startRun(alice.config, 'handed-on', {}, { secrets: {} });
+  if ('error' in started) throw new Error(started.error.message);
+  const run = RunIdSchema.parse(started.data.run);
+  expect(await publishRun(alice.config, run, { checkout: alice.checkout, env: {} })).toMatchObject({ ok: true });
+  expect(await resumeRun(alice.config, run, { claim: false, checkout: alice.checkout })).toMatchObject({ ok: true });
+  expect(leased(await leaseNext(alice.config, run, { kind: 'local', machine: 'alice', workspace: alice.checkout }))).toBe('one');
+  const bob = await shared.install('bob');
+  const made = await skillHarness({}, { install: bob, evidence: { kind: 'session', variable: 'CLAUDE_CODE_SESSION_ID' }, mode });
+  dirs.push(made.root);
+  const owner = (): string => JSON.parse(execFileSync('git', ['--git-dir', bob.config.repo.remote, 'show', `teamai-reports:workflows/runs/${run}/state.json`], { encoding: 'utf8' })).owner.user;
+  return { made, run, owner };
+}
+
+describe('a skill session that takes over a run its owner may still drive', () => {
+  it('is asked, and takes it over with the --confirmed call the answer names once the person agrees', async () => {
+    const { made, run, owner } = await aliceDrivesForBobsSession('allow');
+
+    expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: false, answers: {} })).toMatchObject({ error: {
+      code: 'owner_active', next: `teamai workflow resume ${run} --driver skill --claim --confirmed`,
+    } });
+    expect(owner()).toBe('alice');
+
+    expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: true, answers: {} })).toMatchObject({ data: { turn: { run } } });
+    expect(owner()).toBe('bob');
+  });
+
+  it('is refused unattended, with nothing to run', async () => {
+    const { made, run, owner } = await aliceDrivesForBobsSession('allow', 'unattended');
+
+    expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: true, answers: {} })).toMatchObject({ error: { code: 'owner_active', next: null } });
+    expect(owner()).toBe('alice');
+  });
+});
