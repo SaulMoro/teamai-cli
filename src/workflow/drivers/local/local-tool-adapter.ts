@@ -18,7 +18,7 @@ import { AttemptResult } from '../../attempt-result.js';
 import { budgeted } from '../../limits.js';
 import { expectedOutput } from '../../output.js';
 import type { Limit } from '../../requirements.js';
-import { MAX_TIMER_DELAY } from '../../shell-command.js';
+import { MAX_TIMER_MS } from '../../../utils/timer.js';
 import type { StepModel } from '../../step-model.js';
 import type { OutputSchema, WorkflowFailure } from '../../types.js';
 import { agyGatewayEnv } from '../../../models/agy-gateway.js';
@@ -414,7 +414,7 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
 
       // The idle limit starts with the tool, and each chunk it prints restarts it, so a tool that streams lives and a
       // silent one is stopped.
-      const idleMs = !interactive && launchAdapterIdOf(tool) === 'claude' && input.idleTimeoutMs !== undefined && input.idleTimeoutMs <= MAX_TIMER_DELAY ? input.idleTimeoutMs : undefined;
+      const idleMs = !interactive && launchAdapterIdOf(tool) === 'claude' && input.idleTimeoutMs !== undefined && input.idleTimeoutMs <= MAX_TIMER_MS ? input.idleTimeoutMs : undefined;
       let idleTimer: NodeJS.Timeout | undefined;
 
       const active = (): void => {
@@ -451,7 +451,7 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         void processRun.stop();
       }
 
-      const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_DELAY
+      const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_MS
         ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
         : undefined;
 

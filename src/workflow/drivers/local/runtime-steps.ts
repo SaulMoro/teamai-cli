@@ -8,7 +8,8 @@ import type { AttemptRun } from '../../runtimes/attempt.js';
 import { withRetry } from '../../runtimes/step-runtime.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../../launch-context.js';
-import { MAX_TIMER_DELAY, shellArgv, STOPPED_EXIT_CODE } from '../../shell-command.js';
+import { shellArgv, STOPPED_EXIT_CODE } from '../../shell-command.js';
+import { MAX_TIMER_MS } from '../../../utils/timer.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
@@ -363,7 +364,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
       void run.cancel();
     };
 
-    const timer = input.timeoutMs === undefined || input.timeoutMs > MAX_TIMER_DELAY ? undefined : setTimeout(() => {
+    const timer = input.timeoutMs === undefined || input.timeoutMs > MAX_TIMER_MS ? undefined : setTimeout(() => {
       timedOut = true;
       stop();
     }, input.timeoutMs);

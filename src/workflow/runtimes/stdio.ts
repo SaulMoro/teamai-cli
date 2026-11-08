@@ -6,6 +6,7 @@ import { log } from '../../utils/logger.js';
 import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
+import { MAX_TIMER_MS } from '../../utils/timer.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
@@ -41,9 +42,6 @@ function wholeStdout({ streamed, exited }: { streamed: string; exited: string })
  * `notice`. An unattended or recover `init` has nobody to wait for, and gets `ANSWER_WITHIN_MS`.
  */
 const ATTENDED_INIT_WITHIN_MS = 10 * 60_000;
-
-/** The longest delay a Node timer keeps; a deadline further away than this is not timed. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /**
  * Runs `then` at `deadline` (ms since the epoch), or at once when it passed, and answers how to stop waiting for it.

@@ -13,6 +13,7 @@ import { redact } from '@teamai/shared/redact';
 import type { WorkflowFailure } from '../types.js';
 import { untrustedGit } from '../worktree.js';
 import { changedPaths, snapshotWorktree } from './worktree-snapshot.js';
+import { MAX_TIMER_MS } from '../../utils/timer.js';
 
 export interface SetupRun {
   command: string;
@@ -46,9 +47,6 @@ export type SetupElsewhere = (signal: AbortSignal | undefined) => Promise<SetupE
 /** The last characters of setup's output a failure quotes. */
 const OUTPUT_TAIL = 400;
 
-/** The longest delay `setTimeout` honours. */
-const MAX_TIMER_DELAY = 2 ** 31 - 1;
-
 /**
  * Runs setup and checks what it left. The step may start when this answers undefined. Otherwise, first match wins:
  * a non-zero exit is `setup_failed`; a change to a tracked or non-ignored path, which the step would commit, is
@@ -59,7 +57,7 @@ export async function runSetup({ expiresAt, signal: caller, ...run }: SetupRun):
   const remaining = expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now());
 
   // A longer delay fires at once, so a deadline that far away is left to the caller's own deadline handling.
-  if (remaining === undefined || remaining > MAX_TIMER_DELAY) return checkedSetup({ ...run, signal: caller });
+  if (remaining === undefined || remaining > MAX_TIMER_MS) return checkedSetup({ ...run, signal: caller });
   const bound = new AbortController();
   const stop = (): void => bound.abort();
   caller?.addEventListener('abort', stop, { once: true });

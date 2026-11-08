@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { commandShell } from '../command-shell.js';
 import { stopProcess } from '../tool-launch/process-stop.js';
+import { MAX_TIMER_MS } from '../utils/timer.js';
 
 /** How a shell command this process ran ended. */
 export type CommandExit =
@@ -16,9 +17,6 @@ const OUTPUT_KEPT = 800;
 
 /** The exit code a shell gives a command it stopped on SIGINT, which a step stopped before its end reports. */
 export const STOPPED_EXIT_CODE = 130;
-
-/** The longest delay `setTimeout` honours. */
-export const MAX_TIMER_DELAY = 2 ** 31 - 1;
 
 /** The argv a command step runs as: its command in the shell, as the local loop runs one. */
 export function shellArgv(command: string): string[] {
@@ -71,7 +69,7 @@ export async function runShellCommand({ command, cwd, env, signal, expiresAt, st
   let timedOut = false;
 
   // A longer delay fires at once, so a deadline that far away is left to the caller's own deadline handling.
-  const timer = remaining === undefined || remaining > MAX_TIMER_DELAY
+  const timer = remaining === undefined || remaining > MAX_TIMER_MS
     ? undefined
     : setTimeout(() => { timedOut = true; void stop(); }, remaining);
 

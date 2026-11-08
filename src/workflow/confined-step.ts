@@ -14,7 +14,7 @@ import { JsonValueSchema, type JsonValue, type LocalConfig } from '../types.js';
 import { AttemptResult } from './attempt-result.js';
 import type { ReportInput } from './engine.js';
 import type { ConfinedLease, LeaseWire } from './lease-wire.js';
-import { MAX_TIMER_DELAY } from './shell-command.js';
+import { MAX_TIMER_MS } from '../utils/timer.js';
 import { chooseStepModel, type StepModel } from './step-model.js';
 import { attemptDir, attemptResultPath, type RunId } from './store.js';
 import type { WorkflowFailure } from './types.js';
@@ -120,9 +120,9 @@ function spentOf(usage: ConfinedRun['usage']): Pick<ConfinedStepReport, 'tokens'
 
 /** How long the run may take: what is left of the lease's deadline, and of its turn's timeout, the sooner of them. */
 function timeoutOf(lease: ConfinedStepLease): number {
-  const left = lease.expiresAt === undefined ? MAX_TIMER_DELAY : Date.parse(lease.expiresAt) - Date.now();
+  const left = lease.expiresAt === undefined ? MAX_TIMER_MS : Date.parse(lease.expiresAt) - Date.now();
 
-  return Math.max(1, Math.min(MAX_TIMER_DELAY, left, lease.limits?.timeoutMs ?? MAX_TIMER_DELAY));
+  return Math.max(1, Math.min(MAX_TIMER_MS, left, lease.limits?.timeoutMs ?? MAX_TIMER_MS));
 }
 
 /**

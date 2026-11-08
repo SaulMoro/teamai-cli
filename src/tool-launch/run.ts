@@ -2,9 +2,7 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
 import { batchLaunchOf } from '@teamai/tool-core/exec';
 import { recordGroup, stopProcess } from './process-stop.js';
-
-/** The longest delay a Node timer waits; it fires a longer one at once. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
+import { MAX_TIMER_MS } from '../utils/timer.js';
 
 export interface ToolRun {
   stdout: string;
