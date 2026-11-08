@@ -18,6 +18,7 @@ import { AgentSession, type AgentSessionRef } from '../../session-flow/agent-ses
 import { type SessionArchive } from '../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../skill-use.js';
 import { attemptEnv } from '../attempt-marker.js';
+import { AttemptResult } from '../attempt-result.js';
 import { type ReportInput } from '../engine.js';
 import { type LeaseWire } from '../lease-wire.js';
 import { setsLimit } from '../requirements.js';
@@ -235,6 +236,8 @@ async function outerToolHome({ dir, tool, variable, memberHome }: { dir: string;
 export type PromptRuntime = {
   run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv;
   isThrough?: true;
+  /** The runtime picks the tool, model and login where it runs the step (`StepRuntime.isToolPickedThere`). */
+  isToolPickedThere?: true;
 };
 
 /**
@@ -270,6 +273,8 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
 
     return body;
   };
+
+  if (onRuntime?.isToolPickedThere) return promptPickedThere({ config, lock, driver, lease, onRuntime, signal, mode, secrets });
 
   // A role lease's place was staged for its launch tool, which launches it; others pick theirs now.
   const choice = staged ?? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, tools, await memberTools(config), onRuntime?.defaultTool);
@@ -588,6 +593,72 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
   }
 
   return body;
+}
+
+
+/**
+ * Prompt step `lease` on a runtime that picks its tool, model and login where it runs the step, and renders its prompt
+ * there (`isToolPickedThere`), as a fleet member does: teamai picks none of them here. It sets the place up, sends the
+ * step, and reports the tool the runtime ran it on, the result its agent wrote and its usage. The session stays where
+ * the runtime ran it, so none is reported.
+ */
+async function promptPickedThere({ config, lock, driver, lease, onRuntime, signal, mode, secrets }: {
+  config: LocalConfig; lock: RunLock; driver: DriverIdentity; lease: StagedLease; onRuntime: PromptRuntime; signal: AbortSignal; mode: RunMode; secrets: Record<string, string>;
+}): Promise<ReportInput> {
+  const { run } = onRuntime;
+  const failed = (failure: WorkflowFailure, tool?: string): ReportInput => ({ attempt: lease.attempt, revision: lease.revision, driver, ...(tool !== undefined && { tool }), ...failureReport(failure) });
+  const cwd = lease.cwd ?? driver.workspace;
+  const result = attemptResultPath(config, lock.run, lease.attempt);
+  const opened = await run.open(await placeView(config, lock.run, lease.attempt, cwd));
+
+  if (!opened.ok) return failed(opened.failure);
+  const unready = await runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env: onRuntime.teamEnv, signal, on: runtimeSetup(run) });
+
+  if (unready) return failed(unready);
+  const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
+
+  const stop = (): void => {
+    void run.cancel();
+  };
+
+  signal.addEventListener('abort', stop, { once: true });
+
+  if (signal.aborted) stop();
+
+  // The step's own tool, else the default of whoever runs it: the runtime renders the prompt and picks from its own copy of the step.
+  const end = await run.prompt({
+    lease: { step: lease.step, tool: lease.tool ?? 'default', prompt: lease.prompt ?? '', result, permissions: lease.permissions === 'unattended' ? 'unattended' : 'approval-required', interactive: false },
+    env: scoped.env, provided: scoped.provided, unset: scoped.unset, credentials: {}, cwd,
+  }, {});
+
+  signal.removeEventListener('abort', stop);
+  const uncollected = await run.collect();
+
+  switch (end.kind) {
+    case 'finished': {
+      await AttemptResult.write(result, end.result, secrets);
+      const tool = end.session.tool;
+      const body: ReportInput = { attempt: lease.attempt, revision: lease.revision, driver, tool, outcome: 'success', exitCode: 0 };
+
+      if ('output' in end.result) body.outputs = end.result.output;
+
+      if (end.usage) body.tokens = end.usage;
+      const failure = uncollected ?? end.result.failure;
+
+      return failure ? { ...body, ...failureReport(failure) } : body;
+    }
+
+    case 'cancelled':
+      return failed({ code: 'tool_failed', message: `Step "${lease.step}" was stopped before its runtime finished it.` });
+    case 'failed':
+    case 'lost':
+      return failed(end.failure);
+    default: {
+      const unhandled: never = end;
+
+      return unhandled;
+    }
+  }
 }
 
 

@@ -258,11 +258,11 @@ export function locateStep(run: RunState, path: string): { scope: Scope; step: W
 }
 
 /** The step instance at `path` and what its lease's templates read, or undefined when the run holds no such instance. */
-export function leaseContext(run: RunState, path: string): { step: WorkflowStep; context: TemplateContext } | undefined {
+export function leaseContext(run: RunState, path: string): { step: WorkflowStep; context: TemplateContext; requires: InEffect } | undefined {
   const located = locateStep(run, path);
   const state = run.steps.find((item) => item.id === path);
 
-  return located && state ? { step: located.step, context: contextOf(located.scope, statesIn(run, located.scope), state) } : undefined;
+  return located && state ? { step: located.step, context: contextOf(located.scope, statesIn(run, located.scope), state), requires: mergeRequirements(located.scope.requires, located.step.requires) } : undefined;
 }
 
 /** The requirements in effect at each `from` step that runs the workflow producer `path` outputs. */

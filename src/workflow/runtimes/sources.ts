@@ -383,7 +383,7 @@ async function runnableInstances(): Promise<InitInstance[]> {
 }
 
 /**
- * The built-in `fleet` runtime of `driver`: each command step it takes is offered to the members of its pool on
+ * The built-in `fleet` runtime of `driver`: each command or prompt step it takes is offered to the members of its pool on
  * teamai-reports, and one of them runs it with its own driver (`fleet/owner.ts`). Its `can` is what the definition
  * promises the members' drivers give: nothing checks it here.
  */
@@ -395,7 +395,7 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
 
   if (!ready.ok) return { ok: false, failure: badOption(driver, 'fleet', ready.failure.key ?? 'pool', ready.failure.message) };
 
-  return { ok: true, opened: { kind: 'external', use: 'fleet', runtime, can: ready.can, launchesAgents: false, engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, 'fleet') } };
+  return { ok: true, opened: { kind: 'external', use: 'fleet', runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, 'fleet') } };
 }
 
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */

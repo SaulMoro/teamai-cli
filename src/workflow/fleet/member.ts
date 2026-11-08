@@ -18,12 +18,21 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
-import { attemptDir, attemptResultPath, runScratchDir, takeRunLock, type AttemptId, type RunId } from '../store.js';
+import { attemptDir, attemptResultPath, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { stepWorkflow, workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
+import type { TurnLimits } from '../requirements.js';
+import type { LoginTool } from '../runtimes/login.js';
+import { runPromptStep, type StagedLease } from '../steps/prompt.js';
+import { driverIdentity } from '../../driver-identity.js';
+import { withRunningCli } from '../../env-exec.js';
+import { resolveWorkflowEnv } from '../../env-resolution.js';
+import { resolveRunMode } from '../../launch-context.js';
+import { openSessionArchive } from '../../session-flow/archive.js';
+import { JsonValueSchema } from '../../utils/json.js';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
@@ -32,25 +41,56 @@ const CANCEL_READ_MS = 30_000;
 /** The last characters of a step's stderr a member keeps. */
 const STDERR_KEPT = 4_000;
 
-/** Where a member runs a step's command: here, as `--driver local` does, or on a step runtime of its own driver. */
-export type MemberPlace = { kind: 'here' } | { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime };
+/** Where a member runs a step: here, as `--driver local` does, or on a step runtime of its own driver. */
+type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime };
+
+/** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
+type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true };
 
 /**
- * Where the member's driver `opened` runs a command step: its first runtime that runs commands, as the local loop picks
- * one, here when that is `local` or the member gave no driver. A fleet entry of its own is passed over: the member would
- * offer the attempt again instead of running it.
+ * Where the member's driver runs each kind of step: a command step's command, and a prompt step's tool. A kind with no
+ * place is one the member takes no attempt of.
+ */
+export type MemberPlace = { command?: { kind: 'here' } | RuntimePlace; prompt?: { kind: 'here' } | PromptRuntimePlace };
+
+/** The kind of step a record's lease runs. */
+function leaseKind(lease: FleetLease): keyof MemberPlace {
+  return 'command' in lease ? 'command' : 'prompt';
+}
+
+/**
+ * Where the member's driver `opened` runs each kind of step, as the local loop picks a runtime: its first runtime that
+ * runs commands, and its first that runs prompts, each here when that is `local` or the member gave no driver. A fleet
+ * entry of its own is passed over: the member would offer the attempt again instead of running it.
  */
 export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { refused: string } {
-  if (opened === undefined) return { kind: 'here' };
+  if (opened === undefined) return { command: { kind: 'here' }, prompt: { kind: 'here' } };
+  const place: MemberPlace = {};
 
   for (const entry of opened.runtimes) {
-    if (entry.kind === 'local') return { kind: 'here' };
+    if (entry.kind === 'local') {
+      place.command ??= { kind: 'here' };
+      place.prompt ??= { kind: 'here' };
+      break;
+    }
 
-    // A runtime runs commands unless it says it does not.
-    if (entry.use !== 'fleet' && entry.can.exec !== false) return { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime };
+    if (entry.use === 'fleet') continue;
+    const runtime: RuntimePlace = { kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime };
+
+    // A runtime runs commands, and prompts, unless it says it does not.
+    if (entry.can.exec !== false) place.command ??= runtime;
+
+    if (entry.can.prompt !== false) {
+      place.prompt ??= {
+        ...runtime, launchesAgents: entry.launchesAgents, logins: entry.engine.logins, credentials: entry.credentials, found: entry.found,
+        ...(entry.can.default_tool !== undefined && { defaultTool: entry.can.default_tool }), ...(entry.isThrough && { isThrough: true }),
+      };
+    }
   }
 
-  return { refused: `Driver ${opened.asked} has no runtime that runs command steps, so this member can take no attempt on it. Use a driver with one, such as --driver local.` };
+  if (place.command === undefined && place.prompt === undefined) return { refused: `Driver ${opened.asked} has no runtime that runs command or prompt steps, so this member can take no attempt on it. Use a driver with one, such as --driver local.` };
+
+  return place;
 }
 
 /**
@@ -65,15 +105,16 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
   const finished = await finishLeftClaims(config, { repository, root, member, secrets, place });
 
   if (finished) return finished;
-  const offers = (await listOffers(config, { pool, repository })).filter((offer) => offer.owner.id !== member.id);
+  // An offer of a kind of step this member's driver does not run is another member's to take.
+  const offers = (await listOffers(config, { pool, repository })).filter((offer) => offer.owner.id !== member.id && place[leaseKind(offer.lease)] !== undefined);
   let moved = 0;
 
   for (const offer of offers) {
     // The run's lock comes first: a claim this machine could not run at once would wait for nobody until stale_after.
-    const held = await takeRunLock(config, offer.run, async (): Promise<WorkflowEnvelope | 'moved'> => {
+    const held = await takeRunLock(config, offer.run, async (lock): Promise<WorkflowEnvelope | 'moved'> => {
       const claimed = await claimAttempt(config, offer, member);
 
-      if (claimed.ok) return runClaim(config, { claim: claimed.value, root, secrets, member, place });
+      if (claimed.ok) return runClaim(config, { lock, claim: claimed.value, root, secrets, member, place });
 
       return claimed.error.code === 'state_moved' ? 'moved' : { error: fleetFailure(claimed.error) };
     }, { waitMs: 0 });
@@ -101,7 +142,7 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
  */
 async function finishLeftClaims(config: LocalConfig, { repository, root, member, secrets, place }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope | undefined> {
   for (const record of await listMemberRecords(config, { member, repository })) {
-    const held = await takeRunLock(config, record.run, async (): Promise<WorkflowEnvelope | undefined> => {
+    const held = await takeRunLock(config, record.run, async (lock): Promise<WorkflowEnvelope | undefined> => {
       // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it.
       await stopRecordedGroup(attemptDir(config, record.run, record.attempt));
@@ -125,7 +166,7 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       if (record.state === 'cancelling') return answered(config, record, saved);
       log.info(`Finishing attempt ${record.attempt} of run ${record.run}, which this member claimed and left: step "${record.lease.step}" runs again from the work it pushed.`);
 
-      return runClaim(config, { claim: record, root, secrets, member, place, from: saved });
+      return runClaim(config, { lock, claim: record, root, secrets, member, place, from: saved });
     }, { waitMs: 0 });
 
     if (held.kind !== 'held' || !held.value) continue;
@@ -158,7 +199,7 @@ async function answered(config: LocalConfig, cancelling: Cancelling, pushed: str
  * the work it pushed, then pushes its work and writes how it ended. A cancel of the claim stops the step: its work is
  * pushed, and the member answers the cancel.
  */
-async function runClaim(config: LocalConfig, { claim, root, secrets, member, place, from = claim.start }: { claim: Claimed; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
+async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start }: { lock: RunLock; claim: Claimed; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
   const { run, attempt, lease } = claim;
   const ref = attemptRef(run, attempt);
   const dir = attemptDir(config, run, attempt);
@@ -188,6 +229,10 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, pla
 
     return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": ${trusted.refused} ${next}` });
   }
+
+  const runsHere = trusted.kind === 'command' ? place.command : place.prompt;
+
+  if (runsHere === undefined) return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": its driver runs no ${trusted.kind} step. ${retryCommand(run, lease.step)} offers it again.` });
 
   const fetched = await git(root, ['fetch', '--quiet', 'origin', ref]);
 
@@ -221,9 +266,11 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, pla
   };
 
   try {
-    const command = place.kind === 'here'
-      ? startGroupedCommand({ command: trusted.command, cwd: work, env: { ...process.env, ...trusted.env }, detached: process.platform !== 'win32', group: dir })
-      : runtimeCommand(config, { run, attempt, place, work, command: trusted.command, env: trusted.env });
+    const command = trusted.kind === 'prompt'
+      ? promptRun(config, { lock, claim, trusted, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
+      : commandRun(place.command?.kind === 'runtime'
+        ? runtimeCommand(config, { run, attempt, place: place.command, work, command: trusted.command, env: trusted.env })
+        : startGroupedCommand({ command: trusted.command, cwd: work, env: { ...process.env, ...trusted.env }, detached: process.platform !== 'win32', group: dir }));
 
     let gone: string | undefined;
     let cancelling: Cancelling | undefined;
@@ -287,12 +334,10 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, pla
       });
     }, tickMs);
 
-    const exited = await command.exit.finally(() => clearInterval(beat));
+    const ran = await command.exit.finally(() => clearInterval(beat));
     await beating;
 
     if (gone !== undefined) return { error: { code: 'state_moved', message: `The owner of run ${run} gave up attempt ${attempt} of step "${lease.step}" while this member ran it, so its result was not written. ${gone}` } };
-    const outputs = commandOutputs(exited.stdout);
-    const ran: FleetResult = { exitCode: exited.exitCode, stderr: exited.stderr.trim().slice(0, 400), ...(outputs !== undefined && { outputs }) };
     const saved = await save(`[teamai] ${lease.step} (run ${run}, attempt ${attempt})`);
 
     if (cancelling) return answered(config, cancelling, 'to' in saved ? saved.to : latest.pushed);
@@ -306,12 +351,93 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, pla
   }
 }
 
+/** A step the member runs: how it ended, as the record writes it, and how to stop it. */
+type StepRun = { exit: Promise<FleetResult>; stop: () => Promise<void> };
+
+/** A command the member runs, ending as the local loop reports a command: its exit code, the JSON its stdout held, and the start of its stderr. */
+function commandRun(command: GroupedCommand): StepRun {
+  const exit = command.exit.then((exited): FleetResult => {
+    const outputs = commandOutputs(exited.stdout);
+
+    return { exitCode: exited.exitCode, stderr: exited.stderr.trim().slice(0, 400), ...(outputs !== undefined && { outputs }) };
+  });
+
+  return {
+    exit,
+    stop: async () => {
+      await command.stop();
+    },
+  };
+}
+
+/**
+ * Prompt step `trusted` of claim `claim`, run in clone `work` as this member runs a prompt step itself: its own tool,
+ * model and login, here or on the step runtime `place` of its own driver, on a lease rebuilt from its own definitions.
+ * It ends as the member's report says: success or failure, the output, the tool and its usage.
+ */
+function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, root, secrets }: {
+  lock: RunLock; claim: Claimed; trusted: Extract<Trusted, { kind: 'prompt' }>; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
+}): StepRun {
+  const { run, attempt } = claim;
+  const { step } = trusted;
+  const stopping = new AbortController();
+  const running = place.kind === 'runtime' ? attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver }) : undefined;
+
+  const exit = (async (): Promise<FleetResult> => {
+    await fs.mkdir(path.dirname(attemptResultPath(config, run, attempt)), { recursive: true });
+    const teamEnv = await resolveWorkflowEnv(config);
+
+    // The lease the engine would have sent this member, from its own copy of the step: the record names only its values.
+    const lease: StagedLease = {
+      attempt, revision: 0, step: claim.lease.step, prompt: trusted.prompt, env: trusted.env, cwd: work, processEnv: withRunningCli(process.env),
+      ...(step.agent !== undefined && { agent: step.agent }),
+      ...(step.tool !== undefined && { tool: step.tool }),
+      ...(step.permissions === 'unattended' && { permissions: 'unattended' as const }),
+      ...(step.model instanceof Object ? { model: step.model } : trusted.model !== undefined && { model: trusted.model }),
+      ...(trusted.defaultModel !== undefined && { defaultModel: trusted.defaultModel }),
+      ...(step.output !== undefined && { output: step.output }),
+      ...(trusted.limits !== undefined && { limits: trusted.limits }),
+    };
+
+    const body = await runPromptStep({
+      config, lock, driver: driverIdentity('local', root), lease, archive: openSessionArchive(config), signal: stopping.signal, mode: resolveRunMode(process.env),
+      secrets: { ...teamEnv.secrets, ...secrets },
+      ...(running && place.kind === 'runtime' && { onRuntime: {
+        run: running, logins: place.logins, launchesAgents: place.launchesAgents, credentials: place.credentials, found: place.found, teamEnv,
+        ...(place.defaultTool !== undefined && { defaultTool: place.defaultTool }), ...(place.isThrough && { isThrough: true as const }),
+      } }),
+    });
+
+    const unclosed = await running?.close();
+
+    if (unclosed) log.warn(unclosed.message);
+    const outputs = JsonValueSchema.safeParse(body.outputs);
+
+    return {
+      exitCode: body.exitCode ?? (body.outcome === 'success' ? 0 : 1), stderr: (body.message ?? '').slice(0, 400),
+      ...(body.outputs !== undefined && outputs.success && { outputs: outputs.data }),
+      ...(body.tool !== undefined && { tool: body.tool }),
+      ...(body.model !== undefined && { model: body.model }),
+      ...(body.tokens !== undefined && { tokens: body.tokens }),
+      ...(body.failure !== undefined && { failure: { code: body.failure.code, message: body.failure.message } }),
+    };
+  })();
+
+  return {
+    exit,
+    stop: async () => {
+      stopping.abort();
+      await exit;
+    },
+  };
+}
+
 /**
  * Command `command` in clone `work` on the member's step runtime `place`: open a place on `work`, one exec of the shell,
  * bring the place's work back into `work`, close it. The runtime gets the step's env alone, never this process's. A
  * failure of the runtime ends it as a failed command whose stderr says why, so the member writes it as the step's end.
  */
-function runtimeCommand(config: LocalConfig, { run, attempt, place, work, command, env }: { run: RunId; attempt: AttemptId; place: Extract<MemberPlace, { kind: 'runtime' }>; work: string; command: string; env: Record<string, string> }): GroupedCommand {
+function runtimeCommand(config: LocalConfig, { run, attempt, place, work, command, env }: { run: RunId; attempt: AttemptId; place: RuntimePlace; work: string; command: string; env: Record<string, string> }): GroupedCommand {
   const running = attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver });
   let output = '';
   let stderr = '';
@@ -379,13 +505,19 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
   };
 }
 
+/** What a member runs for a claim, as its own copy of the team's workflow defines it: a command, or a prompt step. */
+type Trusted =
+  | { kind: 'command'; command: string; env: Record<string, string> }
+  | { kind: 'prompt'; step: WorkflowStep; prompt: string; model?: string; defaultModel?: string; env: Record<string, string>; limits?: TurnLimits };
+
 /**
- * The command and env the team's workflow defines for the step `claim` offers, its env rendered from the offer's values,
- * or why this member does not run it. Anyone who can write to teamai-reports can write a record, so the member runs
- * only what the definitions the run executes say, read from its own team repository, as a claimer of a published run
- * does; a lease that says otherwise is refused, not corrected.
+ * What the team's workflow defines for the step `claim` offers, its texts rendered from the offer's values, or why this
+ * member does not run it. Anyone who can write to teamai-reports can write a record, so the member runs only what the
+ * definitions the run executes say, read from its own team repository, as a claimer of a published run does; a lease
+ * that says otherwise is refused, not corrected. Every team commit the record names counts only when this member would
+ * run that commit itself: `definition.teamRevision` is the only one a record carries.
  */
-async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ command: string; env: Record<string, string> } | { refused: string; next?: string }> {
+async function trustedLease(config: LocalConfig, claim: Claimed): Promise<Trusted | { refused: string; next?: string }> {
   const { run, lease, definition, values } = claim;
   const { teamRevision, ...named } = definition;
   // A team commit the member would not run itself names no definitions: without it, only its own copy can match.
@@ -397,6 +529,7 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
   }
 
   if (!found.ok) return { refused: found.error.message };
+  const kind = 'command' in lease ? 'command' : 'prompt';
   const defined = definedStep(found.value, lease.step);
 
   switch (defined.kind) {
@@ -406,7 +539,7 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
         refused: `in workflow "${definition.name}", step "${defined.by}" runs the workflow step "${defined.from}" wrote, which no workflow of the team defines, so a member cannot check what it runs.`,
         next: `Route the steps of that workflow to a runtime besides the fleet.`,
       };
-    case 'none': return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
+    case 'none': return { refused: `workflow "${definition.name}" has no ${kind} step at ${lease.step}.` };
     default: {
       const unhandled: never = defined;
 
@@ -414,11 +547,7 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
     }
   }
 
-  const { step } = defined;
-
-  if (step.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
-
-  if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
+  const { step, defaultModel } = defined;
   const rendered = leaseEnv(step, values, run);
 
   if ('error' in rendered) return { refused: `workflow "${definition.name}" ${rendered.error}.` };
@@ -427,7 +556,27 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
 
   if (differs.length > 0) return { refused: `the offer's env ${differs.join(', ')} differs from what workflow "${definition.name}" renders from the offer's values.` };
 
-  return { command: step.command, env: rendered.env };
+  if ('command' in lease) {
+    if (step.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
+
+    if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
+
+    return { kind: 'command', command: step.command, env: rendered.env };
+  }
+
+  if (step.prompt === undefined || step.answer !== undefined) return { refused: `workflow "${definition.name}" has no prompt step at ${lease.step}.` };
+  const texts = leasePrompt(step, values, run);
+
+  if ('error' in texts) return { refused: `workflow "${definition.name}" ${texts.error}.` };
+
+  if (texts.prompt !== lease.prompt) return { refused: `the offer's prompt differs from what workflow "${definition.name}" renders from the offer's values.` };
+
+  return {
+    kind: 'prompt', step, prompt: texts.prompt, env: rendered.env,
+    ...(texts.model !== undefined && { model: texts.model }),
+    ...(defaultModel !== undefined && { defaultModel }),
+    ...(lease.limits !== undefined && { limits: lease.limits }),
+  };
 }
 
 /**
@@ -436,16 +585,18 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
  * `by` that runs it and the step `from` that wrote it.
  */
 function definedStep({ definition, workflows }: Definitions, stepPath: string):
-  | { kind: 'step'; step: WorkflowStep } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
+  | { kind: 'step'; step: WorkflowStep; defaultModel?: string } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
   const segments = parseStepPath(stepPath);
   let steps = definition.finally?.some((step) => step.id === segments[0]?.id) ? definition.finally : definition.steps;
+  // The `defaults.model` in effect, a nested workflow's over the one it runs in, as the engine's scope keeps it.
+  let defaultModel = definition.defaults?.model;
 
   for (const [index, segment] of segments.entries()) {
     const step = steps.find((item) => item.id === segment.id);
 
     if (!step) return { kind: 'none' };
 
-    if (index === segments.length - 1) return { kind: 'step', step };
+    if (index === segments.length - 1) return { kind: 'step', step, ...(defaultModel !== undefined && { defaultModel }) };
     const runs = stepWorkflow(step);
 
     if (runs?.kind === 'from') return { kind: 'admitted', by: step.id, from: runs.step };
@@ -453,6 +604,7 @@ function definedStep({ definition, workflows }: Definitions, stepPath: string):
 
     if (!child) return { kind: 'none' };
     steps = child.steps;
+    defaultModel = ('defaults' in child ? child.defaults?.model : undefined) ?? defaultModel;
   }
 
   return { kind: 'none' };

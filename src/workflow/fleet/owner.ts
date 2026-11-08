@@ -1,8 +1,9 @@
 /**
  * The owner's side of the `fleet` runtime: a `StepRuntime` whose places are this host's, as `local` makes them, and
- * whose exec of a step's command offers it on teamai-reports. A member of the pool runs it and pushes its work to the
- * attempt's ref; the owner then fast-forwards the place to that work, and the exec ends as the member's command did.
- * Any other exec of the place, such as the workflow's setup, runs here. The owner need not stay up: an exec goes on
+ * whose exec of a step's command, or prompt of a prompt step, offers the step on teamai-reports. A member of the pool
+ * runs it, a prompt on its own tool, model and login, and pushes its work to the attempt's ref; the owner then
+ * fast-forwards the place to that work, and the exec or prompt ends as the member's did. Any other exec of the place,
+ * such as the workflow's setup, runs here. The owner need not stay up: an exec goes on
  * without the teamai that sent it (`isExecReconnected`), a restarted one sends the same id again and waits on the
  * record again, and a claim whose member wrote no progress for `stale_after` is given up.
  */
@@ -16,14 +17,15 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { durationMs } from '../parse.js';
 import { leaseContext } from '../engine.js';
-import { attemptRef, cancelAttempt, expireClaim, fleetFailure, lastGoneWork, leaseEnv, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetRecord } from './record.js';
+import { attemptRef, cancelAttempt, expireClaim, fleetFailure, lastGoneWork, leaseEnv, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { copyGit } from '../place/place.js';
 import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
-import type { ExecEnd, ExecEvents, StepRuntime } from '../runtimes/step-runtime.js';
+import type { ExecEnd, ExecEvents, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
+import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
 
 /** How often the owner reads the attempt's record while a member runs it. */
 const RECORD_POLL_MS = 1_000;
@@ -103,9 +105,9 @@ export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; thro
   return warnings;
 }
 
-/** How the owner's wait on an attempt ended: as the member's command did, cancelled, failed, or left out as this teamai stops. */
+/** How the owner's wait on an attempt ended: as the member's step did, cancelled, failed, or left out as this teamai stops. */
 type Waited =
-  | { kind: 'exited'; code: number; stdout: string; stderr: string }
+  | { kind: 'finished'; result: FleetResult }
   | { kind: 'cancelled'; message: string }
   | { kind: 'failed'; failure: WorkflowFailure }
   | { kind: 'left' };
@@ -143,8 +145,13 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
     case 'cancelled':
     case 'withdrawn':
       return { op, state: 'cancelled' };
-    case 'finished':
-      return { op, state: 'exited', code: record.result.exitCode, stdout: record.result.outputs === undefined ? '' : JSON.stringify(record.result.outputs) };
+    case 'finished': {
+      if ('command' in record.lease) return { op, state: 'exited', code: record.result.exitCode, stdout: record.result.outputs === undefined ? '' : JSON.stringify(record.result.outputs) };
+      const ended = promptEnded(record.result, record.attempt);
+
+      return ended.kind === 'finished' ? { op, state: 'finished', session: ended.session, result: ended.result, ...(ended.usage && { usage: ended.usage }) } : { op, state: 'failed', failure: ended.failure };
+    }
+
     case 'expired':
       return { op, state: 'failed', failure: { code: 'fleet_member_gone', message: `The fleet member ${record.member.user} that took step "${record.lease.step}" stopped writing progress, so the attempt was given up.` } };
     default: {
@@ -156,7 +163,21 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
 }
 
 /**
- * The `fleet` runtime of this install: each step's command it takes is offered to the members of its pool. `masks`
+ * How a prompt a member finished ends for the owner: with the tool it picked and the result and usage it wrote, or, when
+ * it launched no tool, as the failure that stopped it. The member's session stays on its machine; `attempt` names it.
+ */
+function promptEnded(result: FleetResult, attempt: AttemptId): Extract<PromptEnd, { kind: 'finished' | 'failed' }> {
+  if (result.tool === undefined) return { kind: 'failed', failure: result.failure ?? { code: 'tool_failed', message: result.stderr || 'The fleet member launched no tool for the prompt step.' } };
+
+  return {
+    kind: 'finished', session: { tool: result.tool, id: attempt },
+    result: { ...(result.outputs !== undefined && { output: result.outputs }), ...(result.failure && { failure: result.failure }) },
+    ...(result.tokens && { usage: result.tokens }),
+  };
+}
+
+/**
+ * The `fleet` runtime of this install: each step's command or prompt it takes is offered to the members of its pool. `masks`
  * holds the values an offer may not carry, which the drive adds to as it resolves the team's secrets.
  */
 export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks: Record<string, string> }): StepRuntime {
@@ -170,10 +191,14 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
 
   const ended = (waited: Waited, events: ExecEvents): ExecEnd => {
     switch (waited.kind) {
-      case 'exited':
-        if (waited.stderr !== '') events.onOutput?.('stderr', waited.stderr);
+      case 'finished': {
+        const { result } = waited;
 
-        return { kind: 'exited', code: waited.code, stdout: waited.stdout };
+        if (result.stderr !== '') events.onOutput?.('stderr', result.stderr);
+
+        return { kind: 'exited', code: result.exitCode, stdout: result.outputs === undefined ? '' : JSON.stringify(result.outputs) };
+      }
+
       case 'cancelled':
         events.onOutput?.('stderr', waited.message);
 
@@ -191,9 +216,32 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
     }
   };
 
+  const promptEnd = (waited: Waited, attempt: AttemptId): PromptEnd => {
+    if (waited.kind === 'finished') return promptEnded(waited.result, attempt);
+    const end = ended(waited, {});
+
+    return end.kind === 'exited' ? { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The fleet ended a prompt as a command.' } } : end;
+  };
+
+  /** Offers step `lease` of `place` from the place `dir` under id `op`, and waits for the member that takes it. */
+  const offerLease = async ({ place, lease, dir, op }: { place: FleetPlace; lease: FleetLease; dir: string; op: OpId }, onAccepted: () => void): Promise<Waited> => {
+    if (!settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The fleet runtime was not initialized.' } };
+    const cancel = new AbortController();
+    const end = offerAndWait({ config, ...place, ...settings, lease, dir, secrets: masks, op }, { cancel: cancel.signal, leave: disposing.signal });
+    waits.set(op, { place, cancel, end });
+    onAccepted();
+
+    try {
+      return await end;
+    } finally {
+      waits.delete(op);
+    }
+  };
+
   return {
     name: 'fleet',
     isExecReconnected: true,
+    isToolPickedThere: true,
 
     async init({ options, checkout }) {
       const parsed = parseFleetOptions(options);
@@ -202,8 +250,9 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       const { pool, stale_after: staleAfterMs, can = {} } = parsed.value;
       settings = { pool, staleAfterMs, root: checkout ?? process.cwd() };
 
-      // A step's place is this host's, so the fleet offers the workspaces this machine does.
-      return { ok: true, can: { ...can, prompt: false, remote: true, workspace: [...WORKSPACE_MODES] }, launchesAgents: false };
+      // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
+      // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has.
+      return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES] }, launchesAgents: true };
     },
 
     async open(request, onAccepted) {
@@ -217,34 +266,49 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       const place = placeOf(request.handle);
 
       if (!place || !settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `The fleet runtime has no place ${request.handle}${settings ? '' : ', or was not initialized'}.` } };
+      const accepted = (): void => events.onAccepted?.({});
+
       const live = waits.get(request.op);
 
       if (live) {
-        events.onAccepted?.({});
+        accepted();
 
         return ended(await live.end, events);
       }
 
       // Setup, or any exec besides the step's command, runs in the place on this host.
       if (kind !== 'command') return local.exec({ ...request, handle: localHandle(place) }, events, kind);
-      const leased = await leasedCommand(config, place);
+      const leased = await leasedStep(config, place);
 
       if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
 
-      const cancel = new AbortController();
-      const end = offerAndWait({ config, ...place, ...settings, ...leased, dir: request.cwd, secrets: masks, op: request.op }, { cancel: cancel.signal, leave: disposing.signal });
-      waits.set(request.op, { place, cancel, end });
-      events.onAccepted?.({});
+      if (!('command' in leased)) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no command step.` } };
 
-      try {
-        return ended(await end, events);
-      } finally {
-        waits.delete(request.op);
-      }
+      return ended(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op }, accepted), events);
     },
 
-    async prompt() {
-      return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The fleet runtime takes command steps only.' } };
+    // The member picks the tool, model and login and renders the prompt itself: what the request names of them is this
+    // host's, and is not sent.
+    async prompt(request, events) {
+      const place = placeOf(request.handle);
+
+      if (!place || !settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `The fleet runtime has no place ${request.handle}${settings ? '' : ', or was not initialized'}.` } };
+      const accepted = (): void => events.onAccepted?.({});
+      const live = waits.get(request.op);
+
+      if (live) {
+        accepted();
+
+        return promptEnd(await live.end, place.attempt);
+      }
+
+      const leased = await leasedStep(config, place);
+
+      if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
+
+      if (!('prompt' in leased)) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no prompt step.` } };
+
+      return promptEnd(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op }, accepted), place.attempt);
     },
 
     async cancel(op) {
@@ -308,18 +372,21 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
 }
 
 /**
- * The command and env of the step leased with attempt `attempt`, as a member renders them from the offer's values, or
- * why there is none: `isFatal` when the run cannot be read at all.
+ * The step leased with attempt `attempt` as the fleet offers it: its command, or the prompt and the limits it was
+ * granted, with its env, as a member renders them from the offer's values. Or why there is none: `isFatal` when the run
+ * cannot be read at all.
  */
-async function leasedCommand(config: LocalConfig, { run, attempt }: FleetPlace): Promise<{ step: string; command: string; env: Record<string, string> } | { error: string; isFatal: boolean }> {
+async function leasedStep(config: LocalConfig, { run, attempt }: FleetPlace): Promise<FleetLease | { error: string; isFatal: boolean }> {
   const state = await readRun(config, run);
 
   if (state === 'missing' || state === 'corrupt') return { error: `Run ${run} is ${state} here, so its step was not offered to the fleet.`, isFatal: true };
   const step = state.steps.find((item) => item.status === 'leased' && item.lease.attempt === attempt);
-  const leased = step && leaseContext(state, step.id);
-  const command = leased?.step.command;
+  const leased = step?.status === 'leased' ? leaseContext(state, step.id) : undefined;
 
-  if (!step || !leased || command === undefined) return { error: `Attempt ${attempt} of run ${run} leases no command step.`, isFatal: false };
+  if (!step || step.status !== 'leased' || !leased || (leased.step.command === undefined && (leased.step.prompt === undefined || leased.step.answer !== undefined))) {
+    return { error: `Attempt ${attempt} of run ${run} leases no command or prompt step.`, isFatal: false };
+  }
+
   const values = leaseValues(leased.step, leased.context);
 
   if ('error' in values) return { error: values.error, isFatal: true };
@@ -327,7 +394,13 @@ async function leasedCommand(config: LocalConfig, { run, attempt }: FleetPlace):
 
   if ('error' in env) return { error: env.error, isFatal: true };
 
-  return { step: step.id, command, env: env.env };
+  if (leased.step.command !== undefined) return { step: step.id, command: leased.step.command, env: env.env };
+  const texts = leasePrompt(leased.step, values.values, run);
+
+  if ('error' in texts) return { error: texts.error, isFatal: true };
+  const { limits } = step.lease;
+
+  return { step: step.id, prompt: texts.prompt, env: env.env, ...(limits !== undefined && { limits }) };
 }
 
 /** The id of the exec that offered the attempt at `place` from this install, recorded with its pool. */
@@ -336,21 +409,21 @@ async function offeredExec(config: LocalConfig, place: FleetPlace): Promise<OpId
 }
 
 type WaitInput = {
-  config: LocalConfig; run: RunId; attempt: AttemptId; pool: string; staleAfterMs: number; step: string; command: string; env: Record<string, string>; root: string; dir: string;
+  config: LocalConfig; run: RunId; attempt: AttemptId; pool: string; staleAfterMs: number; lease: FleetLease; root: string; dir: string;
   secrets: Record<string, string>; op: OpId;
 };
 
 /**
- * Offers the step's command of attempt `attempt` to pool `pool`, from the place `dir`, a copy of checkout `root`, unless
- * an earlier drive offered it, and settles once a member finished it: with the member's exit code, the JSON its stdout
- * held as stdout, and the start of its stderr, after the place took the commits the member pushed. `secrets` are the
+ * Offers step `lease` of attempt `attempt` to pool `pool`, from the place `dir`, a copy of checkout `root`, unless
+ * an earlier drive offered it, and settles once a member finished it, with the result it wrote, after the place took the
+ * commits the member pushed. `secrets` are the
  * values the offer may not carry. `cancel`: the run cancelled the step, which the owner writes into the record and waits
  * for the member to answer. `leave`: this teamai stops, and the attempt stays out for a later `workflow resume <run>`.
  */
 async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: AbortSignal; leave: AbortSignal }): Promise<Waited> {
-  const { config, run, attempt, step, command, env, root, dir, secrets, op } = input;
+  const { config, run, attempt, lease, root, dir, secrets, op } = input;
+  const { step } = lease;
   const failed = (failure: WorkflowFailure): Waited => ({ kind: 'failed', failure });
-  const lease = { step, command, env };
   const ref = attemptRef(run, attempt);
   const earlier = await readAttemptRecord(config, run, attempt);
 
@@ -408,7 +481,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
 
       if (taken) return failed(taken);
 
-      return { kind: 'exited', code: result.exitCode, stdout: result.outputs === undefined ? '' : JSON.stringify(result.outputs), stderr: result.stderr };
+      return { kind: 'finished', result };
     }
 
     if (record?.state === 'expired') return failed(await gone(record, { config, run, root, dir, ref, staleAfterMs }));

@@ -1668,7 +1668,7 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 它输出 `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}`，没有领取时输出 `{"data":{"idle":{"offered":N}}}`。两位成员同时领取同一个尝试时只有一位能拿到，另一位会去试下一个。
 
-哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 目前只接命令步骤。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
+哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
 每个 fleet 条目在自己的 `pool` 里提供尝试，第一个 `can` 适合某步骤的条目接走它。多个 pool 就是多个 fleet 条目，更具体的放在前面：`can` 被前面某个条目覆盖的 fleet 条目永远拿不到步骤，`workflow start` 会对此发出警告。
 
@@ -1678,7 +1678,7 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 `teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。
 
-成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>`（团队的或 teamai 自带的定义，从不读 `~/.teamai/drivers/`）时，成员在该驱动里第一个能运行命令的运行时上运行步骤（例如沙箱），只带步骤自己的 env；不带它，或驱动的第一个运行时是 `local` 时，就在本机运行。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。
+成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>`（团队的或 teamai 自带的定义，从不读 `~/.teamai/drivers/`）时，成员在该驱动里第一个能运行命令的运行时上运行命令步骤（例如沙箱），只带步骤自己的 env，在第一个能运行提示词的运行时上运行提示词步骤；不带它，或驱动的第一个运行时是 `local` 时，就在本机运行。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。
 
 每条记录都写明写入它的 teamai 版本。teamai 遇到更新格式的记录时：作为成员会跳过这个尝试，作为所有者会让步骤以 `fleet_record_newer` 失败，并说明要升级到哪个版本。尝试在外时，你的驱动每秒读一次它的记录；记录没有变化时读得越来越少，最慢每 30 秒一次。
 

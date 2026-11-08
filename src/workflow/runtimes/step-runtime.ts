@@ -123,6 +123,11 @@ export interface StepRuntime {
    */
   readonly isExecReconnected?: boolean;
   /**
+   * Whether the runtime picks a prompt step's tool, model and login where it runs the step, and renders its prompt there,
+   * as a fleet member does: teamai picks none of them here, and sends the prompt step as leased.
+   */
+  readonly isToolPickedThere?: boolean;
+  /**
    * Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers, knowing the
    * names of the `credentials` its definition gives it, the tool `instances` the member may run, and the run's
    * `checkout`. In `recover` mode it only answers for the handles it recorded.

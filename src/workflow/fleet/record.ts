@@ -18,10 +18,12 @@ import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
+import { TurnLimitsSchema } from '../requirements.js';
+import { TokenUsageSchema } from '../step-state.js';
 import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
-import { parseTemplate, renderText, templateExpressions, type TemplateContext } from '../template.js';
+import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTexts, templateExpressions, type TemplateContext } from '../template.js';
 import type { WorkflowFailure, WorkflowStep } from '../types.js';
 
 /** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
@@ -37,15 +39,30 @@ const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be 
 
 /**
  * What a member runs, as the owner rendered it: never an argv, a credential value or a path of the owner's machine.
- * `env` is the step's rendered `env`.
+ * `env` is the step's rendered `env`. A command step carries its command; a prompt step its rendered prompt, and the
+ * limits its turn ends at, which the member keeps on the tool it picks.
  */
-const FleetLeaseSchema = z.object({
+const CommandLeaseSchema = z.object({
   step: z.string().min(1),
   command: z.string().min(1),
   env: z.record(z.string(), z.string()),
 });
 
+const PromptLeaseSchema = z.object({
+  step: z.string().min(1),
+  prompt: z.string(),
+  env: z.record(z.string(), z.string()),
+  limits: TurnLimitsSchema.optional(),
+});
+
+const FleetLeaseSchema = z.union([CommandLeaseSchema, PromptLeaseSchema]);
+
 export type FleetLease = z.infer<typeof FleetLeaseSchema>;
+
+/** The text of `lease` a member runs: its command, or its prompt. */
+function leaseText(lease: FleetLease): string {
+  return 'command' in lease ? lease.command : lease.prompt;
+}
 
 /**
  * What the step's env reads, which a member renders the env from with its own copy of the step: the inputs it reads, by
@@ -70,6 +87,11 @@ const FleetResultSchema = z.object({
   outputs: JsonValueSchema.optional(),
   stderr: z.string(),
   to: CommitSchema.optional(),
+  /** A prompt step's: the tool the member ran it on, its model and tokens, and why it failed, as the member's report said. */
+  tool: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  tokens: TokenUsageSchema.optional(),
+  failure: z.object({ code: z.string().min(1), message: z.string() }).optional(),
 });
 
 export type FleetResult = z.infer<typeof FleetResultSchema>;
@@ -162,37 +184,52 @@ function recordText(record: FleetRecord): string {
  * `secrets`, or an absolute path of this machine, which a member cannot use.
  */
 function unpublishable(record: FleetRecord, secrets: Record<string, string>): FleetError | undefined {
-  // A command names the paths it reads and writes, such as /dev/null, wherever it runs: only a secret keeps it here.
-  const inCommand = firstUnfit(record.lease.command, secrets);
-  const commandHit = inCommand?.unfit.kind === 'secret' ? { at: ['lease', 'command'], unfit: inCommand.unfit } : undefined;
-  const hit = commandHit ?? firstUnfit(JsonValueSchema.parse({ ...record, lease: { ...record.lease, command: '' } }), secrets);
+  // A command or a prompt names the paths it reads and writes, such as /dev/null, wherever it runs: only a secret keeps it here.
+  const field = 'command' in record.lease ? 'command' : 'prompt';
+  const inText = firstUnfit(leaseText(record.lease), secrets);
+  const textHit = inText?.unfit.kind === 'secret' ? { at: ['lease', field], unfit: inText.unfit } : undefined;
+  const hit = textHit ?? firstUnfit(JsonValueSchema.parse({ ...record, lease: { ...record.lease, [field]: '' } }), secrets);
 
   if (hit === undefined) return undefined;
-  const field = hit.at.join('.');
+  const at = hit.at.join('.');
   const what = hit.unfit.kind === 'secret' ? `what looks like a secret (${hit.unfit.label})` : 'an absolute path of this machine';
 
-  return { code: 'fleet_unpublishable', message: `Attempt ${record.attempt} of run ${record.run} was not written to teamai-reports: its "${field}" holds ${what}.` };
+  return { code: 'fleet_unpublishable', message: `Attempt ${record.attempt} of run ${record.run} was not written to teamai-reports: its "${at}" holds ${what}.` };
 }
 
 /**
- * What the env of command step `step` reads in `context`, the context its lease rendered the env in, or why a member
- * could not render the env from values: it reads something besides inputs, the item, the run's id and steps' outputs.
+ * The texts of step `step` a fleet lease renders from values: its `env` and, for a prompt step, its `with`, `prompt` and
+ * `model`, as `templatedTexts` names them.
  */
-export function leaseValues(step: Pick<WorkflowStep, 'id' | 'env'>, context: TemplateContext): { values: LeaseValues } | { error: string } {
+function leasedTexts(step: Pick<WorkflowStep, 'prompt' | 'env' | 'with' | 'model'>): Array<{ what: string; text: string }> {
+  return templatedTexts(step).filter(({ what }) => what.startsWith('env.') || what.startsWith('with.') || what === 'prompt' || what === 'model');
+}
+
+/** How a message names the text at `what`: `env NAME` for an env entry, as a person writes it. */
+function textLabel(what: string): string {
+  return what.startsWith('env.') ? `env ${what.slice('env.'.length)}` : what;
+}
+
+/**
+ * What the texts of step `step` a fleet lease renders read in `context`, the context its lease rendered them in, or why
+ * a member could not render them from values: one reads something besides inputs, the item, the run's id and steps'
+ * outputs. A read of the step's own `with` is rendered from the `with` texts.
+ */
+export function leaseValues(step: Pick<WorkflowStep, 'id' | 'prompt' | 'env' | 'with' | 'model'>, context: TemplateContext): { values: LeaseValues } | { error: string } {
   const given = JsonValueSchema.safeParse(context.inputs ?? {});
   const item = JsonValueSchema.safeParse(context.item);
   let inputs: JsonValue | undefined;
   let itemValues: JsonValue | undefined;
   const outputs: Record<string, JsonValue> = {};
 
-  for (const [name, text] of Object.entries(step.env ?? {})) {
+  for (const { what, text } of leasedTexts(step)) {
     const parsed = parseTemplate(text, Object.hasOwn(context, 'item'));
 
-    if (!parsed.ok) return { error: `Step "${step.id}" env ${name} does not parse: ${parsed.errors[0]?.message ?? ''}` };
+    if (!parsed.ok) return { error: `Step "${step.id}" ${textLabel(what)} does not parse: ${parsed.errors[0]?.message ?? ''}` };
 
     for (const read of templateExpressions(parsed.template).flatMap(expressionPaths)) {
       if (read.root === 'steps' && read.field !== 'outputs') {
-        return { error: `Step "${step.id}" env ${name} reads steps.${read.step}.${read.field}, which a fleet member cannot render: on the fleet a step's env reads only inputs, item, run.id and steps' outputs.` };
+        return { error: `Step "${step.id}" ${textLabel(what)} reads steps.${read.step}.${read.field}, which a fleet member cannot render: on the fleet a step's env, with, prompt and model read only inputs, item, run.id and steps' outputs.` };
       }
 
       if (read.root === 'inputs' && given.success) inputs = withPath(inputs, given.data, read.fields);
@@ -204,7 +241,7 @@ export function leaseValues(step: Pick<WorkflowStep, 'id' | 'env'>, context: Tem
         if (picked !== undefined) outputs[read.step] = picked;
       }
 
-      // An env that reads the item renders against one, even when the field it reads is missing.
+      // A text that reads the item renders against one, even when the field it reads is missing.
       if (read.root === 'item' && item.success) itemValues = withPath(itemValues, item.data, read.fields) ?? {};
     }
   }
@@ -240,15 +277,19 @@ function withPath(picked: JsonValue | undefined, from: JsonValue, fields: PathFi
   return inner === undefined ? into : { ...into, [field]: inner };
 }
 
-/** The env of command step `step` in run `run`, rendered from `values` as its owner's lease rendered it from the run. */
-export function leaseEnv(step: Pick<WorkflowStep, 'id' | 'env'>, values: LeaseValues, run: RunId): { env: Record<string, string> } | { error: string } {
-  const context: TemplateContext = {
+/** The context step texts render in from `values`, as its owner's lease rendered them from the run. */
+function valuesContext(values: LeaseValues, run: RunId): TemplateContext {
+  return {
     inputs: values.inputs ?? {},
     steps: Object.fromEntries(Object.entries(values.outputs ?? {}).map(([id, outputs]) => [id, { outputs }])),
     run: { id: run },
     ...(Object.hasOwn(values, 'item') && { item: values.item }),
   };
+}
 
+/** The env of step `step` in run `run`, rendered from `values` as its owner's lease rendered it from the run. */
+export function leaseEnv(step: Pick<WorkflowStep, 'id' | 'env'>, values: LeaseValues, run: RunId): { env: Record<string, string> } | { error: string } {
+  const context = valuesContext(values, run);
   const env: Record<string, string> = {};
 
   for (const [name, text] of Object.entries(step.env ?? {})) {
@@ -259,6 +300,33 @@ export function leaseEnv(step: Pick<WorkflowStep, 'id' | 'env'>, values: LeaseVa
   }
 
   return { env };
+}
+
+/**
+ * The prompt of prompt step `step` in run `run`, and its model when a template names it, rendered from `values` after
+ * its `with`, as the engine renders a lease's.
+ */
+export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 'model'>, values: LeaseValues, run: RunId): { prompt: string; model?: string } | { error: string } {
+  if (step.prompt === undefined) return { error: `step "${step.id}" is no prompt step` };
+  const context = valuesContext(values, run);
+
+  if (step.with !== undefined) {
+    const rendered = renderStrings(step.with, context);
+
+    if (!rendered.ok) return { error: `with ${rendered.error.source}: ${rendered.error.message}` };
+    context.with = rendered.value;
+  }
+
+  const prompt = renderLeaseText(context, step, { what: 'prompt', text: step.prompt });
+
+  if (prompt instanceof Object) return { error: prompt.message };
+
+  if (step.model === undefined || step.model instanceof Object) return { prompt };
+  const model = renderLeaseText(context, step, { what: 'model', text: step.model });
+
+  if (model instanceof Object) return { error: model.message };
+
+  return model === '' ? { prompt } : { prompt, model };
 }
 
 /** Offers `lease` of attempt `attempt` to pool `pool`, once its start commit is on the attempt's ref. */
@@ -340,7 +408,13 @@ export async function answerCancel(config: LocalConfig, cancelling: Cancelling, 
  */
 export async function finishAttempt(config: LocalConfig, claimed: Claimed, result: FleetResult, secrets: Record<string, string>): Promise<Written<FleetRecord>> {
   const finished: FleetRecord = { ...claimed, write: randomUUID(), state: 'finished', finishedAt: new Date().toISOString(), result };
-  const quiet: FleetRecord = { ...finished, result: { ...result, stderr: 'Its stderr is not shown here: it names a path of the member\'s machine or a secret.' } };
+
+  // A tool's failure message is as free as stderr, so it goes too, keeping its code.
+  const quiet: FleetRecord = {
+    ...finished,
+    result: { ...result, stderr: 'Its stderr is not shown here: it names a path of the member\'s machine or a secret.', ...(result.failure && { failure: { code: result.failure.code, message: 'Its message is not shown here: it names a path of the member\'s machine or a secret.' } }) },
+  };
+
   const fit = [finished, quiet].find((candidate) => unpublishable(candidate, secrets) === undefined);
   const record: FleetRecord = fit ?? { ...finished, result: { exitCode: 1, stderr: unpublishable(quiet, secrets)?.message ?? '' } };
   const written = await writeRecord(config, record, { replaces: claimed.write, message: `[teamai] Finish attempt ${claimed.attempt} of run ${claimed.run}` });
