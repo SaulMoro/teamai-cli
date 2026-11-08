@@ -17,6 +17,7 @@
     "./log": "./src/log.ts",
     "./lookpath": "./src/lookpath.ts",
     "./registry": "./src/registry.ts",
+    "./reply": "./src/reply.ts",
     "./sessions/*": "./src/sessions/*.ts",
     "./stdout": "./src/stdout.ts",
     "./tokens": "./src/tokens.ts"

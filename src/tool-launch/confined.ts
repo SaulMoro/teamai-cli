@@ -20,6 +20,7 @@ import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { JsonValueSchema, type JsonValue } from '../types.js';
 import type { ConfinedUsage } from './confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
+import { extractReply } from '@teamai/tool-core/reply';
 import { runTool, type ToolRun } from './run.js';
 import { toolStdout, type TokenUsage } from './stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
@@ -312,15 +313,6 @@ function records(stdout: string): Array<z.infer<typeof RecordSchema>> {
   });
 }
 
-/** The JSON value a reply holds, inside a fenced block or bare, or undefined when it holds none. */
-export function parseReply(text: string): JsonValue | undefined {
-  try {
-    const parsed = JsonValueSchema.safeParse(JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')));
-
-    return parsed.success ? parsed.data : undefined;
-  } catch { return undefined; }
-}
-
 /** Whether `dir` or a directory above it holds `.git` or `.hg`: OpenCode then lets its file tools read the whole checkout. */
 async function insideCheckout(dir: string): Promise<boolean> {
   for (let at = dir;; at = path.dirname(at)) {
@@ -478,13 +470,13 @@ const LAUNCHES = {
 async function resultRecordReply(stdout: string): Promise<JsonValue | undefined> {
   const last = records(stdout).findLast((record) => record.type === 'result');
 
-  return last?.structured_output ?? parseReply(last?.result ?? '');
+  return last?.structured_output ?? extractReply(last?.result ?? '', JsonValueSchema);
 }
 
 async function adapterReply(tool: ConfinedTool, stdout: string): Promise<JsonValue | undefined> {
   const reading = launchAdapterOf(tool).call.read({ stdout, lastMessage: undefined });
 
-  return reading.ok ? parseReply(reading.text) : undefined;
+  return reading.ok ? extractReply(reading.text, JsonValueSchema) : undefined;
 }
 
 const OpenCodeText = z.object({ type: z.literal('text'), part: z.object({ text: z.string() }) });
@@ -492,15 +484,15 @@ const OpenCodeText = z.object({ type: z.literal('text'), part: z.object({ text: 
 /** Where each family leaves its reply: Codex's answer file, a result record, OpenCode's text parts, or the adapter's reading. */
 // oxlint-disable-next-line teamai/tool-facts -- keyed by launch adapter id, as LAUNCH_ADAPTERS is; a tool picks one with TOOLS.launch
 const REPLIES = {
-  codex: async (_stdout, tmp) => parseReply(await optionalFile(path.join(tmp, 'answer.json')) ?? ''),
+  codex: async (_stdout, tmp) => extractReply(await optionalFile(path.join(tmp, 'answer.json')) ?? '', JsonValueSchema),
   claude: resultRecordReply,
   codebuddy: resultRecordReply,
   cursor: resultRecordReply,
-  opencode: async (stdout) => parseReply(records(stdout).flatMap((record) => {
+  opencode: async (stdout) => extractReply(records(stdout).flatMap((record) => {
     const parsed = OpenCodeText.safeParse(record);
 
     return parsed.success ? [parsed.data.part.text] : [];
-  }).join('\n')),
+  }).join('\n'), JsonValueSchema),
   pi: async (stdout, _tmp, tool) => adapterReply(tool, stdout),
   agy: async (stdout, _tmp, tool) => adapterReply(tool, stdout),
 } satisfies { [F in Family]: (stdout: string, tmp: string, tool: ConfinedTool) => Promise<JsonValue | undefined> };
