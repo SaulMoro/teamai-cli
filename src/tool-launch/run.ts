@@ -1,4 +1,6 @@
+import { spawn, type SpawnOptions } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
+import { batchLaunchOf } from '@teamai/tool-core/exec';
 import { recordGroup, stopProcess } from './process-stop.js';
 
 export interface ToolRun {
@@ -15,8 +17,13 @@ export interface ToolRun {
  * no Ctrl-C from the terminal: only a run nobody waits on in the foreground detaches.
  */
 export async function runTool(input: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; detached: boolean; group?: string; signal?: AbortSignal }): Promise<ToolRun> {
+  const batch = process.platform === 'win32' ? batchLaunchOf(input.executable, input.args, input.env.ComSpec ?? input.env.COMSPEC ?? 'cmd.exe') : undefined;
+
+  if (batch?.ok === false) return { stdout: '', stderr: batch.message, code: 1, timedOut: false };
   const detached = input.detached && process.platform !== 'win32';
-  const child = crossSpawn(input.executable, input.args, { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true });
+  const options: SpawnOptions = { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true };
+  // A batch file gets the command line escaped here, as cross-spawn escapes only one under node_modules/.bin twice.
+  const child = batch ? spawn(batch.command, batch.args, { ...options, windowsVerbatimArguments: true }) : crossSpawn(input.executable, input.args, options);
 
   if (detached && input.group !== undefined) recordGroup(child, input.group);
   const stdout: string[] = [];

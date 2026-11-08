@@ -167,3 +167,47 @@ export function detachChild(child: ChildProcess): void {
 
   if (child.stderr) detachPipe(child.stderr);
 }
+
+/** The longest command line cmd.exe accepts. */
+const CMD_MAX_COMMAND_LINE = 8191;
+
+/** cmd.exe metacharacters, escaped with `^`: the set cross-spawn escapes. */
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+const escapeCmdMeta = (text: string): string => text.replace(CMD_META, '^$1');
+
+/** One argument as cross-spawn writes it for a batch file: quoted for the program it starts, then `^`-escaped twice. */
+function escapeBatchArgument(arg: string): string {
+  const quoted = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1');
+
+  return escapeCmdMeta(escapeCmdMeta(`"${quoted}"`));
+}
+
+/** How to start a batch file under cmd.exe, or why cmd.exe cannot carry its arguments. */
+export type BatchLaunch =
+  | { readonly ok: true; readonly command: string; readonly args: readonly string[] }
+  | { readonly ok: false; readonly message: string };
+
+/**
+ * How Windows starts the batch file `executable` (an npm `.cmd` shim, say) with `args`, or undefined when it is not a
+ * batch file. Every argument is escaped for cmd.exe twice, because the shim's `%*` line is parsed again; cross-spawn
+ * does that only for shims under node_modules/.bin, not for the global ones npm installs. cmd.exe ends a command line
+ * at a newline and cuts one over 8191 characters, so such arguments are refused rather than silently shortened.
+ */
+export function batchLaunchOf(executable: string, args: readonly string[], comspec: string): BatchLaunch | undefined {
+  if (!/\.(cmd|bat)$/i.test(executable)) return undefined;
+
+  const name = executable.split(/[\\/]/).at(-1) ?? executable;
+
+  if (args.some((arg) => /[\r\n]/.test(arg))) {
+    return { ok: false, message: `${name} is a batch file, which runs under cmd.exe, and cmd.exe cannot pass an argument containing a newline. Pass that text on stdin, or run the tool's .exe instead of its npm shim.` };
+  }
+
+  const line = [escapeCmdMeta(executable), ...args.map(escapeBatchArgument)].join(' ');
+
+  if (line.length > CMD_MAX_COMMAND_LINE) {
+    return { ok: false, message: `The command line for ${name} is too long for cmd.exe: ${line.length} characters once escaped, over its ${CMD_MAX_COMMAND_LINE}-character limit. Pass long text on stdin, or run the tool's .exe instead of its npm shim.` };
+  }
+
+  return { ok: true, command: comspec, args: ['/d', '/s', '/c', `"${line}"`] };
+}
