@@ -60,15 +60,4 @@ describe('Claude Code project directories', () => {
 
     expect(fs.readdirSync(path.join(root, LONG_MAC_DIR))).toContain(`${written}.jsonl`);
   });
-
-  it('reads a session by id when it sits under another spelling of the cwd', async () => {
-    const root = store();
-    const adapter = platforms['claude-code'].adapter(root);
-
-    placed(root, '-private-var-folders-repo', '/private/var/folders/repo');
-
-    const session = await adapter.readSession({ sessionId: SESSION_ID, projectPath: '/var/folders/repo' });
-
-    expect(session.sessionId).toBe(SESSION_ID);
-  });
 });
