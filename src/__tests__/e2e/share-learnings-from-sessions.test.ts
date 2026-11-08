@@ -15,6 +15,7 @@ import { findSqlite3 } from '../../session-flow/sqlite.js';
 import type { LocalConfig } from '../../types.js';
 import { readRun } from '../../workflow/store.js';
 import { waitForDetachedChildren } from '../helpers/detached-processes.js';
+import { leftSkillRunners, stopLeftSkillRunners } from '../helpers/skill-runners.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -50,8 +51,10 @@ interface Install {
 
 const roots: string[] = [];
 afterEach(async () => {
+  const left = roots.flatMap((root) => stopLeftSkillRunners(root));
   await waitForDetachedChildren();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  expect(left, leftSkillRunners(left)).toEqual([]);
 });
 
 function git(install: Pick<Install, 'repo' | 'env'>, ...args: string[]): string {

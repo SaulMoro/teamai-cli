@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { waitForDetachedChildren } from '../helpers/detached-processes.js';
+import { leftSkillRunners, stopLeftSkillRunners } from '../helpers/skill-runners.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 
 const cli = fileURLToPath(new URL('../../../dist/index.js', import.meta.url));
@@ -43,7 +44,12 @@ function fixture(prefix: string, workflows: (root: string) => Record<string, str
     root, repo, git, workflow,
     runFile: (id: string) => JSON.parse(fs.readFileSync(path.join(runsDir(), `${id}.json`), 'utf8')) as { status: string; steps: Array<{ id: string; status: string; outputs?: unknown }> },
     runIds: () => (fs.existsSync(runsDir()) ? fs.readdirSync(runsDir()).filter((name) => /^r[0-9a-f]+\.json$/.test(name)) : []),
-    cleanup: async () => { await waitForDetachedChildren(); fs.rmSync(root, { recursive: true, force: true }); },
+    cleanup: async () => {
+      const left = stopLeftSkillRunners(root);
+      await waitForDetachedChildren();
+      fs.rmSync(root, { recursive: true, force: true });
+      expect(left, leftSkillRunners(left)).toEqual([]);
+    },
   };
 }
 

@@ -42,6 +42,7 @@ import { error, leaseNext, reportAttempt, startRun } from '../../workflow/engine
 import type { DriverCan } from '../../workflow/requirements.js';
 import { readRun } from '../../workflow/store.js';
 import type { DriverIdentity, WorkflowEnvelope } from '../../workflow/types.js';
+import { leftSkillRunners, stopLeftSkillRunners } from './skill-runners.js';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist', 'index.js');
 export const TEAM_URL = 'https://github.com/acme/team.git';
@@ -161,6 +162,7 @@ export interface BenchmarkFixture {
   probeControl(run: string): void;
   /** The envelope of each control command a fake tool ran. */
   probeAnswers(): Envelope[];
+  /** Removes the fixture, and throws when a skill runner it started was still running; that runner is stopped first. */
   remove(): void;
 }
 
@@ -570,7 +572,11 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
     hookCalls: () => (fs.existsSync(hookMarker) ? fs.readFileSync(hookMarker, 'utf8').trim().split('\n') : []),
     probeControl: (run) => fs.writeFileSync(probeRun, run),
     probeAnswers: () => (fs.existsSync(probeLog) ? fs.readFileSync(probeLog, 'utf8').trim().split('\n').map((line) => EnvelopeSchema.parse(JSON.parse(line))) : []),
-    remove: () => fs.rmSync(root, { recursive: true, force: true }),
+    remove: () => {
+      const left = stopLeftSkillRunners(root);
+      fs.rmSync(root, { recursive: true, force: true });
+      if (left.length > 0) throw new Error(leftSkillRunners(left));
+    },
   };
 }
 

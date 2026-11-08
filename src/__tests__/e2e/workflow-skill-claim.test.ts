@@ -8,8 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { waitForDetachedChildren } from '../helpers/detached-processes.js';
+import { leftSkillRunners, stopLeftSkillRunners } from '../helpers/skill-runners.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -175,6 +176,11 @@ describe('a coding session claims a run another member published', () => {
     await join('alice');
     await join('bob');
   }, 120_000);
+
+  afterEach(() => {
+    const left = sandbox ? stopLeftSkillRunners(sandbox) : [];
+    expect(left, leftSkillRunners(left)).toEqual([]);
+  });
 
   afterAll(async () => {
     await waitForDetachedChildren();

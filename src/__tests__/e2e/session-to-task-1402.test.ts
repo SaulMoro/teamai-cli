@@ -16,6 +16,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import { fakeGhHost, type FakeGh } from '../helpers/fake-gh.js';
 import { waitForDetachedChildren } from '../helpers/detached-processes.js';
+import { leftSkillRunners, stopLeftSkillRunners } from '../helpers/skill-runners.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -48,8 +49,10 @@ interface Member {
 
 const roots: string[] = [];
 afterEach(async () => {
+  const left = roots.flatMap((root) => stopLeftSkillRunners(root));
   await waitForDetachedChildren();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  expect(left, leftSkillRunners(left)).toEqual([]);
 });
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
