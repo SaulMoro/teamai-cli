@@ -228,11 +228,11 @@ steps:
  * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
  * takes it. Answers what Bob's take answered, and the record Alice reads then.
  */
-async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow = MARK, place: MemberPlace = HERE) {
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow = MARK, place: MemberPlace = HERE, inputs: Record<string, string> = {}) {
   const acme = team({ mark: workflow });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await before?.({ alice, bob });
-  const started = await startRun(alice.config, 'mark', { mark: 'made.txt' }, { secrets: {} });
+  const started = await startRun(alice.config, 'mark', { mark: 'made.txt', ...inputs }, { secrets: {} });
   if (!('data' in started)) throw new Error(started.error.message);
   const run = RunIdSchema.parse(String(started.data.run));
   const state = await readRun(alice.config, run);
@@ -306,6 +306,20 @@ describe('a member taking a prompt attempt', () => {
     expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Write made.txt.')]), cwd: expect.stringMatching(/work$/) })]);
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, outputs: { ok: true }, tool: 'claude' } });
+  });
+
+  it('runs on the tool\'s own default model when the step\'s model renders empty, as the owner\'s driver would, not on the defaults\' model', async () => {
+    const claude = claudeOnPath('{"ok":true}');
+    const modelled = PROMPTED.replace('inputs: { mark: string }', 'inputs: { mark: string, model: string }\ndefaults: { model: opus }').replace('    prompt: "Write', '    model: "{{ inputs.model }}"\n    prompt: "Write');
+
+    const { record } = await takeForged((forged) => {
+      forged.lease = { step: 'write', prompt: 'Write made.txt.', env: {} };
+      forged.values = { inputs: { mark: 'made.txt', model: '' } };
+    }, useClaude, modelled, HERE, { model: '' });
+
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
+    expect(claude.calls()).toHaveLength(1);
+    expect(claude.calls()[0]?.args).not.toContain('--model');
   });
 
   it('refuses a prompt the team\'s workflow does not define for the step, and launches no tool', async () => {

@@ -306,7 +306,7 @@ export function leaseEnv(step: Pick<WorkflowStep, 'id' | 'env'>, values: LeaseVa
 
 /**
  * The prompt of prompt step `step` in run `run`, and its model when a template names it, rendered from `values` after
- * its `with`, as the engine renders a lease's.
+ * its `with`, as the engine renders a lease's. A model that renders empty is kept empty: it asks for the tool's default.
  */
 export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 'model'>, values: LeaseValues, run: RunId): { prompt: string; model?: string } | { error: string } {
   if (step.prompt === undefined) return { error: `step "${step.id}" is no prompt step` };
@@ -328,7 +328,7 @@ export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 
 
   if (model instanceof Object) return { error: model.message };
 
-  return model === '' ? { prompt } : { prompt, model };
+  return { prompt, model };
 }
 
 /** Offers `lease` of attempt `attempt` to pool `pool`, once its start commit is on the attempt's ref. */
@@ -489,10 +489,6 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
   return records;
 }
 
-/**
- * The attempts offered to pool `pool` for business repository `repository`, oldest offer first, as this machine's copy
- * of `teamai-reports` holds them: refresh it first.
- */
 /** An attempt out on a fleet: offered, claimed, or claimed and asked to stop. */
 export type OpenAttempt = Extract<FleetRecord, { state: 'offered' | 'claimed' | 'cancelling' }>;
 
@@ -503,6 +499,10 @@ export async function listOpenAttempts(config: LocalConfig, repository: string):
   return open.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }
 
+/**
+ * The attempts offered to pool `pool` for business repository `repository`, oldest offer first, as this machine's copy
+ * of `teamai-reports` holds them: refresh it first.
+ */
 export async function listOffers(config: LocalConfig, { pool, repository }: { pool: string; repository: string }): Promise<Offered[]> {
   const offers = (await listRecords(config)).flatMap((record) => (record.state === 'offered' && record.pool === pool && record.repository === repository ? [record] : []));
 
