@@ -1266,6 +1266,36 @@ steps:
   });
 });
 
+describe('a step that requires labels', () => {
+  const LABELLED = `schemaVersion: v1alpha1
+name: build
+description: Runs the browser tests.
+steps:
+  - id: e2e
+    requires: { labels: [computer-use] }
+    command: echo '{"ran":true}'
+`;
+
+  it('runs here when workflows.labels on this machine declares each label', async () => {
+    const { config, workspace, runId } = await workflowFixture(LABELLED);
+    config.workflows = { tools: {}, labels: ['computer-use'] };
+
+    await runLocalDriver(config, runId, workspace, { toolPaths });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'e2e', status: 'succeeded', outputs: { ran: true } }] });
+  });
+
+  it('fails a step whose label this machine does not declare, naming the label and where to declare it', async () => {
+    const { config, workspace, runId } = await workflowFixture(LABELLED);
+
+    await runLocalDriver(config, runId, workspace, { toolPaths });
+
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [{ id: 'e2e', status: 'failed', failure: { code: 'requirement_unmet', message: expect.stringMatching(/computer-use.*workflows\.labels/) } }],
+    });
+  });
+});
+
 describe('local workflow driver setup', () => {
   const TOKEN = 'setup-token-value-1082';
 

@@ -26,6 +26,7 @@ import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
 import type { ExecEnd, ExecEvents, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
 import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
+import { LabelSchema } from '../requirements.js';
 
 /** How often the owner reads the attempt's record while a member runs it. */
 const RECORD_POLL_MS = 1_000;
@@ -44,9 +45,11 @@ const FleetOptionsSchema = z.object({
     return z.NEVER;
   }),
   can: CanSchema.optional(),
+  /** What the pool's machines declare in their `workflows.labels`: a step that requires them goes to this entry. */
+  labels: z.array(LabelSchema).optional(),
 }).strict();
 
-/** The options of the `fleet` runtime, as `init` checks a runtime's own: its pool, `stale_after` in milliseconds, and `can`. */
+/** The options of the `fleet` runtime, as `init` checks a runtime's own: its pool, `stale_after` in milliseconds, `can` and `labels`. */
 export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z.infer<typeof FleetOptionsSchema> } | { ok: false; failure: { key: string; message: string } } {
   const parsed = FleetOptionsSchema.safeParse(options);
 
@@ -66,7 +69,9 @@ const ENV_REACH = [false, 'commands', true] as const;
  * Whether a fleet entry that offers `earlier` takes every step one that offers `later` could take, so the later one never
  * gets a step. What cannot be ordered, the tools and the confined offers, must be the same.
  */
-function coversCan(earlier: Can, later: Can): boolean {
+function coversCan(earlier: Can & { labels?: readonly string[] }, later: Can & { labels?: readonly string[] }): boolean {
+  if ((later.labels ?? []).some((label) => !(earlier.labels ?? []).includes(label))) return false;
+
   if (NEEDED_FLAGS.some((flag) => later[flag] === true && earlier[flag] !== true)) return false;
 
   // A runtime runs commands unless it says it does not.
@@ -85,7 +90,7 @@ function coversCan(earlier: Can, later: Can): boolean {
  * options do not parse is left to its own check.
  */
 export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; through?: string; options?: RuntimeOptions }>): string[] {
-  const seen: Array<{ pool: string; can: Can }> = [];
+  const seen: Array<{ pool: string; can: Can & { labels?: readonly string[] } }> = [];
   const warnings: string[] = [];
 
   for (const entry of runtimes) {
@@ -95,7 +100,8 @@ export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; thro
     const parsed = parseFleetOptions(options);
 
     if (!parsed.ok) continue;
-    const { pool, can = {} } = parsed.value;
+    const { pool, can: offered = {}, labels } = parsed.value;
+    const can = labels ? { ...offered, labels } : offered;
     const earlier = seen.find((one) => coversCan(one.can, can));
 
     if (earlier) warnings.push(`The fleet entry for pool "${pool}" never gets a step: the fleet entry for pool "${earlier.pool}" before it offers everything it does, and takes each step first. Put the more specific entry first.`);
@@ -247,12 +253,12 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       const parsed = parseFleetOptions(options);
 
       if (!parsed.ok) return { ok: false, failure: { code: 'bad_option', ...parsed.failure } };
-      const { pool, stale_after: staleAfterMs, can = {} } = parsed.value;
+      const { pool, stale_after: staleAfterMs, can = {}, labels } = parsed.value;
       settings = { pool, staleAfterMs, root: checkout ?? process.cwd() };
 
       // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
       // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has.
-      return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES] }, launchesAgents: true };
+      return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES], ...(labels && { labels }) }, launchesAgents: true };
     },
 
     async open(request, onAccepted) {
@@ -454,7 +460,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
 
     if (pushed.code !== 0) return failed({ code: 'push_failed', message: `Step "${step}" could not push its start commit to ${ref} on origin, so no fleet member can take it: ${pushed.stderr.trim()}` });
     await markOffered(config, run, attempt, pool, { op, staleAfterMs });
-    const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, definition: runDefinition(state), values: values.values, secrets });
+    const { labels } = leased.requires;
+    const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, definition: runDefinition(state), values: values.values, secrets, ...(labels && { labels }) });
 
     if (!offered.ok) return failed(fleetFailure(offered.error));
   }

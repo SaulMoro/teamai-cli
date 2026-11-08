@@ -18,7 +18,7 @@ import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
-import { TurnLimitsSchema } from '../requirements.js';
+import { LabelSchema, TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
 import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
@@ -110,6 +110,8 @@ const OfferedSchema = z.object({
   run: RunIdSchema,
   attempt: AttemptIdSchema,
   pool: z.string().min(1),
+  /** The step's `requires.labels`: a member takes the attempt only when its `workflows.labels` declares each. */
+  labels: z.array(LabelSchema).optional(),
   /** The business repository the attempt runs in, as `getRepoIdentity` names it. */
   repository: z.string().min(1),
   owner: OwnerSchema,
@@ -332,7 +334,7 @@ export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 
 /** Offers `lease` of attempt `attempt` to pool `pool`, once its start commit is on the attempt's ref. */
 export async function offerAttempt(config: LocalConfig, input: {
   run: RunId; attempt: AttemptId; pool: string; repository: string; owner: HandoffOwner; start: string; staleAfterMs: number; lease: FleetLease;
-  definition: Offered['definition']; values: LeaseValues; secrets: Record<string, string>;
+  definition: Offered['definition']; values: LeaseValues; secrets: Record<string, string>; labels?: string[];
 }): Promise<Written<Offered>> {
   const { secrets, ...fields } = input;
   const record: Offered = { version: RECORD_VERSION, teamai: getCurrentVersion(), ...fields, write: randomUUID(), offeredAt: new Date().toISOString(), state: 'offered' };

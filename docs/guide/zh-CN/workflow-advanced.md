@@ -1118,6 +1118,7 @@ steps:
 | `requires.env` | 把这些[团队 env](sharing.md#env环境变量) 键交给步骤。其他团队 env 键，以及运行中其他步骤要求的键，都不会交给它。运行中只记录键名。某个键在本机没有值时，步骤在运行前以 `missing_env` 失败，消息写明怎样给它一个值：见[必需的键在本机没有值](#必需的键在本机没有值)。步骤 `env:` 中的项与团队 secret 或被要求的键同名时，以 `env_conflict` 失败。 | 步骤等待。 |
 | `requires.network` | `false` 要求步骤不能访问网络。 | 步骤照常运行，其 `unenforced` 列出 `network`。本地驱动无法禁止网络。 |
 | `requires.isolation` | `none`、`worktree` 或 `sandbox`。有工作区的步骤至少是 `worktree`。 | 步骤照常运行，其 `unenforced` 列出 `isolation`。 |
+| `requires.labels` | 列出机器必须具备、但 teamai 不建模的东西，例如 `[computer-use]` 或 `[gpu]`，类似 CI runner 的标签。机器在 `~/.teamai/config.yaml` 的 `workflows.labels` 里声明自己的标签；fleet 条目在它的 `labels` 选项里声明池的标签。这些都是承诺：teamai 不检查机器。 | 步骤等待声明了每个标签的运行时。运行只有一个驱动且它一个都没声明时，步骤以 `requirement_unmet` 失败，并列出这些标签。 |
 | `requires.strict` | `true` 让这一级的 `isolation` 和 `network` 成为下限：其下每个步骤至少得到它们，无论内层要求什么。严格的 `isolation: sandbox` 还会让步骤的每个进程都拿不到 `GITHUB_TOKEN`、`GH_TOKEN`、`GITLAB_TOKEN`、`GL_TOKEN`、`CI_JOB_TOKEN`、`SSH_AUTH_SOCK`、`GIT_ASKPASS` 和 `SSH_ASKPASS`，其下某个步骤的 `requires.env` 指定了其中之一时，pull 会拒绝它。使用 `--driver local` 时，本地驱动永远无法运行的启动会以 `requirement_unmet` 被拒绝。 | 步骤等待。严格的 sandbox 还需要 `can.env: true`。 |
 | `setup` | 驱动在它创建的每个工作区中、在步骤之前运行 `command`。setup 获得它的 `requires.env` 键；步骤只有自己也要求时才会获得。setup 以非零退出（`setup_failed`）、改动 git 会提交的文件（`setup_dirty`），或把自己某个键的值留在它写入的文件中（包括被忽略的文件，`setup_secret`）时，步骤不运行即失败，工作区被删除。步骤的 `timeout` 也约束 setup。 | 带工作区的步骤等待。 |
 | `timeout` | `500ms`、`30s`、`10m`、`2h` 或 `1d`，写在步骤或工作流文件上。超时的步骤被停止，结果为 `timeout`。写在 workflow 步骤上时，会停止其中每个步骤。写在工作流文件上时，运行以 `failed` 结束，失败码为 `timeout`。重试会重新开始计时。 | 不是能力。每个驱动都会在租约上拿到 `expiresAt`。 |
@@ -1668,7 +1669,7 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 它输出 `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}`，没有领取时输出 `{"data":{"idle":{"offered":N}}}`。两位成员同时领取同一个尝试时只有一位能拿到，另一位会去试下一个。
 
-哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
+哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。带 `requires.labels` 的步骤交给 `labels` 选项列出每个标签的 fleet 条目，成员只有在它的 `workflows.labels` 也列出每个标签时才接；其他成员会跳过它并记录原因。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
 每个 fleet 条目在自己的 `pool` 里提供尝试，第一个 `can` 适合某步骤的条目接走它。多个 pool 就是多个 fleet 条目，更具体的放在前面：`can` 被前面某个条目覆盖的 fleet 条目永远拿不到步骤，`workflow start` 会对此发出警告。
 

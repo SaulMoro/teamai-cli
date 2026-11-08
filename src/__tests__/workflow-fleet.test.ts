@@ -9,7 +9,7 @@ import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
-import { shadowedFleetEntries } from '../workflow/fleet/owner.js';
+import { fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
 import { RuntimeOptionsSchema } from '@teamai/runtime-protocol';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { newOpId, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
@@ -32,11 +32,11 @@ const RUN = RunIdSchema.parse('r0123abcd');
 const ATTEMPT = AttemptIdSchema.parse('a0123abcd');
 const LEASE: { step: string; command: string; env: Record<string, string> } = { step: 'build', command: 'npm run build', env: { MODE: 'ci' } };
 
-async function offer(owner: Member, input: { secrets?: Record<string, string>; lease?: typeof LEASE; start?: string } = {}) {
+async function offer(owner: Member, input: { secrets?: Record<string, string>; lease?: typeof LEASE; start?: string; labels?: string[] } = {}) {
   return offerAttempt(owner.config, {
     run: RUN, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(owner.config),
     start: input.start ?? 'f'.repeat(40), staleAfterMs: 60_000, lease: input.lease ?? LEASE, secrets: input.secrets ?? {},
-    definition: { name: 'build', sourceHash: 'a'.repeat(64), definitionHash: 'b'.repeat(64) }, values: {},
+    definition: { name: 'build', sourceHash: 'a'.repeat(64), definitionHash: 'b'.repeat(64) }, values: {}, ...(input.labels && { labels: input.labels }),
   });
 }
 
@@ -134,6 +134,20 @@ describe('fleet attempts on teamai-reports', () => {
     const finished = await readAttemptRecord(alice.config, RUN, ATTEMPT);
     expect(finished).toMatchObject({ ok: true, value: { state: 'finished', result: { exitCode: 1, tool: 'claude', tokens: { input: 10, output: 2 }, failure: { code: 'tool_failed' } } } });
     expect(JSON.stringify(finished)).not.toContain('/home/bob');
+  });
+
+  it('leaves an offer whose labels this machine does not declare every one of in workflows.labels for another member', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice, { labels: ['computer-use'] });
+    if (!offered.ok) throw new Error(offered.error.message);
+    await readableReportsWorktree(bob.config);
+    bob.config.workflows = { tools: {}, labels: ['gpu'] };
+
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered', labels: ['computer-use'] } });
   });
 
   it('leaves an offer for another member while this machine already drives its run', async () => {
@@ -821,6 +835,22 @@ describe('fleet entries of one driver definition', () => {
     ])).toEqual([
       'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. Put the more specific entry first.',
     ]);
+  });
+
+  it('names no labelled entry after one without its labels, and an entry an earlier one with every label of it covers', () => {
+    expect(shadowedFleetEntries([fleet({ pool: 'default' }), fleet({ pool: 'e2e', labels: ['computer-use'] })])).toEqual([]);
+    expect(shadowedFleetEntries([fleet({ pool: 'e2e', labels: ['computer-use', 'gpu'] }), fleet({ pool: 'gpu', labels: ['gpu'] })])).toEqual([
+      'The fleet entry for pool "gpu" never gets a step: the fleet entry for pool "e2e" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+    ]);
+  });
+
+  it('declares the labels its entry lists, so a step that requires them goes to its pool', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
+
+    expect(await runtime.init({ options: { pool: 'e2e', labels: ['computer-use'] }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { labels: ['computer-use'] } });
+    await runtime.dispose();
   });
 
   it('names a specific fleet entry a general one before it covers', () => {

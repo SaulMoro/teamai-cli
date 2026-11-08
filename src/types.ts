@@ -13,7 +13,7 @@ import type { WorkspaceChildren } from './workspace-children.js';
 import type { HeadState } from './utils/git.js';
 import type { RunMode } from './launch-context.js';
 import type { OutcomeKind, SessionUsage, WorkOutcome } from './outcomes.js';
-import { AllowSchema } from './workflow/requirements.js';
+import { AllowSchema, LabelSchema } from './workflow/requirements.js';
 
 export { isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/tool-core/json';
 
@@ -890,6 +890,8 @@ export const MemberWorkflowSettingsSchema = z.object({
   sandbox: z.boolean().optional(),
   /** What a workflow step may use on this machine, whatever driver runs it. An unset key allows. */
   allow: AllowSchema.optional(),
+  /** What this machine has that teamai does not model, such as `computer-use` or `gpu`: a step's `requires.labels` runs only where each is declared. */
+  labels: z.array(LabelSchema).optional(),
   /** How long `doctor --fix` leaves what a settled run left behind: a duration or never. Kept as written; `resolveRetention` reads it. */
   retention: z.unknown().optional(),
   /** The driver `teamai score`, `teamai score --drain` and the finished-sessions hook start their runs for. Kept as written; `driveByDefault` reads it. */

@@ -601,10 +601,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // A runtime that runs a tool without permission prompts outside a sandbox proves no isolation: its steps' is none.
   const unproven = (can: DriverCan): boolean => (can.fullAccess?.length ?? 0) > 0 && can.isolation !== 'sandbox';
 
+  // What this machine declares it has that teamai does not model: a step's requires.labels runs here only with each.
+  const hostLabels = config.workflows?.labels;
+  const hostCan: DriverCan = hostLabels ? { ...localReady.can, labels: hostLabels } : localReady.can;
+
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => {
     switch (entry.kind) {
       case 'local':
-        return { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
+        return { kind: 'local', use: 'local', runtime: local, can: hostCan, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
@@ -635,7 +639,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const listedHost = definedSlots.find((slot) => slot.kind === 'local');
 
   const hostSlot: RuntimeSlot = listedHost ?? {
-    kind: 'local', use: 'host', runtime: local, can: { ...localReady.can, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
+    kind: 'local', use: 'host', runtime: local, can: { ...hostCan, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
   };
 
   const runsCommands = definedSlots.some((slot) => slot.kind !== 'local' && slot.can.exec !== false);
