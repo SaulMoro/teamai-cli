@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { z } from 'zod';
-import { UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
+import { EXITED_STDOUT_CHARS, STDOUT_CUT, UNAVAILABLE_REASON_MAX, type InitCredentials, type InitInstance } from '@teamai/runtime-protocol';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
@@ -365,6 +365,35 @@ describe('a prompt attempt in a container', () => {
     // Every line it wrote to teamai: both streams as they came, and the stdout it ended with.
     expect(JSON.stringify(connection.messages)).not.toContain('gateway-secret-1');
     expect(ran.output).toContain('calling <REDACTED:');
+  });
+
+  it('streams the stdout it ends an exec with, masking a base URL on this machine that the step printed in two writes in both', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    const credentials = { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://member:gateway-secret-1@localhost:4000/v1' };
+
+    expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
+    const ran = await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "${ANTHROPIC_BASE_URL%%gateway*}"; sleep 0.3; printf "%s\\n" "gateway${ANTHROPIC_BASE_URL#*gateway}"'], credentials, cwd: at.worktree });
+
+    expect(ran.end).toMatchObject({ event: 'exited', code: 0 });
+    expect(ran.output).toBe(ran.end.stdout);
+    expect(JSON.stringify(connection.messages)).not.toContain('gateway-secret-1');
+  });
+
+  it('ends an exec that prints past protocol 1\'s bound with the end of what it streamed, marked as cut, and reattaches with the same', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const ran = await exec(connection, { argv: [process.execPath, '-e', 'process.stdout.write("start" + "x".repeat(100000) + "end")'], cwd: at.worktree });
+    const stdout = String(ran.end.stdout);
+
+    expect(ran.output).toBe(`start${'x'.repeat(100_000)}end`);
+    expect(stdout).toBe(`${STDOUT_CUT}${ran.output.slice(-EXITED_STDOUT_CHARS)}`);
+    connection.send({ type: 'reattach', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'alive')).toMatchObject({ ops: [{ op: ran.end.op, state: 'exited', code: 0, stdout }] });
   });
 
   it("refuses a step whose base URL points at this machine itself on Docker on Linux, before it creates the container, naming the variable and never its value", async () => {
