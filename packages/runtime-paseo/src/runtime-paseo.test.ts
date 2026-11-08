@@ -6,7 +6,6 @@ import { OpIdSchema, type InitInstance, type PromptLeaseSchema, type PromptReque
 import type { z } from 'zod';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
-import { isCodexExecutable } from './daemon.js';
 import { agentIdOf } from './runtime.js';
 import { paseoApp } from './testing/asar.js';
 import { startFakeDaemon, type Behaviour } from './testing/fake-daemon.js';
@@ -277,21 +276,6 @@ describe('teamai-runtime-paseo', () => {
       ok: true, unavailable: { codex: cannotRun('codex', `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why`) },
     });
     expect(fs.existsSync(ran)).toBe(false);
-  });
-
-  it.each([
-    ['win32', 'C:\\tools\\codex.exe', true],
-    ['win32', 'C:\\Users\\dev\\AppData\\Roaming\\npm\\codex.cmd', true],
-    ['win32', 'C:\\Tools\\Codex.EXE', true],
-    ['win32', 'C:\\tools\\codex', false],
-    ['win32', 'C:\\tools\\codex.ps1', false],
-    ['win32', 'C:\\tools\\helper.exe', false],
-    ['win32', 'codex.exe', false],
-    ['linux', '/usr/local/bin/codex', true],
-    ['linux', '/usr/local/bin/codex.exe', false],
-    ['darwin', '/opt/homebrew/bin/Codex', false],
-  ] as const)('on %s, runs the Codex the daemon resolves to %s: %s', (platform, resolved, runs) => {
-    expect(isCodexExecutable(resolved, platform)).toBe(runs);
   });
 
   it('stops every process of a `codex login status` that does not answer in time, as an npm shim leaves its native codex', async () => {

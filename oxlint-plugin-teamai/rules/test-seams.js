@@ -12,9 +12,8 @@ import { lintedPath, scopedFiles } from '../utils.js';
  * no longer imports fails until it is removed.
  */
 const PAST_A_SEAM = new Set([
-  // The Paseo runtime's own test reads two helpers of its runtime module, until they have tests of their own.
+  // The Paseo runtime's own test reads a helper of its runtime module, until it has a test of its own.
   'packages/runtime-paseo/src/runtime-paseo.test.ts -> packages/runtime-paseo/src/runtime.ts',
-  'packages/runtime-paseo/src/runtime-paseo.test.ts -> packages/runtime-paseo/src/daemon.ts',
   // The T3 runtime's test reads how a step thread's session is found, until its test is split by module.
   'packages/runtime-t3/src/runtime-t3.test.ts -> packages/runtime-t3/src/sessions.ts',
   // The sandbox wrapper's test reads the provider's command runner, until the sandbox is split by module.

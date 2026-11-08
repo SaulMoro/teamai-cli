@@ -172,7 +172,7 @@
     },
     {
       // Paseo is a prerequisite the member installs: teamai-runtime-paseo loads its client from that install
-      // (client.ts), so shipped code imports only its types, and the bundle holds none of its code.
+      // (daemon/client.ts), so shipped code imports only its types, and the bundle holds none of its code.
       "files": ["packages/runtime-paseo/src/**"],
       "rules": {
         "no-restricted-imports": [
@@ -182,7 +182,7 @@
               {
                 "group": ["@getpaseo/*", "ws"],
                 "allowTypeImports": true,
-                "message": "Import only types from Paseo's packages: the runtime loads them from the member's Paseo install (client.ts)."
+                "message": "Import only types from Paseo's packages: the runtime loads them from the member's Paseo install (daemon/client.ts)."
               }
             ]
           }
