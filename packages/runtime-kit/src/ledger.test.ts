@@ -25,6 +25,16 @@ describe('an operation that ends', () => {
     expect(ledger.endsOf(OP)).toBe(1);
   });
 
+  it('is answered before settle returns when its record is kept at once, so what the runtime does next follows the end', () => {
+    const { written, ledger } = ledgerWritten();
+
+    void ledger.settle(FINISHED, () => {});
+    void ledger.settle({ op: 'op-0123abce' as OpId, state: 'cancelled' }, () => { throw new Error('read-only'); });
+
+    expect(written).toMatchObject([{ op: OP, event: 'finished' }, { op: 'op-0123abce', event: 'notice' }, { op: 'op-0123abce', event: 'cancelled' }]);
+    expect(ledger.unkept('op-0123abce' as OpId)).toEqual({ op: 'op-0123abce', state: 'cancelled' });
+  });
+
   it('is answered with its true end when its record cannot be kept, says so in a notice, and remembers that end until forgotten', async () => {
     const { written, ledger } = ledgerWritten();
 

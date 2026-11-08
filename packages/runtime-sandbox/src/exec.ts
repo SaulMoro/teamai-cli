@@ -125,7 +125,7 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
    */
   const finish = (op: OpId, outcome: Outcome, kept: Outcome = outcome): void => {
     if (!running.has(op)) return;
-    ledger.settle({ op, ...outcome }, () => keep(op, kept));
+    void ledger.settle({ op, ...outcome }, () => keep(op, kept));
     release(op);
   };
 
@@ -147,7 +147,7 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
     followers.get(op)?.stop();
 
     if (keepIt === undefined) endWith(op, outcome);
-    else ledger.settle({ op, ...outcome }, keepIt);
+    else void ledger.settle({ op, ...outcome }, keepIt);
   };
 
   /**

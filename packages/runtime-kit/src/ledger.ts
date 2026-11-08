@@ -22,7 +22,8 @@ export interface OpLedger<TRun = unknown> {
   /**
    * Ends `ended`'s op with its true outcome once `keep` journaled it. An end `keep` cannot journal is answered all the
    * same, since the op did end that way and teamai keeps it as soon as it reads it: this process remembers it
-   * (`unkept`) until the op runs here again or its place closes, and says so in a notice about the op.
+   * (`unkept`) until the op runs here again or its place closes, and says so in a notice about the op. A `keep` that
+   * returns no promise is answered before `settle` returns; the promise never rejects.
    */
   settle(ended: OpEnd, keep: () => Promise<void> | void): Promise<void>;
   /** The end of `op` this process answered and could not journal, which stands in for its record's. */
@@ -102,16 +103,30 @@ export function opLedger<TRun = unknown>({ name, write }: { name: string; write:
     write(message);
   };
 
-  const settle = async (ended: OpEnd, keep: () => Promise<void> | void): Promise<void> => {
-    try {
-      await keep();
+  const settle = (ended: OpEnd, keep: () => Promise<void> | void): Promise<void> => {
+    const answer = (): void => {
       unkept.delete(ended.op);
-    } catch (error) {
+      counted(endLine(ended));
+    };
+
+    const answerUnkept = (why: string): void => {
       unkept.set(ended.op, ended);
-      counted({ event: 'notice', op: ended.op, message: `Runtime ${name} could not record how ${ended.op} ended (${error instanceof Error ? error.message : String(error)}), so only this runtime process remembers that end, until the place closes.` });
+      counted({ event: 'notice', op: ended.op, message: `Runtime ${name} could not record how ${ended.op} ended (${why}), so only this runtime process remembers that end, until the place closes.` });
+      counted(endLine(ended));
+    };
+
+    // A record kept at once is answered before settle returns, so what the runtime does next, such as releasing the
+    // op or answering its place's close, follows the end, as a runtime with a synchronous journal expects.
+    try {
+      const kept = keep();
+
+      if (kept instanceof Promise) return kept.then(answer, (error: Error | string) => answerUnkept(error instanceof Error ? error.message : String(error)));
+      answer();
+    } catch (error) {
+      answerUnkept(error instanceof Error ? error.message : String(error));
     }
 
-    counted(endLine(ended));
+    return Promise.resolve();
   };
 
   return {

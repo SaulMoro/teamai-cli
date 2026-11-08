@@ -402,7 +402,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
         const failure = agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message };
 
         // Kept on its record when that can still be read and written, so a reattach or a repeated prompt reports it.
-        ledger.settle({ op: request.op, state: 'failed', failure }, () => {
+        void ledger.settle({ op: request.op, state: 'failed', failure }, () => {
           const record = journal.prompt(request.op);
 
           if (record && record.kind !== 'refused' && !record.outcome) journal.savePrompt(request.op, { ...record, outcome: { op: request.op, state: 'failed', failure } });

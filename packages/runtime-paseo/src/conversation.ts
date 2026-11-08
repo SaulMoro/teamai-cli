@@ -268,7 +268,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
     // An end the record cannot keep is answered all the same, and this process remembers it until the place closes.
     waiting.delete(op);
-    ledger.settle(endOf(outcome), () => journal.savePrompt(op, { ...record, outcome }));
+    void ledger.settle(endOf(outcome), () => journal.savePrompt(op, { ...record, outcome }));
   };
 
   /** Records whether a prompt sent its create, on its record as it stands: one a close removed is not written again. */
