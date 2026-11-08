@@ -563,8 +563,9 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
   const [outerOpened, innerOpened] = [outer.opened, inner.opened];
 
   // Only a runtime that launches agents its own way has tools to run through another; one that execs them would run
-  // nothing on the inner side, and its steps would run on the outer alone.
-  if (!innerOpened.launchesAgents) {
+  // nothing on the inner side, and its steps would run on the outer alone. A stop offers nothing: a runtime in recover
+  // mode says it launches nothing, and the entry is opened only to stop and close what it ran.
+  if (!innerOpened.launchesAgents && how.purpose !== 'stop') {
     await Promise.all([outerOpened.runtime.dispose(), innerOpened.runtime.dispose()]);
 
     return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${names.inner} launches no agents of its own: only a runtime that launches agents, such as an app's, runs its tools through another. Use ${names.outer} on its own, or fix the file, and start again.` } };

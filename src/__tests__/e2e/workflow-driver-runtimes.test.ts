@@ -3042,5 +3042,32 @@ span('end');
       expect(reattaches[1]?.credentials).toBeUndefined();
       expect(asked().filter((call) => call.type === 'prompt')).toEqual([]);
     });
+
+    /** The places a toy's journal still holds, by `<run>/<attempt>`. */
+    const placesOf = (dir: string): Record<string, string> => (fs.existsSync(path.join(dir, 'handles.json')) ? JSON.parse(fs.readFileSync(path.join(dir, 'handles.json'), 'utf8')) as Record<string, string> : {});
+    /** Each request the toys were asked, as `<toy> <type>`. */
+    const steps = (): string[] => asked().map(({ toy, type }) => `${toy} ${type}`);
+
+    /** Starts `oneprompt` on `driver`, whose toy kills it; answers the run and the attempt the toy in `state` journaled. */
+    const killedStart = async (driver: string, journal: string): Promise<{ runId: string; attempt: string }> => {
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', driver], repo, env(tokens));
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const [runId = '', attempt = ''] = Object.keys(placesOf(journal))[0]?.split('/') ?? [];
+      fs.writeFileSync(calls, '');
+
+      return { runId, attempt };
+    };
+
+    it('stops a composed attempt a killed teamai left, closing the inner place and then the outer, when the run is cancelled', async () => {
+      throughDefinition('throughcancel', { die_at: 'prompt-finished' });
+      const { runId, attempt } = await killedStart('throughcancel', innerState);
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env(tokens));
+
+      expect(cancelled.stderr).toContain(`Stopped attempt ${attempt} of run ${runId} on step runtime "toy through sandboxtoy" and closed its place.`);
+      expect(steps().filter((step) => step.endsWith('close'))).toEqual(['inner close', 'outer close']);
+      expect([placesOf(innerState), placesOf(outerState)]).toEqual([{}, {}]);
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+    });
   });
 });
