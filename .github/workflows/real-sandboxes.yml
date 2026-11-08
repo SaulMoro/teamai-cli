@@ -11,13 +11,13 @@ on:
       ref:
         description: The branch, tag or commit to test
         required: true
-        default: wave7/sandbox-sec
+        default: wave7/sandbox-kit
   push:
     branches:
       - ci/real-sandboxes
 
 env:
-  REF: ${{ inputs.ref || 'wave7/sandbox-sec' }}
+  REF: ${{ inputs.ref || 'wave7/sandbox-kit' }}
 
 jobs:
   linux:
@@ -64,9 +64,9 @@ jobs:
       - run: git log -1 --format='Testing %H %s'
       - run: npm ci --ignore-scripts
       - run: npx tsup
-      - name: The runtime refuses init on Windows, naming WSL2
+      - name: The runtime teamai starts refuses init on Windows, naming WSL2
         run: |
-          reply=$(echo '{"type":"init","protocol":1,"mode":"unattended","options":{"provider":"docker","image":"alpine:3"}}' | node dist/runtime-sandbox.js)
+          reply=$(echo '{"type":"init","protocol":1,"mode":"unattended","options":{"provider":"docker","image":"alpine:3"}}' | TEAMAI_RUNTIME_PROTOCOL=1 node dist/runtime-sandbox.js)
           echo "$reply"
           echo "$reply" | grep -q '"code":"sandbox_unavailable"'
           echo "$reply" | grep -q 'WSL2'
@@ -75,6 +75,15 @@ jobs:
           npm install -g . --ignore-scripts
           set +e
           out=$(timeout 60 cmd //c "teamai-sandbox-claude.cmd -p hi" </dev/null 2>&1); code=$?
+          set -e
+          echo "exit $code: $out"
+          test "$code" = 2
+          echo "$out" | grep -q 'does not run on Windows'
+      - name: The wrapper refuses through npm's .cmd shim with no argument at all, rather than waiting on stdin
+        run: |
+          set +e
+          # stdin stays open, as an app's pipe does: a wrapper that served runtime protocol would wait on it.
+          out=$(sleep 90 | timeout 60 cmd //c "teamai-sandbox-claude.cmd" 2>&1); code=$?
           set -e
           echo "exit $code: $out"
           test "$code" = 2
