@@ -14,7 +14,7 @@ import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstan
 import type { AddedProjects } from './added-projects.js';
 import type { SignInAccess } from './auth.js';
 import { parseOptions } from './options.js';
-import type { ConversationRecord, Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
+import type { OpRecord, Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type Driver, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde, type ServedInstances } from './tool-instances.js';
@@ -165,7 +165,8 @@ export interface ServeOptions {
   /** The member's home as teamai runs, which the tool homes teamai gives are under. */
   home: string;
   /** The variables teamai started the runtime with, whose CLAUDE_CONFIG_DIR or CODEX_HOME moves a base tool's home. */
-  env: Readonly<Record<string, string | undefined>>;
+  /** The process's environment; serving removes the variable teamai marks a runtime start with. */
+  env: Record<string, string | undefined>;
   /** The lock file that keeps two runtimes on this machine from adding the same T3 provider instance. */
   settingsLock: string;
   /** The `t3` command, which adds and removes a project as the member does. */
@@ -616,7 +617,7 @@ export function serve(options: ServeOptions): Promise<number> {
   };
 
   /** `conversation` with its thread ended: the runtime saw it stop. */
-  const endedIn = (conversation: ConversationRecord): ConversationRecord => {
+  const endedIn = (conversation: OpRecord): OpRecord => {
     const { thread } = conversation;
 
     return thread && !thread.ended ? { ...conversation, thread: { ...thread, ended: {} } } : conversation;
@@ -626,19 +627,25 @@ export function serve(options: ServeOptions): Promise<number> {
    * Journals `change` to `op`'s record in the place `handle`, once the place's records can be read; in `opened`, written
    * again first, when its record is missing.
    */
-  const journalOp = ({ handle, op, opened }: { handle: string; op: string; opened?: PlaceRecord }, change: (conversation: ConversationRecord | undefined) => ConversationRecord | undefined): void => {
+  const journalOp = ({ handle, op, opened }: { handle: string; op: string; opened?: PlaceRecord }, change: (conversation: OpRecord | undefined) => OpRecord | undefined): void => {
     const known = journal.read(handle);
 
     if (known.kind === 'unreadable' || (known.kind === 'missing' && !opened)) return;
 
     if (known.kind === 'missing' && opened) journal.open(opened);
-    journal.update(handle, op, change);
+    journal.update({ handle, op }, change);
   };
 
-  /** Journals how an op ended, and, when the runtime saw it stop, that its thread ended, in one write. */
+  /**
+   * Journals how an op ended, and, when the runtime saw it stop, that its thread ended, in one write. A place whose
+   * records cannot be read is never written over: that throws, so the ledger keeps the end in memory and says so.
+   */
   const record = (handle: string, state: OpState, { threadEnded }: { threadEnded: boolean }): void => {
+    const known = journal.read(handle);
+
+    if (known.kind === 'unreadable') throw new Error(`${known.file} cannot be read: ${known.why.replace(/\.$/, '')}`);
     journalOp({ handle, op: state.op }, (conversation) => {
-      const withOp: ConversationRecord = { ...conversation, state };
+      const withOp: OpRecord = { ...conversation, state };
 
       return threadEnded ? endedIn(withOp) : withOp;
     });

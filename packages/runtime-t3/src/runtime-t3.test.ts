@@ -3092,6 +3092,25 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['op'] === 'op-0000007a').map((line) => line['event'])).toEqual(['accepted', 'display', 'notice', 'finished']);
     });
 
+    // A place whose record cannot be read is never written over, and the end it holds back is the ledger's to keep.
+    it('answers a prompt that ends while its place\'s record cannot be read, and says in a notice that it was not recorded', async () => {
+      const release = path.join(dir, 'release');
+      t3.config({ agent: { release, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-000000b7'));
+      await runtime.next((line) => line['op'] === 'op-000000b7' && line['event'] === 'display');
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(handle)}.json`);
+      const readable = fs.readFileSync(record, 'utf8');
+      fs.writeFileSync(record, '{"handle":');
+      fs.writeFileSync(release, '');
+
+      expect(await ended(runtime, 'op-000000b7')).toMatchObject({ op: 'op-000000b7', event: 'finished' });
+      fs.writeFileSync(record, readable);
+      expect(runtime.lines.find((line) => line['op'] === 'op-000000b7' && line['event'] === 'notice')).toEqual({
+        op: 'op-000000b7', event: 'notice', message: expect.stringMatching(/^Runtime t3 could not record how op-000000b7 ended \(.*cannot be read.*\), so only this runtime process remembers that end, until the place closes\.$/),
+      });
+    });
+
     it('reports the end of a prompt it could not record to a reattach, a cancel and a repeated prompt in the same process, never another end', async () => {
       const release = path.join(dir, 'release');
       t3.config({ agent: { release, output: {} } });

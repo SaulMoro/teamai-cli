@@ -85,9 +85,9 @@ const PlaceSchema = z.discriminatedUnion('kind', [
  * and its launch while T3 has not answered it. Two runtime processes that write different operations never lose each
  * other's write.
  */
-const ConversationSchema = z.object({ state: OpStateSchema, thread: ThreadSchema.optional(), launch: LaunchSchema.optional() });
+const OpRecordSchema = z.object({ state: OpStateSchema, thread: ThreadSchema.optional(), launch: LaunchSchema.optional() });
 
-export type ConversationRecord = z.infer<typeof ConversationSchema>;
+export type OpRecord = z.infer<typeof OpRecordSchema>;
 
 /** A place with its operations: each one's state, the thread of each prompt that launched one, and each unanswered launch. */
 export type PlaceRecord = z.infer<typeof PlaceSchema> & {
@@ -112,7 +112,7 @@ export interface Journal {
    * Writes `op`'s record in the place `handle` as `change` makes it from the one there; `undefined` writes nothing. A
    * record there that cannot be read is never written over: that throws.
    */
-  update(handle: string, op: string, change: (conversation: ConversationRecord | undefined) => ConversationRecord | undefined): void;
+  update(at: { handle: string; op: string }, change: (record: OpRecord | undefined) => OpRecord | undefined): void;
   remove(handle: string): void;
   /** The file that holds the place's record, which the person deletes once they stopped what it may still run. */
   file(handle: string): string;
@@ -124,7 +124,7 @@ export interface Journal {
  */
 export function journal(dir: string): Journal {
   const places = recordStore(dir, PlaceSchema);
-  const conversationsOf = (handle: string) => recordStore(path.join(dir, encodeURIComponent(handle)), ConversationSchema);
+  const conversationsOf = (handle: string) => recordStore(path.join(dir, encodeURIComponent(handle)), OpRecordSchema);
 
   const read = (handle: string): PlaceRead => {
     const own = places.read(handle);
@@ -171,7 +171,7 @@ export function journal(dir: string): Journal {
 
       for (const [op, state] of Object.entries(ops)) conversations.write(op, { state, ...(threads[op] && { thread: threads[op] }), ...(launches[op] && { launch: launches[op] }) });
     },
-    update(handle, op, change) {
+    update({ handle, op }, change) {
       const conversations = conversationsOf(handle);
       const found = conversations.read(op);
 

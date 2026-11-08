@@ -27,8 +27,8 @@ describe('the T3 journal', () => {
     expect(recovering.read(PLACE.handle)).toMatchObject({ kind: 'found' });
     expect(launching.read(PLACE.handle)).toMatchObject({ kind: 'found' });
 
-    recovering.update(PLACE.handle, FIRST, () => ({ state: { op: FIRST, state: 'cancelled' } }));
-    launching.update(PLACE.handle, SECOND, () => ({ state: { op: SECOND, state: 'exited', code: 0, stdout: '' } }));
+    recovering.update({ handle: PLACE.handle, op: FIRST }, () => ({ state: { op: FIRST, state: 'cancelled' } }));
+    launching.update({ handle: PLACE.handle, op: SECOND }, () => ({ state: { op: SECOND, state: 'exited', code: 0, stdout: '' } }));
 
     expect(journal(dir).read(PLACE.handle)).toEqual({
       kind: 'found',
@@ -47,7 +47,7 @@ describe('the T3 journal', () => {
   it('forgets a place and every operation of it once removed', () => {
     const places = journal(dir);
     places.open(PLACE);
-    places.update(PLACE.handle, FIRST, () => ({ state: { op: FIRST, state: 'running' } }));
+    places.update({ handle: PLACE.handle, op: FIRST }, () => ({ state: { op: FIRST, state: 'running' } }));
 
     places.remove(PLACE.handle);
 
