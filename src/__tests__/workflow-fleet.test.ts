@@ -212,7 +212,7 @@ describe('a member taking an attempt', () => {
   });
 
   it('runs the step on the step runtime of the member\'s own driver, with the step\'s env alone, and pushes what it wrote there', async () => {
-    const local = localStepRuntime({ exec: true });
+    const local = localStepRuntime();
     const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
     const runtime: StepRuntime = { ...local, exec: (request, events, kind) => {
       execs.push({ argv: request.argv, env: request.env, cwd: request.cwd });
@@ -423,7 +423,7 @@ describe('cancelling an attempt through its record', () => {
     let execs = 0;
     let open = (): void => {};
     const opening = new Promise<void>((resolve) => { open = resolve; });
-    const local = localStepRuntime({ exec: true });
+    const local = localStepRuntime();
     const runtime: StepRuntime = {
       ...local,
       open: async (request, onAccepted) => {
@@ -540,7 +540,7 @@ describe('a restarted member', () => {
     // What the killed run left on the runtime, once stopped: a closed place, and the exec it had sent there, whose id the
     // runtime answers with how that exec ended, as an id sent again reconnects to its exec.
     const stoppedExec = newOpId();
-    const local = localStepRuntime({ exec: true });
+    const local = localStepRuntime();
     const runtime: StepRuntime = { ...local, exec: async (request, events, kind) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events, kind)) };
     fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
     fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
@@ -744,6 +744,10 @@ describe('fleet entries of one driver definition', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'any', can: { network: true, isolation: 'sandbox' } }), fleet({ pool: 'box', can: { isolation: 'worktree' } })])).toEqual([
       'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the more specific entry first.',
     ]);
+  });
+
+  it('names no entry after one that runs no command, since an entry that says nothing of exec runs commands', () => {
+    expect(shadowedFleetEntries([fleet({ pool: 'prompts', can: { exec: false } }), fleet({ pool: 'default' })])).toEqual([]);
   });
 
   it('names a shadowed fleet entry that also sets the options teamai takes for itself', () => {
