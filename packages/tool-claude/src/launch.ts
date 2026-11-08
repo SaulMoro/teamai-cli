@@ -3,7 +3,14 @@ import { readClaudeResult, type LaunchAdapter } from '@teamai/tool-core/launch';
 /** How teamai launches Claude Code and its variants headless; each variant starts its own command. */
 export const launch = {
   claude: {
-    call: { evidence: 'verified', prompt: 'stdin', args: () => ['-p', '--output-format', 'json'], read: readClaudeResult },
+    call: {
+      evidence: 'verified',
+      prompt: 'stdin',
+      args: () => ['-p', '--output-format', 'json'],
+      read: readClaudeResult,
+      // Claude Code 2.1.319 continued a `claude -p` session this way (2026-11-08).
+      resume: { evidence: 'verified', args: (session) => ['--resume', session] },
+    },
     // Claude Code 2.1.312 ran a strict-sandbox benchmark trial in this mode (2026-10-30, `teamai benchmark run --sandbox`).
     step: { evidence: 'verified', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'verified' } },
     confined: {

@@ -13,8 +13,8 @@ export const CONFINED_LEVELS = ['best-effort', 'verified'] as const;
 
 export type ConfinedLevel = (typeof CONFINED_LEVELS)[number];
 
-/** What a headless call printed: its answer, or the error the tool reported, when it reported one. */
-export type CallReading = { ok: true; text: string; tokens?: TokenUsage } | { ok: false; message?: string };
+/** What a headless call printed: its answer and the session it ran in, or the error the tool reported, when it reported one. */
+export type CallReading = { ok: true; text: string; tokens?: TokenUsage; session?: string } | { ok: false; message?: string };
 
 /** What a finished call left: its stdout, and the last message it wrote to the file `args` named, if it wrote one. */
 export interface CallOutput {
@@ -40,6 +40,8 @@ export interface CallLaunch {
   stdinOf?(prompt: string): string;
   args(input: CallInput): string[];
   read(output: CallOutput): CallReading;
+  /** The arguments, after `args`, that continue the session a call ran in, for a tool that keeps it and reports its id. */
+  readonly resume?: { readonly evidence: Evidence; args(session: string): string[] };
 }
 
 /**
@@ -95,9 +97,15 @@ export function failed(message: string | undefined): CallReading {
   return message === undefined ? { ok: false } : { ok: false, message };
 }
 
-/** A call's answer, with the tokens it billed when the tool reported them. */
-export function answered(text: string, tokens: TokenUsage | undefined): CallReading {
-  return tokens === undefined ? { ok: true, text } : { ok: true, text, tokens };
+/** A call's answer, with the tokens it billed and the session it ran in when the tool reported them. */
+export function answered(text: string, tokens: TokenUsage | undefined, session?: string): CallReading {
+  const reading: CallReading = { ok: true, text };
+
+  if (tokens !== undefined) reading.tokens = tokens;
+
+  if (session !== undefined) reading.session = session;
+
+  return reading;
 }
 
 /** The counts a tool reported, or undefined when it reported none. */
@@ -117,6 +125,7 @@ const ClaudeResult = z.object({
   type: z.literal('result'),
   is_error: z.boolean().optional(),
   result: z.string().optional(),
+  session_id: z.string().optional(),
   usage: z.object({ input_tokens: z.number().optional(), output_tokens: z.number().optional(), cache_read_input_tokens: z.number().optional() }).partial().optional(),
 });
 
@@ -134,7 +143,7 @@ export function readClaudeResult({ stdout }: CallOutput): CallReading {
   if (record.is_error || record.result === undefined) return failed(record.result || undefined);
   const usage = record.usage;
 
-  return answered(record.result.trim(), reportedTokens({ input: usage?.input_tokens, output: usage?.output_tokens, cachedInput: usage?.cache_read_input_tokens }));
+  return answered(record.result.trim(), reportedTokens({ input: usage?.input_tokens, output: usage?.output_tokens, cachedInput: usage?.cache_read_input_tokens }), record.session_id);
 }
 
 /** A tool that prints only its reply, as plain text. */

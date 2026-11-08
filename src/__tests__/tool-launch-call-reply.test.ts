@@ -1,0 +1,95 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { claudeFake } from '@teamai/tool-claude/testing';
+import { opencodeFake } from '@teamai/tool-opencode/testing';
+import { fakeAgent, type FakeAgent, type FakeAgentOptions, type FakeAgentRecording } from '@teamai/tool-testing/fake-agent';
+import { createToolCaller } from '../tool-launch/call.js';
+
+const made: string[] = [];
+const agents: FakeAgent[] = [];
+
+afterEach(() => {
+  const left = agents.splice(0).flatMap((agent) => agent.stopLeft());
+
+  vi.unstubAllEnvs();
+  for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  expect(left, 'fake agents left running').toEqual([]);
+});
+
+/** A fake of `recording` in a fresh dir with its own HOME, and a caller that finds only it. */
+function only(recording: FakeAgentRecording, options: Omit<FakeAgentOptions, 'bin'> = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cr-')));
+
+  made.push(root);
+  vi.stubEnv('HOME', path.join(root, 'h'));
+  const agent = fakeAgent(recording, { bin: path.join(root, 'b'), ...options });
+
+  agents.push(agent);
+  const caller = createToolCaller({ resolveTool: (command) => (command === recording.executable ? agent.executable : null), resolveScope: async () => undefined });
+
+  return { root, agent, caller };
+}
+
+const Color = z.object({ color: z.string() });
+
+describe('a call that must reply with a value', () => {
+  it('asks again in the same session when the reply holds no valid value, and returns the corrected one', async () => {
+    const { root, agent, caller } = only(claudeFake, { answers: [{ when: 'Retries remaining', answer: '{"color":"blue"}' }], answer: 'Sure, the color is blue.' });
+
+    const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 2 });
+
+    expect(called).toMatchObject({ tool: 'claude', reply: { color: 'blue' }, asked: 2 });
+    const [first, second] = agent.calls();
+    const sessions = fs.readdirSync(path.join(root, 'h', '.claude', 'projects', root.replace(/[^A-Za-z0-9]/g, '-')));
+
+    expect(first?.args).toEqual(['-p', '--output-format', 'json']);
+    expect(sessions).toEqual([`${second?.args[4]}.jsonl`]);
+    expect(second?.args).toEqual(['-p', '--output-format', 'json', '--resume', expect.any(String)]);
+    expect(second?.prompt).toContain('Sure, the color is blue.');
+  });
+
+  it('stops asking at the cap and gives no value', async () => {
+    const { root, agent, caller } = only(claudeFake, { answer: 'no JSON here' });
+
+    const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 2 });
+
+    expect({ reply: called.reply, asked: called.asked, calls: agent.calls().length }).toEqual({ reply: undefined, asked: 3, calls: 3 });
+  });
+
+  it('resumes an OpenCode session by its id', async () => {
+    const { root, agent, caller } = only(opencodeFake, { answers: [{ when: 'Retries remaining', answer: '{"color":"red"}' }], answer: 'red' });
+
+    const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 1 });
+
+    expect(called.reply).toEqual({ color: 'red' });
+    expect(agent.calls()[1]?.args).toEqual(['run', '--format', 'json', '--session', expect.stringMatching(/^ses_/)]);
+  });
+
+  it('asks once when the first reply holds the value', async () => {
+    const { root, agent, caller } = only(claudeFake, { answer: 'Here it is:\n```json\n{"color":"green"}\n```' });
+
+    const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 2 });
+
+    expect({ reply: called.reply, asked: called.asked, calls: agent.calls().length }).toEqual({ reply: { color: 'green' }, asked: 1, calls: 1 });
+  });
+});
+
+describe('a call with an idle limit', () => {
+  it('fails a tool that goes silent for longer than the limit', async () => {
+    const { root, caller } = only(opencodeFake, { always: ['hang'] });
+
+    await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 500 })).rejects.toMatchObject({
+      kind: 'call_failed',
+      message: 'AI call printed nothing for 0.5s, longer than its idle limit (tool: opencode). Raise the idle limit if this tool works silently for longer.',
+    });
+  });
+
+  it('keeps a tool that streams for longer than the limit but never stays silent that long', async () => {
+    const { root, caller } = only(opencodeFake, { always: ['slow'], slowMs: 400, answer: 'still here' });
+
+    await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 1000 })).resolves.toMatchObject({ text: 'still here' });
+  });
+});
