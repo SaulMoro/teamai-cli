@@ -1414,6 +1414,7 @@ teamai workflow resume [--next]
 | 代码 | 发生了什么 | 下一步 |
 |---|---|---|
 | `not_owner` | 另一个安装实例拥有该运行。带 `owner` 和 `ownedAt`。 | 联系所有者，或用 `resume <run> --claim` 接管。 |
+| `driver_running` | 本机有该运行的本地驱动正在运行时执行了 `publish`。 | 停止那个驱动，再发布。 |
 | `state_moved` | 本机准备认领或发布期间，运行发生了变化：认领时在 `teamai-reports` 上，发布时在本机上。没有认领或发布任何内容。 | 再认领一次，或再发布一次。 |
 | `state_conflict` | `teamai-reports` 上的状态比本机上次看到的更新。 | 执行 `resume <run>` 取得已发布的状态。 |
 | `run_not_published` | 没有人发布过该运行。 | 在有这个运行的机器上发布它。 |

@@ -55,6 +55,15 @@ steps:
           command: node -e "const g = (...a) => require('child_process').execFileSync('git', a).toString().trim(); if (g('rev-parse', 'HEAD') !== '${commit}' || g('remote') !== '') process.exit(1); require('fs').writeFileSync('clean.txt', 'C')"
 `;
 
+// `wait` writes the run's scratch dir to the file HOLD_AT names, then runs until stopped.
+const HOLD = `schemaVersion: v1alpha1
+name: hold
+description: One step that runs until stopped.
+steps:
+  - id: wait
+    command: node -e "require('fs').writeFileSync(process.env.HOLD_AT + '.held', process.env.TEAMAI_RUN_DIR || ''); setInterval(() => {}, 1000)"
+`;
+
 const QUICK = `schemaVersion: v1alpha1
 name: quick
 description: Two commands, no workspace.
@@ -278,6 +287,7 @@ describe('workflow publish and resume across members', () => {
       'workflows/ship.yaml': SHIP,
       'workflows/edit.yaml': EDIT,
       'workflows/review.yaml': REVIEW,
+      'workflows/hold.yaml': HOLD,
       'workflows/clean.yaml': CLEAN(originGit(businessOrigin, 'rev-parse', 'main')),
     }, 'team repo', teamOrigin);
     // Both members join before anything is published, so nothing published reaches bob through a pull.
@@ -371,6 +381,27 @@ describe('workflow publish and resume across members', () => {
     const bobRefused = await teamai('bob', ['workflow', 'resume', shipRun]);
     expect(bobRefused.code, said(bobRefused)).toBe(1);
     expect(bobRefused.envelope()).toMatchObject({ error: { code: 'not_owner', owner: publishedState(shipRun).owner } });
+  }, 120_000);
+
+  it('refuses to publish a run while a driver of it runs on this machine, so nobody takes over a step that is running', async () => {
+    const hold = path.join(sandbox, 'hold-publish');
+    let pid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'hold', '--driver', 'local'], {
+      env: { HOLD_AT: hold }, detached: true, started: (value) => { pid = value; },
+    });
+    try {
+      expect(await waitFor(`${hold}.held`, 30_000), 'alice reached wait').toBe(true);
+      const run = path.basename(path.dirname(fs.readFileSync(`${hold}.held`, 'utf8')));
+      expect(run).toMatch(/^r[0-9a-f]{16}$/);
+
+      const refused = await teamai('alice', ['workflow', 'publish', run]);
+      expect(refused.code, said(refused)).toBe(1);
+      expect(refused.envelope()).toMatchObject({ error: { code: 'driver_running' } });
+      expect(() => publishedState(run), 'nothing reached teamai-reports').toThrow();
+    } finally {
+      process.kill(-pid, 'SIGINT');
+      await started;
+    }
   }, 120_000);
 
   it('adds no reports commit when a run is published again unchanged', async () => {
