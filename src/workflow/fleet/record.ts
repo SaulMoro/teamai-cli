@@ -493,6 +493,16 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
  * The attempts offered to pool `pool` for business repository `repository`, oldest offer first, as this machine's copy
  * of `teamai-reports` holds them: refresh it first.
  */
+/** An attempt out on a fleet: offered, claimed, or claimed and asked to stop. */
+export type OpenAttempt = Extract<FleetRecord, { state: 'offered' | 'claimed' | 'cancelling' }>;
+
+/** The attempts out for business repository `repository`, oldest offer first, as `workflow resume` lists them. */
+export async function listOpenAttempts(config: LocalConfig, repository: string): Promise<OpenAttempt[]> {
+  const open = (await listRecords(config)).flatMap((record) => (record.repository === repository && (record.state === 'offered' || record.state === 'claimed' || record.state === 'cancelling') ? [record] : []));
+
+  return open.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
+}
+
 export async function listOffers(config: LocalConfig, { pool, repository }: { pool: string; repository: string }): Promise<Offered[]> {
   const offers = (await listRecords(config)).flatMap((record) => (record.state === 'offered' && record.pool === pool && record.repository === repository ? [record] : []));
 

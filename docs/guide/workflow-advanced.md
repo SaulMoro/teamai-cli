@@ -1675,6 +1675,14 @@ teamai workflow resume --next                # published runs only, as before: n
 
 It prints `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}`, or `{"data":{"idle":{"offered":N}}}` when it took none. Two members that try the same attempt cannot both take it: the second tries the next one.
 
+Each call takes at most one attempt, so a machine that stays a member runs it in a loop, or from a CI schedule:
+
+```sh
+while :; do teamai workflow resume --next --pool build; sleep 60; done
+```
+
+Run several loops to take several attempts at once. `teamai workflow resume` with no run lists the attempts out for the checkout's origin: pool, state, the member that claimed each, and its last progress.
+
 Which steps go to the fleet follows the usual routing, with no step key: the order of `runtimes`, what `can` under the fleet's `options` promises (the members' machines give it; teamai does not check it), the step's `requires` and `strict`, and the steps that always stay on this machine. The fleet takes command and prompt steps. A step with `requires.labels` goes to a fleet entry whose `labels` option lists each, and a member takes it only when its `workflows.labels` does too; any other member leaves it and logs why. A member runs a prompt step on its own tool, model and login, from its own copy of the step; list the tools your pool has under the fleet's `can.tools` to keep other steps off it. Each ready step, and each item of a `for_each`, is an attempt of its own, up to the fleet's `max_parallel`. Give such a step a workspace, such as `workspace: new`: a step with none runs in your checkout, and a member's changes to it fail the step `read_only_dirty`.
 
 Each fleet entry offers in its own `pool`, and the first entry whose `can` fits a step takes it. Several pools are several fleet entries, the more specific first: a fleet entry whose `can` an earlier one covers never gets a step, and `workflow start` warns about it.

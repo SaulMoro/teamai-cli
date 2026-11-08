@@ -16,7 +16,7 @@ import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { memberPlace, takeFleetAttempt } from './workflow/fleet/member.js';
-import { DEFAULT_FLEET_POOL } from './workflow/fleet/record.js';
+import { DEFAULT_FLEET_POOL, listOpenAttempts, type OpenAttempt } from './workflow/fleet/record.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
@@ -1800,14 +1800,21 @@ async function listResumable({ config, env }: Ready, taker: Taker): Promise<void
   if (unread) log.warn(`${unread.message} Listing the runs this machine last saw there.`);
   const repository = getRepoIdentity(process.cwd()) ?? undefined;
   const runs = await PublishedRuns.resumable(config, { taker, env, repository });
+  const attempts = repository === undefined ? [] : await listOpenAttempts(config, repository);
 
-  if (runs.length === 0) {
-    process.stdout.write(`No runs to resume here: this machine has no running run, and teamai-reports offers none for ${repository ?? 'a checkout without an origin'}.\n`);
+  if (runs.length === 0) process.stdout.write(`No runs to resume here: this machine has no running run, and teamai-reports offers none for ${repository ?? 'a checkout without an origin'}.\n`);
+  else process.stdout.write(table([['RUN', 'WORKFLOW', 'STATUS', 'OWNER', 'WHERE'], ...runs.map(resumableRow)]));
 
-    return;
-  }
+  if (attempts.length === 0) return;
+  process.stdout.write(`\nAttempts out on a fleet (teamai workflow resume --next --pool <pool> takes an offered one):\n`);
+  process.stdout.write(table([['RUN', 'ATTEMPT', 'STEP', 'POOL', 'STATE', 'MEMBER', 'CLAIMED', 'LAST PROGRESS'], ...attempts.map(attemptRow)]));
+}
 
-  process.stdout.write(table([['RUN', 'WORKFLOW', 'STATUS', 'OWNER', 'WHERE'], ...runs.map(resumableRow)]));
+/** An attempt out on a fleet, as a row: who claimed it, when, and when it last wrote progress. */
+function attemptRow(attempt: OpenAttempt): string[] {
+  const claimed = attempt.state === 'offered' ? undefined : attempt;
+
+  return [attempt.run, attempt.attempt, attempt.lease.step, attempt.pool, attempt.state, claimed ? ownerText(claimed.member) : '-', claimed?.claimedAt ?? '-', claimed?.progressAt ?? '-'];
 }
 
 function ownerText(owner: HandoffOwner): string {
