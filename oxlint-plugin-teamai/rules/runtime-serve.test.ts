@@ -58,8 +58,8 @@ rule.valid('allows a runtime\'s tests and test harness to read its lines', `impo
 export const lines = (input: NodeJS.ReadableStream) => readline.createInterface({ input });
 export const exited = { op: 'op-1', event: 'exited', code: 0, stdout: '' };`, { filename: 'packages/runtime-t3/src/testing/harness.ts' });
 
-rule.valid('leaves a runtime not yet on the kit alone while it still serves the protocol', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });`, { filename: 'packages/runtime-sandbox/src/runtime.ts' });
+rule.valid('leaves a runtime not yet on the kit alone while it still serves the protocol', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });`, { filename: 'packages/runtime-sandbox/src/attempt-socket.ts' });
 
 rule.invalid('fails a runtime left on the list once it no longer serves the protocol itself', `export const nothing = 1;`, (output) => {
-  expect(output).toContain('packages/runtime-sandbox/src/runtime.ts no longer reads requests or writes an op\'s end itself');
-}, { filename: 'packages/runtime-sandbox/src/runtime.ts' });
+  expect(output).toContain('packages/runtime-sandbox/src/attempt-socket.ts no longer reads requests or writes an op\'s end itself');
+}, { filename: 'packages/runtime-sandbox/src/attempt-socket.ts' });
