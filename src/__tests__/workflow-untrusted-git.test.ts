@@ -185,6 +185,29 @@ describe('untrustedGit in a copy a step controlled', () => {
     expect(ran(at)).toBe('');
     expect(execFileSync('git', ['--git-dir', origin, 'rev-parse', 'refs/heads/main'], { env: at.env, encoding: 'utf8' }).trim()).toBe(tip);
   });
+
+  it('pushes to every push URL the member\'s checkout named for origin, none rewritten by a pushInsteadOf, as git push origin does', async () => {
+    const at = repo();
+    const origin = bare(at);
+    const mirror = path.join(at.root, 'mirror.git');
+    execFileSync('git', ['init', '-q', '--bare', mirror], { env: at.env });
+    at.git(['remote', 'add', 'origin', origin]);
+    at.git(['config', 'remote.origin.pushurl', origin]);
+    at.git(['config', '--add', 'remote.origin.pushurl', mirror]);
+    // git push origin applies no pushInsteadOf to a push URL the remote names.
+    at.git(['config', `url.${path.join(at.root, 'nowhere.git')}.pushInsteadOf`, origin]);
+    const kept = await readMemberConfig(at.dir);
+    if ('error' in kept) throw new Error(kept.error);
+    const tip = at.git(['rev-parse', 'HEAD']);
+
+    const pushed = await pushIfOrigin(at.dir, 'main', [tip], untrustedGit(at.env, undefined, new Set(kept)), { kept: new Set(kept), env: at.env });
+
+    expect(pushed).toBe('pushed');
+
+    for (const remote of [origin, mirror]) {
+      expect(execFileSync('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/main'], { env: at.env, encoding: 'utf8' }).trim()).toBe(tip);
+    }
+  });
 });
 
 /** A bare repository beside `at`, its origin. */

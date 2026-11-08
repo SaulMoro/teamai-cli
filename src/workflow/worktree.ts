@@ -157,11 +157,33 @@ export interface MemberRemote {
   env: NodeJS.ProcessEnv;
 }
 
-/** The URL `kept` names for pushing to origin: its first push URL, else its first URL. */
-export function keptOrigin(kept: MemberConfig): string | undefined {
-  const first = (key: string): string | undefined => [...kept].find((entry) => entry.startsWith(`${key}\n`))?.slice(key.length + 1);
+/** Every value `kept` holds for config key `key`, in the order git lists them. */
+function keptValues(kept: MemberConfig, key: string): string[] {
+  return [...kept].flatMap((entry) => (entry.startsWith(`${key}\n`) ? [entry.slice(key.length + 1)] : []));
+}
 
-  return first('remote.origin.pushurl') ?? first('remote.origin.url');
+/** The URL `kept` names for fetching from origin, as `git remote get-url origin` answers in the checkout. */
+export function keptOriginUrl(kept: MemberConfig): string | undefined {
+  return keptValues(kept, 'remote.origin.url')[0];
+}
+
+/**
+ * Where `git push origin` pushes in a checkout whose kept config is `kept`, each with the kept config to push with:
+ * every push URL it names, none of them rewritten by a `pushInsteadOf`, or else origin's URL, which one rewrites. None
+ * when it names no origin.
+ */
+export function pushTargets(kept: MemberConfig): { url: string; kept: MemberConfig }[] {
+  const pushUrls = keptValues(kept, 'remote.origin.pushurl');
+
+  if (pushUrls.length > 0) {
+    const unrewritten: MemberConfig = new Set([...kept].filter((entry) => !/^url\..*\.pushinsteadof\n/.test(entry)));
+
+    return pushUrls.map((url) => ({ url, kept: unrewritten }));
+  }
+
+  const url = keptOriginUrl(kept);
+
+  return url === undefined ? [] : [{ url, kept }];
 }
 
 /** Reads `MemberConfig` in checkout `dir`, for a run to keep before its first step. */
@@ -1265,16 +1287,16 @@ export async function commitWork(
 
 /**
  * Pushes when the member's checkout named an origin before the run, and the branch is ahead of the copy `origin` has.
- * It pushes to that URL (`remoteGit`), never to one the copy's config names now, and records what `push -u origin`
- * would: the remote-tracking ref and the branch's upstream.
+ * It pushes where `git push origin` did there (`pushTargets`, through `remoteGit`), never to one the copy's config
+ * names now, and records what `push -u origin` would: the remote-tracking ref and the branch's upstream.
  * A retry that adds no commit still pushes when an earlier attempt left commits unpublished,
  * including a first push that never created the remote branch.
  * No origin is not a failure. `runGit` runs each git call: a step ran in `dir`, so `untrustedGit`.
  */
 export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: UntrustedGit, member: MemberRemote): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
-  const url = keptOrigin(member.kept);
+  const targets = pushTargets(member.kept);
 
-  if (url === undefined) {
+  if (targets.length === 0) {
     const origin = await runGit(dir, ['remote', 'get-url', 'origin']);
 
     if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';
@@ -1287,9 +1309,13 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
 
   if (tip.code !== 0) return { error: tip.stderr.trim() || `${branch} has no commit` };
   const commit = tip.stdout.trim();
-  const pushed = await remoteGit(dir, member, ['push', '--quiet', url, `${commit}:refs/heads/${branch}`], runGit);
 
-  if (pushed.code !== 0) return { error: (pushed.stderr || pushed.stdout).trim() || 'git push failed' };
+  for (const target of targets) {
+    const pushed = await remoteGit(dir, { ...member, kept: target.kept }, ['push', '--quiet', target.url, `${commit}:refs/heads/${branch}`], runGit);
+
+    if (pushed.code !== 0) return { error: (pushed.stderr || pushed.stdout).trim() || 'git push failed' };
+  }
+
   await runGit(dir, ['update-ref', `refs/remotes/origin/${branch}`, commit]);
   await runGit(dir, ['config', `branch.${branch}.remote`, 'origin']);
   await runGit(dir, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]);
