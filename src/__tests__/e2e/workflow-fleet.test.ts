@@ -555,6 +555,20 @@ describe('the fleet', () => {
     expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
   }, 180_000);
 
+  it('takes no attempt on a driver definition of the member\'s own, as resume --next reads none', async () => {
+    const mine = path.join(homeOf('carol'), '.teamai', 'drivers', 'mine.yaml');
+    fs.mkdirSync(path.dirname(mine), { recursive: true });
+    fs.writeFileSync(mine, stringify({ schemaVersion: 'v1alpha1', name: 'mine', runtimes: [{ use: 'local' }] }));
+
+    try {
+      const taken = await teamai('carol', ['workflow', 'resume', '--next', '--pool', 'build', '--driver', 'mine']);
+
+      expect(taken.envelope().error?.code, said(taken)).toBe('driver_not_found');
+    } finally {
+      fs.rmSync(path.dirname(mine), { recursive: true, force: true });
+    }
+  }, 60_000);
+
   // One step at a time, the default, runs the command attached to the driver's terminal; in parallel, in a group of its own.
   it.each([{ parallel: 'workflows.max_parallel: 4', isDefault: false }, { parallel: 'the default max_parallel', isDefault: true }])('stops the command a killed local driver left running when the run is cancelled, with $parallel', async ({ isDefault }) => {
     const config = path.join(dataHomeOf('alice'), 'config.yaml');
