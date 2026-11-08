@@ -107,7 +107,7 @@ async function answered(config: LocalConfig, cancelling: Cancelling, pushed: str
 }
 
 /**
- * Runs claim `claim` in a worktree of `root` at `from`, the attempt's start commit unless a restarted member goes on from
+ * Runs claim `claim` in a clone of `root` at `from`, the attempt's start commit unless a restarted member goes on from
  * the work it pushed, then pushes its work and writes how it ended. A cancel of the claim stops the step: its work is
  * pushed, and the member answers the cancel.
  */
@@ -143,13 +143,16 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   const fetched = await git(root, ['fetch', '--quiet', 'origin', ref]);
 
   if (fetched.code !== 0) return finish({ exitCode: 1, stderr: `The member could not fetch ${ref}: ${fetched.stderr.trim()}` });
-  // Read before the step runs: the worktree shares this checkout's config, which the step may then write.
   const read = await readMemberConfig(root);
 
   if ('error' in read) return finish({ exitCode: 1, stderr: `The member could not read the git config of its checkout: ${read.error}` });
   const memberConfig: MemberConfig = new Set(read);
-  await git(root, ['worktree', 'remove', '--force', work]);
-  const added = await git(root, ['worktree', 'add', '--quiet', '--detach', work, from]);
+  // The step runs in a clone of its own, which shares the checkout's objects but not its config: a worktree would let the
+  // step write the checkout's .git/config, which every later git command there reads. No git runs in the checkout once
+  // the step started.
+  await fs.rm(work, { recursive: true, force: true });
+  const cloned = await git(root, ['clone', '--quiet', '--shared', '--no-checkout', root, work]);
+  const added = cloned.code === 0 ? await git(work, ['checkout', '--quiet', '--detach', from]) : cloned;
 
   if (added.code !== 0) return finish({ exitCode: 1, stderr: `The member could not check out ${from}: ${added.stderr.trim()}` });
   // Each save is a commit on the one before, so the ref only moves forward.
@@ -233,7 +236,7 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
 
     return finish(saved.to === from ? ran : { ...ran, to: saved.to });
   } finally {
-    await git(root, ['worktree', 'remove', '--force', work]);
+    await fs.rm(work, { recursive: true, force: true });
   }
 }
 

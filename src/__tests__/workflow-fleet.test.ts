@@ -380,3 +380,24 @@ describe('a restarted member', () => {
     }
   }, 60_000);
 });
+
+/** A step that writes git config where it runs, as a hostile or careless step can. */
+const PLANT = `schemaVersion: v1alpha1
+name: slow
+description: Writes git config.
+steps:
+  - id: work
+    workspace: new
+    command: git config teamai.planted yes && echo planted > planted.txt
+`;
+
+describe('a member\'s own checkout', () => {
+  it('keeps no git config the step wrote where it ran', async () => {
+    const { bob, run } = await offerSlow(60_000, { definition: PLANT, command: 'git config teamai.planted yes && echo planted > planted.txt' });
+
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+
+    expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+    expect(fs.readFileSync(path.join(bob.checkout, '.git', 'config'), 'utf8')).not.toContain('planted');
+  });
+});
