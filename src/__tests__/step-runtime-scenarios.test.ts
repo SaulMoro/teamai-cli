@@ -1691,7 +1691,7 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND }: { workflow?:
   const acme = team({ slow: workflow });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   const run = RunIdSchema.parse(await startIn(alice, 'slow'));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], exec: true } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES] } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */

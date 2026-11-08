@@ -462,7 +462,7 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     const agent = { output: { learnings: [{ title: 'Retry flaky fetches', file: learning, namespace: '' }] } };
     fs.writeFileSync(path.join(home, '.teamai', 'drivers', 'toylearn.yaml'), [
       'schemaVersion: v1alpha1', 'name: toylearn', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
-      `      state: ${JSON.stringify(state)}`, `      agent: ${JSON.stringify(agent)}`, '      can: { exec: true, hitl: true }',
+      `      state: ${JSON.stringify(state)}`, `      agent: ${JSON.stringify(agent)}`, '      can: { hitl: true }',
       '      judge: { reply: { answer: { label: thorough, reasoning: "Ran the tests." } } }', '',
     ].join('\n'));
     const inputs = { session: SESSION, source: 'claude-code', publish: false, scorers: ['review-quality'] };
