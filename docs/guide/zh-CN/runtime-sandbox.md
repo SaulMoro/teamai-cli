@@ -436,7 +436,7 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
+- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录，Claude Code 的 `CLAUDE_CODE_TMPDIR` 就是这个 `TMPDIR`。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
 - 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
 - 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。

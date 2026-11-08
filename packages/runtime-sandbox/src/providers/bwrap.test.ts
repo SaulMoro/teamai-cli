@@ -157,6 +157,18 @@ describe('bwrap: a step', () => {
     expect(seen).toMatchObject({ home: path.join(own, 'home'), tmp: path.join(own, 'tmp'), token: true });
   });
 
+  it("points Claude Code's own temp directory at the step's, which it writes instead of TMPDIR", async () => {
+    host.tool('claude-tmp', 'console.log(process.env.CLAUDE_CODE_TMPDIR)');
+    const connection = start();
+    await init(connection, { provider: 'bwrap' });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at);
+
+    const { output } = await exec(connection, { argv: ['claude-tmp'], cwd: at.worktree });
+
+    expect(output).toBe(`${path.join(fs.realpathSync(host.home), '.teamai', 'runtime-state', 'sandbox', 'bwrap', HANDLE, 'tmp')}\n`);
+  });
+
   it('cancels a running step by ending its process group', async () => {
     host.tool('waits', "console.log('started'); setInterval(() => {}, 1000);");
     const connection = start();

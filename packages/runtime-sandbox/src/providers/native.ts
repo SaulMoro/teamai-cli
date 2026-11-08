@@ -225,7 +225,8 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
     const [argv0 = ''] = spec.argv;
     const own = { home: realOf(path.join(dirOf(id), 'home')), tmp: realOf(path.join(dirOf(id), 'tmp')) };
     const kept = Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
-    const childEnv: NodeJS.ProcessEnv = { ...kept, HOME: own.home, TMPDIR: own.tmp, ...spec.env };
+    // Claude Code writes /tmp/claude-<uid> whatever TMPDIR says, which the sandbox does not let it write.
+    const childEnv: NodeJS.ProcessEnv = { ...kept, HOME: own.home, TMPDIR: own.tmp, CLAUDE_CODE_TMPDIR: own.tmp, ...spec.env };
 
     for (const name of spec.unset) delete childEnv[name];
 
