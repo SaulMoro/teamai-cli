@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { z } from 'zod';
 import type { Connection } from './connect.js';
 
 // ─── What a test left running ───
@@ -26,28 +27,46 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** An answer about a place that names what the runtime leaves of it on purpose. */
+const KeptSchema = z.object({ handle: z.string(), kept: z.array(z.string()) });
+
+/** What the runtimes of `connections` said they leave on purpose: the `kept` of each answer about a place. */
+function keptBy(connections: readonly Connection[]): string[] {
+  return connections.flatMap(({ lines }) => lines.flatMap((line) => KeptSchema.safeParse(line).data?.kept ?? []));
+}
+
+/** What `connections`, `dir` and `left` still hold, as `<kind>: <what>`, but what a runtime said it keeps. */
+function leftRunning({ dir, connections, left }: Scope): string[] {
+  const kept = keptBy(connections);
+  const isKept = (thing: string): boolean => kept.some((name) => thing.includes(name));
+  const runtimes = connections.flatMap(({ child }) => (child.pid !== undefined && child.exitCode === null && child.signalCode === null && isAlive(child.pid) ? [`runtime: ${child.pid} ${child.spawnargs.join(' ')}`] : []));
+
+  return [...runtimes, ...processesUnder(dir).filter((line) => !isKept(line)).map((line) => `process: ${line}`), ...left().filter((thing) => !isKept(thing)).map((thing) => `left: ${thing}`)];
+}
+
+/** What a test made: its directory, its runtimes, and what else its fakes hold, such as a fake engine's containers. */
+interface Scope {
+  dir: string;
+  connections: readonly Connection[];
+  left: () => string[];
+}
+
 /** How long a process may take to end by itself after the test, as a detached opener or a fake's child does. */
 const SETTLE_MS = 2000;
 
-/** What `connections` and `dir` still run, as `<kind>: <pid> <args>`. */
-function leftRunning({ dir, connections }: { dir: string; connections: readonly Connection[] }): string[] {
-  const runtimes = connections.flatMap(({ child }) => (child.pid !== undefined && child.exitCode === null && child.signalCode === null && isAlive(child.pid) ? [`runtime: ${child.pid} ${child.spawnargs.join(' ')}`] : []));
-
-  return [...runtimes, ...processesUnder(dir).map((line) => `process: ${line}`)];
-}
-
 /**
- * Fails the test, naming each, when a runtime of `connections` still runs, or any process names a path under `dir`,
- * the test's own directory, which everything it made is under, `SETTLE_MS` after the test: one that ends by itself
- * within that is no leak.
+ * Fails the test, naming each, when a runtime of `connections` still runs, any process names a path under `dir`, the
+ * test's own directory, which everything it made is under, or `left` names anything, `SETTLE_MS` after the test: one
+ * that ends by itself within that is no leak, and neither is what a runtime said, in its answers' `kept`, it leaves.
  */
-export async function expectNothingLeft({ dir, connections = [] }: { dir: string; connections?: readonly Connection[] }): Promise<void> {
+export async function expectNothingLeft({ dir, connections = [], left = () => [] }: { dir: string; connections?: readonly Connection[]; left?: () => string[] }): Promise<void> {
+  const scope = { dir, connections, left };
   const deadline = Date.now() + SETTLE_MS;
-  let named = leftRunning({ dir, connections });
+  let named = leftRunning(scope);
 
   while (named.length > 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 50));
-    named = leftRunning({ dir, connections });
+    named = leftRunning(scope);
   }
 
   if (named.length > 0) throw new Error(`The test left behind:\n${named.join('\n')}`);

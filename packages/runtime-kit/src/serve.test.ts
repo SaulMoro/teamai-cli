@@ -118,7 +118,7 @@ describe('a runtime process teamai did not start', () => {
   it('reads no request, says why on stderr, and ends with status 2', async () => {
     const runtime = served(() => ({}), {});
 
-    await runtime.send({ type: 'reattach', handle: 'h-1', credentials: 'none' });
+    await runtime.send({ type: 'reattach', handle: 'h-1', credentials: {} });
 
     expect(await runtime.done).toBe(2);
     expect(runtime.written).toEqual([]);

@@ -34,6 +34,7 @@ import { z } from 'zod';
 //                                                   a handle already closed answers `closed` again: teamai closes one
 //                                                   again once it removed a clone or team folder of the run
 //    > {"type":"close","handle":"…","release":true}  the person let the attempt go: forget the place either way
+//                                                   a close's answer may name what it leaves on purpose: "kept":["…"]
 //    < {"event":"notice","op":"op-8b10…","message":"…"}   any time, op or handle optional: a line for the person; it answers nothing
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
 //                                                   or, when the stop is not confirmed, {"op":"op-8b10…","event":"failed",
@@ -556,19 +557,25 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
     z.object({ op: OpIdSchema, event: z.literal('cancelled') }).strict(),
   ]);
 
+  /**
+   * What the runtime leaves of the place on purpose once it answers, by name, such as a container a released attempt's
+   * close could not remove, which the failure tells the person how to remove: a test's leak check accepts it.
+   */
+  const kept = z.array(z.string().min(1)).optional();
+
   const HandleEvent = z.discriminatedUnion('event', [
     z.object({ event: z.literal('collected'), handle: RuntimeHandleSchema }).strict(),
     z.object({ event: z.literal('collect_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
     z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema), display }).strict(),
     z.object({ event: z.literal('gone'), handle: RuntimeHandleSchema }).strict(),
-    z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema }).strict(),
+    z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema, kept }).strict(),
     /** The runtime could not end the place, so what it started there may still run. */
-    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
+    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema, kept }).strict(),
     /**
      * The runtime could not answer a `reattach`, `collect` or `close` of the handle, such as when its journal cannot be
      * read or its provider cannot be reached: never `gone` for that, since the place may still be there.
      */
-    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
+    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema, kept }).strict(),
   ]);
 
   /**

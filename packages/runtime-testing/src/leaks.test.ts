@@ -68,4 +68,21 @@ describe('the check that a test left nothing running', () => {
       fs.rmSync(elsewhere, { recursive: true, force: true });
     }
   });
+
+  it('accepts what a runtime said, in a close\'s kept, that it leaves on purpose, and names the rest', async () => {
+    const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-testing-bundle-')));
+
+    try {
+      const executable = path.join(elsewhere, 'runtime.mjs');
+      fs.writeFileSync(executable, 'process.stdout.write(JSON.stringify({ event: "close_failed", handle: "h-1", failure: { code: "sandbox_failed", message: "remove it" }, kept: ["teamai-r1-a1"] }) + "\\n");\n');
+      const runtime = connectRuntime({ executable, env: {} });
+      await runtime.next((line) => line['event'] === 'close_failed');
+      await runtime.close();
+
+      await expect(expectNothingLeft({ dir, connections: [runtime], left: () => ['teamai-r1-a1'] })).resolves.toBeUndefined();
+      await expect(expectNothingLeft({ dir, connections: [runtime], left: () => ['teamai-r1-a1', 'teamai-r1-a2'] })).rejects.toThrow(/^The test left behind:\nleft: teamai-r1-a2$/);
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
 });
