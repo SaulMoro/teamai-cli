@@ -19,6 +19,9 @@ export function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineW
   // An inline workflow reads the steps and the item around it (scope.ts childScope), which a nested run has none of.
   if (child === undefined || !isWorkflowFile(child)) return 'it is not a workflow file';
 
+  // A workflow a `from` step wrote is in no definition, so a member could not check what it runs.
+  if (stepWorkflow(step)?.kind === 'from') return 'it runs the workflow a step wrote';
+
   if (isRecord(step.workspace)) return 'it opens a clone, the team repo or a confined directory';
 
   // A header's `workspace: new` opens a copy at the step only when none is around it, which the step alone does not say.

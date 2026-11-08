@@ -1792,6 +1792,8 @@ function wholeNegotiation(
   const missing = new Set<Missing>();
 
   for (const inner of child.definition.steps) {
+    // A gate step runs nothing: the member asks its question through the attempt's record.
+    if (inner.command === undefined && inner.prompt === undefined) continue;
     const innerExecutor = inner.command !== undefined ? 'command' : 'prompt';
 
     const judged = negotiate({
