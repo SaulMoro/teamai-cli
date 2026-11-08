@@ -1,12 +1,14 @@
 import readline from 'node:readline';
-import { CANCEL_FAILED, OpIdSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type OpId, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, OpIdSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type OpId, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import type { OpLedger } from './ledger.js';
 
 // ─── Serving runtime protocol 1 ──────────────────────────
 //
 //  The loop every step runtime process runs: it reads one request per line, hands each to the runtime's handler for its
 //  type, and answers a request whose handler threw, or a line it cannot read, with that request's own failure: teamai
 //  fails every request still waiting on an `error` line, so one is written only for a line that names no request.
+//  An operation ends once: a handler that wrote its op's end and then threw gets no second one.
 //
 
 /** What the runtime does for each request type: it answers the request itself, through the lines it writes. */
@@ -16,7 +18,8 @@ export interface ServeRuntime {
   /** The runtime's name as its messages give it, such as `t3` in "Runtime t3 could not start". */
   name: string;
   input: NodeJS.ReadableStream;
-  write(message: RuntimeMessage): void;
+  /** What every line goes through, the handlers' too: it counts each op's ends. */
+  ledger: OpLedger;
   handlers: RuntimeHandlers;
   /**
    * Whether the runtime already runs `op` or answered it, or a record it keeps holds or may hold it: such an op has its
@@ -63,7 +66,9 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<v
  * Serves runtime protocol 1 on `input` until teamai closes it. Each request runs as it comes, without waiting for the
  * ones before it: a slow prompt never holds a cancel.
  */
-export function serveRuntime({ name, input, write, handlers, holds, stopped, debug }: ServeRuntime): Promise<void> {
+export function serveRuntime({ name, input, ledger, handlers, holds, stopped, debug }: ServeRuntime): Promise<void> {
+  const { write } = ledger;
+
   /**
    * Answers a request that threw with a failure of its own: teamai fails every request it waits on when a line names
    * none. A cancel that threw did not confirm a stop.
@@ -122,10 +127,19 @@ export function serveRuntime({ name, input, write, handlers, holds, stopped, deb
         return;
       }
 
+      // The ends of its op written before it, which a repeated op is answered with again, are not this request's.
+      const endsBefore = 'op' in request ? ledger.endsOf(request.op) : 0;
+
       void (async () => {
         try {
           await dispatch(handlers, request);
         } catch (error) {
+          if ('op' in request && ledger.endsOf(request.op) !== endsBefore) {
+            debug(`Runtime ${name} ended ${request.op} and then failed on its ${request.type}, which ends it no further: ${error instanceof Error ? error.message : String(error)}`);
+
+            return;
+          }
+
           failRequest(request, error instanceof Error ? error.message : String(error));
         }
       })();

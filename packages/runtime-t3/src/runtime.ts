@@ -6,6 +6,7 @@ import {
   CANCEL_FAILED, fitReason, PromptResultSchema, type RUNTIME_MODES,
   type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
+import { opLedger } from '@teamai/runtime-kit/ledger';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { findOnPath } from '@teamai/tool-core/lookpath';
@@ -508,7 +509,9 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
 }
 
 export function serve(options: ServeOptions): Promise<void> {
-  const { write, journal } = options;
+  const { journal } = options;
+  const ledger = opLedger(options.write);
+  const { write } = ledger;
   let session: Session | undefined;
   /**
    * Opened in recover mode: the connection a cancel or a close makes once it needs T3, which init never does, so a
@@ -649,27 +652,11 @@ export function serve(options: ServeOptions): Promise<void> {
     };
   };
 
-  const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
+  const fail = (op: OpId, failure: RuntimeFailure): void => ledger.end({ op, state: 'failed', failure });
 
   /** The terminal event of an operation that ended; a running one has none yet. */
   const answerEnded = (op: OpId, state: OpState): void => {
-    switch (state.state) {
-      case 'running':
-        return;
-      case 'finished':
-        return write({ op, event: 'finished', session: state.session, result: state.result, ...(state.usage && { usage: state.usage }), ...(state.confined && { confined: state.confined }) });
-      case 'cancelled':
-        return write({ op, event: 'cancelled' });
-      case 'failed':
-        return write({ op, event: 'failed', failure: state.failure });
-      case 'exited':
-        return write({ op, event: 'exited', code: state.code, stdout: state.stdout });
-      default: {
-        const unhandled: never = state;
-
-        return unhandled;
-      }
-    }
+    if (state.state !== 'running') ledger.end(state);
   };
 
   /**
@@ -1957,7 +1944,7 @@ export function serve(options: ServeOptions): Promise<void> {
   return serveRuntime({
     name: 't3',
     input: options.input,
-    write,
+    ledger,
     handlers: {
       init,
       open: (request) => track(handleFor(request), open(request)),

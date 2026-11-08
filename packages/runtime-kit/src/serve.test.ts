@@ -1,6 +1,7 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { RuntimeMessageSchema, type OpId, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { opLedger } from './ledger.js';
 import { serveRuntime, type RuntimeHandlers } from './serve.js';
 
 const OP = 'op-0123abcd' as OpId;
@@ -13,12 +14,13 @@ function served(make: (write: (message: RuntimeMessage) => void) => Partial<Runt
   const written: RuntimeMessage[] = [];
   const debugged: string[] = [];
   const nothing = async (): Promise<void> => {};
-  const write = (message: RuntimeMessage): void => { written.push(RuntimeMessageSchema.parse(message)); };
+  const ledger = opLedger((message) => { written.push(RuntimeMessageSchema.parse(message)); });
+  const { write } = ledger;
 
   const done = serveRuntime({
     name: 'fake',
     input,
-    write,
+    ledger,
     handlers: { init: nothing, open: nothing, exec: nothing, prompt: nothing, cancel: nothing, collect: nothing, reattach: nothing, close: nothing, ...make(write) },
     holds: (op) => op === HELD,
     stopped: 'its fake agent',
@@ -89,5 +91,24 @@ describe('serving runtime protocol 1', () => {
     await runtime.send(request);
 
     expect(runtime.written).toEqual([answer]);
+  });
+
+  it.each<[string, RuntimeRequest, RuntimeMessage]>([
+    ['a prompt it ended finished', { type: 'prompt', op: OP, handle: 'h-1', env: {}, unset: [], credentials: {}, cwd: '/w', lease: { step: 's', tool: 'claude', prompt: 'p', result: '/w/r.json', permissions: 'approval-required', interactive: false } }, { op: OP, event: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: {} } }],
+    ['an open it reported ready', { type: 'open', op: OP, run: 'r', attempt: 'a', credentials: {} }, { op: OP, event: 'ready' }],
+    ['a cancel whose op it ended cancelled', { type: 'cancel', op: OP }, { op: OP, event: 'cancelled' }],
+  ])('writes nothing more for %s when its handler throws after that end', async (_, request, end) => {
+    const runtime = served((write) => {
+      const endThenThrow = async (): Promise<void> => {
+        write(end);
+        throw new Error('boom after the end');
+      };
+
+      return { prompt: endThenThrow, open: endThenThrow, cancel: endThenThrow };
+    });
+
+    await runtime.send(request);
+
+    expect(runtime.written).toEqual([end]);
   });
 });
