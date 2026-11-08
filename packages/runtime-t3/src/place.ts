@@ -82,7 +82,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   const { options, journal, ledger, places, write, notice, fail } = serving;
   const { journalOp, stopRunning, resolveLaunch } = conversations;
 
-  /** The registration on a sandbox's attempt socket that each place through one holds in this process, by handle. */
+  /** The connection each place through a sandbox registered its tool on, in this process, by handle. */
   const registrations = new Map<string, { close(): void }>();
 
   /** Registers the step's tool of `handle` on the attempt socket `outer` names, once in this process; or says why not. */
@@ -558,7 +558,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   };
 
   return {
-    // An open that keeps no place, failed or released, ends the registration it took on the sandbox's attempt socket.
+    // An open that keeps no place, failed or released, ends the connection it registered on the sandbox's attempt socket.
     open: (request: Extract<RuntimeRequest, { type: 'open' }>) => places.track(handleFor(request), open(request).finally(() => {
       if (journal.read(handleFor(request)).kind !== 'found') unregister(handleFor(request));
     })),

@@ -6,8 +6,8 @@ import { z } from 'zod';
 //  An app's runtime (T3 Code, Paseo) whose entry runs through a sandbox (`use: t3, through: sandbox`) gets the outer's
 //  handle as `open.outer`: JSON with the attempt socket the sandbox serves its wrapper on. Before the app starts the
 //  step's tool, the runtime registers that tool there, on a connection it keeps open for the step: the sandbox grants
-//  the wrapper only the registered agent's tool. A runtime registers again after its own reattach, since a restarted
-//  sandbox runtime does not remember the registration.
+//  the wrapper only the registered agent's tool, and keeps that grant for the attempt once the connection closes. A
+//  runtime registers again after its own reattach, since a restarted sandbox runtime does not remember the registration.
 //
 
 /** An outer handle that names an attempt socket; the sandbox's carries its place too, which only the sandbox reads. */
@@ -25,8 +25,8 @@ function socketOf(outer: string): string | undefined {
 }
 
 /**
- * Registers `agent`'s tool, or with null an app's tool that has no agent id, on the attempt socket `outer` names: a
- * registration that holds until it is closed, or why there is none. It keeps no process alive on its own.
+ * Registers `agent`'s tool, or with null an app's tool that has no agent id, on the attempt socket `outer` names: the
+ * connection it was sent on, which `close` ends, or why there is none. It keeps no process alive on its own.
  */
 export function registerThrough({ outer, agent }: { outer: string; agent: string | null }): Promise<{ ok: true; close(): void } | { ok: false; why: string }> {
   const socket = socketOf(outer);
