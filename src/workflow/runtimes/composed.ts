@@ -262,7 +262,7 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
 
       if (!parsed) return { ok: true };
       // Only the inner knows a place it made before teamai recorded it, and no request of teamai names that place.
-      const unrecorded: RuntimeFailure = { code: 'runtime_lost', message: `${inner.name} may hold a place for this attempt that teamai never recorded, since teamai was stopped while ${inner.name} opened it, so teamai cannot ask ${inner.name} to close it. Close it in ${inner.name} yourself if it is there.` };
+      const unrecorded: RuntimeFailure = { code: 'runtime_lost', message: `${inner.name} may hold a place for this attempt that teamai never recorded, since teamai or ${inner.name} stopped while ${inner.name} opened it, so teamai cannot ask ${inner.name} to close it. Close it in ${inner.name} yourself if it is there.` };
       const innerHandle = innerOf(parsed);
       const innerClosed = 'innerOpening' in parsed ? { ok: false as const, failure: unrecorded } : innerHandle === undefined ? { ok: true as const } : await inner.close(innerHandle, how);
 
