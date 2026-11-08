@@ -12,8 +12,6 @@ import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './step-runtime.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
 import { stopRecordedGroup } from '../../tool-launch/process-stop.js';
-import { cancelFleetAttempt } from '../fleet/owner.js';
-import { offeredPool } from '../fleet/record.js';
 
 // ─── What cancelled attempts left on their step runtimes ─
 //
@@ -47,17 +45,9 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
     return attempt.success ? [attempt.data] : [];
   });
 
-  // What a killed driver of this install started for a cancelled attempt, which leads a process group of its own, and
-  // what a fleet member runs for one, which only the attempt's record reaches.
-  for (const attempt of cancelled) {
-    await stopRecordedGroup(attemptDir(config, run, attempt));
-
-    if (await offeredPool(config, run, attempt) === undefined) continue;
-    const asked = await cancelFleetAttempt(config, run, attempt);
-
-    if (asked.ok) log.info(asked.message);
-    else log.warn(asked.message);
-  }
+  // What a killed driver of this install started for a cancelled attempt, which its record reaches; what one runs on a
+  // step runtime, the fleet's member included, its runtime stops below.
+  for (const attempt of cancelled) await stopRecordedGroup(attemptDir(config, run, attempt));
 
   const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)]);
 

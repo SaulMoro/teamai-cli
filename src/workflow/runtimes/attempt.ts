@@ -260,8 +260,11 @@ export function toolHomeVariable(tool: string): string | undefined {
   return isExecRuntimeTool(tool) ? homeEnvOf(tool) : undefined;
 }
 
-/** What a restart found of an exec it had sent: the outcome, or that it was still running and is now stopped. */
-export type AttemptExecEnd = ExecEnd | { kind: 'interrupted' };
+/**
+ * What a restart found of an exec it had sent: the outcome, or that it was still running and is now stopped; or, on a
+ * runtime whose execs go on without teamai, that this teamai stopped and left the exec running there.
+ */
+export type AttemptExecEnd = ExecEnd | { kind: 'interrupted' } | { kind: 'left' };
 
 /**
  * One attempt on a step runtime: it opens the place, runs one exec, and finishes with collect and close, each under an
@@ -296,6 +299,11 @@ export interface AttemptRun {
   prompt(request: Omit<PromptRequest, 'op' | 'handle'>, events: { onAccepted?: (accepted: Accepted) => void }): Promise<PromptEnd>;
   /** Stops the exec or prompt running now, with every process it started. */
   cancel(): Promise<void>;
+  /**
+   * This teamai stops: an exec on a runtime whose execs go on without it (`StepRuntime.isExecReconnected`) is left
+   * running there and ends `left`, for a later teamai to reconnect to; any other is cancelled.
+   */
+  stop(): Promise<void>;
   /**
    * Brings the place's work back to the host, after success and after failure, before teamai reads the result or commits.
    * After an exec or prompt that ended `lost` it brings nothing back, since what ran there may still write the place.
@@ -345,6 +353,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   const file = attemptRuntimePath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   let running: { op: OpId } | undefined;
+  // Ends the exec running now as `left`, while one runs.
+  let leave: (() => void) | undefined;
   // Why an exec or prompt of this attempt may still run, once one ended `lost`: its place is not closed under it.
   let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
@@ -533,7 +543,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       if (!before || handle === undefined) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${attempt} has no open place to exec in.` } };
 
-      if (before.exec) {
+      // A runtime whose execs go on without teamai is sent the same id again, which reconnects to the exec.
+      if (before.exec && !runtime.isExecReconnected) {
         const sent = before.exec;
         const found = await runtime.reattach(handle);
 
@@ -568,11 +579,13 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       await save({ ...before, exec, phase: 'running' });
       running = exec;
       const acceptance = accepting(events);
-      const end = await runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
+      const leaving = new Promise<{ kind: 'left' }>((resolve) => { leave = () => resolve({ kind: 'left' }); });
+      const end = await Promise.race([runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }), leaving]);
+      leave = undefined;
       await acceptance.kept();
       running = undefined;
 
-      return ended(end);
+      return end.kind === 'left' ? end : ended(end);
     },
 
     async setup(request, events) {
@@ -659,6 +672,16 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       running = undefined;
 
       return ended(await keptIn(end));
+    },
+
+    async stop() {
+      if (leave && runtime.isExecReconnected) {
+        leave();
+
+        return;
+      }
+
+      if (running) await runtime.cancel(running.op);
     },
 
     async cancel() {

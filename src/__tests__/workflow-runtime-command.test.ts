@@ -17,6 +17,7 @@ function commandRun(): { run: AttemptRun; execs: () => number } {
     setup: async () => ({ kind: 'exited', code: 0, stdout: '' }),
     prompt: async () => ({ kind: 'failed', failure: { code: 'prompt_unsupported', message: 'exec only' } }),
     cancel: async () => {},
+    stop: async () => {},
     collect: async () => undefined,
     close: async () => {},
     stopLeftSetup: async () => undefined,

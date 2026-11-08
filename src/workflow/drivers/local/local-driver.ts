@@ -31,8 +31,6 @@ import {
   type LocalToolResult,
   type LocalToolRun,
 } from './local-tool-adapter.js';
-import { fleetCommand } from '../../fleet/owner.js';
-import { offeredPool } from '../../fleet/record.js';
 import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
 import { attemptHoldingSession, attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
@@ -237,12 +235,11 @@ export interface DriverRuntimes {
 }
 
 /**
- * One runtime the loop offers: `local`, which launches on this machine as the loop always did, an external one, whose
- * steps go through an `AttemptRun`, or `fleet`, whose command steps a member of `pool` runs (`fleetCommand`). Each is
- * reached through the `StepRuntime` interface for its offer and the lifecycle of its attempts' places; a fleet slot's
- * places are this host's, so it has the local one.
+ * One runtime the loop offers: `local`, which launches on this machine as the loop always did, or an external one, such
+ * as `fleet`, whose steps go through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer
+ * and the lifecycle of its attempts' places.
  */
-type RuntimeSlot = SlotBase & ({ kind: 'local' | 'external' } | { kind: 'fleet'; pool: string; staleAfterMs: number });
+type RuntimeSlot = SlotBase & { kind: 'local' | 'external' };
 
 interface SlotBase {
   use: string;
@@ -1187,13 +1184,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // A runtime that runs a tool without permission prompts outside a sandbox proves no isolation: its steps' is none.
   const unproven = (can: DriverCan): boolean => (can.fullAccess?.length ?? 0) > 0 && can.isolation !== 'sandbox';
 
-  // A fleet step's place is prepared here, so the fleet offers the workspaces this machine does.
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => {
     switch (entry.kind) {
       case 'local':
         return { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
-      case 'fleet':
-        return { kind: 'fleet', use: 'fleet', pool: entry.pool, staleAfterMs: entry.staleAfterMs, runtime: local, can: { ...entry.can, workspace: localReady.can.workspace }, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
@@ -1337,8 +1331,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     || [...slotOf.values()].filter((bound) => bound === slot).length < slot.engine.maxParallel;
 
   // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time: an external one by
-  // the runtime its record names, one it offered to a fleet pool to that pool, any other to local, or, without a local
-  // runtime, to the definition's first.
+  // the runtime its record names, any other to local, or, without a local runtime, to the definition's first.
   const reconnecting: Array<{ attempt: string; slot: RuntimeSlot }> = [];
 
   if (isStarted) {
@@ -1347,11 +1340,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const attempt = AttemptIdSchema.safeParse(step.lease.attempt);
       const record = attempt.success ? await readAttemptRuntime(config, runId, attempt.data) : undefined;
 
-      const pool = attempt.success && !record ? await offeredPool(config, runId, attempt.data) : undefined;
-
       const slot = (record && slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime))
         ?? (record ? slots.find((candidate) => candidate.kind === 'external') : undefined)
-        ?? (pool === undefined ? undefined : slots.find((candidate) => candidate.kind === 'fleet' && candidate.pool === pool))
         ?? slots.find((candidate) => candidate.kind === 'local') ?? slots[0];
 
       reconnecting.push({ attempt: step.lease.attempt, slot });
@@ -1709,11 +1699,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             if (forwarded) handle(forwarded);
 
             const stepRun = runOf(lease);
-            const bound = slotOf.get(lease.attempt);
-
-            if (bound?.kind === 'fleet') {
-              return fleetCommand({ config, run: runId, attempt: lease.attempt, pool: bound.pool, staleAfterMs: bound.staleAfterMs, lease: { step: lease.step, command, env: lease.env ?? {} }, root, dir: lease.cwd ?? root, secrets: turn.secrets });
-            }
 
             if (stepRun) {
               // An adopted place is checked again once setup ran there.

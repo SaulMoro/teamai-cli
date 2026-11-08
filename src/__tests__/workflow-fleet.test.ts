@@ -8,7 +8,6 @@ import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
-import { fleetCommand } from '../workflow/fleet/owner.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
@@ -378,27 +377,6 @@ describe('cancelling an attempt through its record', () => {
     expect(await cancelAttempt(alice.config, progressed.value)).toMatchObject({ ok: true, value: { state: 'cancelling' } });
     await readableReportsWorktree(alice.config);
     expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: ATTEMPT, pushed: 'e'.repeat(40) });
-  });
-});
-
-describe('the owner\'s driver', () => {
-  const waitOn = (alice: Member, run: ReturnType<typeof RunIdSchema.parse>) => fleetCommand({
-    config: alice.config, run, attempt: ATTEMPT, pool: 'default', staleAfterMs: 60_000, lease: { step: 'work', command: 'echo begun > begun.txt; sleep 60', env: {} },
-    root: alice.checkout, dir: alice.checkout, secrets: {},
-  });
-
-  it('leaves the attempt out for a later resume when it stops', async () => {
-    const { alice, run } = await offerSlow(60_000);
-
-    expect(await waitOn(alice, run).stop()).toMatchObject({ code: 'runtime_interrupted' });
-    expect(await recordOf(alice, run)).toMatchObject({ state: 'offered' });
-  });
-
-  it('withdraws the attempt when the run cancels the step', async () => {
-    const { alice, run } = await offerSlow(60_000);
-
-    expect(await waitOn(alice, run).cancel?.()).toMatchObject({ exitCode: 130 });
-    expect(await recordOf(alice, run)).toMatchObject({ state: 'withdrawn' });
   });
 });
 

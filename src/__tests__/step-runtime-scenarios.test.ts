@@ -10,7 +10,7 @@ import { log } from '../utils/logger.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { composedStepRuntime } from '../workflow/runtimes/composed.js';
-import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
+import type { OpId, OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
@@ -18,6 +18,15 @@ import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
+import { dirs, git, startIn, team, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
+import { leaseNext } from '../workflow/engine.js';
+import { fleetStepRuntime } from '../workflow/fleet/owner.js';
+import { takeFleetAttempt } from '../workflow/fleet/member.js';
+import { readAttemptRecord } from '../workflow/fleet/record.js';
+import { AttemptIdSchema, installOwner, RunIdSchema } from '../workflow/store.js';
+import { readableReportsWorktree } from '../utils/reports-branch.js';
+import { shellArgv } from '../workflow/shell-command.js';
+import { getRepoIdentity } from '../session-flow/sync.js';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -1645,3 +1654,140 @@ describe('the stdio step runtime client', () => {
     await runtime.dispose();
   });
 });
+
+/** A command step that runs until it is stopped. */
+const SLOW_COMMAND = 'echo begun > begun.txt; sleep 60';
+const SLOW = `schemaVersion: v1alpha1
+name: slow
+description: Works until stopped.
+steps:
+  - id: work
+    workspace: new
+    command: ${SLOW_COMMAND}
+`;
+
+/** The fleet runtimes a scenario opened, which teardown disposes. */
+const fleetRuntimes: StepRuntime[] = [];
+
+/** Polls `read` until it answers something. */
+async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): Promise<T> {
+  const deadline = Date.now() + ms;
+
+  for (;;) {
+    const value = await read();
+
+    if (value !== undefined) return value;
+
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+/** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND }: { workflow?: string; command?: string } = {}) {
+  const acme = team({ slow: workflow });
+  const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+  const run = RunIdSchema.parse(await startIn(alice, 'slow'));
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], exec: true } });
+  if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
+  const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
+  /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
+  const open = async (cwd = alice.checkout) => {
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
+    fleetRuntimes.push(runtime);
+    expect(await runtime.init({ options: { stale_after: '60s' }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { prompt: false, remote: true } });
+    const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
+    if (opened.kind !== 'ready') throw new Error(opened.failure.message);
+    const exec = (op: OpId) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {});
+
+    return { runtime, handle: opened.handle, exec };
+  };
+
+  const record = async () => eventually(async () => {
+    const read = await readAttemptRecord(alice.config, run, attempt);
+
+    return read.ok && read.value !== 'absent' ? read.value : undefined;
+  });
+
+  return { alice, bob, run, attempt, open, record };
+}
+
+describe('StepRuntime scenarios: fleet with two installs', () => {
+  // Every runtime a scenario opened ends before its installs go, so no wait reads a removed checkout.
+  afterEach(async () => {
+    await Promise.all(fleetRuntimes.splice(0).map(async (runtime) => runtime.dispose()));
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('accepts the step\'s command, which a member runs, then ends as the member\'s command did, with its work in the place', async () => {
+    const owner = await ownerOf({ workflow: SLOW.replace(SLOW_COMMAND, 'echo done > done.txt && echo \'{"made":1}\''), command: 'echo done > done.txt && echo \'{"made":1}\'' });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {} });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: '{"made":1}' });
+    expect(fs.readFileSync(path.join(place, 'done.txt'), 'utf8')).toBe('done\n');
+  }, 60_000);
+
+  it('offers the step\'s command, and leaves the attempt out for a later resume when its teamai stops', async () => {
+    const owner = await ownerOf();
+    const { runtime, exec } = await owner.open();
+    const op = newOpId();
+    const ended = exec(op);
+
+    expect(await owner.record()).toMatchObject({ state: 'offered', lease: { step: 'work', command: 'echo begun > begun.txt; sleep 60' } });
+    await runtime.dispose();
+    expect(await ended).toMatchObject({ kind: 'failed', failure: { code: 'runtime_interrupted' } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+  });
+
+  it('withdraws the attempt when the run cancels the step, and ends cancelled', async () => {
+    const owner = await ownerOf();
+    const { runtime, exec } = await owner.open();
+    const op = newOpId();
+    const ended = exec(op);
+    await owner.record();
+
+    await runtime.cancel(op);
+
+    expect(await ended).toEqual({ kind: 'cancelled' });
+    expect(await owner.record()).toMatchObject({ state: 'withdrawn' });
+  });
+
+  it('runs any other exec of the place, such as setup, on this host', async () => {
+    const owner = await ownerOf();
+    const { runtime, handle } = await owner.open();
+
+    expect(await runtime.exec({ op: newOpId(), handle, argv: shellArgv('echo set up'), env: {}, unset: [], credentials: {}, cwd: owner.alice.checkout }, {}))
+      .toEqual({ kind: 'exited', code: 0, stdout: 'set up\n' });
+    expect(await readAttemptRecord(owner.alice.config, owner.run, owner.attempt)).toEqual({ ok: true, value: 'absent' });
+  });
+
+  it('reconnects a restarted teamai to the exec it left by the same id, and a cancel with no wait reaches the record', async () => {
+    const owner = await ownerOf();
+    const first = await owner.open();
+    const op = newOpId();
+    const left = first.exec(op);
+    await owner.record();
+    await first.runtime.dispose();
+    await left;
+
+    const second = await owner.open();
+    expect(await second.runtime.reattach(second.handle)).toEqual({ kind: 'alive', ops: [{ op, state: 'running' }] });
+    const reconnected = second.exec(op);
+    await second.runtime.cancel(op);
+
+    expect(await reconnected).toEqual({ kind: 'cancelled' });
+
+    // A teamai with no wait of its own, as workflow cancel with no live driver, reads the record.
+    const third = await owner.open();
+    expect(await third.runtime.reattach(third.handle)).toEqual({ kind: 'alive', ops: [{ op, state: 'cancelled' }] });
+  });
+});
+

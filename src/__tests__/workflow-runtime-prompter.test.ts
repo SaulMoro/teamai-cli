@@ -38,6 +38,7 @@ function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true }
       cancels += 1;
       sent({ kind: 'cancelled' });
     },
+    stop: async () => run.cancel(),
     collect: async () => undefined,
     close: async () => {},
     stopLeftSetup: async () => undefined,

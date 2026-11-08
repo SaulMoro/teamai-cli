@@ -8,7 +8,7 @@ import type { AttemptRun } from '../../runtimes/attempt.js';
 import { withRetry } from '../../runtimes/step-runtime.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../../launch-context.js';
-import { MAX_TIMER_DELAY } from '../../shell-command.js';
+import { MAX_TIMER_DELAY, shellArgv } from '../../shell-command.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
@@ -45,11 +45,6 @@ export async function placeView(config: LocalConfig, run: RunId, attempt: Attemp
   if (toolHome) view.toolHome[toolHome.variable] = toolHome.dir;
 
   return view;
-}
-
-/** The argv a command step runs as: its command in the shell, as the local loop runs one. */
-export function shellArgv(command: string): string[] {
-  return process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', command] : ['/bin/sh', '-c', command];
 }
 
 /** The names a step's process gets over its runtime's environment, and those it goes without. */
@@ -141,7 +136,11 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
         return { exitCode: 130, stdout: '', stderr, output };
       case 'interrupted':
         return interrupted();
+      case 'left':
+        return left();
       case 'failed':
+        if (end.isStepOutcome) return { code: end.failure.code, message: end.failure.message };
+
         return { code: 'runtime_failed', message: `The step runtime could not run the command (${end.failure.code}): ${end.failure.message}` };
       case 'lost':
         return lost('the command', end.failure);
@@ -153,13 +152,15 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
     }
   })();
 
-  return { exit, stop: async () => {
+  const halt = (how: 'stop' | 'cancel') => async (): Promise<CommandExit | WorkflowFailure> => {
     isStopRequested = true;
     stopping.abort();
-    await run.cancel();
+    await (how === 'cancel' ? run.cancel() : run.stop());
 
     return exit;
-  } };
+  };
+
+  return { exit, stop: halt('stop'), cancel: halt('cancel') };
 }
 
 /**
@@ -190,6 +191,8 @@ export function runtimeSetup(run: AttemptRun) {
           return { code: 130, output };
         case 'interrupted':
           return { failure: interrupted() };
+        case 'left':
+          return { failure: left() };
         case 'failed':
           return { failure: { code: 'runtime_failed', message: `The step runtime could not run setup "${command}" (${end.failure.code}): ${end.failure.message}` } };
         case 'lost':
@@ -209,6 +212,14 @@ export function runtimeSetup(run: AttemptRun) {
 /** A step whose runtime stopped answering while it ran, or could not stop it: what it started may still run there. */
 function lost(what: string, failure: RuntimeFailure): WorkflowFailure {
   return { code: 'runtime_lost', message: `The step runtime did not confirm that ${what} stopped, so it may still run there (${failure.code}): ${failure.message}` };
+}
+
+/** A step this teamai stopped waiting on, which goes on where it runs, such as on a fleet member. */
+function left(): WorkflowFailure {
+  return {
+    code: 'runtime_interrupted',
+    message: 'teamai stopped while the step ran on its runtime, where it goes on: its work stays there, and teamai workflow resume takes it.',
+  };
 }
 
 function interrupted(): WorkflowFailure {
@@ -261,6 +272,8 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
           return { exitCode: 143, stdout };
         case 'interrupted':
           return { failure: interrupted() };
+        case 'left':
+          return { failure: left() };
         case 'failed':
           return { failure: { code: 'runtime_failed', message: `The step runtime could not run ${executable} (${end.failure.code}): ${end.failure.message}` } };
         case 'lost':

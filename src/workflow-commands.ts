@@ -16,6 +16,7 @@ import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { takeFleetAttempt } from './workflow/fleet/member.js';
+import { DEFAULT_FLEET_POOL } from './workflow/fleet/record.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
@@ -24,7 +25,7 @@ import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriver
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive, drivesHere } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
-import { checkDriver, DEFAULT_FLEET_POOL, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { checkDriver, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { sessionAppOf } from './workflow/session-apps.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
 import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';

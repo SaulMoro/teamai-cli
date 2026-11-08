@@ -152,6 +152,7 @@ describe('runConfinedStepOnRuntime', () => {
         return { kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { label: 'good' } }, confined: { level: 'best-effort', access: 'read' } };
       },
       cancel: async () => {},
+      stop: async () => {},
       collect: async () => undefined,
       close: async () => undefined,
       stopLeftSetup: async () => undefined,
