@@ -47,10 +47,11 @@ export type OpenRequest = Omit<z.infer<typeof OpenRequestSchema>, 'type'>;
 export type ExecRequest = Omit<z.infer<typeof ExecRequestSchema>, 'type'>;
 
 /**
- * What an exec runs, which teamai knows and the protocol does not carry: the workflow's `setup`, the step's `command`, or
- * a prompt step's `tool`. Only an in-process runtime reads it, such as the fleet, which offers the step's command alone.
+ * What an exec runs, which teamai knows and the protocol does not carry: the workflow's `setup`, the step's `command`, a
+ * prompt step's `tool`, or a `workflow:` step leased whole, which only a runtime with `can.workflow` is sent. Only an
+ * in-process runtime reads it, such as the fleet, which offers the step's command, or the whole workflow, alone.
  */
-export type ExecKind = 'setup' | 'command' | 'tool';
+export type ExecKind = 'setup' | 'command' | 'tool' | 'workflow';
 
 /** A prompt as the local loop sends it to a runtime that launches agents its own way. */
 export type PromptRequest = Omit<z.infer<typeof PromptRequestSchema>, 'type'>;

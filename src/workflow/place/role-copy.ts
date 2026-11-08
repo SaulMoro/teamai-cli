@@ -366,6 +366,8 @@ export async function setUpWorktreeRole(input: { dir: string; step: string; exec
 export function launchedTools(input: { executor: Executor; tool: string | undefined; enabled: readonly string[] }): string[] {
   switch (input.executor) {
     case 'command':
+    // A whole workflow runs no step with a role (`notWhole`), so its copy gets no role's tools.
+    case 'workflow':
       return [];
     case 'prompt':
       return input.tool !== undefined ? [input.tool] : [...input.enabled];

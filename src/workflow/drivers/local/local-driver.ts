@@ -19,7 +19,7 @@ import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput 
 import { isRecord } from '../../expression.js';
 import { createLocalToolAdapter, type LocalToolAdapter } from '../../steps/local-tool-adapter.js';
 import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
-import { placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
+import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
 import { attemptRun, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
@@ -30,7 +30,8 @@ import { credentialSecrets, newOpId, type StepRuntime } from '../../runtimes/ste
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, runPlaceSetup, sweepClones } from '../../place/place.js';
-import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
+import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
+import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../../tool-launch/member-tools.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
 import { baseToolOf, instanceNames, isToolId } from '../../../tool-registry.js';
@@ -324,7 +325,7 @@ async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { c
 
 async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: CommandExit, secrets: Record<string, string>): Promise<ReportBody> {
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
-  const end = commandEnd(result);
+  const end = lease.workflow ? wholeReport(result) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
   // What a command says as it runs goes to its stderr, so its stdout stays the step's outputs.
   const progress = result.stderr.split(/\r?\n/).filter((line) => line.trim() !== '').map((line) => masked(line, secrets));
@@ -333,6 +334,23 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
   if (progress.length > 0) body.progress = progress;
 
   return body;
+}
+
+/**
+ * How a workflow step leased whole ended, from what its runtime's exec answered on stdout (`WholeEndSchema`): the
+ * outcome, end, outputs and failure of the workflow it ran. An exec that answered none, as one stopped early, ends as
+ * the command it then was.
+ */
+function wholeReport(result: CommandExit): Omit<ReportBody, 'attempt' | 'revision' | 'driver'> {
+  const parsed = WholeEndSchema.safeParse(commandOutputs(result.stdout));
+
+  if (!parsed.success) return commandEnd(result);
+  const { outcome, end, outputs, failure } = parsed.data;
+
+  return {
+    outcome: outcome === 'succeeded' ? 'success' : 'failed', exitCode: result.exitCode,
+    ...(end !== undefined && { end }), ...(outputs !== undefined && { outputs }), ...(failure && { failure, message: failure.message }),
+  };
 }
 
 function masked(line: string, secrets: Record<string, string>): string {
@@ -1091,7 +1109,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       for (let index = 0; !interactiveRuns() && busy() < maxParallel;) {
         const lease = held[index];
-        const command = lease?.command;
+        // A workflow leased whole runs as one exec of the runtime it was leased on, which reads it from the run.
+        const command = lease?.command ?? (lease?.workflow ? '' : undefined);
 
         if (lease === undefined || command === undefined) break;
 
@@ -1127,10 +1146,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
                 ?? refuseDirtyAdoptedCommand({ config, run: runId, attempt: lease.attempt });
 
               return runtimeCommand({
-                run: stepRun, command, view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root), setUp,
+                run: stepRun, command, kind: lease.workflow ? 'workflow' : 'command', view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root), setUp,
                 ...runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: runId, mode }),
               });
             }
+
+            if (lease.workflow) return failedCommand({ code: 'runtime_protocol', message: `Step "${lease.step}" was leased whole on a runtime that runs no whole workflow.` });
 
             // The lease `env` is set over the step's environment, so its values reach the shell only as variables.
             const input: Parameters<typeof startGroupedCommand>[0] = {

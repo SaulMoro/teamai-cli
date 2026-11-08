@@ -25,7 +25,7 @@ import { leaseNext } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
 import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
-import { AttemptIdSchema, installOwner, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { shellArgv } from '../workflow/shell-command.js';
 import { getRepoIdentity } from '../session-flow/sync.js';
@@ -1684,6 +1684,39 @@ steps:
       ok: boolean
 `;
 
+/** A workflow step whose sub-graph, two commands in the step's own copy, a member can run whole. */
+const WHOLE = `schemaVersion: v1alpha1
+name: slow
+description: Runs a pair of steps.
+inputs: { mark: string }
+steps:
+  - id: work
+    workspace: new
+    workflow: pair
+    with:
+      mark: "{{ inputs.mark }}"
+`;
+
+const PAIR = `schemaVersion: v1alpha1
+name: pair
+description: Writes a mark, then counts it.
+inputs: { mark: string }
+outputs:
+  counted: steps.count.outputs.counted
+steps:
+  - id: write
+    workspace: continue
+    env:
+      MARK: "{{ inputs.mark }}"
+    command: echo written > "$MARK"
+  - id: count
+    needs: [write]
+    workspace: continue
+    command: echo '{"counted":1}'
+    output:
+      counted: number
+`;
+
 /** The fleet runtimes a scenario opened, which teardown disposes. */
 const fleetRuntimes: StepRuntime[] = [];
 
@@ -1702,11 +1735,11 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools }: { workflow?: string; command?: string; tools?: string[] } = {}) {
-  const acme = team({ slow: workflow });
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, workflows = {}, inputs, isWhole = false }: { workflow?: string; command?: string; tools?: string[]; workflows?: Record<string, string>; inputs?: Record<string, string>; isWhole?: boolean } = {}) {
+  const acme = team({ slow: workflow, ...workflows });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
-  const run = RunIdSchema.parse(await startIn(alice, 'slow'));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }) } });
+  const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(isWhole && { workflow: true }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
@@ -1718,7 +1751,7 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools }: { wor
     expect(initialized.ok && initialized.can).not.toHaveProperty('prompt');
     const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
     if (opened.kind !== 'ready') throw new Error(opened.failure.message);
-    const exec = (op: OpId) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {}, 'command');
+    const exec = (op: OpId, kind: 'command' | 'workflow' = 'command') => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {}, kind);
     // What this host would send of the prompt: the member renders its own, so none of it reaches the record.
     const prompt = (op: OpId) => runtime.prompt({
       op, handle: opened.handle, env: {}, unset: [], credentials: {}, cwd,
@@ -1759,6 +1792,30 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: '{"made":1}' });
     expect(fs.readFileSync(path.join(place, 'done.txt'), 'utf8')).toBe('done\n');
   }, 60_000);
+
+  it('leases a whole workflow step to a runtime that runs whole workflows, and starts it for any other, leasing its first step', async () => {
+    const whole = await ownerOf({ workflow: WHOLE, workflows: { pair: PAIR }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const expanded = await ownerOf({ workflow: WHOLE, workflows: { pair: PAIR }, inputs: { mark: 'made.txt' } });
+
+    expect(await readRun(whole.alice.config, whole.run)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
+    expect(await readRun(expanded.alice.config, expanded.run)).toMatchObject({ steps: [{ id: 'work', status: 'running' }, { id: 'work.write', status: 'leased' }, { id: 'work.count', status: 'pending' }] });
+  }, 60_000);
+
+  it('offers a whole workflow step as one attempt, which a member runs as a nested run from its own copy of the workflow, then ends with the workflow\'s outputs and its work in the place', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: PAIR }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId(), 'workflow');
+    expect(await owner.record()).toMatchObject({ state: 'offered', lease: { step: 'work', workflow: true, inputs: { mark: 'made.txt' } } });
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
+    expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
+  }, 90_000);
 
   it('offers a prompt step, which a member runs on its own tool from its own copy of the step, then ends with the result its agent wrote', async () => {
     const owner = await ownerOf({ workflow: PROMPTED, tools: ['claude'] });

@@ -18,22 +18,30 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
+import { createRun } from '../engine.js';
+import { runLocalDriver, type DriverRuntimes } from '../drivers/local/local-driver.js';
+import { cancelRun } from '../run-controls.js';
+import { knownSecrets, resolveWorkflowEnv } from '../../env-resolution.js';
+import { runCopyBranch } from '../workspace.js';
+import { notWhole } from '../whole-workflow.js';
+import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
-import { attemptDir, attemptResultPath, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { stepWorkflow, workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
+import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
 import type { TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { runPromptStep, type StagedLease } from '../steps/prompt.js';
 import { driverIdentity } from '../../driver-identity.js';
 import { withRunningCli } from '../../env-exec.js';
-import { resolveWorkflowEnv } from '../../env-resolution.js';
 import { resolveRunMode } from '../../launch-context.js';
 import { archiveSessions, openSessionArchive } from '../../session-flow/archive.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
-import { JsonValueSchema } from '../../utils/json.js';
+import { JsonValueSchema, type JsonValue } from '../../utils/json.js';
+import { isJsonObject } from '../../types.js';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
@@ -49,14 +57,21 @@ type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: Ste
 type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true };
 
 /**
- * Where the member's driver runs each kind of step: a command step's command, and a prompt step's tool. A kind with no
+ * Where the member's driver runs each kind of step: a command step's command, a prompt step's tool, and a whole
+ * workflow's steps, which its local loop drives as a nested run, here or on the runtimes of its driver. A kind with no
  * place is one the member takes no attempt of.
  */
-export type MemberPlace = { command?: { kind: 'here' } | RuntimePlace; prompt?: { kind: 'here' } | PromptRuntimePlace };
+export type MemberPlace = {
+  command?: { kind: 'here' } | RuntimePlace;
+  prompt?: { kind: 'here' } | PromptRuntimePlace;
+  workflow?: { kind: 'here' } | { kind: 'driver'; runtimes: DriverRuntimes };
+};
 
 /** The kind of step a record's lease runs. */
 function leaseKind(lease: FleetLease): keyof MemberPlace {
-  return 'command' in lease ? 'command' : 'prompt';
+  if ('command' in lease) return 'command';
+
+  return 'prompt' in lease ? 'prompt' : 'workflow';
 }
 
 /**
@@ -65,8 +80,12 @@ function leaseKind(lease: FleetLease): keyof MemberPlace {
  * entry of its own is passed over: the member would offer the attempt again instead of running it.
  */
 export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { refused: string } {
-  if (opened === undefined) return { command: { kind: 'here' }, prompt: { kind: 'here' } };
+  if (opened === undefined) return { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } };
   const place: MemberPlace = {};
+  // A whole workflow's steps go to the runtimes of the member's own driver, but for a fleet entry of its own.
+  const [first, ...rest] = opened.runtimes.filter((entry) => entry.kind === 'local' || entry.use !== 'fleet');
+
+  if (first !== undefined) place.workflow = { kind: 'driver', runtimes: { driver: opened.driver.name, asked: opened.asked, runtimes: [first, ...rest] } };
 
   for (const entry of opened.runtimes) {
     if (entry.kind === 'local') {
@@ -242,7 +261,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": ${trusted.refused} ${next}` });
   }
 
-  const runsHere = trusted.kind === 'command' ? place.command : place.prompt;
+  const runsHere = place[trusted.kind];
 
   if (runsHere === undefined) return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": its driver runs no ${trusted.kind} step. ${retryCommand(run, lease.step)} offers it again.` });
 
@@ -258,9 +277,16 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   // the step started.
   await fs.rm(work, { recursive: true, force: true });
   const cloned = await git(root, ['clone', '--quiet', '--shared', '--no-checkout', root, work]);
+
   // The clone's origin is the checkout; the step sees the origin the checkout names, as it would there.
   const originUrl = keptOriginUrl(memberConfig);
-  const named = cloned.code === 0 && originUrl !== undefined ? await git(work, ['remote', 'set-url', 'origin', originUrl]) : cloned;
+
+  // A whole workflow's nested run would push the branches of its copies to the origin it sees: it sees none, and only
+  // the attempt's ref leaves this machine.
+  const named = cloned.code !== 0 ? cloned
+    : trusted.kind === 'workflow' ? await git(work, ['remote', 'remove', 'origin'])
+      : originUrl !== undefined ? await git(work, ['remote', 'set-url', 'origin', originUrl]) : cloned;
+
   const added = named.code === 0 ? await git(work, ['checkout', '--quiet', '--detach', from]) : named;
 
   if (added.code !== 0) return finish({ exitCode: 1, stderr: `The member could not check out ${from}: ${added.stderr.trim()}` });
@@ -278,7 +304,9 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   };
 
   try {
-    const command = trusted.kind === 'prompt'
+    const command = trusted.kind === 'workflow'
+      ? workflowRun(config, { claim, trusted, place: place.workflow ?? { kind: 'here' }, work, from, secrets })
+      : trusted.kind === 'prompt'
       ? promptRun(config, { lock, claim, trusted, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(place.command?.kind === 'runtime'
         ? runtimeCommand(config, { run, attempt, place: place.command, work, command: trusted.command, env: trusted.env })
@@ -448,6 +476,67 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
   };
 }
 
+/** What a nested run's local loop answers once the run ended. */
+const NestedDoneSchema = z.object({
+  done: z.object({ outcome: z.string(), end: z.string().min(1).optional(), failure: z.object({ code: z.string(), message: z.string() }).optional(), outputs: z.record(z.string(), JsonValueSchema).optional() }),
+});
+
+/**
+ * Whole workflow `trusted` of claim `claim`, run in clone `work` as a nested run of its own: the sub-graph from this
+ * member's own copy of the team's workflows, started with the inputs the offer's values render, and driven by its local
+ * loop on the runtimes of its driver (`place`). Its steps work in one copy of the run, as they would in the copy of the
+ * workflow step on the owner; once it ends, the clone takes that copy's last commit, which the member pushes to the
+ * attempt's ref. It ends as the run did: its outcome, end and outputs.
+ */
+function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, secrets }: {
+  claim: Claimed; trusted: Extract<Trusted, { kind: 'workflow' }>; place: NonNullable<MemberPlace['workflow']>; work: string; from: string; secrets: Record<string, string>;
+}): StepRun {
+  const { definition: offered } = claim;
+  let nested: string | undefined;
+  const failed = (failure: { code: string; message: string }): FleetResult => ({ exitCode: 1, stderr: failure.message.slice(0, 400), failure });
+
+  const exit = (async (): Promise<FleetResult> => {
+    const teamEnv = await resolveWorkflowEnv(config);
+    const known = { ...teamEnv.secrets, ...secrets };
+    // A private run publishes no record of its own: it is the owner's step.
+    const definition: WorkflowDefinition = { ...trusted.child, private: true, ...(!trusted.isReadOnly && { workspace: 'new' as const }) };
+
+    const created = await createRun(config, {
+      name: definition.name, inputs: isJsonObject(trusted.inputs) ? trusted.inputs : undefined, sourceHash: offered.sourceHash, teamRevision: offered.teamRevision,
+      runMode: resolveRunMode(process.env), definition, workflows: {}, base: { commit: from }, checkout: work, origin: offered.origin ?? { source: 'team' }, secrets: known,
+    });
+
+    if (!('data' in created)) return failed(created.error);
+    nested = String(created.data.run);
+    const driven = await runLocalDriver(config, nested, work, { hitl: false, autoApprove: false, ...(place.kind === 'driver' && { runtimes: place.runtimes }) });
+    const ended = 'data' in driven ? NestedDoneSchema.safeParse(driven.data) : undefined;
+
+    if (!ended?.success) return failed('error' in driven ? driven.error : { code: 'run_unreadable', message: `The nested run ${nested} of step "${claim.lease.step}" did not say how it ended.` });
+    const { outcome, end, failure, outputs } = ended.data.done;
+    const state = await readRun(config, RunIdSchema.parse(nested));
+    const copied = state === 'missing' || state === 'corrupt' ? undefined : state.copies?.[runCopyBranch(state.id)]?.commit;
+    // The clone takes the copy's work, which the member then pushes as the attempt's.
+    const taken = copied === undefined || copied === from ? undefined : await git(work, ['checkout', '--quiet', '--detach', copied]);
+
+    if (taken && taken.code !== 0) return failed({ code: 'workspace_base', message: `The member could not take the work of its nested run ${nested}: ${taken.stderr.trim()}` });
+    const isSucceeded = outcome === 'succeeded';
+
+    return {
+      exitCode: isSucceeded ? 0 : 1, stderr: (failure?.message ?? '').slice(0, 400),
+      ...(outputs !== undefined && { outputs }), ...(end !== undefined && { end }),
+      ...(!isSucceeded && { failure: failure ?? { code: 'runtime_failed', message: `The nested run ${nested} of step "${claim.lease.step}" ended ${outcome}.` } }),
+    };
+  })();
+
+  return {
+    exit,
+    stop: async () => {
+      if (nested !== undefined) await cancelRun(config, nested, await knownSecrets(config), undefined, 'Cancelled: the owner cancelled the fleet attempt that runs it');
+      await exit;
+    },
+  };
+}
+
 /**
  * Pushes the session a prompt step ran on this member to the team session archive, filed under the business repository
  * of checkout `root`, so the owner's later step continues it, as `publish --sessions` does. The tool's store is the one
@@ -540,7 +629,8 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
 /** What a member runs for a claim, as its own copy of the team's workflow defines it: a command, or a prompt step. */
 type Trusted =
   | { kind: 'command'; command: string; env: Record<string, string> }
-  | { kind: 'prompt'; step: WorkflowStep; prompt: string; model?: string; defaultModel?: string; env: Record<string, string>; limits?: TurnLimits };
+  | { kind: 'prompt'; step: WorkflowStep; prompt: string; model?: string; defaultModel?: string; env: Record<string, string>; limits?: TurnLimits }
+  | { kind: 'workflow'; child: WorkflowDefinition; inputs: JsonValue; isReadOnly: boolean };
 
 /**
  * What the team's workflow defines for the step `claim` offers, its texts rendered from the offer's values, or why this
@@ -561,7 +651,7 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<Truste
   }
 
   if (!found.ok) return { refused: found.error.message };
-  const kind = 'command' in lease ? 'command' : 'prompt';
+  const kind = leaseKind(lease);
   const defined = definedStep(found.value, lease.step);
 
   switch (defined.kind) {
@@ -587,6 +677,23 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<Truste
   const differs = names.filter((name) => rendered.env[name] !== lease.env[name]).sort();
 
   if (differs.length > 0) return { refused: `the offer's env ${differs.join(', ')} differs from what workflow "${definition.name}" renders from the offer's values.` };
+
+  if ('workflow' in lease) {
+    const child = step.workflow === undefined ? undefined : workflowRunBy(found.value, step, '');
+
+    if (step.workflow === undefined || child === undefined || !isWorkflowFile(child)) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
+    // A member runs only the sub-graph it was offered whole, as its own copy of the team's workflows defines it.
+    const unfit = notWhole(step, child);
+
+    if (unfit !== undefined) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${unfit}.` };
+    const inputs = leaseInputs(step, child, values, run);
+
+    if ('error' in inputs) return { refused: `workflow "${definition.name}" step "${lease.step}" ${inputs.error}.` };
+
+    if (!isDeepStrictEqual(inputs.inputs, lease.inputs)) return { refused: `the offer's inputs differ from what workflow "${definition.name}" renders from the offer's values for step "${lease.step}".` };
+
+    return { kind: 'workflow', child, inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
+  }
 
   if ('command' in lease) {
     if (step.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };

@@ -86,7 +86,8 @@ const ENTRIES = [
   },
   {
     folder: LOCAL,
-    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-drive.ts'] },
+    // A fleet member drives a whole workflow step it took as a nested run on its own local driver.
+    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-drive.ts', 'src/workflow/fleet/member.ts'] },
     testEntries: ['local-driver.ts'],
   },
   // A step as a driver runs it: the local driver runs every prompt step through prompt.ts, and a fleet member the prompt

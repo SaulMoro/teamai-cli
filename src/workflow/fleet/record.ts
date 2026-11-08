@@ -24,7 +24,8 @@ import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTexts, templateExpressions, type TemplateContext } from '../template.js';
-import type { WorkflowFailure, WorkflowStep } from '../types.js';
+import type { WorkflowDefinition, WorkflowFailure, WorkflowStep } from '../types.js';
+import { wholeInputs } from '../whole-workflow.js';
 
 /** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
 export const DEFAULT_FLEET_POOL = 'default';
@@ -55,13 +56,27 @@ const PromptLeaseSchema = z.object({
   limits: TurnLimitsSchema.optional(),
 });
 
-const FleetLeaseSchema = z.union([CommandLeaseSchema, PromptLeaseSchema]);
+/**
+ * A `workflow:` step leased whole: the inputs its workflow starts with, as the owner rendered them from the step's `with`,
+ * which the member renders again from its own copy of the step and the offer's values. The sub-graph is the member's
+ * own: the record names none of its steps.
+ */
+const WorkflowLeaseSchema = z.object({
+  step: z.string().min(1),
+  workflow: z.literal(true),
+  inputs: JsonValueSchema,
+  env: z.record(z.string(), z.string()),
+});
+
+const FleetLeaseSchema = z.union([CommandLeaseSchema, PromptLeaseSchema, WorkflowLeaseSchema]);
 
 export type FleetLease = z.infer<typeof FleetLeaseSchema>;
 
-/** The text of `lease` a member runs: its command, or its prompt. */
-function leaseText(lease: FleetLease): string {
-  return 'command' in lease ? lease.command : lease.prompt;
+/** The text of `lease` a member runs, with the field that holds it: its command, or its prompt; none for a whole workflow. */
+function leaseText(lease: FleetLease): { field: 'command' | 'prompt'; text: string } | undefined {
+  if ('command' in lease) return { field: 'command', text: lease.command };
+
+  return 'prompt' in lease ? { field: 'prompt', text: lease.prompt } : undefined;
 }
 
 /**
@@ -96,6 +111,8 @@ const FleetResultSchema = z.object({
   model: z.string().min(1).optional(),
   tokens: TokenUsageSchema.optional(),
   failure: z.object({ code: z.string().min(1), message: z.string() }).optional(),
+  /** A whole workflow's: the end its nested run reached. */
+  end: z.string().min(1).optional(),
 });
 
 export type FleetResult = z.infer<typeof FleetResultSchema>;
@@ -191,10 +208,10 @@ function recordText(record: FleetRecord): string {
  */
 function unpublishable(record: FleetRecord, secrets: Record<string, string>): FleetError | undefined {
   // A command or a prompt names the paths it reads and writes, such as /dev/null, wherever it runs: only a secret keeps it here.
-  const field = 'command' in record.lease ? 'command' : 'prompt';
-  const inText = firstUnfit(leaseText(record.lease), secrets);
-  const textHit = inText?.unfit.kind === 'secret' ? { at: ['lease', field], unfit: inText.unfit } : undefined;
-  const hit = textHit ?? firstUnfit(JsonValueSchema.parse({ ...record, lease: { ...record.lease, [field]: '' } }), secrets);
+  const leased = leaseText(record.lease);
+  const inText = leased && firstUnfit(leased.text, secrets);
+  const textHit = leased && inText?.unfit.kind === 'secret' ? { at: ['lease', leased.field], unfit: inText.unfit } : undefined;
+  const hit = textHit ?? firstUnfit(JsonValueSchema.parse(leased ? { ...record, lease: { ...record.lease, [leased.field]: '' } } : record), secrets);
 
   if (hit === undefined) return undefined;
   const at = hit.at.join('.');
@@ -333,6 +350,14 @@ export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 
   if (model instanceof Object) return { error: model.message };
 
   return { prompt, model };
+}
+
+/**
+ * The inputs workflow `child` starts with when step `step` of run `run` runs it whole, rendered from `values` as its
+ * owner's lease rendered them from the run.
+ */
+export function leaseInputs(step: Pick<WorkflowStep, 'with'>, child: Pick<WorkflowDefinition, 'defaults'>, values: LeaseValues, run: RunId): { inputs: JsonValue } | { error: string } {
+  return wholeInputs(step, child, valuesContext(values, run));
 }
 
 /** Offers `lease` of attempt `attempt` to pool `pool`, once its start commit is on the attempt's ref. */

@@ -146,6 +146,8 @@ const ENFORCEMENT = {
   commands: 'strict',
   /** `requires.labels`: the driver declares every label (`can.labels`), a promise teamai does not check. */
   labels: 'strict',
+  /** A `workflow:` step leased whole: the driver runs its sub-graph as one attempt (`can.workflow`). Process-only. */
+  workflow: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 
 type Enforcement = typeof ENFORCEMENT;
@@ -166,8 +168,10 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * - `fullAccess`: the tools its init reports in `permissions` as running without permission prompts. Of a runtime
  *   that reports it, `unattended` holds only for those tools.
  * - `labels`: what the machine that runs its steps declares: `workflows.labels` for this host, a fleet entry's `labels`.
+ * - `workflow`: it runs a whole `workflow:` step as one attempt, as the fleet runtime does, so `next` leases such a step
+ *   to it whole instead of starting its workflow (`whole-workflow.ts`).
  */
-export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[] };
+export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true };
 
 /**
  * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
@@ -328,8 +332,8 @@ export interface EnvFacts {
   unreadable?: string;
 }
 
-/** What runs a step: a process of the driver's own, or an agent. */
-export type Executor = 'command' | 'prompt';
+/** What runs a step: a process of the driver's own, an agent, or a whole workflow's steps, as one attempt. */
+export type Executor = 'command' | 'prompt' | 'workflow';
 
 /** Whether `can.env` covers a step run by `executor`, and the setup before it. */
 interface EnvCover {
@@ -470,6 +474,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
     ...personGap(offer.interactive, can),
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
+    ...(offer.executor === 'workflow' && can.workflow !== true ? ['workflow' as const] : []),
     ...(offer.pinned && can.remote ? ['host' as const] : []),
     ...(offer.executor === 'prompt' && !offer.answer && can.prompt === false ? ['prompt' as const] : []),
     ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),

@@ -71,6 +71,40 @@ steps:
     command: node -e "require('fs').writeFileSync('part-' + process.env.PART + '.txt', process.env.PART)"
 `;
 
+/** A workflow step whose two commands work in its copy, so the fleet takes it whole. */
+const WHOLE = `schemaVersion: v1alpha1
+name: whole
+description: whole
+outputs:
+  counted: steps.pair.outputs.counted
+steps:
+  - id: pair
+    workspace: new
+    workflow: pair
+    with:
+      mark: made.txt
+`;
+
+const PAIR = `schemaVersion: v1alpha1
+name: pair
+description: pair
+inputs: { mark: string }
+outputs:
+  counted: steps.count.outputs.counted
+steps:
+  - id: write
+    workspace: continue
+    env:
+      MARK: "{{ inputs.mark }}"
+    command: node -e "require('fs').writeFileSync(process.env.MARK, 'W')"
+  - id: count
+    needs: [write]
+    workspace: continue
+    command: node -e "console.log(JSON.stringify({counted:Number(require('fs').existsSync('made.txt'))}))"
+    output:
+      counted: number
+`;
+
 const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1, can: { tools: [] } } }, { use: 'local' }] };
 
 /** The default pool, two attempts out at once. */
@@ -320,6 +354,8 @@ describe('the fleet', () => {
       'workflows/hold.yaml': HOLD,
       'workflows/look.yaml': LOOK,
       'workflows/fan.yaml': FAN,
+      'workflows/whole.yaml': WHOLE,
+      'workflows/pair.yaml': PAIR,
       'drivers/build-fleet.yaml': stringify(FLEET),
       'drivers/fan-fleet.yaml': stringify(FAN_FLEET),
     };
@@ -508,6 +544,28 @@ describe('the fleet', () => {
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(records(run).map((record) => [record.state, record.lease.step]).sort()).toEqual([['finished', 'part[0]'], ['finished', 'part[1]'], ['finished', 'part[2]']]);
   }, 240_000);
+
+  it('runs a whole workflow step on a member as one attempt, its steps driven there, and settles it from what that run returned', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const started = teamai('alice', ['workflow', 'start', 'whole', '--driver', 'fan-fleet'], (pid) => { alicePid = pid; });
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'offered', lease: { step: 'pair', workflow: true, inputs: { mark: 'made.txt' }, env: {} } })]);
+
+    const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 0 } } });
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { counted: 1 } } } });
+    // The owner's run holds the workflow step alone: its steps ran on the member, as one attempt.
+    expect(runStateOf('alice', run).steps.map((step) => [step.id, step.status, step.runtime])).toEqual([['pair', 'succeeded', 'fleet']]);
+    const [finished] = records(run);
+    expect(originGit('show', `${finished?.result?.to ?? ''}:made.txt`)).toBe('W');
+    // The member's nested run pushed nothing of its own to origin.
+    expect(originGit('for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/').split('\n').filter((branch) => branch.endsWith('/_run'))).toEqual([]);
+  }, 240_000);
+
   it('stops a member\'s step when the owner cancels the run, and the member pushes its work and answers the cancel', async () => {
     let alicePid = 0;
     const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
