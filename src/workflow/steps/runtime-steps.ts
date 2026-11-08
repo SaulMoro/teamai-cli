@@ -5,7 +5,7 @@ import type { CommandExit } from '../../tool-launch/process-stop.js';
 import { attemptEnv } from '../attempt-marker.js';
 import type { LeaseWire } from '../lease-wire.js';
 import type { AttemptRun } from '../runtimes/attempt.js';
-import { withRetry } from '../runtimes/step-runtime.js';
+import { withRetry, type ExecEvents } from '../runtimes/step-runtime.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../launch-context.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
@@ -99,8 +99,10 @@ export interface StartedCommand {
  * A command step on the attempt's runtime, as the loop stages and stops one: open, one exec of the shell, collect.
  * A runtime failure, or an exec a restart found running and stopped, ends it with a failure instead of an exit.
  */
-export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; kind?: 'command' | 'workflow'; env: Record<string, string>; unset: string[]; setUp: SetUp }): StartedCommand {
-  const { run, command, kind = 'command', env, unset, setUp } = input;
+export function runtimeCommand(input: {
+  run: AttemptRun; view: () => Promise<PlaceView>; command: string; kind?: 'command' | 'workflow'; env: Record<string, string>; unset: string[]; setUp: SetUp; ask?: ExecEvents['ask'];
+}): StartedCommand {
+  const { run, command, kind = 'command', env, unset, setUp, ask } = input;
   // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent. Setup gets
   // the stop as its signal, so a stop before it runs sends nothing and one while it runs ends it stopped.
   let isStopRequested = false;
@@ -121,6 +123,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
     // A command runs no tool, so it gets none of the runtime's credentials.
     const end = await run.exec({ argv: shellArgv(command), env, unset, credentials: {}, cwd: view.worktree }, {
+      ...(ask && { ask }),
       onOutput: (stream, data) => {
         output += data;
 

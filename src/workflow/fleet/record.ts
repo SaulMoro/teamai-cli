@@ -25,6 +25,7 @@ import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTexts, templateExpressions, type TemplateContext } from '../template.js';
 import type { WorkflowDefinition, WorkflowFailure, WorkflowStep } from '../types.js';
+import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { wholeInputs } from '../whole-workflow.js';
 
 /** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
@@ -167,13 +168,30 @@ const ExpiredSchema = ClaimedSchema.extend({ state: z.literal('expired'), expire
 /** An offer the owner took back, before any member claimed it: the step was cancelled. */
 const WithdrawnSchema = OfferedSchema.extend({ state: z.literal('withdrawn'), withdrawnAt: z.string() });
 
+/** A gate a whole workflow reached on the member, as the owner's person sees it. */
+const QuestionSchema = z.object({
+  step: z.string().min(1), kind: z.enum(['approve', 'choose']), message: z.string(), options: z.array(z.string()), required: z.boolean(), default: z.string().optional(),
+}) satisfies z.ZodType<ExecQuestion>;
+
+/** The owner's answer: the choice and note its person gave, or why none comes. */
+const AnswerSchema = z.union([z.object({ choice: z.string().min(1), note: z.string().optional() }), z.object({ refused: z.string().min(1) })]) satisfies z.ZodType<ExecAnswer>;
+
+/**
+ * A claim whose whole workflow waits at a gate: the member asks the owner `question`, and keeps asking in its progress
+ * until it reads the answer.
+ */
+const AskingSchema = ClaimedSchema.extend({ state: z.literal('asking'), question: QuestionSchema });
+
+/** The owner's answer to the question of a claim, which the member takes at its next read; its next progress is a claim again. */
+const AnsweredSchema = AskingSchema.extend({ state: z.literal('answered'), answer: AnswerSchema });
+
 /** A claim the owner asked its member to stop, which the member answers with `cancelled` once its step stopped. */
 const CancellingSchema = ClaimedSchema.extend({ state: z.literal('cancelling'), cancelAt: z.string() });
 
 /** A cancelled claim: the member stopped its step and pushed its work up to `pushed`, which a retry goes on from. */
 const CancelledSchema = CancellingSchema.extend({ state: z.literal('cancelled'), cancelledAt: z.string() });
 
-export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, FinishedSchema, ExpiredSchema, WithdrawnSchema, CancellingSchema, CancelledSchema]);
+export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, AskingSchema, AnsweredSchema, FinishedSchema, ExpiredSchema, WithdrawnSchema, CancellingSchema, CancelledSchema]);
 
 export type FleetRecord = z.infer<typeof FleetRecordSchema>;
 
@@ -182,6 +200,41 @@ type Offered = Extract<FleetRecord, { state: 'offered' }>;
 export type Claimed = Extract<FleetRecord, { state: 'claimed' }>;
 
 export type Cancelling = Extract<FleetRecord, { state: 'cancelling' }>;
+
+/** A claim its member holds: running, asking the owner a gate, or with the owner's answer to read. */
+export type Held = Extract<FleetRecord, { state: 'claimed' | 'asking' | 'answered' }>;
+
+export type Asking = Extract<FleetRecord, { state: 'asking' }>;
+
+/** Whether `record` is a claim its member holds. */
+export function isHeld(record: FleetRecord): record is Held {
+  return record.state === 'claimed' || record.state === 'asking' || record.state === 'answered';
+}
+
+/** Claim `held` as a plain claim, without a question or an answer. */
+function claimOf(held: Held): Claimed {
+  switch (held.state) {
+    case 'claimed':
+      return held;
+    case 'asking': {
+      const { question: _question, ...claim } = held;
+
+      return { ...claim, state: 'claimed' };
+    }
+
+    case 'answered': {
+      const { question: _question, answer: _answer, ...claim } = held;
+
+      return { ...claim, state: 'claimed' };
+    }
+
+    default: {
+      const unhandled: never = held;
+
+      return unhandled;
+    }
+  }
+}
 
 export type FleetError =
   | { code: 'state_moved'; message: string }
@@ -393,10 +446,14 @@ export async function claimAttempt(config: LocalConfig, offered: Offered, member
   return written.ok ? { ok: true, value: claim } : written;
 }
 
-/** Writes that the member of claim `claimed` still runs it, and has pushed `pushed` to the attempt's ref. */
-export async function recordProgress(config: LocalConfig, claimed: Claimed, pushed: string): Promise<Written<Claimed>> {
-  const progressed: Claimed = { ...claimed, write: randomUUID(), progressAt: new Date().toISOString(), pushed };
-  const written = await writeRecord(config, progressed, { replaces: claimed.write, message: `[teamai] Progress of attempt ${claimed.attempt} of run ${claimed.run}` });
+/**
+ * Writes that the member of claim `held` still runs it, and has pushed `pushed` to the attempt's ref: asking the owner
+ * `question` while its whole workflow waits at that gate.
+ */
+export async function recordProgress(config: LocalConfig, held: Held, pushed: string, question?: ExecQuestion): Promise<Written<Held>> {
+  const claim: Claimed = { ...claimOf(held), write: randomUUID(), progressAt: new Date().toISOString(), pushed };
+  const progressed: Held = question === undefined ? claim : { ...claim, state: 'asking', question };
+  const written = await writeRecord(config, progressed, { replaces: held.write, message: `[teamai] Progress of attempt ${held.attempt} of run ${held.run}` });
 
   return written.ok ? { ok: true, value: progressed } : written;
 }
@@ -405,8 +462,8 @@ export async function recordProgress(config: LocalConfig, claimed: Claimed, push
  * Gives up claim `claimed`, whose member wrote no progress for longer than the pool allows, or did not answer the cancel
  * of it in that time.
  */
-export async function expireClaim(config: LocalConfig, claimed: Claimed | Cancelling): Promise<Written<Extract<FleetRecord, { state: 'expired' }>>> {
-  const expired: Extract<FleetRecord, { state: 'expired' }> = { ...claimed, write: randomUUID(), state: 'expired', expiredAt: new Date().toISOString() };
+export async function expireClaim(config: LocalConfig, claimed: Held | Cancelling): Promise<Written<Extract<FleetRecord, { state: 'expired' }>>> {
+  const expired: Extract<FleetRecord, { state: 'expired' }> = { ...(claimed.state === 'cancelling' ? claimed : claimOf(claimed)), write: randomUUID(), state: 'expired', expiredAt: new Date().toISOString() };
   const written = await writeRecord(config, expired, { replaces: claimed.write, message: `[teamai] Expire attempt ${claimed.attempt} of run ${claimed.run}` });
 
   return written.ok ? { ok: true, value: expired } : written;
@@ -416,12 +473,20 @@ export async function expireClaim(config: LocalConfig, claimed: Claimed | Cancel
  * Cancels attempt `record` through its record: an offer no member claimed is withdrawn, and a claim becomes `cancelling`,
  * which its member answers once it stopped the step. Another write first answers `state_moved`.
  */
-export async function cancelAttempt(config: LocalConfig, record: Offered | Claimed): Promise<Written<Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }>>> {
+export async function cancelAttempt(config: LocalConfig, record: Offered | Held): Promise<Written<Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }>>> {
   const now = new Date().toISOString();
-  const cancel: Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }> = record.state === 'offered' ? { ...record, write: randomUUID(), state: 'withdrawn', withdrawnAt: now } : { ...record, write: randomUUID(), state: 'cancelling', cancelAt: now };
+  const cancel: Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }> = record.state === 'offered' ? { ...record, write: randomUUID(), state: 'withdrawn', withdrawnAt: now } : { ...claimOf(record), write: randomUUID(), state: 'cancelling', cancelAt: now };
   const written = await writeRecord(config, cancel, { replaces: record.write, message: `[teamai] Cancel attempt ${record.attempt} of run ${record.run}` });
 
   return written.ok ? { ok: true, value: cancel } : written;
+}
+
+/** Writes the owner's answer `answer` to the question of claim `asking`; a progress of its member that landed first answers `state_moved`. */
+export async function answerQuestion(config: LocalConfig, asking: Asking, answer: ExecAnswer): Promise<Written<Extract<FleetRecord, { state: 'answered' }>>> {
+  const answered: Extract<FleetRecord, { state: 'answered' }> = { ...asking, write: randomUUID(), state: 'answered', answer };
+  const written = await writeRecord(config, answered, { replaces: asking.write, message: `[teamai] Answer attempt ${asking.attempt} of run ${asking.run}` });
+
+  return written.ok ? { ok: true, value: answered } : written;
 }
 
 /** Answers the cancel of claim `cancelling`: its member stopped the step, whose work up to `pushed` is on the attempt's ref. */
@@ -437,8 +502,8 @@ export async function answerCancel(config: LocalConfig, cancelling: Cancelling, 
  * names its cwd, is left out and the result stands; any other field that may not fails the attempt instead, naming the
  * field, so the owner does not wait on it.
  */
-export async function finishAttempt(config: LocalConfig, claimed: Claimed, result: FleetResult, secrets: Record<string, string>): Promise<Written<FleetRecord>> {
-  const finished: FleetRecord = { ...claimed, write: randomUUID(), state: 'finished', finishedAt: new Date().toISOString(), result };
+export async function finishAttempt(config: LocalConfig, claimed: Held, result: FleetResult, secrets: Record<string, string>): Promise<Written<FleetRecord>> {
+  const finished: FleetRecord = { ...claimOf(claimed), write: randomUUID(), state: 'finished', finishedAt: new Date().toISOString(), result };
 
   // A tool's failure message is as free as stderr, so it goes too, keeping its code.
   const quiet: FleetRecord = {
@@ -518,12 +583,12 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
   return records;
 }
 
-/** An attempt out on a fleet: offered, claimed, or claimed and asked to stop. */
-export type OpenAttempt = Extract<FleetRecord, { state: 'offered' | 'claimed' | 'cancelling' }>;
+/** An attempt out on a fleet: offered, claimed (asking or answered too), or claimed and asked to stop. */
+export type OpenAttempt = Extract<FleetRecord, { state: 'offered' | 'claimed' | 'asking' | 'answered' | 'cancelling' }>;
 
 /** The attempts out for business repository `repository`, oldest offer first, as `workflow resume` lists them. */
 export async function listOpenAttempts(config: LocalConfig, repository: string): Promise<OpenAttempt[]> {
-  const open = (await listRecords(config)).flatMap((record) => (record.repository === repository && (record.state === 'offered' || record.state === 'claimed' || record.state === 'cancelling') ? [record] : []));
+  const open = (await listRecords(config)).flatMap((record) => (record.repository === repository && (record.state === 'offered' || isHeld(record) || record.state === 'cancelling') ? [record] : []));
 
   return open.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }

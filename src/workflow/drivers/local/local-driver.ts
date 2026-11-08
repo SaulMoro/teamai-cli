@@ -26,7 +26,7 @@ import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
 import { type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
-import { credentialSecrets, newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
+import { credentialSecrets, newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, runPlaceSetup, sweepClones } from '../../place/place.js';
@@ -895,6 +895,28 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     }
   } : undefined;
 
+  const isAutoApproved = options.autoApprove ?? config.workflows?.auto_approve === true;
+
+  // A gate a whole workflow reached on a fleet member: the person here answers it, as a gate of this run. With nobody
+  // here, it is answered as this driver answers its own gates then: an optional approval by auto-approve, else skipped,
+  // an optional choice by its default under auto-approve, and any other not at all, which fails the member's run.
+  const askGate = async (gate: ExecQuestion, signal: AbortSignal): Promise<ExecAnswer> => {
+    if (askPerson) {
+      const line = await askPerson(`Step "${gate.step}" of a workflow a fleet member runs: ${gate.message}\nOptions: ${gate.options.join(', ')}\nChoice, followed by an optional note: `, signal);
+
+      if (line === undefined) return { refused: `The question of step "${gate.step}" closed without an answer.` };
+      const [choice = '', ...words] = line.trim().split(/\s+/);
+
+      return words.length > 0 ? { choice, note: words.join(' ') } : { choice };
+    }
+
+    if (!gate.required && gate.kind === 'approve') return { choice: isAutoApproved ? 'yes' : 'no' };
+
+    if (!gate.required && isAutoApproved && gate.default !== undefined) return { choice: gate.default };
+
+    return { refused: `Step "${gate.step}" of a workflow a fleet member runs needs a person's answer, and nobody answers where the run is driven. Retry the step, then resume the run from a terminal in an attended run (TEAMAI_MODE=attended, or neither TEAMAI_MODE nor CI set).` };
+  };
+
   let interactiveIgnores: readonly NodeJS.Signals[] = [];
   let signalled: NodeJS.Signals | undefined;
   let handled: readonly NodeJS.Signals[] = [];
@@ -1147,6 +1169,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
               return runtimeCommand({
                 run: stepRun, command, kind: lease.workflow ? 'workflow' : 'command', view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root), setUp,
+                ...(lease.workflow && { ask: askGate }),
                 ...runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: runId, mode }),
               });
             }

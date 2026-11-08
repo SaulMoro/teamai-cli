@@ -18,7 +18,8 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type Held, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
 import { runLocalDriver, type DriverRuntimes } from '../drivers/local/local-driver.js';
@@ -27,6 +28,7 @@ import { knownSecrets, resolveWorkflowEnv } from '../../env-resolution.js';
 import { runCopyBranch } from '../workspace.js';
 import { notWhole } from '../whole-workflow.js';
 import { isDeepStrictEqual } from 'node:util';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
@@ -46,6 +48,9 @@ import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGi
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
 const CANCEL_READ_MS = 30_000;
+
+/** How often a member whose whole workflow waits at a gate reads its claim's record for the owner's answer. */
+const ANSWER_READ_MS = 1_000;
 
 /** The last characters of a step's stderr a member keeps. */
 const STDERR_KEPT = 4_000;
@@ -183,7 +188,7 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       // Its place there is closed: a run of the attempt starts again with a place and an exec of its own.
       await fs.rm(attemptRuntimePath(config, record.run, record.attempt), { force: true });
 
-      if (record.state !== 'claimed' && record.state !== 'cancelling') return undefined;
+      if (!isHeld(record) && record.state !== 'cancelling') return undefined;
       const ref = attemptRef(record.run, record.attempt);
       // Only this member pushes to the attempt's ref, so its tip is the last work it saved. Another member process in this
       // checkout may fetch meanwhile, so the tip comes from origin's listing, never from FETCH_HEAD.
@@ -230,12 +235,14 @@ async function answered(config: LocalConfig, cancelling: Cancelling, pushed: str
  * the work it pushed, then pushes its work and writes how it ended. A cancel of the claim stops the step: its work is
  * pushed, and the member answers the cancel.
  */
-async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start }: { lock: RunLock; claim: Claimed; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
+async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start }: { lock: RunLock; claim: Held; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
   const { run, attempt, lease } = claim;
   const ref = attemptRef(run, attempt);
   const dir = attemptDir(config, run, attempt);
   const work = path.join(dir, 'work');
-  let latest = claim;
+  let latest: Held = claim;
+  // The gate the nested run of a whole workflow asks the owner: written with each progress until the answer comes.
+  let asking: { question: ExecQuestion; answer: (answer: ExecAnswer) => void } | undefined;
 
   const finish = async (result: FleetResult): Promise<WorkflowEnvelope> => {
     const written = await finishAttempt(config, latest, result, secrets);
@@ -303,38 +310,91 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     return saved;
   };
 
+  let gone: string | undefined;
+  let cancelling: Cancelling | undefined;
+  let beating: Promise<void> | undefined;
+  let stopCommand = async (): Promise<void> => {};
+
+  // A write of the claim that answered state_moved: the owner cancelled it, which the member answers once the step
+  // stopped, or gave it up, after which nothing the member does counts. Either way the step stops.
+  // A claimed or asking record naming this member is a write of its own that landed though it could not tell, as when
+  // origin took the push and its answer was lost: only the claim's member writes one over a claim. An answered one is
+  // the owner's answer to the gate it asks, which only the owner writes over its question.
+  const moved = async (error: FleetError): Promise<void> => {
+    if (gone !== undefined || cancelling !== undefined) return;
+    const now = await readAttemptRecord(config, run, attempt);
+    const record = now.ok && now.value !== 'absent' && 'member' in now.value && now.value.member.id === member.id ? now.value : undefined;
+
+    if (record?.state === 'claimed' || record?.state === 'asking') {
+      latest = record;
+
+      return;
+    }
+
+    if (record?.state === 'answered') {
+      latest = record;
+      const waiting = asking;
+      asking = undefined;
+      waiting?.answer(record.answer);
+
+      return;
+    }
+
+    if (record?.state === 'cancelling') cancelling = record;
+    else gone = error.message;
+    await stopCommand();
+  };
+
+  // Reads the record for a cancel, or the owner's answer, unless it is the member's own last write.
+  const readRecord = async (): Promise<void> => {
+    const now = await readAttemptRecord(config, run, attempt);
+
+    if (now.ok && now.value !== 'absent' && now.value.write !== latest.write) await moved({ code: 'state_moved', message: `Attempt ${attempt} of run ${run} changed on teamai-reports meanwhile.` });
+  };
+
+  // Writes progress naming `pushed`, with the question the member asks while it waits for the owner's answer.
+  const progress = async (pushed: string): Promise<void> => {
+    const progressed = await recordProgress(config, latest, pushed, asking?.question);
+
+    if (progressed.ok) latest = progressed.value;
+    else if (progressed.error.code === 'state_moved') await moved(progressed.error);
+  };
+
+  // The question goes out at once, after any beat still writing, and is read for its answer every ANSWER_READ_MS.
+  const askOwner = async (question: ExecQuestion, signal: AbortSignal): Promise<ExecAnswer> => {
+    const answer = new Promise<ExecAnswer>((resolve) => {
+      asking = { question, answer: resolve };
+    });
+
+    await beating;
+    beating = progress(latest.pushed).finally(() => {
+      beating = undefined;
+    });
+    await beating;
+
+    for (;;) {
+      const given = await Promise.race([answer, sleep(ANSWER_READ_MS, undefined, { signal }).then(() => undefined, () => 'closed' as const)]);
+
+      if (given === 'closed') return { refused: 'The question closed before the owner answered it.' };
+
+      if (given !== undefined) return given;
+
+      if (gone !== undefined || cancelling !== undefined) return { refused: 'The owner stopped the attempt before it answered.' };
+
+      if (beating === undefined) await readRecord();
+    }
+  };
+
   try {
     const command = trusted.kind === 'workflow'
-      ? workflowRun(config, { claim, trusted, place: place.workflow ?? { kind: 'here' }, work, from, secrets })
+      ? workflowRun(config, { claim, trusted, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner })
       : trusted.kind === 'prompt'
       ? promptRun(config, { lock, claim, trusted, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(place.command?.kind === 'runtime'
         ? runtimeCommand(config, { run, attempt, place: place.command, work, command: trusted.command, env: trusted.env })
         : startGroupedCommand({ command: trusted.command, cwd: work, env: { ...process.env, ...trusted.env }, detached: process.platform !== 'win32', group: dir }));
 
-    let gone: string | undefined;
-    let cancelling: Cancelling | undefined;
-    let beating: Promise<void> | undefined;
-
-    // A write of the claim that answered state_moved: the owner cancelled it, which the member answers once the step
-    // stopped, or gave it up, after which nothing the member does counts. Either way the step stops.
-    // A claimed record naming this member is a write of its own that landed though it could not tell, as when origin
-    // took the push and its answer was lost: only the claim's member writes a claimed record over a claim.
-    const moved = async (error: FleetError): Promise<void> => {
-      if (gone !== undefined || cancelling !== undefined) return;
-      const now = await readAttemptRecord(config, run, attempt);
-      const record = now.ok && now.value !== 'absent' && 'member' in now.value && now.value.member.id === member.id ? now.value : undefined;
-
-      if (record?.state === 'claimed') {
-        latest = record;
-
-        return;
-      }
-
-      if (record?.state === 'cancelling') cancelling = record;
-      else gone = error.message;
-      await command.stop();
-    };
+    stopCommand = command.stop;
 
     // Progress comes three times per `stale_after`, so one late write does not make the member look gone. A beat still
     // writing skips the next, and the result waits for it, so each write replaces the one before. Between beats further
@@ -351,24 +411,10 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
 
       if (isBeat) sinceBeat = 0;
       beating = (async () => {
-        if (!isBeat) {
-          const now = await readAttemptRecord(config, run, attempt);
-
-          if (now.ok && now.value !== 'absent' && now.value.write !== latest.write) await moved({ code: 'state_moved', message: `Attempt ${attempt} of run ${run} changed on teamai-reports meanwhile.` });
-
-          return;
-        }
-
+        if (!isBeat) return readRecord();
         const saved = await save(`[teamai] ${lease.step} so far (run ${run}, attempt ${attempt})`);
-        const progressed = await recordProgress(config, latest, 'to' in saved ? saved.to : latest.pushed);
 
-        if (progressed.ok) {
-          latest = progressed.value;
-
-          return;
-        }
-
-        if (progressed.error.code === 'state_moved') await moved(progressed.error);
+        await progress('to' in saved ? saved.to : latest.pushed);
       })().finally(() => {
         beating = undefined;
       });
@@ -417,7 +463,7 @@ function commandRun(command: GroupedCommand): StepRun {
  * It ends as the member's report says: success or failure, the output, the tool and its usage.
  */
 function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, root, secrets }: {
-  lock: RunLock; claim: Claimed; trusted: Extract<Trusted, { kind: 'prompt' }>; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
+  lock: RunLock; claim: Held; trusted: Extract<Trusted, { kind: 'prompt' }>; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
 }): StepRun {
   const { run, attempt } = claim;
   const { step } = trusted;
@@ -488,11 +534,27 @@ const NestedDoneSchema = z.object({
  * workflow step on the owner; once it ends, the clone takes that copy's last commit, which the member pushes to the
  * attempt's ref. It ends as the run did: its outcome, end and outputs.
  */
-function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, secrets }: {
-  claim: Claimed; trusted: Extract<Trusted, { kind: 'workflow' }>; place: NonNullable<MemberPlace['workflow']>; work: string; from: string; secrets: Record<string, string>;
+function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, secrets, ask }: {
+  claim: Held; trusted: Extract<Trusted, { kind: 'workflow' }>; place: NonNullable<MemberPlace['workflow']>; work: string; from: string; secrets: Record<string, string>;
+  ask: (question: ExecQuestion, signal: AbortSignal) => Promise<ExecAnswer>;
 }): StepRun {
   const { definition: offered } = claim;
   let nested: string | undefined;
+  // Why the owner gave no answer to a gate, which then fails the run.
+  let refused: string | undefined;
+
+  // A gate of the nested run goes to the owner, whose person answers it: the local loop applies the answer as typed.
+  const question = async ({ step, kind, message, options, required, default: preset }: ExecQuestion, signal: AbortSignal): Promise<string> => {
+    const answer = await ask({ step, kind, message, options, required, ...(preset !== undefined && { default: preset }) }, signal);
+
+    if ('refused' in answer) {
+      refused = answer.refused;
+      throw new Error(answer.refused);
+    }
+
+    return answer.note === undefined ? answer.choice : `${answer.choice} ${answer.note}`;
+  };
+
   const failed = (failure: { code: string; message: string }): FleetResult => ({ exitCode: 1, stderr: failure.message.slice(0, 400), failure });
 
   const exit = (async (): Promise<FleetResult> => {
@@ -508,8 +570,10 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
 
     if (!('data' in created)) return failed(created.error);
     nested = String(created.data.run);
-    const driven = await runLocalDriver(config, nested, work, { hitl: false, autoApprove: false, ...(place.kind === 'driver' && { runtimes: place.runtimes }) });
+    const driven = await runLocalDriver(config, nested, work, { hitl: true, question, autoApprove: false, ...(place.kind === 'driver' && { runtimes: place.runtimes }) });
     const ended = 'data' in driven ? NestedDoneSchema.safeParse(driven.data) : undefined;
+
+    if (refused !== undefined) return failed({ code: 'hitl_required', message: refused });
 
     if (!ended?.success) return failed('error' in driven ? driven.error : { code: 'run_unreadable', message: `The nested run ${nested} of step "${claim.lease.step}" did not say how it ended.` });
     const { outcome, end, failure, outputs } = ended.data.done;
@@ -639,7 +703,7 @@ type Trusted =
  * that says otherwise is refused, not corrected. Every team commit the record names counts only when this member would
  * run that commit itself: `definition.teamRevision` is the only one a record carries.
  */
-async function trustedLease(config: LocalConfig, claim: Claimed): Promise<Trusted | { refused: string; next?: string }> {
+async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted | { refused: string; next?: string }> {
   const { run, lease, definition, values } = claim;
   const { teamRevision, ...named } = definition;
   // A team commit the member would not run itself names no definitions: without it, only its own copy can match.

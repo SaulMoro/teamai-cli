@@ -98,8 +98,19 @@ export interface Accepted {
   display?: RuntimeDisplay;
 }
 
+/** A gate the work an exec runs reached, which the driver that sent it asks its person (`ExecEvents.ask`). */
+export type ExecQuestion = { step: string; kind: 'approve' | 'choose'; message: string; options: string[]; required: boolean; default?: string };
+
+/** The answer to an `ExecQuestion`: the choice and note the person gave, or why none comes, for the work to fail on. */
+export type ExecAnswer = { choice: string; note?: string } | { refused: string };
+
 export interface ExecEvents {
   onAccepted?: (accepted: Accepted) => void;
+  /**
+   * Asks the driver's person a gate the work reached, as a whole workflow a fleet member runs does. Absent: the driver
+   * answers none, and such work fails at its gate.
+   */
+  ask?: (question: ExecQuestion, signal: AbortSignal) => Promise<ExecAnswer>;
   /**
    * A display the runtime gave apart from the acceptance, such as the agent it launched after it accepted a prompt. It
    * neither accepts nor ends the operation, and may come before the acceptance.

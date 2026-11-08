@@ -17,7 +17,7 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { durationMs } from '../parse.js';
 import { leaseContext } from '../engine.js';
-import { attemptRef, cancelAttempt, expireClaim, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
+import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { isWorkflowFile, workflowRunBy, type WorkflowFailure } from '../types.js';
@@ -26,7 +26,7 @@ import { isJsonObject } from '../../types.js';
 import { copyGit } from '../place/place.js';
 import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
-import type { ExecEnd, ExecEvents, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
+import type { ExecAnswer, ExecEnd, ExecEvents, ExecQuestion, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
 import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
 import { LabelSchema } from '../requirements.js';
 
@@ -147,6 +147,8 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
   switch (record.state) {
     case 'offered':
     case 'claimed':
+    case 'asking':
+    case 'answered':
       return { op, state: 'running' };
     // The member was asked to stop, and nothing of the step runs on this machine: the record ends cancelled or expired.
     case 'cancelling':
@@ -248,10 +250,10 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
   };
 
   /** Offers step `lease` of `place` from the place `dir` under id `op`, and waits for the member that takes it. */
-  const offerLease = async ({ place, lease, dir, op }: { place: FleetPlace; lease: FleetLease; dir: string; op: OpId }, onAccepted: () => void): Promise<Waited> => {
+  const offerLease = async ({ place, lease, dir, op, ask }: { place: FleetPlace; lease: FleetLease; dir: string; op: OpId; ask?: ExecEvents['ask'] }, onAccepted: () => void): Promise<Waited> => {
     if (!settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The fleet runtime was not initialized.' } };
     const cancel = new AbortController();
-    const end = offerAndWait({ config, ...place, ...settings, lease, dir, secrets: masks, op }, { cancel: cancel.signal, leave: disposing.signal });
+    const end = offerAndWait({ config, ...place, ...settings, lease, dir, secrets: masks, op, ask }, { cancel: cancel.signal, leave: disposing.signal });
     waits.set(op, { place, cancel, end, isWhole: 'workflow' in lease });
     onAccepted();
 
@@ -271,7 +273,8 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       const parsed = parseFleetOptions(options);
 
       if (!parsed.ok) return { ok: false, failure: { code: 'bad_option', ...parsed.failure } };
-      const { pool, stale_after: staleAfterMs, can = {}, labels } = parsed.value;
+      // No person sits at a member's tool, whatever the entry promises, so no interactive step goes to the fleet.
+      const { pool, stale_after: staleAfterMs, can: { hitl: _hitl, ...can } = {}, labels } = parsed.value;
       settings = { pool, staleAfterMs, root: checkout ?? process.cwd() };
 
       // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
@@ -310,7 +313,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
 
       if (isWhole !== (kind === 'workflow') || 'prompt' in leased) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no ${kind === 'workflow' ? 'whole workflow' : 'command step'}.` } };
 
-      return ended(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op }, accepted), events, isWhole);
+      return ended(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op, ask: events.ask }, accepted), events, isWhole);
     },
 
     // The member picks the tool, model and login and renders the prompt itself: what the request names of them is this
@@ -447,6 +450,8 @@ async function offeredExec(config: LocalConfig, place: FleetPlace): Promise<OpId
 type WaitInput = {
   config: LocalConfig; run: RunId; attempt: AttemptId; pool: string; staleAfterMs: number; lease: FleetLease; root: string; dir: string;
   secrets: Record<string, string>; op: OpId;
+  /** Asks this driver's person a gate the member's whole workflow reached. Absent: nobody answers here. */
+  ask?: ExecEvents['ask'];
 };
 
 /**
@@ -457,7 +462,7 @@ type WaitInput = {
  * for the member to answer. `leave`: this teamai stops, and the attempt stays out for a later `workflow resume <run>`.
  */
 async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: AbortSignal; leave: AbortSignal }): Promise<Waited> {
-  const { config, run, attempt, lease, root, dir, secrets, op } = input;
+  const { config, run, attempt, lease, root, dir, secrets, op, ask } = input;
   const { step } = lease;
   const failed = (failure: WorkflowFailure): Waited => ({ kind: 'failed', failure });
   const ref = attemptRef(run, attempt);
@@ -500,7 +505,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
   // cancel goes through the record, and waits for the member's answer as long as for its progress.
   let lastSeen: { write: string; at: number } | undefined;
   let isCancelWritten = false;
-  const woken = AbortSignal.any([cancel, leave]);
+  // The gate the member asks, put to this driver's person once: `answer` once the person answered.
+  let asked: Asked | undefined;
   // A record that does not change is read less often, down to a third of stale_after, so a staleness is seen in time.
   const slowestPollMs = Math.min(RECORD_POLL_MAX_MS, Math.max(RECORD_POLL_MS, Math.floor(staleAfterMs / 3)));
   let pollMs = RECORD_POLL_MS;
@@ -538,7 +544,27 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       pollMs = RECORD_POLL_MS;
     }
 
-    if ((record?.state === 'claimed' || record?.state === 'cancelling') && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
+    // A question closes once the record no longer asks it: the member read the answer, or the claim ended.
+    if (asked !== undefined && (record === undefined || (record.state !== 'asking' && record.state !== 'answered') || JSON.stringify(record.question) !== asked.question)) {
+      asked.closed.abort();
+      asked = undefined;
+    }
+
+    if (record?.state === 'asking' && asked === undefined) asked = askPerson(record.question, ask, { step, member: record.member.user });
+
+    // The answer goes over what the record holds now, which still asks it: the member's progress may have landed meanwhile.
+    if (record?.state === 'asking' && asked?.answer !== undefined) {
+      const written = await answerQuestion(config, record, asked.answer);
+
+      if (!written.ok && written.error.code !== 'state_moved') return failed(fleetFailure(written.error));
+
+      // Once written, the answer is spent: the member asking the same again, as when its run did not take the answer,
+      // asks the person again.
+      if (written.ok) asked = undefined;
+      continue;
+    }
+
+    if ((record !== undefined && (isHeld(record) || record.state === 'cancelling')) && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
       const expired = await expireClaim(config, record);
 
       // The member wrote meanwhile: it is still there.
@@ -551,7 +577,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     if (cancel.aborted && !isCancelWritten) {
       if (record === undefined) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read, so no member was asked to stop it.${read.ok ? '' : ` ${read.error.message}`}` });
 
-      if (record.state === 'offered' || record.state === 'claimed') {
+      if (record.state === 'offered' || isHeld(record)) {
         const written = await cancelAttempt(config, record);
 
         if (!written.ok && written.error.code !== 'state_moved') return failed(fleetFailure(written.error));
@@ -561,9 +587,44 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       }
     }
 
+    const woken = AbortSignal.any([cancel, leave, ...(asked ? [asked.answered.signal] : [])]);
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
+}
+
+/** A gate put to this driver's person: the question as the record holds it, closed once the record no longer asks it, and the answer once given. */
+type Asked = { question: string; closed: AbortController; answered: AbortController; answer?: ExecAnswer };
+
+/**
+ * Puts `question`, a gate the whole workflow of step `step` reached on fleet member `member`, to this driver's person
+ * through `ask`, until the answer is a choice the gate offers or none comes. Without `ask`, nobody answers here.
+ */
+function askPerson(question: ExecQuestion, ask: ExecEvents['ask'], { step, member }: { step: string; member: string }): Asked {
+  const closed = new AbortController();
+  const answered = new AbortController();
+  const asked: Asked = { question: JSON.stringify(question), closed, answered };
+  const nobody = `Step "${question.step}" of the workflow step "${step}", on fleet member ${member}, needs an answer, and nobody answers it where the run is driven. Resume the run from a terminal where a person answers, in an attended run.`;
+
+  void (async () => {
+    for (;;) {
+      const answer = ask === undefined ? { refused: nobody } : await ask(question, closed.signal).catch(() => ({ refused: `The driver where the run is driven could not ask its person step "${question.step}".` }));
+
+      if (closed.signal.aborted) return;
+
+      if ('choice' in answer && !question.options.includes(answer.choice)) {
+        log.warn(`"${answer.choice}" is not a choice of step "${question.step}": answer one of ${question.options.join(', ')}.`);
+        continue;
+      }
+
+      asked.answer = answer;
+      answered.abort();
+
+      return;
+    }
+  })();
+
+  return asked;
 }
 
 /**
@@ -634,7 +695,7 @@ export async function cancelFleetAttempt(config: LocalConfig, run: RunId, attemp
     if (!read.ok) return { ok: false, message: `Attempt ${attempt} of run ${run} is out on the fleet, and its record could not be read, so its member was not asked to stop: ${read.error.message} Run teamai workflow cancel ${run} again.` };
     const record = read.value;
 
-    if (record === 'absent' || (record.state !== 'offered' && record.state !== 'claimed')) return { ok: true, message: `Attempt ${attempt} of run ${run} was out on the fleet, and its record already says it is ${record === 'absent' ? 'not offered' : record.state}.` };
+    if (record === 'absent' || (record.state !== 'offered' && !isHeld(record))) return { ok: true, message: `Attempt ${attempt} of run ${run} was out on the fleet, and its record already says it is ${record === 'absent' ? 'not offered' : record.state}.` };
     const cancel = await cancelAttempt(config, record);
 
     if (cancel.ok) {
