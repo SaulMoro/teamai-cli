@@ -62,7 +62,7 @@ describe('fleet attempts on teamai-reports', () => {
     if (!offered.ok) throw new Error(offered.error.message);
     const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
     await updateReports(alice.config, async (worktree) => {
-      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, version: 2, teamai: '9.1.0', shape: 'new' }));
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, version: 3, teamai: '9.1.0', shape: 'new' }));
 
       return { value: undefined, write: { files: [rel], message: 'a newer record' } };
     });
@@ -79,7 +79,44 @@ describe('fleet attempts on teamai-reports', () => {
     const acme = team();
     const offered = await offer(await acme.member('alice'));
 
-    expect(offered).toMatchObject({ ok: true, value: { version: 1, teamai: expect.stringMatching(/^\d+\.\d+\.\d+/) } });
+    expect(offered).toMatchObject({ ok: true, value: { version: 2, teamai: expect.stringMatching(/^\d+\.\d+\.\d+/) } });
+  });
+
+  it('reads no record that holds a field its format does not name, rather than reading it without that field', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
+    await updateReports(alice.config, async (worktree) => {
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, lease: { ...offered.value.lease, workflow: true } }));
+
+      return { value: undefined, write: { files: [rel], message: 'a record with a field of its own' } };
+    });
+    await readableReportsWorktree(bob.config);
+
+    expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toMatchObject({ ok: false, error: { code: 'fleet_record_unreadable' } });
+    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
+  });
+
+  it('reads a record an older teamai wrote in the format before this one as one its writer upgrades for', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
+    await updateReports(alice.config, async (worktree) => {
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, version: 1, teamai: '0.21.0' }));
+
+      return { value: undefined, write: { files: [rel], message: 'an older record' } };
+    });
+    await readableReportsWorktree(bob.config);
+
+    expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toEqual({ ok: false, error: {
+      code: 'fleet_record_unreadable',
+      message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 0.21.0, in an older format this teamai does not read. Upgrade teamai on the install that offered it.`,
+    } });
+    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
   });
 
   it('lists only the offers of the pool and repository asked for, and no claimed one', async () => {
