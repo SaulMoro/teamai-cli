@@ -17,7 +17,9 @@ export interface ToolRun {
  * no Ctrl-C from the terminal: only a run nobody waits on in the foreground detaches.
  */
 export async function runTool(input: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; idleTimeoutMs?: number; detached: boolean; group?: string; signal?: AbortSignal }): Promise<ToolRun> {
-  const batch = process.platform === 'win32' ? batchLaunchOf(input.executable, input.args, input.env.ComSpec ?? input.env.COMSPEC ?? 'cmd.exe') : undefined;
+  // cmd.exe by the parent's absolute path: a confined run's env has no ComSpec, and a bare name is looked up in the cwd first.
+  const comspec = process.env.ComSpec ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`;
+  const batch = process.platform === 'win32' ? batchLaunchOf(input.executable, input.args, comspec) : undefined;
 
   if (batch?.ok === false) return { stdout: '', stderr: batch.message, code: 1 };
   const detached = input.detached && process.platform !== 'win32';
