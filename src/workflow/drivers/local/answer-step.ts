@@ -40,6 +40,24 @@ const FAILURE_OF = {
   call_failed: 'tool_failed',
 } as const satisfies Record<CallErrorKind, WorkflowFailure['code']>;
 
+/**
+ * `workflows.idle_timeout` in milliseconds, unset when the member set none; a value that is no duration fails the step.
+ * The one reading of it, for an answer step's call and a prompt step's launch alike.
+ */
+export function idleLimit(config: LocalConfig): { ms?: number } | { failure: WorkflowFailure } {
+  const idle = config.workflows?.idle_timeout;
+
+  if (idle === undefined) return {};
+  const text = z.string().safeParse(idle);
+  const ms = text.success ? durationMs(text.data) : undefined;
+
+  if (ms === undefined) {
+    return { failure: { code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` } };
+  }
+
+  return { ms };
+}
+
 function failed(failure: WorkflowFailure): AnswerReport {
   return { outcome: 'failed', message: failure.message, failure };
 }
@@ -60,18 +78,11 @@ export async function runAnswerStep({ config, prompt, output, cwd, expiresAt, si
   const caller = createToolCaller(resolveTool ? { resolveTool } : {});
   const options: CallOptions = { launchedBy: 'answer', scope: config, cwd, signal };
 
-  const idle = config.workflows?.idle_timeout;
+  const idle = idleLimit(config);
 
-  if (idle !== undefined) {
-    const text = z.string().safeParse(idle);
-    const ms = text.success ? durationMs(text.data) : undefined;
+  if ('failure' in idle) return failed(idle.failure);
 
-    if (ms === undefined) {
-      return failed({ code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` });
-    }
-
-    options.idleTimeout = ms;
-  }
+  if (idle.ms !== undefined) options.idleTimeout = idle.ms;
 
   // The lease expires at the step's timeout, which the call then keeps.
   if (expiresAt !== undefined) options.timeout = Math.max(1, Date.parse(expiresAt) - Date.now());

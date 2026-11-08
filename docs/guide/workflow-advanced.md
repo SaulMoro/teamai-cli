@@ -64,7 +64,7 @@ workflows:
   auto_approve: false
 ```
 
-`workflows.idle_timeout`, a duration such as `5m`, stops a prompt step's Claude that prints nothing for that long and fails the step `tool_failed`; a value that is no duration fails it `tool_unconfigured`. It applies only to Claude launched for a prompt step without a terminal, which prints each message as it comes. A tool that prints only once it ends would always reach the limit, so other tools, and Claude in a terminal, have none.
+`workflows.idle_timeout`, a duration such as `5m`, stops the tool of an answer or prompt step that prints nothing for that long and fails the step `tool_failed`; a value that is no duration fails it `tool_unconfigured`. It applies only to a tool that prints as it works: on a prompt step, Claude launched without a terminal; on an answer step, Claude, OpenCode and Codex. A tool that prints only once it ends would always reach the limit, so other tools, and Claude in a terminal, have none.
 
 A prompt in the current checkout waits until that checkout is free, and nothing else in that checkout starts until the prompt finishes. The read-only check compares that checkout before and after the prompt. A prompt with `workspace: new` runs in its own worktree, so it can overlap steps in other worktrees, up to `max_parallel`. Commands with no `workspace` share the checkout and run one at a time with anything else there.
 
@@ -760,7 +760,7 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 - In a directory that is no git repository, nothing can check an answer, so on the local driver answers there do
   not wait for each other, with or without `workspace: new`.
 - A prompt has no default timeout. Give the step one.
-- `workflows.idle_timeout`, a duration in `~/.teamai/config.yaml` or a workspace's `config.yaml`, stops a tool that prints nothing for that long and fails the step `tool_failed`; a value that is no duration fails it `tool_unconfigured`. Claude prints its answer only when the call ends, so give it more than its longest answer takes:
+- `workflows.idle_timeout`, a duration in `~/.teamai/config.yaml` or a workspace's `config.yaml`, stops the tool of an answer or prompt step that prints nothing for that long and fails the step `tool_failed`; a value that is no duration fails it `tool_unconfigured`. On an answer step it applies to Claude, OpenCode and Codex, which print as they work; other tools have none:
 
   ```yaml
   workflows:

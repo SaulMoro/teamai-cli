@@ -42,6 +42,8 @@ export const launch = {
       read: readOpenCodeRun,
       // `opencode run --help` of 2.1.2: `-s, --session` continues a session by its id.
       resume: { evidence: 'docs', args: (session) => ['--session', session] },
+      // Prints each event as it comes (the recorded run in ./fixtures).
+      streams: { evidence: 'verified' },
     },
     // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
     step: { evidence: 'verified', unattended: { args: ['--auto'], evidence: 'docs' } },

@@ -35,6 +35,17 @@ function only(recording: FakeAgentRecording, options: Omit<FakeAgentOptions, 'bi
 
 const Color = z.object({ color: z.string() });
 
+/** A `copilot` that prints only its reply, as `copilot -p <prompt> -s` does. */
+const PLAIN_COPILOT: FakeAgentRecording = {
+  executable: 'copilot',
+  version: '1.0.0',
+  data: {},
+  script: String.raw`
+  await say(reply ?? 'done');
+  process.exit(0);
+`,
+};
+
 describe('a call that must reply with a value', () => {
   it('asks again in the same session when the reply holds no valid value, and returns the corrected one', async () => {
     const { root, agent, caller } = only(claudeFake, { answers: [{ when: 'Retries remaining', answer: '{"color":"blue"}' }], answer: 'Sure, the color is blue.' });
@@ -108,6 +119,27 @@ describe('a call with an idle limit', () => {
     const { root, caller } = only(opencodeFake, { always: ['slow'], slowMs: 400, answer: 'still here' });
 
     await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 1000 })).resolves.toMatchObject({ text: 'still here' });
+  });
+
+  it('asks Claude, which prints its json output only once it ends, for its stream-json output instead, and reads the reply from it', async () => {
+    const { root, agent, caller } = only(claudeFake, { always: ['slow'], slowMs: 300, answer: 'still here' });
+
+    await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 1000 })).resolves.toMatchObject({ text: 'still here' });
+    expect(agent.calls()[0]?.args).toEqual(['-p', '--output-format', 'stream-json', '--verbose']);
+  });
+
+  it('calls Claude for its json output when no idle limit is set', async () => {
+    const { root, agent, caller } = only(claudeFake, { answer: 'still here' });
+
+    await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root })).resolves.toMatchObject({ text: 'still here' });
+    expect(agent.calls()[0]?.args).toEqual(['-p', '--output-format', 'json']);
+  });
+
+  it('keeps a tool whose call prints only once it ends for as long as it works, as under no limit', async () => {
+    // GitHub Copilot's `-p … -s` prints only its reply, once it ends.
+    const { root, caller } = only(PLAIN_COPILOT, { always: ['slow'], slowMs: 1500, answer: 'still here' });
+
+    await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 500 })).resolves.toMatchObject({ text: 'still here' });
   });
 
   it('keeps a tool under an idle limit longer than a timer can wait, as under no limit', async () => {

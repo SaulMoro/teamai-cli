@@ -13,6 +13,7 @@ import { addTokens } from '@teamai/tool-core/stdout';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf, type LaunchOrderTool } from './tools.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
+import type { CallLaunch } from '@teamai/tool-core/launch';
 import type { z } from 'zod';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -34,8 +35,8 @@ export interface CallOptions {
   /** Stops the tool, as its timeout does. */
   signal?: AbortSignal;
   /**
-   * Stops a tool that prints nothing for this long, in ms. Only for a tool whose call streams its progress, such as
-   * OpenCode's events: one that prints its answer at the end, as `claude -p --output-format json` does, would be stopped.
+   * Stops a tool that prints nothing for this long, in ms, calling it in a way that prints as it works (Claude's
+   * stream-json). A tool whose call prints only once it ends gets no idle limit: it would be stopped while it works.
    */
   idleTimeout?: number;
 }
@@ -168,8 +169,10 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
 
         if (call.prompt === 'file') await fs.writeFile(promptFile, prompt);
         const resumed = session !== undefined && 'resume' in call ? call.resume.args(session) : [];
-        const args = [...call.args({ prompt, promptFile, lastMessageFile }), ...resumed];
-        const run = await runTool({ executable, args, cwd, env: callEnv(launchedBy, tool), stdin: call.prompt !== 'stdin' ? '' : 'stdinOf' in call ? call.stdinOf(prompt) : prompt, timeoutMs: timeout, idleTimeoutMs: idleTimeout, detached: false, signal });
+        const { streams }: CallLaunch = call;
+        const streaming = idleTimeout === undefined ? undefined : streams;
+        const args = [...(streaming?.args ?? call.args)({ prompt, promptFile, lastMessageFile }), ...resumed];
+        const run = await runTool({ executable, args, cwd, env: callEnv(launchedBy, tool), stdin: call.prompt !== 'stdin' ? '' : 'stdinOf' in call ? call.stdinOf(prompt) : prompt, timeoutMs: timeout, ...(streaming && { idleTimeoutMs: idleTimeout }), detached: false, signal });
 
         if (run.stopped === 'timeout') throw new CallError('call_failed', `AI call timed out after ${Math.round(timeout / 1000)}s (tool: ${tool})`);
 

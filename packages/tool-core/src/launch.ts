@@ -42,6 +42,12 @@ export interface CallLaunch {
   read(output: CallOutput): CallReading;
   /** The arguments, after `args`, that continue the session a call ran in, for a tool that keeps it and reports its id. */
   readonly resume?: { readonly evidence: Evidence; args(session: string): string[] };
+  /**
+   * That the call prints as it works, which an idle limit needs: `args` stream already, or `streams.args` run a call
+   * that does, whose output `read` reads too. Absent: it prints only once it ends, so an idle limit would stop it while
+   * it works, and none applies.
+   */
+  readonly streams?: { readonly evidence: Evidence; args?(input: CallInput): string[] };
 }
 
 /**

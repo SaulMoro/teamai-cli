@@ -64,7 +64,7 @@ workflows:
   auto_approve: false
 ```
 
-`workflows.idle_timeout` 是一个时长，例如 `5m`：提示词步骤启动的 Claude 若这么久没有任何输出，就会被停止，步骤以 `tool_failed` 失败；不是时长的值会让步骤以 `tool_unconfigured` 失败。它只作用于没有终端时为提示词步骤启动的 Claude，这种 Claude 会逐条输出消息。只在结束时才输出的工具总会达到这个限制，所以其他工具以及在终端里运行的 Claude 都没有这个限制。
+`workflows.idle_timeout` 是一个时长，例如 `5m`：回答或提示词步骤的工具若这么久没有任何输出，就会被停止，步骤以 `tool_failed` 失败；不是时长的值会让步骤以 `tool_unconfigured` 失败。它只作用于边工作边输出的工具：提示词步骤中是没有终端时启动的 Claude；回答步骤中是 Claude、OpenCode 和 Codex。只在结束时才输出的工具总会达到这个限制，所以其他工具以及在终端里运行的 Claude 都没有这个限制。
 
 当前检出目录里的提示词要等该目录空闲后才启动，结束前该目录里不会再启动别的步骤。只读检查比较的是这个检出目录在提示词前后的状态。`workspace: new` 的提示词在自己的 worktree 里运行，因此可以和其他 worktree 里的步骤重叠，上限是 `max_parallel`。没有 `workspace` 的命令共用检出目录，并且和那里的其他步骤一次只运行一个。
 
@@ -756,7 +756,7 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 - 加上 `workspace: new` 后，它在自己的 worktree 中回答，该 worktree 位于运行开始时的提交，因此 `for_each` 的各项最多按其 `max_parallel` 并排运行。这个 worktree 不含你未提交的改动，也不含 pull 交付给工具的文件。修改它同样会让回答以 `read_only_dirty` 失败。回答成功后 teamai 删除这个 worktree，运行成功后删除它的分支。
 - 在不是 git 仓库的目录中，没有办法检查回答，所以在本地驱动上，那里的回答互不等待，无论有没有 `workspace: new`。
 - 提示词没有默认超时，请给这个步骤设置一个。
-- `workflows.idle_timeout` 是写在 `~/.teamai/config.yaml` 或某个工作区 `config.yaml` 里的一个时长：工具在这么长时间内没有任何输出时会被停止，步骤以 `tool_failed` 失败；不是时长的值会让步骤以 `tool_unconfigured` 失败。Claude 只在调用结束时打印回答，所以给它的时长要超过它最长的回答所需时间：
+- `workflows.idle_timeout` 是写在 `~/.teamai/config.yaml` 或某个工作区 `config.yaml` 里的一个时长：回答或提示词步骤的工具在这么长时间内没有任何输出时会被停止，步骤以 `tool_failed` 失败；不是时长的值会让步骤以 `tool_unconfigured` 失败。在回答步骤中，它作用于边工作边输出的 Claude、OpenCode 和 Codex；其他工具没有这个限制：
 
   ```yaml
   workflows:

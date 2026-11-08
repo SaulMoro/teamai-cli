@@ -11,6 +11,9 @@ export const launch = {
       read: readClaudeResult,
       // Claude Code 2.1.319 continued a `claude -p` session this way (2026-11-08).
       resume: { evidence: 'verified', args: (session) => ['--resume', session] },
+      // `--output-format json` prints nothing until the call ends; stream-json prints each message, its last the same
+      // result record (Claude Code 2.1.319, 2026-11-08).
+      streams: { evidence: 'verified', args: () => ['-p', '--output-format', 'stream-json', '--verbose'] },
     },
     // Claude Code 2.1.312 ran a strict-sandbox benchmark trial in this mode (2026-10-30, `teamai benchmark run --sandbox`).
     step: { evidence: 'verified', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'verified' } },
