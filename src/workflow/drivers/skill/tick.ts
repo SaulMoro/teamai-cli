@@ -22,7 +22,7 @@ import { attendedReason, ceilingOf, localPromptTool, localReason, needsTool } fr
 import { drivesRun, newSkillState, readSkillState, removeSkillState, scoringSkillState, writeSkillState, type AttemptState, type SkillState, type TurnEvent } from './skill-state.js';
 import {
   ackRow, adoptRow, callRow, cancelledRow, chooseRow, doneRow, gateCheckRow, giveUpRow, graceRow, hasSlot, heldProbeRow, invokeRow, lockBusyRow, offeredRow, pollRow, queuedAttempts, readiedRow, reopenedRow, replyRow,
-  deadlineRow, reportCallRow, reportedRow, reportRow, resendRow, respondedRow, runnerFreeRow, scoredRow, scoringTickRow, startedRow, tickRow, turnRow, unattendedRow, unqueueRow, unseenEvents, type Answer,
+  deadlineRow, reportCallRow, reportedRow, reportRow, resendRow, respondedRow, runnerFreeRow, scoredRow, scoringTickRow, startedRow, tickRow, turnRow, unattendedRow, unqueueRow, unreadBeforeClaimRow, unseenEvents, type Answer,
   type Effect, type MovedWithEffects, type ResumeAnswers, type RowId, type StartRun, type TickTurn, type TurnAnswer,
 } from './transitions.js';
 import { errorOf, scoringWaits, turnOf, type SkillAnswer, type SkillError, type Turn, type Waiting } from './turn.js';
@@ -375,11 +375,16 @@ async function called(context: SkillContext, lock: RunLock, same: Literal, input
       published: input.resume !== undefined, claim: input.resume !== undefined && input.resume.claim !== 'lacking', ceiling: ceilingOf(context.config), can: canFor(undefined),
     });
 
-    const local = carried ? localReason(carried.description) : undefined;
-    const attended = carried ? attendedNow(carried) : undefined;
+    // A run it cannot read may need either, so it is refused too, rather than claimed for nobody to drive.
+    if (carried.kind === 'failed') {
+      return { answer: { error: errorOf(traced(context, unreadBeforeClaimRow(run, carried.failure)).answer, { invocation: context.invocation, same, localTool }) } };
+    }
 
-    if (carried && (local !== undefined || attended !== undefined)) {
-      const readied: RunReadied = { kind: 'ready', installed: false, ...carried, judging: { kind: 'none' } };
+    const local = carried.kind === 'carried' ? localReason(carried.description) : undefined;
+    const attended = carried.kind === 'carried' ? attendedNow(carried) : undefined;
+
+    if (carried.kind === 'carried' && (local !== undefined || attended !== undefined)) {
+      const readied: RunReadied = { kind: 'ready', installed: false, description: carried.description, status: carried.status, judging: { kind: 'none' } };
       const refused = traced(context, readiedRow({ run, readied, kept: false, mode: context.mode, local, attended, needsTool: false, answers, confirmed }));
 
       if (refused && 'answer' in refused) return { answer: { error: errorOf(refused.answer, { invocation: context.invocation, same, localTool }) } };

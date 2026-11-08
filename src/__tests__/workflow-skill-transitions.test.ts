@@ -1662,6 +1662,25 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
+    name: 'an unattended resume of a run teamai cannot read before the claim is refused, and claims nothing',
+    rows: ['R24'],
+    run: async () => {
+      const team = sharedTeam({ 'release-docs': RELEASE_DOCS });
+      const ci = await team.install('ci');
+      const { run } = await publishedMidStep(ci, 'release-docs');
+      const member = await team.install('member');
+      // The published run could not be fetched a moment ago, and can be now.
+      const made = await harness({}, { install: member, client: (client) => ({ ...client, carried: async () => ({ kind: 'failed', failure: { code: 'run_unreadable', message: 'teamai-reports could not be fetched' } }) }) });
+      expect(await made.call({ kind: 'resume', run, claim: 'lacking', confirmed: false, answers: {} }, { mode: 'unattended' })).toEqual({ error: {
+        code: 'unattended_denied',
+        message: `Run ${run} could not be read before it is claimed (teamai-reports could not be fetched), so this unattended session does not take it: nobody is there if it needs a person or the local driver. Run the same command again, or continue the run from a session a person attends.`,
+        next: null,
+      } });
+      expect(await readRun(member.config, run)).toBe('missing');
+      return made.rows;
+    },
+  },
+  {
     name: 'a resume of a run this session drives is handed to the person\'s local resume when its definition has a local route here, as for a run it does not drive',
     rows: ['R8'],
     run: async () => {
