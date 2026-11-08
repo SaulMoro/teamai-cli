@@ -3069,5 +3069,28 @@ span('end');
       expect([placesOf(innerState), placesOf(outerState)]).toEqual([{}, {}]);
       expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
     });
+
+    it('says it cannot confirm the place of an attempt whose handle teamai never recorded, and keeps it until the person releases it', async () => {
+      writeDefinition('throughouter', [{
+        use: 'toy', through: 'sandboxtoy',
+        options: {
+          toy: { state: innerState, calls, agent: { output: { ok: true } }, credentials: { APP_TOKEN: 'env:MEMBER_APP_TOKEN' } },
+          sandboxtoy: { state: outerState, calls, die_at: 'open-accepted', can: { isolation: 'sandbox' }, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:MEMBER_CLAUDE_TOKEN' } },
+        },
+      }]);
+      const { runId, attempt } = await killedStart('throughouter', outerState);
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env(tokens));
+
+      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId}`);
+      expect(cancelled.stderr).not.toContain('closed its place');
+      expect(Object.keys(placesOf(outerState))).toEqual([`${runId}/${attempt}`]);
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'opening' });
+
+      const released = await runCLI(['workflow', 'cancel', runId, '--release', attempt], repo, env(tokens));
+
+      expect(released.stderr).toContain(`Released attempt ${attempt} of run ${runId}`);
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+    });
   });
 });

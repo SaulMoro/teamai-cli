@@ -52,6 +52,14 @@ export type PromptRequest = Omit<z.infer<typeof PromptRequestSchema>, 'type'>;
 export type Opened = { kind: 'ready'; handle: string; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
 /**
+ * Whether `failure` is teamai's, for a runtime that did not answer (`stdio.ts`): it timed out, stopped, or broke the
+ * protocol, so it may hold what it was asked to make. Any other failure is the runtime's own answer.
+ */
+export function isUnansweredFailure(failure: RuntimeFailure): boolean {
+  return failure.code === 'runtime_unanswered' || failure.code === 'runtime_exited' || failure.code === 'runtime_protocol';
+}
+
+/**
  * The runtime stopped answering after it was sent an operation: what that operation started may still run there, so
  * nothing it holds, such as a login, is released.
  */

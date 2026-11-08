@@ -259,6 +259,70 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   });
 });
 
+describe('an open that failed, or that a killed teamai left unanswered', () => {
+  const config = (): LocalConfig => ({ repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') });
+  const view = () => ({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} });
+  const refused = { code: 'sandbox_failed', message: 'The image cannot be pulled.' };
+
+  /** A runtime whose open runs `open`, and that notes each open and close it was sent. */
+  const runtimeOpening = (open: StepRuntime['open']): StepRuntime & { opens: string[]; closes: string[] } => {
+    const opens: string[] = [];
+    const closes: string[] = [];
+
+    return {
+      opens,
+      closes,
+      name: 'fake',
+      init: async () => ({ ok: true, can: {}, launchesAgents: false }),
+      open: async (request, onAccepted) => {
+        opens.push(request.op);
+
+        return open(request, onAccepted);
+      },
+      exec: async () => ({ kind: 'cancelled' }),
+      prompt: async () => ({ kind: 'cancelled' }),
+      cancel: async () => {},
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'gone' }),
+      close: async (handle) => {
+        closes.push(handle);
+
+        return { ok: true };
+      },
+      dispose: async () => {},
+    };
+  };
+
+  it('answers the failure of an open its runtime accepted, without sending it again, once teamai restarts, and closes the place', async () => {
+    const runtime = runtimeOpening(async (_request, onAccepted) => {
+      await onAccepted('h1');
+
+      return { kind: 'failed', failure: refused };
+    });
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).open(view())).toMatchObject({ ok: false });
+
+    const restarted = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+
+    expect(await restarted.open(view())).toMatchObject({ ok: false, failure: { message: expect.stringContaining('(sandbox_failed): The image cannot be pulled.') } });
+    expect(runtime.opens).toHaveLength(1);
+    expect(await restarted.close()).toBeUndefined();
+    expect(runtime.closes).toEqual(['h1']);
+  });
+
+  it('keeps an open a killed teamai left with no handle when the restarted open is refused, since the first may have made a place', async () => {
+    const left = runtimeOpening(() => new Promise(() => {}));
+    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime: left, driver: 'd' }).open(view());
+    await expect.poll(() => left.opens.length).toBe(1);
+
+    const runtime = runtimeOpening(async () => ({ kind: 'failed', failure: refused }));
+    const restarted = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+
+    expect(await restarted.open(view())).toMatchObject({ ok: false });
+    expect(runtime.opens).toEqual(left.opens);
+    expect(await restarted.close()).toMatchObject({ message: expect.stringContaining('may hold a place for attempt a00000001 that teamai cannot close') });
+  });
+});
+
 describe('a tool home seeded from the attempt whose session a step resumes', () => {
   it('copies the session, never the login teamai copied into that home under its lock', async () => {
     const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };

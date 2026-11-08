@@ -19,7 +19,7 @@ import { redact } from '@teamai/shared/redact';
 import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { credentialSecrets, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { credentialSecrets, isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -81,6 +81,11 @@ export const AttemptRuntimeRecordSchema = z.object({
    * `closed` place only when the person released it without the runtime's close.
    */
   closeFailed: RuntimeFailureSchema.optional(),
+  /**
+   * Why the open failed after the runtime accepted the place. A restarted teamai answers it instead of sending the open
+   * again, which a runtime through another could answer with less of the place than the first open made.
+   */
+  openFailed: RuntimeFailureSchema.optional(),
 });
 
 export type AttemptRuntimeRecord = z.infer<typeof AttemptRuntimeRecordSchema>;
@@ -461,8 +466,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     async open(view, { tool, toolHome: home, credentials = {} } = {}) {
       openedWith = credentials;
       const found = await current();
-      // A place closed on another runtime holds nothing of this one: the attempt starts again here.
-      const before = found && (found.runtime === runtime.name || found.phase !== 'closed') ? found : undefined;
+      // A place closed on another runtime, or an open the runtime refused before it made a place, holds nothing of this
+      // one: the attempt starts again here.
+      const before = found && !(found.phase === 'closed' && (found.runtime !== runtime.name || found.open.handle === undefined)) ? found : undefined;
 
       // A record of another runtime is one whose place there is still open: what ran there was not stopped
       // (`stopOnRecordedDriver`), so the attempt does not move while it may still run.
@@ -470,6 +476,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
         return { ok: false, failure: runtimeFailure(runtime.name, `cannot continue attempt ${attempt}, whose place on step runtime "${before.runtime}" of driver "${before.driver}" is still open, so what ran there may still run. Resume the run with --driver ${before.driver}.`) };
       }
 
+      if (before?.openFailed && before.phase !== 'closed') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${before.openFailed.code}): ${before.openFailed.message}`) };
       const op = before?.open.op ?? newOpId();
       const toolHome = home ?? before?.toolHome;
       const opening: AttemptRuntimeRecord = { runtime: runtime.name, driver, phase: before?.phase ?? 'opening', open: { op } };
@@ -499,7 +506,18 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
         if (now) await save({ ...now, open: { op, handle: before?.open.handle ?? handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
       });
 
-      if (opened.kind !== 'ready') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${opened.failure.code}): ${opened.failure.message}`) };
+      if (opened.kind !== 'ready') {
+        const now = await current();
+
+        if (now?.open.handle !== undefined) await save({ ...now, openFailed: opened.failure });
+        // The runtime answered the first open of this op with a failure before it accepted a place, so it holds none.
+        // One that did not answer, or an op a killed teamai sent before, may hold a place no handle names: the record
+        // stays open, so a close says so.
+        else if (now && !before && !isUnansweredFailure(opened.failure)) await save({ ...now, phase: 'closed' });
+
+        return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${opened.failure.code}): ${opened.failure.message}`) };
+      }
+
       const ready = await current();
 
       if (ready && ready.open.handle !== opened.handle) await save({ ...ready, open: { op, handle: opened.handle } });
@@ -667,9 +685,16 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
     async close(how) {
       const before = await current();
-      const handle = before?.open.handle;
 
-      if (!before || handle === undefined || before.phase === 'closed') return undefined;
+      if (!before || before.phase === 'closed') return undefined;
+      const handle = before.open.handle;
+
+      // A teamai stopped after it sent the open and before it recorded the handle: the runtime may have made a place
+      // that no request teamai can send names, so it is not said to be closed.
+      if (handle === undefined) {
+        return runtimeFailure(runtime.name, `may hold a place for attempt ${attempt} that teamai cannot close: teamai was stopped after it asked for the place (${before.open.op}) and before it recorded the place's handle. Close it in ${runtime.name} yourself if it is there.`);
+      }
+
       const elsewhere = placeElsewhere(before);
 
       if (elsewhere) return elsewhere;
