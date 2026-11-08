@@ -19,7 +19,7 @@ import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, takeRunLock } from '../store.js';
 import { stepWorkflow, workflowRunBy, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
-import { git, hostGitEnv, keptOrigin, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
+import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
 const CANCEL_READ_MS = 30_000;
@@ -158,7 +158,7 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   await fs.rm(work, { recursive: true, force: true });
   const cloned = await git(root, ['clone', '--quiet', '--shared', '--no-checkout', root, work]);
   // The clone's origin is the checkout; the step sees the origin the checkout names, as it would there.
-  const originUrl = [...memberConfig].find((entry) => entry.startsWith('remote.origin.url\n'))?.slice('remote.origin.url\n'.length);
+  const originUrl = keptOriginUrl(memberConfig);
   const named = cloned.code === 0 && originUrl !== undefined ? await git(work, ['remote', 'set-url', 'origin', originUrl]) : cloned;
   const added = named.code === 0 ? await git(work, ['checkout', '--quiet', '--detach', from]) : named;
 
@@ -350,28 +350,15 @@ async function pushWork({ work, ref, message, memberConfig, parent, index }: { w
   if (committed.code !== 0) return { error: `The member could not commit the step's work: ${committed.stderr.trim()}` };
   const to = committed.stdout.trim();
   // The origin this checkout named before the step, never the one the step's copy names now.
-  const url = keptOrigin(memberConfig);
+  const targets = pushTargets(memberConfig);
 
-  if (url === undefined) return { error: `The member could not push the step's work to ${ref}: its checkout names no origin.` };
+  if (targets.length === 0) return { error: `The member could not push the step's work to ${ref}: its checkout names no origin.` };
 
-  for (const target of pushTargets(memberConfig, url)) {
+  for (const target of targets) {
     const pushed = await remoteGit(work, { kept: target.kept, env: hostGitEnv() }, ['push', '--quiet', target.url, `${to}:${ref}`], snapshotGit);
 
     if (pushed.code !== 0) return { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
   }
 
   return { to };
-}
-
-/**
- * Where `git push origin` pushes in a checkout whose kept config is `kept`, origin's URL being `url`: every push URL it
- * names, none of them rewritten by a `pushInsteadOf`, or else `url`, which one rewrites.
- */
-function pushTargets(kept: MemberConfig, url: string): { url: string; kept: MemberConfig }[] {
-  const pushUrls = [...kept].flatMap((entry) => entry.startsWith('remote.origin.pushurl\n') ? [entry.slice('remote.origin.pushurl\n'.length)] : []);
-
-  if (pushUrls.length === 0) return [{ url, kept }];
-  const unrewritten = new Set([...kept].filter((entry) => !/^url\..*\.pushinsteadof\n/.test(entry)));
-
-  return pushUrls.map((pushUrl) => ({ url: pushUrl, kept: unrewritten }));
 }
