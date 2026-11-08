@@ -6,7 +6,7 @@ import { claimOffered, publishRun, resumeRun } from '../workflow/handoff.js';
 import { managedReport, resumeRefusal } from '../workflow/protocol.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun, RunIdSchema } from '../workflow/store.js';
-import { BUILD, dirs, git, type Member, originFile, start, team } from './helpers/workflow-handoff-fixture.js';
+import { BUILD, dirs, git, type Member, originFile, receiveHook, start, team } from './helpers/workflow-handoff-fixture.js';
 import { sharedTeam, skillHarness } from './helpers/skill-harness.js';
 import { AttemptIdSchema, type AttemptId, type RunId } from '../workflow/store.js';
 
@@ -149,6 +149,24 @@ describe('taking over a run its owner drives', () => {
 
     vi.setSystemTime(Date.now() + 61 * MINUTE);
     expect(await resumeRun(bob.config, runId, { claim: false, checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+  });
+
+  it('keeps asking after a publish of the owner failed to reach teamai-reports: its next lease past the renewal age writes again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { acme, alice, bob, runId } = await aliceDrives();
+    receiveHook(acme.origin, 'exit 1');
+    expect(await publishRun(alice.config, runId, { checkout: alice.checkout, env: {} })).toMatchObject({ ok: false });
+    receiveHook(acme.origin, 'exit 0');
+    const first = published(acme, runId).write;
+
+    vi.setSystemTime(Date.now() + 21 * MINUTE);
+    await leaseNext(alice.config, runId, alice.driver);
+    expect(published(acme, runId)).toMatchObject({ owner: { user: 'alice' } });
+    expect(published(acme, runId).offered).toBeUndefined();
+    expect(published(acme, runId).write).not.toBe(first);
+
+    vi.setSystemTime(Date.now() + 45 * MINUTE);
+    expect(await resumeRun(bob.config, runId, { claim: false, checkout: bob.checkout })).toMatchObject({ ok: false, error: { code: 'owner_active' } });
   });
 
   it('keeps asking while the owner leases: each lease past the renewal age writes again', async () => {
