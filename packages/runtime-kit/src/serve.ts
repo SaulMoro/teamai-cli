@@ -102,17 +102,17 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
   const failRequest = (request: RuntimeRequest, why: string): void => {
     switch (request.type) {
       case 'init':
-        return write({ type: 'init', ok: false, error: { code: 'runtime_error', message: `Runtime ${name} could not start: ${why}` } });
+        return write({ type: 'init', ok: false, error: { code: 'runtime_failed', message: `Runtime ${name} could not start: ${why}` } });
       case 'open':
       case 'exec':
       case 'prompt':
-        return write({ op: request.op, event: 'failed', failure: { code: 'runtime_error', message: `Runtime ${name} could not carry out ${request.type} of ${request.op}: ${why}` } });
+        return write({ op: request.op, event: 'failed', failure: { code: 'runtime_failed', message: `Runtime ${name} could not carry out ${request.type} of ${request.op}: ${why}` } });
       case 'cancel':
         return write({ op: request.op, event: 'failed', failure: { code: CANCEL_FAILED, message: `Runtime ${name} could not carry out the cancel of ${request.op}, so ${stopped} may still run: ${why.replace(/\.$/, '')}. Run teamai workflow cancel again.` } });
       case 'reattach':
       case 'collect':
       case 'close':
-        return write({ event: 'failed', handle: request.handle, failure: { code: 'runtime_error', message: `Runtime ${name} could not carry out ${request.type} of ${request.handle}: ${why}` } });
+        return write({ event: 'failed', handle: request.handle, failure: { code: 'runtime_failed', message: `Runtime ${name} could not carry out ${request.type} of ${request.handle}: ${why}` } });
       default: {
         const unhandled: never = request;
 

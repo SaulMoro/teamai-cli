@@ -1496,11 +1496,11 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send({ type: 'open', op: 'op-00000062', run: RUN, attempt: 'a9e8d7c6', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
       expect(await runtime.next((line) => line['op'] === 'op-00000062' && line['event'] !== 'accepted')).toEqual({
-        op: 'op-00000062', event: 'failed', failure: { code: 'runtime_error', message: expect.stringMatching(/^Runtime t3 could not carry out open of op-00000062: .*EACCES/) },
+        op: 'op-00000062', event: 'failed', failure: { code: 'runtime_failed', message: expect.stringMatching(/^Runtime t3 could not carry out open of op-00000062: .*EACCES/) },
       });
       runtime.send({ type: 'close', handle });
       expect(await runtime.next((line) => line['handle'] === handle)).toEqual({
-        event: 'failed', handle, failure: { code: 'runtime_error', message: expect.stringMatching(new RegExp(`^Runtime t3 could not carry out close of ${handle}: .*EACCES`)) },
+        event: 'failed', handle, failure: { code: 'runtime_failed', message: expect.stringMatching(new RegExp(`^Runtime t3 could not carry out close of ${handle}: .*EACCES`)) },
       });
 
       expect(runtime.lines.filter((line) => line['event'] === 'error')).toEqual([]);
@@ -1514,7 +1514,7 @@ describe('teamai-runtime-t3', () => {
       fs.chmodSync(ops, 0o500);
 
       runtime.send(prompt(handle, 'op-00000077'));
-      expect(await ended(runtime, 'op-00000077')).toEqual({ op: 'op-00000077', event: 'failed', failure: { code: 'runtime_error', message: expect.stringMatching(/^Runtime t3 could not carry out prompt of op-00000077: .*EACCES/) } });
+      expect(await ended(runtime, 'op-00000077')).toEqual({ op: 'op-00000077', event: 'failed', failure: { code: 'runtime_failed', message: expect.stringMatching(/^Runtime t3 could not carry out prompt of op-00000077: .*EACCES/) } });
       expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
 
       fs.chmodSync(ops, 0o700);

@@ -497,7 +497,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
             unforgotten = ` Its records could not be removed either: ${forgetting instanceof Error ? forgetting.message : String(forgetting)}`;
           }
 
-          write({ event: 'failed', handle, failure: { code: 'runtime_error', message: `Runtime sandbox could not carry out close of ${handle}: ${error instanceof Error ? error.message : String(error)}${unforgotten}` }, ...(isReleased === true && keptOf(handle, ready.provider)) });
+          write({ event: 'failed', handle, failure: { code: 'runtime_failed', message: `Runtime sandbox could not carry out close of ${handle}: ${error instanceof Error ? error.message : String(error)}${unforgotten}` }, ...(isReleased === true && keptOf(handle, ready.provider)) });
         }
       },
     },

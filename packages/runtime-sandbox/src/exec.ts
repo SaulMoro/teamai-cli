@@ -440,7 +440,7 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
       await run();
     } catch (error) {
       if (!running.has(request.op)) throw error;
-      finish(request.op, { state: 'failed', failure: { code: 'runtime_error', message: `Runtime sandbox could not carry out ${request.type} of ${request.op}: ${error instanceof Error ? error.message : String(error)}` } });
+      finish(request.op, { state: 'failed', failure: { code: 'runtime_failed', message: `Runtime sandbox could not carry out ${request.type} of ${request.op}: ${error instanceof Error ? error.message : String(error)}` } });
     }
   };
 

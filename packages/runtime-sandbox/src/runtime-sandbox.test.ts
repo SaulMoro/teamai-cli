@@ -626,7 +626,7 @@ describe('a prompt attempt in a container', () => {
     fs.writeFileSync(record, '{"handle":');
     connection.send({ type: 'close', handle: HANDLE, release: true });
 
-    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) }, kept: [HANDLE] });
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_failed', message: expect.stringContaining(record) }, kept: [HANDLE] });
     expect(journalFiles()).toEqual([]);
   });
 
@@ -1229,15 +1229,15 @@ describe('a prompt attempt in a container', () => {
     const op = newOp();
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
-    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     connection.send({ type: 'close', handle: HANDLE });
     const closeFailed = await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000);
 
-    expect(closeFailed).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    expect(closeFailed).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     // Not released: the place stays for a close once the journal is mended, so nothing is left on purpose.
     expect(closeFailed).not.toHaveProperty('kept');
     connection.send({ type: 'reattach', handle: HANDLE });
-    expect(await connection.next((message) => message.handle === HANDLE, 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    expect(await connection.next((message) => message.handle === HANDLE, 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     // An error line would fail every other request teamai is waiting on.
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
     // Nothing is taken as absent: the container and its record stay for a close once the journal is mended.
@@ -1260,7 +1260,7 @@ describe('a prompt attempt in a container', () => {
     const before = connection.messages.length;
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
-    expect(await connection.next((message) => message.op === op && connection.messages.indexOf(message) >= before && message.event !== 'output', 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    expect(await connection.next((message) => message.op === op && connection.messages.indexOf(message) >= before && message.event !== 'output', 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
     // Mended, the place closes as any other.
     fs.writeFileSync(record, intact);
@@ -2018,7 +2018,7 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     const intact = fs.readFileSync(record, 'utf8');
     fs.writeFileSync(record, '{"run":');
 
-    expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, ms: 5_000 })).toMatchObject({ event: 'failed', failure: { code: 'runtime_error', message: expect.stringContaining(record) } });
+    expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, ms: 5_000 })).toMatchObject({ event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
     // Mended, the place closes as any other.
     fs.writeFileSync(record, intact);

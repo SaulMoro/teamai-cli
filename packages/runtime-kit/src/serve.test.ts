@@ -81,10 +81,10 @@ describe('serving runtime protocol 1', () => {
   });
 
   it.each<[string, RuntimeRequest, RuntimeMessage]>([
-    ['an init, with init\'s refusal', { type: 'init', protocol: 1, mode: 'unattended', options: {} }, { type: 'init', ok: false, error: { code: 'runtime_error', message: 'Runtime fake could not start: boom' } }],
-    ['an exec, with its failure', exec(OP), { op: OP, event: 'failed', failure: { code: 'runtime_error', message: `Runtime fake could not carry out exec of ${OP}: boom` } }],
+    ['an init, with init\'s refusal', { type: 'init', protocol: 1, mode: 'unattended', options: {} }, { type: 'init', ok: false, error: { code: 'runtime_failed', message: 'Runtime fake could not start: boom' } }],
+    ['an exec, with its failure', exec(OP), { op: OP, event: 'failed', failure: { code: 'runtime_failed', message: `Runtime fake could not carry out exec of ${OP}: boom` } }],
     ['a cancel, with a stop it could not confirm', { type: 'cancel', op: OP }, { op: OP, event: 'failed', failure: { code: 'cancel_failed', message: `Runtime fake could not carry out the cancel of ${OP}, so its fake agent may still run: boom. Run teamai workflow cancel again.` } }],
-    ['a reattach, with its handle\'s failure', { type: 'reattach', handle: 'h-1' }, { event: 'failed', handle: 'h-1', failure: { code: 'runtime_error', message: 'Runtime fake could not carry out reattach of h-1: boom' } }],
+    ['a reattach, with its handle\'s failure', { type: 'reattach', handle: 'h-1' }, { event: 'failed', handle: 'h-1', failure: { code: 'runtime_failed', message: 'Runtime fake could not carry out reattach of h-1: boom' } }],
   ])('answers %s when its handler throws', async (_, request, answer) => {
     const boom = async (): Promise<void> => { throw new Error('boom'); };
     const runtime = served(() => ({ init: boom, exec: boom, cancel: boom, reattach: boom }));
