@@ -63,6 +63,20 @@ describe('a driver definition with several runtimes', () => {
     return run;
   };
 
+  /** The run a usage limit past an unattended run's wait offered on teamai-reports. */
+  const offeredRunOf = (ran: Ran): string => {
+    const done = envelope(ran);
+    const handoff = 'data' in done && typeof done.data.handoff === 'object' && done.data.handoff !== null && 'run' in done.data.handoff ? done.data.handoff.run : undefined;
+    if (typeof handoff !== 'string') throw new Error(`no offered run in the envelope:\n${ran.stdout}\n${ran.stderr}`);
+    return handoff;
+  };
+
+  /** Claude's text for a limit that resets three days from now, past the 6 hours an unattended run waits for it. */
+  const claudeWeekly = (): string => {
+    const day = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'Europe/Madrid' }).format(Date.now() + 3 * 24 * 3600_000);
+    return `You've hit your limit · resets ${day}, 9am (Europe/Madrid)`;
+  };
+
   beforeAll(async () => {
     sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-driver-runtimes-e2e-')));
     repo = path.join(sandbox, 'repo');
@@ -1418,15 +1432,15 @@ steps:
       expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ sessionHome: { tool: 'claude', dir: path.join(os.homedir(), '.claude') } });
     });
 
-    it('fails a prompt whose tool hit its usage limit usage_limited, with the reset time the runtime gave and the retry to run', async () => {
-      writeDefinition('agentlimit', [{ use: 'toy', options: { state, agent: { fail: { code: 'usage_limited', message: 'claude hit its usage limit, which resets at 14:00.' } } } }]);
+    it('offers the run of a prompt whose tool hit a usage limit past the wait, with the step pending and the text the runtime gave', async () => {
+      const resets = Math.ceil(Date.now() / 1000) + 3 * 24 * 3600;
+      writeDefinition('agentlimit', [{ use: 'toy', options: { state, agent: { fail: { code: 'usage_limited', message: `claude hit its usage limit: Claude AI usage limit reached|${resets}` } } } }]);
 
       const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentlimit'], repo, env());
 
-      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
-      const runId = runOf(ran);
-      const [review] = readRunState(runId).steps;
-      expect(review).toMatchObject({ status: 'failed', failure: { code: 'usage_limited', message: `claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry ${runId} review` } });
+      const runId = offeredRunOf(ran);
+      expect(ran.stderr).toContain(`Step "review" stopped: claude hit its usage limit: Claude AI usage limit reached|${resets}. teamai launches no more steps on claude until its limit resets, then runs the step again.`);
+      expect(readRunState(runId).steps).toMatchObject([{ id: 'review', status: 'pending' }]);
     });
 
     it('ends the failure of a prompt whose runtime restarted under it with the retry to run', async () => {
@@ -1993,29 +2007,32 @@ steps:
     it.each([
       { driver: 'local', definition: undefined },
       { driver: 'claudelimit', definition: 'toy' },
-    ])('fails a Claude step that hit its usage limit usage_limited on $driver, with Claude\'s own text and the retry to run', async ({ driver, definition }) => {
+    ])('offers the run of a Claude step that hit its usage limit past the wait on $driver, naming Claude\'s own text', async ({ driver, definition }) => {
       if (definition) writeDefinition(driver, [{ use: definition, options: { state } }]);
+      const limit = claudeWeekly();
 
-      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', driver, '--tools', 'default=claude'], repo, env({ FAKE_TOOL_ERROR: 'You\'ve hit your limit · resets 3pm (Europe/Madrid)' }));
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', driver, '--tools', 'default=claude'], repo, env({ FAKE_TOOL_ERROR: limit }));
 
-      const runId = runOf(ran);
-      const [review] = readRunState(runId).steps;
-      expect(review, ran.stderr).toMatchObject({
-        status: 'failed',
-        failure: { code: 'usage_limited', message: `claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry ${runId} review` },
-      });
+      const runId = offeredRunOf(ran);
+      expect(ran.stderr).toContain(`Step "review" stopped: claude hit its usage limit: ${limit}. teamai launches no more steps on claude until its limit resets`);
+      expect(ran.stderr).toContain(`past the 6 hours an unattended run waits for it. So run ${runId} is offered on teamai-reports`);
+      expect(readRunState(runId).steps).toMatchObject([{ id: 'review', status: 'pending' }]);
     });
 
-    it('fails a Claude step the API refused on its rate limit usage_limited, with Claude\'s own text and the retry to run', async () => {
+    it('waits on a Claude step the API refused on its rate limit, and leaves it pending when stopped', async () => {
       const refused = 'API Error: Request rejected (429) · This request would exceed your account\'s rate limit. Please try again later.';
-      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'local', '--tools', 'default=claude'], repo, env({ FAKE_TOOL_ERROR: refused }));
+      const child = spawn(process.execPath, [CLI, 'workflow', 'start', 'oneprompt', '--driver', 'local', '--tools', 'default=claude'], { cwd: repo, env: { ...process.env, ...env({ FAKE_TOOL_ERROR: refused }), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const closed = new Promise((resolve) => child.on('close', resolve));
+      for (const deadline = Date.now() + 30_000; !stderr.includes('gave no reset time') && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+      child.kill('SIGINT');
+      await closed;
 
-      const runId = runOf(ran);
-      const [review] = readRunState(runId).steps;
-      expect(review, ran.stderr).toMatchObject({
-        status: 'failed',
-        failure: { code: 'usage_limited', message: `claude hit its usage limit: ${refused} Then run: teamai workflow retry ${runId} review` },
-      });
+      expect(stderr).toContain(`Step "review" stopped: claude hit its usage limit: ${refused} teamai launches no more steps on claude until its limit resets`);
+      expect(stderr).toMatch(/Run (r[0-9a-f]+) waits: claude hit its usage limit and gave no reset time, so teamai tries it again at [0-9:]+ \(.+\)\. Then it runs the steps that limit holds\. To go on elsewhere instead, stop it \(Ctrl-C\) and run: teamai workflow publish \1/);
+      const runId = /Run (r[0-9a-f]+) waits:/.exec(stderr)?.[1] ?? '';
+      expect(readRunState(runId).steps).toMatchObject([{ id: 'review', status: 'pending' }]);
     });
 
     it('masks an env credential in the failure of a place its runtime could not close', async () => {
@@ -2323,15 +2340,15 @@ span('end');
       expect(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct-daily', refresh_token: 'r900' } });
     });
 
-    it('fails a Codex step that hit its usage limit usage_limited, with Codex\'s own text and the retry to run', async () => {
+    it('offers the run of a Codex step that hit its usage limit past the wait, naming Codex\'s own text', async () => {
       loginDefinition('codexlimit', state);
       const limit = 'You\'ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again in 2 days 1 hour 40 minutes.';
 
       const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexlimit'], repo, env({ FAKE_CODEX_ERROR: limit }));
 
-      const runId = runOf(ran);
-      const [review] = readRunState(runId).steps;
-      expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'usage_limited', message: `codex hit its usage limit: ${limit} Then run: teamai workflow retry ${runId} review` } });
+      const runId = offeredRunOf(ran);
+      expect(ran.stderr).toContain(`Step "review" stopped: codex hit its usage limit: ${limit} teamai launches no more steps on codex until its limit resets`);
+      expect(readRunState(runId).steps).toMatchObject([{ id: 'review', status: 'pending' }]);
     });
 
     it('copies no login into the attempt\'s tool home when the runtime\'s provider keeps its own Codex login', async () => {
