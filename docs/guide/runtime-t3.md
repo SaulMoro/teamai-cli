@@ -238,6 +238,22 @@ When the instance that runs a team tool has another home than teamai gives the t
 ⚠ Step runtime "t3": T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.acme-claude: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ~/.acme-claude.
 ```
 
+## Through a sandbox
+
+An entry `use: t3, through: sandbox` runs each step's thread in T3 Code as above, and the thread's tool in the attempt's sandbox. [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool) shows the definition and what the sandbox does. The sandbox's provider must serve the attempt's socket: `docker`, `podman`, `sbx` or `bwrap`.
+
+For each step, the runtime registers the step's tool on that socket, and T3 starts teamai's wrapper `teamai-sandbox-<tool>` in place of the tool. The first time, teamai adds the T3 provider instance that runs the wrapper, as it adds one for a team tool:
+
+```text
+⚠ Step runtime "t3", operation op-08bf92d32391: Added the T3 Code provider instance "teamai-sandbox-claude" (driver Claude, Binary path /usr/local/bin/teamai-sandbox-claude), so teamai-sandbox-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
+```
+
+The step's session is read in the attempt's tool home, where the sandbox runs the tool. With a provider that serves no socket (`seatbelt`, `vercel`), the step fails before any thread starts, and teamai adds no instance:
+
+```text
+✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.
+```
+
 ## Project scripts
 
 T3 runs a project's **setup** script ("Run on worktree creation") in each worktree a thread opens on, and its **settle** script when a thread is settled. teamai prepares the step's worktree itself, so neither runs for a step:
