@@ -426,7 +426,7 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
     if (unclosed) log.warn(unclosed.message);
     const outputs = JsonValueSchema.safeParse(body.outputs);
 
-    if (body.tool !== undefined && body.session !== undefined) await archiveSession(config, { run, work, session: { tool: body.tool, id: body.session } });
+    if (body.tool !== undefined && body.session !== undefined) await archiveSession(config, { run, root, session: { tool: body.tool, id: body.session } });
 
     return {
       exitCode: body.exitCode ?? (body.outcome === 'success' ? 0 : 1), stderr: (body.message ?? '').slice(0, 400),
@@ -450,15 +450,16 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
 
 /**
  * Pushes the session a prompt step ran on this member to the team session archive, filed under the business repository
- * of clone `work`, so the owner's later step continues it, as `publish --sessions` does. A session that does not reach
+ * of checkout `root`, so the owner's later step continues it, as `publish --sessions` does. The tool's store is the one
+ * `root`'s config records, as the step's clone has no config of its own. A session that does not reach
  * the archive leaves the step's end as it is: a later step that continues it starts a new session and says why.
  */
-async function archiveSession(config: LocalConfig, { run, work, session }: { run: RunId; work: string; session: { tool: string; id: string } }): Promise<void> {
+async function archiveSession(config: LocalConfig, { run, root, session }: { run: RunId; root: string; session: { tool: string; id: string } }): Promise<void> {
   const platform = AgentSession.platformForTool(session.tool);
 
   if (!platform) return;
   const holding = await attemptHoldingSession(config, run, session);
-  const archived = await archiveSessions(config, [[{ platform, sessionId: session.id, ...(holding && { storeDir: holding.storeDir }) }]], { run, checkout: work });
+  const archived = await archiveSessions(config, [[{ platform, sessionId: session.id, ...(holding && { storeDir: holding.storeDir }) }]], { run, checkout: root });
 
   if (archived.status === 'failed') log.warn(`The ${session.tool} session ${session.id} of run ${run} did not reach the team session archive, so a later step that continues it starts a new session: ${archived.message}`);
 }

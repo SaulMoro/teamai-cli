@@ -339,6 +339,32 @@ describe('a member taking a prompt attempt', () => {
     expect(restored).toEqual({ status: 'restored', sessionId: expect.any(String) });
   });
 
+  it('archives the session from the Claude root the member\'s checkout records, though the step ran in a clone of it', async () => {
+    claudeOnPath('{"ok":true}');
+    // A relocated root teamai records is one under the member's home.
+    const relocated = path.join(process.env.HOME ?? '', '.claude-relocated');
+    fs.mkdirSync(relocated, { recursive: true });
+    vi.stubEnv('CLAUDE_CONFIG_DIR', relocated);
+
+    const { record, alice } = await takeForged((forged) => {
+      forged.lease = { step: 'write', prompt: 'Write made.txt.', env: {} };
+    }, async (members) => {
+      await useClaude(members);
+      // As `teamai init` in a workspace records a relocated Claude Code: in the checkout's own config.
+      fs.mkdirSync(path.join(members.bob.checkout, '.teamai'), { recursive: true });
+      fs.writeFileSync(path.join(members.bob.checkout, '.teamai', 'config.yaml'), JSON.stringify({ ...members.bob.config, scope: 'workspace', toolRoots: { claude: relocated } }));
+    }, PROMPTED);
+
+    const session = record?.state === 'finished' ? record.result.session : undefined;
+    await readableReportsWorktree(alice.config);
+    // Alice's own Claude Code, where she continues the session.
+    fs.mkdirSync(path.join(process.env.HOME ?? '', '.claude', 'projects'), { recursive: true });
+    const archive = openSessionArchive(alice.config);
+    const restored = await archive.restore({ platform: 'claude-code', sessionId: session ?? '' }, { platform: 'claude-code', cwd: alice.checkout });
+    await archive.close();
+    expect(restored).toEqual({ status: 'restored', sessionId: expect.any(String) });
+  });
+
   it('fails the attempt, keeping what the tool answered out of it, when the member cannot push the work the tool made', async () => {
     claudeOnPath('{"ok":true}', 'fs.writeFileSync("made.txt", "written\\n");');
 
