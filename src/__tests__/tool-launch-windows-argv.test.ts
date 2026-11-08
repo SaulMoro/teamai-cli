@@ -1,0 +1,136 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { batchLaunchOf } from '@teamai/tool-core/exec';
+import { runTool } from '../tool-launch/run.js';
+import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../tool-launch/tools.js';
+
+const isWindows = process.platform === 'win32';
+const BACKSLASH = String.fromCodePoint(92);
+
+/** Arguments cmd.exe or Windows argv parsing would mangle if quoted wrongly (sandcastle's set). */
+const NASTY_ARGS = [
+  'plain',
+  'has spaces in it',
+  '',
+  "single ' quote",
+  'double " quote',
+  `mixed 'single' and "double"`,
+  '100% sure, %PATH% and %%',
+  'caret ^ and ^^',
+  'amp & and &&',
+  'pipe | and ||',
+  'redirects < > >> 2>&1',
+  'parens ( ) and !bang!',
+  `trailing backslash${BACKSLASH}`,
+  `backslash before quote ${BACKSLASH}" here`,
+  `C:${BACKSLASH}Program Files${BACKSLASH}thing${BACKSLASH}`,
+  'claude-fable-5[1m]',
+  '$HOME `whoami` $(id)',
+  'unicode: café — 日本語',
+];
+
+const PROMPT = `Fix "the bug" in it's & | ^ %PATH% ${NASTY_ARGS.join(' ')}`;
+const MULTILINE = 'Name one color.\n\nReply with only a JSON value.';
+
+/** Each tool's real call argv for `prompt`, as teamai builds it. */
+/** Why cmd.exe cannot start `executable` with `args`, or undefined when it can. */
+const refusalOf = (executable: string, args: readonly string[]): string | undefined => {
+  const launch = batchLaunchOf(executable, args, 'C:\\Windows\\system32\\cmd.exe');
+
+  return launch?.ok === false ? launch.message : undefined;
+};
+
+const profiles = LAUNCH_ORDER.map((tool) => {
+  const call = launchAdapterOf(tool).call;
+
+  return { tool, executable: executableOf(tool), takes: call.prompt, args: (prompt: string) => call.args({ prompt, promptFile: 'C:\\t\\prompt.md', lastMessageFile: 'C:\\t\\last.txt' }) };
+});
+
+describe('arguments for an npm .cmd shim', () => {
+  it.each(profiles)('lets $tool pass any prompt and nasty arguments that hold no newline', ({ executable, args }) => {
+    expect(refusalOf(`C:\\npm\\${executable}.cmd`, [...args(PROMPT), ...NASTY_ARGS])).toBeUndefined();
+  });
+
+  it.each(profiles.filter((profile) => profile.takes === 'argv'))('refuses a multi-line prompt $tool takes as an argument, naming stdin', ({ executable, args }) => {
+    expect(refusalOf(`C:\\npm\\${executable}.cmd`, args(MULTILINE))).toBe(
+      `${executable}.cmd is a batch file, which runs under cmd.exe, and cmd.exe cannot pass an argument containing a newline. Pass that text on stdin, or run the tool's .exe instead of its npm shim.`,
+    );
+  });
+
+  it.each(profiles.filter((profile) => profile.takes !== 'argv'))('takes a multi-line prompt to $tool off the command line', ({ executable, args }) => {
+    expect(refusalOf(`C:\\npm\\${executable}.cmd`, args(MULTILINE))).toBeUndefined();
+  });
+
+  it('refuses a command line over the cmd.exe limit once escaped', () => {
+    expect(refusalOf('C:\\npm\\copilot.cmd', ['-p', '%'.repeat(2100)])).toMatch(/^The command line for copilot\.cmd is too long for cmd\.exe: \d+ characters once escaped, over its 8191-character limit\./);
+  });
+
+  it('starts a batch file through cmd.exe, and leaves an .exe to cross-spawn', () => {
+    expect({
+      shim: batchLaunchOf('C:\\npm\\claude.cmd', ['-p'], 'C:\\Windows\\system32\\cmd.exe'),
+      exe: batchLaunchOf('C:\\tools\\claude.exe', [MULTILINE, 'x'.repeat(9000)], 'cmd.exe'),
+    }).toEqual({ shim: { ok: true, command: 'C:\\Windows\\system32\\cmd.exe', args: ['/d', '/s', '/c', expect.stringMatching(/^"C:\\npm\\claude\.cmd .*-p.*"$/)] }, exe: undefined });
+  });
+});
+
+/** The shim npm's cmd-shim writes for a JS bin, pointed at a printer of its argv. */
+const NPM_CMD_SHIM = [
+  '@ECHO off',
+  'GOTO start',
+  ':find_dp0',
+  'SET dp0=%~dp0',
+  'EXIT /b',
+  ':start',
+  'SETLOCAL',
+  'CALL :find_dp0',
+  '',
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ') ELSE (',
+  '  SET "_prog=node"',
+  '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+  ')',
+  '',
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\argv.js" %*',
+  '',
+].join('\r\n');
+
+const Printed = z.object({ argv: z.array(z.string()), stdin: z.string() });
+
+describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windows', () => {
+  let dir = '';
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-cmd-argv-'));
+    fs.writeFileSync(path.join(dir, 'argv.js'), "const fs = require('node:fs'); process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), stdin: fs.readFileSync(0, 'utf8') }));");
+  });
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(profiles)('delivers $tool its real arguments and prompt verbatim', async ({ executable, takes, args }) => {
+    const shim = path.join(dir, `${executable}.cmd`);
+
+    fs.writeFileSync(shim, NPM_CMD_SHIM);
+    const argv = [...args(PROMPT), ...NASTY_ARGS];
+
+    const run = await runTool({ executable: shim, args: argv, cwd: dir, env: process.env, stdin: takes === 'stdin' ? MULTILINE : '', timeoutMs: 30_000, detached: false });
+
+    expect(run).toMatchObject({ code: 0, stderr: '' });
+    expect(Printed.parse(JSON.parse(run.stdout))).toEqual({ argv, stdin: takes === 'stdin' ? MULTILINE : '' });
+  });
+
+  it('refuses before starting the shim when a prompt argument holds a newline', async () => {
+    const shim = path.join(dir, 'copilot.cmd');
+
+    fs.writeFileSync(shim, NPM_CMD_SHIM);
+
+    const run = await runTool({ executable: shim, args: ['-p', MULTILINE, '-s'], cwd: dir, env: process.env, stdin: '', timeoutMs: 30_000, detached: false });
+
+    expect(run).toMatchObject({ code: 1, stdout: '', stderr: expect.stringContaining('cannot pass an argument containing a newline') });
+  });
+});
