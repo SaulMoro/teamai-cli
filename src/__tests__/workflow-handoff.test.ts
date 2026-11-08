@@ -640,7 +640,8 @@ describe('workflow handoff through teamai-reports', () => {
     receiveHook(acme.origin, 'exit 1');
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: false, error: { code: 'reports_failed' } });
     receiveHook(acme.origin, 'exit 0');
-    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout });
+    // Alice took the run back a moment ago and may drive it, so the claim needs the person's yes.
+    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' });
     expect(claimed).toMatchObject({ ok: true, value: { ownership: 'claimed', stateRevision: 2 } });
     const claim = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
 

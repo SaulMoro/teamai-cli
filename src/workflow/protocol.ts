@@ -14,7 +14,7 @@ import { attemptEnv, nestedWorkflowError, type AgentEvidence } from './attempt-m
 import { loadCachedWorkflow, loadWorkflowTree } from './cache.js';
 import { describeWorkflow, type WorkflowDescription } from './describe.js';
 import { ConfinedLeaseSchema, LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
-import { carriedRun, claimOffered, offerToPerson, reconcileTakenCopies, resumeRun, settledSteps } from './handoff.js';
+import { carriedRun, claimOffered, leaseRefusal, offerToPerson, reconcileTakenCopies, resumeRun, settledSteps, takeoverFor, takeoverRefusal, type Takeover } from './handoff.js';
 import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput } from './engine.js';
 import {
   abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparedCopyTeam, preparePlace, refuseDirtyAdoptedCommand, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
@@ -145,16 +145,17 @@ export interface WorkflowClient {
    * the branches of a run taken over to the commits it recorded. `claim` says which runs it takes from teamai-reports,
    * as {@link ResumeClaim} reads, or `none`, no run. A lease this machine's
    * local driver still holds is released, as that driver would on its way out: it drives only while it holds the run
-   * lock, so it is gone. Describes the run's own definition as `describe` does.
+   * lock, so it is gone. Describes the run's own definition as `describe` does. `takeover` is the caller's run mode and
+   * whether the person confirmed, which decide a takeover of a run its owner may still drive.
    */
-  resume(runId: RunId, options: { lock: RunLock; claim: 'none' | ResumeClaim; checkout: string; ceiling: number; can: DriverCan; tool?: string }): Promise<RunReadied>;
+  resume(runId: RunId, options: { lock: RunLock; claim: 'none' | ResumeClaim; takeover: Pick<InvokeCaller, 'mode' | 'confirmed'>; checkout: string; ceiling: number; can: DriverCan; tool?: string }): Promise<RunReadied>;
   /**
    * Run `runId` as it stands before `resume` changes anything, as `resumeRefusal` reads it: its own definition described
    * as `describe` does, and its status. Undefined when this machine cannot read it.
    */
   carried(runId: RunId, options: { published: boolean; claim: boolean; ceiling: number; can: DriverCan }): Promise<{ description: WorkflowDescription; status: RunStatus } | undefined>;
   /** Why `caller` may not continue run `runId`, by a resume or a takeover, as `resumeRefusal` decides it. */
-  resumeRefusal(runId: RunId, options: { caller: InvokeCaller; published: boolean }): Promise<WorkflowFailure | undefined>;
+  resumeRefusal(runId: RunId, options: { caller: InvokeCaller; published: boolean; claim?: boolean }): Promise<WorkflowFailure | undefined>;
 }
 
 /**
@@ -164,15 +165,15 @@ export interface WorkflowClient {
 export type ResumeClaim = 'lacking' | 'any' | 'offered';
 
 /** Readies run `runId` here as `claim` says: claimed only while offered, claimed whoever owns it, or resumed as it is. */
-function readiedHere(config: LocalConfig, runId: RunId, claim: 'none' | ResumeClaim, checkout: string): ReturnType<typeof resumeRun> {
+function readiedHere(config: LocalConfig, runId: RunId, { claim, takeover, checkout }: { claim: 'none' | ResumeClaim; takeover: Takeover; checkout: string }): ReturnType<typeof resumeRun> {
   switch (claim) {
     case 'offered':
       return claimOffered(config, runId, { checkout });
     case 'any':
-      return resumeRun(config, runId, { claim: true, checkout });
+      return resumeRun(config, runId, { claim: true, checkout, takeover });
     case 'lacking':
     case 'none':
-      return resumeRun(config, runId, { claim: false, checkout });
+      return resumeRun(config, runId, { claim: false, checkout, takeover });
     default: {
       const unhandled: never = claim;
 
@@ -320,12 +321,16 @@ export async function resumeRefusal(
   config: LocalConfig,
   runId: RunId,
   caller: InvokeCaller,
-  { published, act = 'continue' }: { published: boolean; act?: 'continue' | 'claim' },
+  { published, act = 'continue', claim = false }: { published: boolean; act?: 'continue' | 'claim'; claim?: boolean },
 ): Promise<WorkflowFailure | undefined> {
   if (caller.evidence.kind === 'none') return undefined;
-  const carried = await carriedRun(config, runId, { published });
+  const carried = await carriedRun(config, runId, { published, claim });
 
   if (!carried.ok) return { code: carried.error.code, message: carried.error.message };
+  // A takeover asks before the run's invoke does, so the yes the invoke asks for is never also a yes to a takeover.
+  const active = carried.value?.snapshot ? await takeoverRefusal(config, carried.value.snapshot, takeoverFor(caller)) : undefined;
+
+  if (active) return { code: active.code, message: active.message };
 
   return invokeRefusal(carried.value?.definition, caller, { kind: act, run: runId });
 }
@@ -720,9 +725,9 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
 
       return { data: { cancelled } };
     },
-    resume: async (runId, { lock, claim, checkout, ceiling, can, tool }) => {
+    resume: async (runId, { lock, claim, takeover, checkout, ceiling, can, tool }) => {
       if (claim === 'none' && await readRun(config, runId) === 'missing') return { kind: 'not-here' };
-      const resumed = await readiedHere(config, runId, claim, checkout);
+      const resumed = await readiedHere(config, runId, { claim, takeover: takeoverFor(takeover), checkout });
 
       if (!resumed.ok) {
         const { error } = resumed;
@@ -777,7 +782,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
 
       return { description: describeWorkflow({ definition, source, workflows, ceiling, can, allow: config.workflows?.allow ?? {}, env: env.facts }), status };
     },
-    resumeRefusal: (runId, { caller, published }) => resumeRefusal(config, runId, caller, { published }),
+    resumeRefusal: (runId, { caller, published, claim }) => resumeRefusal(config, runId, caller, { published, claim }),
   };
 }
 
@@ -929,6 +934,15 @@ async function withStarted({ config, runId, secrets }: { config: LocalConfig; ru
  */
 async function placedReport(input: { config: LocalConfig; runId: string; report: ReportInput; secrets: Record<string, string>; lock: RunLock | undefined; changed?: readonly string[] }): Promise<WorkflowEnvelope> {
   const { config, runId, report, secrets, lock } = input;
+
+  // A run another install took over is driven there now: this machine's attempt is not committed, pushed or recorded,
+  // and the driver stops. A release pushes nothing, and frees the lease the takeover already let go.
+  if (report.outcome !== 'released') {
+    const lost = await leaseRefusal(config, runId, { throttled: false });
+
+    if (lost?.code === 'not_owner') return { error: lost };
+  }
+
   const attempt = AttemptIdSchema.safeParse(report.attempt);
   const run = RunIdSchema.safeParse(runId);
 

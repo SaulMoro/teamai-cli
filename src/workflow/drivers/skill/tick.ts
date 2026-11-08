@@ -388,7 +388,7 @@ async function called(context: SkillContext, lock: RunLock, same: Literal, input
 
   if (input.resume !== undefined || (input.takeover && !state)) {
     const readied = await context.client.resume(run, {
-      lock, claim: input.resume === undefined ? 'none' : input.resume.claim, checkout: context.cwd, ceiling: ceilingOf(context.config), can: { ...canFor(undefined), confined: await sessionOffers(context.tool) }, tool: context.tool,
+      lock, claim: input.resume === undefined ? 'none' : input.resume.claim, takeover: { mode: context.mode, confirmed }, checkout: context.cwd, ceiling: ceilingOf(context.config), can: { ...canFor(undefined), confined: await sessionOffers(context.tool) }, tool: context.tool,
     });
 
     const local = readied.kind === 'ready' ? localReason(readied.description) : undefined;
@@ -579,7 +579,7 @@ async function invokeRefused(context: SkillContext, run: RunId, call: Extract<Fo
 
   if (drivesRun(read.kind === 'found' ? read.state : undefined, context.session)) return undefined;
   const caller = { evidence: context.evidence, confirmed: call.confirmed, mode: context.mode };
-  const refused = traced(context, invokeRow(await context.client.resumeRefusal(run, { caller, published: call.kind === 'resume' })));
+  const refused = traced(context, invokeRow(await context.client.resumeRefusal(run, { caller, published: call.kind === 'resume', claim: call.kind === 'resume' && call.claim === 'any' })));
 
   if (!refused) return undefined;
   const confirmed = literalOf(context.invocation, run, { ...call, confirmed: true });

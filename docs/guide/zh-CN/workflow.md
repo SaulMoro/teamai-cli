@@ -724,7 +724,16 @@ teamai workflow resume <run>      # 在另一台机器上，位于同一个仓�
 teamai workflow resume <run> --tools default=claude --sandbox     # 装有 claude、跑在容器里的 CI runner
 ```
 
-已发布的运行只有所有者能继续。在另一个已有该运行的安装实例上，`resume` 和 `publish` 都返回 `not_owner`，带上所有者的用户名和安装实例 id。同一成员的两个安装实例显示相同的用户名，靠安装实例 id 区分。要接管这个运行，执行 `teamai workflow resume <run> --claim`。认领会替换本机的运行副本，并释放其他机器持有的租约。此后原所有者不能再发布或继续这个运行，除非它再认领回来。
+已发布的运行只有所有者能继续。在另一个已有该运行的安装实例上，`resume` 和 `publish` 都返回 `not_owner`，带上所有者的用户名和安装实例 id。同一成员的两个安装实例显示相同的用户名，靠安装实例 id 区分。要接管这个运行，执行 `teamai workflow resume <run> --claim`。认领会替换本机的运行副本，并释放其他机器持有的租约。此后原所有者不能再发布或继续这个运行，除非它再认领回来：它的驱动在下一次租约或上报时以 `not_owner` 停止。
+
+驱动在运行期间会持续把它驱动的运行写到 `teamai-reports`，最多每 20 分钟一次。所有者在最近一小时内写过、且没有人留给运行器接手的运行，所有者可能仍在执行某个步骤，所以接管会先询问：
+
+```text
+$ teamai workflow resume r6aa0e2c0927ff266 --claim
+{"error":{"code":"owner_active","owner":{"id":"4c514375…","user":"alice"},"wroteAt":"2026-11-08T09:12:44.120Z","message":"Run r6aa0e2c0927ff266 is owned by alice (install 4c514375…), whose teamai wrote it to teamai-reports 7 minutes ago, so a driver there may be running one of its steps now, and taking it over would run that step twice. To hand it over, alice stops the driver on that machine and runs teamai workflow publish r6aa0e2c0927ff266, which offers it; or it can be taken over once nothing is written for 53 more minutes. If alice has stopped it, take it over now: teamai workflow resume r6aa0e2c0927ff266 --claim --confirmed"}}
+```
+
+alice 停止之后，`--claim --confirmed` 即可接管。无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）无论是否带 `--confirmed` 都会被拒绝。留给运行器接手的运行，或已经结束的运行，不询问直接接管。
 
 要在编程会话中继续这个运行，由 agent 执行 `teamai workflow resume <run> --driver skill`，加 `--claim` 则从所有者那里接管。它以同样的方式认领运行，然后在会话的运行模式下用 skill 驱动运行它，选项与 skill 启动相同：`--parallel`、`--hitl` 或 `--auto-approve`，以及 `--no-judge`。不带这些选项时，一次只运行一个步骤，agent 在回答可选关卡前会先问你。在无人值守的运行中，它像 `--auto-approve` 那样回答可选关卡；运行到只有人能处理的步骤时，它[把运行交给人](#运行需要人参与时)，会话随之停止。`invoke: ask` 的工作流会在认领之前被拒绝（`unattended_denied`）。无人值守的运行中会拒绝 `--hitl person`（`invalid_arguments`）：没有人会回答。它的第一个回合在工作流有 prompt 步骤或由会话评审时提出宿主问题，并重新派发另一台机器持有租约的步骤。必须用本地驱动运行的工作流会以 `teamai workflow resume <run>` 交还给你。接管运行由你决定，所以 agent 执行这两条命令前都会先问你。
 
