@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Can, InitInstance, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
+import { boundedTail } from '../bounded-tail.js';
 
 // ─── What every bind-mount provider shares: its CLI, and the place view as mounts ───
 //
@@ -41,12 +42,16 @@ export interface Cli {
   executable: string;
   /**
    * Runs the CLI once with `args`, on `env` (teamai's own environment unless given), streaming its output. With
-   * `timeoutMs`, a CLI still running that long after it started is killed and answers `timed_out`.
+   * `onOutput`, it answers only the last 64 KiB of stdout; stderr, its last 8000 characters. With `timeoutMs`, a CLI
+   * still running that long after it started is killed and answers `timed_out`.
    */
   run(args: string[], options?: { env?: NodeJS.ProcessEnv; onOutput?: (stream: 'stdout' | 'stderr', data: string) => void; timeoutMs?: number }): Promise<Ran>;
   /** What the CLI said when it could not do something: its last stderr line, or why it could not start. */
   why(ran: Ran): string;
 }
+
+/** How much of a CLI's stderr a run keeps: its last lines, which say why it failed. */
+const STDERR_CHARS = 8000;
 
 /**
  * The CLI `name` as teamai's PATH finds it. spawn looks a bare name up on the env it is given, and an exec's env may
@@ -73,15 +78,16 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
         resolve({ kind: 'timed_out', message: `\`${name} ${args[0]}\` did not answer within ${timeoutMs / 1000} s` });
       }, timeoutMs);
 
-      let stdout = '';
-      let stderr = '';
-      child.stdout.setEncoding('utf8').on('data', (data: string) => { stdout += data; onOutput?.('stdout', data); });
-      child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr = `${stderr}${data}`.slice(-8000); onOutput?.('stderr', data); });
+      // A streamed run (a step's exec) keeps only the end of what it printed; a query keeps its whole answer to parse.
+      const stdout = onOutput === undefined ? boundedTail(Number.POSITIVE_INFINITY) : boundedTail();
+      const stderr = boundedTail(STDERR_CHARS);
+      child.stdout.setEncoding('utf8').on('data', (data: string) => { stdout.push(data); onOutput?.('stdout', data); });
+      child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr.push(data); onOutput?.('stderr', data); });
       // A CLI that cannot start never closes: ENOENT is a missing CLI, anything else (EACCES) is named as it is.
       child.on('error', (error) => resolve({ kind: 'unstartable', message: 'code' in error && error.code === 'ENOENT' ? notInstalled : `${name} could not be started: ${error.message}` }));
       child.on('close', (code, signal) => {
         clearTimeout(timer);
-        resolve({ kind: 'ran', code: code ?? (signal === 'SIGKILL' ? 137 : 143), stdout, stderr });
+        resolve({ kind: 'ran', code: code ?? (signal === 'SIGKILL' ? 137 : 143), stdout: stdout.text(), stderr: stderr.text() });
       });
     }),
     why: (ran) => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : ran.message),

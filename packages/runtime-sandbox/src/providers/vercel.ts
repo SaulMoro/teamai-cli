@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Command, Sandbox } from '@vercel/sandbox';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { boundedTail } from '../bounded-tail.js';
 import type { JournalId } from '../journal.js';
 import type { VercelOptions } from '../options.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
@@ -169,14 +170,14 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
   const run = async (sandbox: Sandbox, cmd: string, args: string[], sudo = false, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> => {
     const command = await sandbox.runCommand({ cmd, args, sudo, detached: true, ...(cwd !== undefined && { cwd }) });
     let stdout = '';
-    let stderr = '';
+    const stderr = boundedTail(4000);
 
     for await (const line of command.logs()) {
       if (line.stream === 'stdout') stdout += line.data;
-      else stderr = `${stderr}${line.data}`.slice(-4000);
+      else stderr.push(line.data);
     }
 
-    return { code: (await command.wait()).exitCode, stdout, stderr };
+    return { code: (await command.wait()).exitCode, stdout, stderr: stderr.text() };
   };
 
   /** Runs `args` and says why when it does not exit 0. */
@@ -190,11 +191,11 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
   const archive = (paths: string[]): Promise<{ ok: true; data: Buffer } | { ok: false; message: string }> => new Promise((resolve) => {
     const child = spawn('tar', ['-cf', '-', '--no-xattrs', '-C', '/', ...paths.map(relative)], { env: { ...env, COPYFILE_DISABLE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks: Buffer[] = [];
-    let stderr = '';
+    const stderr = boundedTail(4000);
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
-    child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
+    child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr.push(data); });
     child.on('error', (error) => resolve({ ok: false, message: error.message }));
-    child.on('close', (code) => resolve(code === 0 ? { ok: true, data: Buffer.concat(chunks) } : { ok: false, message: stderr.trim().split('\n').at(-1) || `tar exited ${code}` }));
+    child.on('close', (code) => resolve(code === 0 ? { ok: true, data: Buffer.concat(chunks) } : { ok: false, message: stderr.text().trim().split('\n').at(-1) || `tar exited ${code}` }));
   });
 
   /** Puts the archive of `paths` in `sandbox` at their own paths: as its user, or as root (`asRoot`). */
