@@ -19,9 +19,9 @@ interface RuleHarness {
 /**
  * Run one rule of the teamai plugin through the real oxlint, on a fixture
  * written at `filename` (relative, like a path in this repository), with only
- * that rule enabled.
+ * that rule enabled, given `options` when the rule takes them.
  */
-export function ruleHarness(rule: `teamai/${string}`, defaults: { filename: string }): RuleHarness {
+export function ruleHarness(rule: `teamai/${string}`, defaults: { filename: string; options?: readonly object[] }): RuleHarness {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-oxlint-rule-'));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
   const fixtures: string[] = [];
@@ -30,7 +30,7 @@ export function ruleHarness(rule: `teamai/${string}`, defaults: { filename: stri
   fs.writeFileSync(config, JSON.stringify({
     jsPlugins: [path.join(PLUGIN_ROOT, 'index.js')],
     categories: { correctness: 'off' },
-    rules: { [rule]: 'error' },
+    rules: { [rule]: defaults.options ? ['error', ...defaults.options] : 'error' },
   }));
 
   const fixture = (source: string, filename: string, files: Readonly<Record<string, string>> = {}): string => {

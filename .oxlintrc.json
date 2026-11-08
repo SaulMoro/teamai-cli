@@ -109,7 +109,13 @@
     // packages/* never imports src/, src/ never imports a runtime package, and a package is reached only by its name.
     "teamai/package-boundaries": "error",
     // A runtime serves protocol 1 only through @teamai/runtime-kit: no request loop or op end of its own.
-    "teamai/runtime-serve": "error",
+    // Listed files still serve it themselves, until Paseo and the sandbox read no process input of their own (serveRuntime
+    // reads it) and the sandbox reads its attempt socket through the kit's eachLine. The list only shrinks.
+    "teamai/runtime-serve": ["error", { "notYetOnTheKit": [
+      "packages/runtime-paseo/src/main.ts",
+      "packages/runtime-sandbox/src/main.ts",
+      "packages/runtime-sandbox/src/attempt-socket.ts"
+    ] }],
     // A package's test reaches its own package only through the module it is named after, src/testing/ and the package's exports.
     "teamai/test-seams": "error",
     // TOOLS, LAUNCH_ADAPTERS and ADAPTER_REGISTRY are read only through src/tool-registry.ts.

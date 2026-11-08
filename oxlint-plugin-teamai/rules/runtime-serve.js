@@ -1,7 +1,10 @@
 /** @import { ESTree } from '@oxlint/plugins' */
-import { defineRule } from '@oxlint/plugins';
+import fs from 'node:fs';
 
-import { lintedPath, scopedFiles, stringLiteralValue } from '../utils.js';
+import { defineRule } from '@oxlint/plugins';
+import { z } from 'zod';
+
+import { lintedPath, stringLiteralValue } from '../utils.js';
 
 /** The runtime packages that are the protocol itself: its schemas, the kit that serves it, and the kit tests use. */
 const PROTOCOL_PACKAGES = new Set(['runtime-protocol', 'runtime-kit', 'runtime-testing']);
@@ -12,24 +15,16 @@ const ENDS = new Set(['exited', 'finished', 'cancelled', 'failed']);
 /** The modules that read lines: only the runtime kit reads a runtime's input, and a socket's lines go through its `eachLine`. */
 const LINE_READERS = new Set(['readline', 'node:readline', 'readline/promises', 'node:readline/promises']);
 
+/** The rule's option, as `meta.schema` lets it be written; unset lists nothing. */
+const OptionsSchema = z.tuple([z.object({ notYetOnTheKit: z.array(z.string()) })]).or(z.tuple([]));
+
 /** The module whose `stdin` is the process input. */
 const PROCESS_MODULES = new Set(['process', 'node:process']);
 
 /**
- * Files that still read requests or write an op's end themselves, until each runtime adopts the runtime kit. A new
- * runtime starts on the kit; this list only shrinks, and an entry that no longer does either fails until it is removed.
- */
-const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
-  // Until Paseo and the sandbox read no process input of their own: serveRuntime reads it.
-  'packages/runtime-paseo/src/main.ts',
-  'packages/runtime-sandbox/src/main.ts',
-  // Until the sandbox reads its attempt socket through the kit's eachLine.
-  'packages/runtime-sandbox/src/attempt-socket.ts',
-]));
-
-/**
- * The linted file's path from the repository root, as `{ relative }`, when it is a runtime package's production source,
- * else undefined.
+ * The linted file's path from the repository root, as `{ relative, root, src }`, when it is a runtime package's
+ * production source, else undefined. `root` is the repository's directory, and `src` the runtime's source directory
+ * from it.
  * @param {string} file
  */
 function runtimeSource(file) {
@@ -40,7 +35,7 @@ function runtimeSource(file) {
 
   if (PROTOCOL_PACKAGES.has(folder) || rest.startsWith('testing/') || /\.test\.[cm]?[jt]sx?$/.test(rest)) return undefined;
 
-  return { relative };
+  return { relative, root: file.slice(0, file.length - relative.length), src: `packages/${folder}/src/` };
 }
 
 /**
@@ -64,12 +59,19 @@ export default defineRule({
   meta: {
     type: 'problem',
     docs: { description: 'Serve runtime protocol 1 only through the runtime kit: no runtime reads its input, imports a line reader, parses requests or writes an op\'s end itself.' },
+    // `notYetOnTheKit`: files, from the repository root, that still read requests or write an op's end themselves, until
+    // their runtime adopts the kit. A new runtime starts on the kit; the list only shrinks: an entry that no longer does
+    // either, or whose file is gone, fails until it is removed.
+    schema: [{ type: 'object', properties: { notYetOnTheKit: { type: 'array', items: { type: 'string' } } }, required: ['notYetOnTheKit'], additionalProperties: false }],
   },
   create(context) {
     const source = runtimeSource(lintedPath(context));
 
     if (source === undefined) return {};
-    const isBaseline = NOT_YET_ON_THE_KIT.has(source.relative);
+    const listed = OptionsSchema.parse(context.options)[0]?.notYetOnTheKit ?? [];
+    const isBaseline = listed.includes(source.relative);
+    // Each source of a runtime checks its entries, so a renamed or removed file fails lint instead of staying listed.
+    const gone = listed.filter((file) => file.startsWith(source.src) && !fs.existsSync(`${source.root}${file}`));
     let serves = false;
 
     /** @param {ESTree.Node} node @param {string} message */
@@ -140,7 +142,11 @@ export default defineRule({
       /** @param {ESTree.Program} node */
       'Program:exit'(node) {
         if (isBaseline && !serves) {
-          context.report({ node, message: `${source.relative} no longer reads requests or writes an op's end itself: remove it from NOT_YET_ON_THE_KIT in oxlint-plugin-teamai/rules/runtime-serve.js.` });
+          context.report({ node, message: `${source.relative} no longer reads requests or writes an op's end itself: remove it from notYetOnTheKit, teamai/runtime-serve's option in .oxlintrc.json.` });
+        }
+
+        for (const file of gone) {
+          context.report({ node, message: `${file} is listed in notYetOnTheKit but does not exist: remove it from teamai/runtime-serve's option in .oxlintrc.json, or point it at the file's new path.` });
         }
       },
     };

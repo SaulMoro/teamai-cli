@@ -2,7 +2,11 @@ import { expect } from 'vitest';
 
 import { ruleHarness } from '../test/harness.ts';
 
-const rule = ruleHarness('teamai/runtime-serve', { filename: 'packages/runtime-t3/src/conversation.ts' });
+/** A runtime the fixtures list as not yet on the kit, and one listed whose file is gone. */
+const LISTED = 'packages/runtime-listed/src/main.ts';
+const GONE = 'packages/runtime-gone/src/main.ts';
+
+const rule = ruleHarness('teamai/runtime-serve', { filename: 'packages/runtime-t3/src/conversation.ts', options: [{ notYetOnTheKit: [LISTED, GONE] }] });
 
 rule.invalid('rejects a runtime writing an op\'s end itself', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'finished', result: {} });`, (output) => {
   expect(output).toContain("End an operation through the runtime kit's ledger");
@@ -58,8 +62,12 @@ rule.valid('allows a runtime\'s tests and test harness to read its lines', `impo
 export const lines = (input: NodeJS.ReadableStream) => readline.createInterface({ input });
 export const exited = { op: 'op-1', event: 'exited', code: 0, stdout: '' };`, { filename: 'packages/runtime-t3/src/testing/harness.ts' });
 
-rule.valid('leaves a runtime not yet on the kit alone while it still serves the protocol', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });`, { filename: 'packages/runtime-sandbox/src/attempt-socket.ts' });
+rule.valid('leaves a runtime not yet on the kit alone while it still serves the protocol', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });`, { filename: LISTED });
 
 rule.invalid('fails a runtime left on the list once it no longer serves the protocol itself', `export const nothing = 1;`, (output) => {
-  expect(output).toContain('packages/runtime-sandbox/src/attempt-socket.ts no longer reads requests or writes an op\'s end itself');
-}, { filename: 'packages/runtime-sandbox/src/attempt-socket.ts' });
+  expect(output).toContain(`${LISTED} no longer reads requests or writes an op's end itself`);
+}, { filename: LISTED });
+
+rule.invalid('fails a listed file that no longer exists, from any source of its runtime', `export const nothing = 1;`, (output) => {
+  expect(output).toContain(`${GONE} is listed in notYetOnTheKit but does not exist`);
+}, { filename: 'packages/runtime-gone/src/other.ts' });
