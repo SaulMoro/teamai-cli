@@ -19,8 +19,9 @@ process.stderr.on('error', () => { stderrOpen = false; });
 /** Paseo sets PASEO_AGENT_ID in each agent it runs, so a run started from one names it. */
 const startedFrom = process.env['PASEO_AGENT_ID'];
 
-await serve({
+const status = await serve({
   input: process.stdin,
+  env: process.env,
   // A line teamai could not read is a bug here: it fails where it is written.
   write: (message: RuntimeMessage) => {
     if (stdoutOpen) process.stdout.write(`${JSON.stringify(RuntimeMessageSchema.parse(message))}\n`);
@@ -32,4 +33,4 @@ await serve({
   ...(startedFrom && { startedFrom }),
 });
 
-process.exit(0);
+process.exit(status);
