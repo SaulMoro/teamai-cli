@@ -18,7 +18,7 @@ import type { LocalConfig } from '../types.js';
 import { resolveAnchors } from '../utils/git.js';
 import { resolvePartitionDir } from '../utils/partition.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
-import type { LocalToolAdapter, LocalToolRun } from '../workflow/drivers/local/local-tool-adapter.js';
+import type { LocalToolAdapter, LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
 import { startRun } from '../workflow/engine.js';
 import { canFor } from '../workflow/drivers/skill/skill-driver.js';
 import { inProcessClient } from '../workflow/protocol.js';

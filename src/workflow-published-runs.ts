@@ -12,7 +12,7 @@ import { log } from './utils/logger.js';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from './types.js';
 import { describeWorkflow, type WorkflowDescription } from './workflow/describe.js';
 import { canFor, ceilingOf, isLeft, listOf, localReason, personClauses } from './workflow/drivers/skill/skill-driver.js';
-import { launchToolFor } from './workflow/drivers/local/local-driver.js';
+import { launchToolFor } from './workflow/steps/prompt.js';
 import { memberTools, type MemberTool } from './tool-launch/member-tools.js';
 import { launchExecutableOf, type LaunchTarget } from './tool-launch/tools.js';
 import { sameEnvName } from './resources/env-key.js';

@@ -59,4 +59,4 @@ teamai(launch-through-workflows): Only a workflow driver launches an AI tool. Ru
 - **The support page follows the adapters.** The `workflows` and `aiBackend` cells in `src/tools.ts` stay hand-written,
   for their evidence and notes, and `tools.test.ts` fails when a cell marks a feature built that the adapter has no
   profile for, or the reverse.
-- **Steps and judges still switch on the adapter.** `invocation` in `drivers/local/local-tool-adapter.ts` ends in a `never` check, and the confined argv and reply tables in `tool-launch/confined.ts` (`LAUNCHES`, which launches every judge step, and `REPLIES`) need an entry per adapter with a `confined` profile, so a new adapter with a `step` or `confined` profile fails the type check until both handle it.
+- **Steps and judges still switch on the adapter.** `invocation` in `steps/local-tool-adapter.ts` ends in a `never` check, and the confined argv and reply tables in `tool-launch/confined.ts` (`LAUNCHES`, which launches every judge step, and `REPLIES`) need an entry per adapter with a `confined` profile, so a new adapter with a `step` or `confined` profile fails the type check until both handle it.

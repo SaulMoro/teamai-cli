@@ -11,7 +11,7 @@ import { checkoutRecordKey, type CheckoutRecord } from '../pull.js';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { type LocalConfig, type TeamaiConfig } from '../types.js';
 import { log } from '../utils/logger.js';
-import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/drivers/local/local-tool-adapter.js';
+import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/steps/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { readRun } from '../workflow/store.js';

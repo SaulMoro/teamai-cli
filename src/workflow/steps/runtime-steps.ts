@@ -1,19 +1,19 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { RunMode } from '../../../launch-context.js';
-import type { CommandExit } from '../../../tool-launch/process-stop.js';
-import { attemptEnv } from '../../attempt-marker.js';
-import type { LeaseWire } from '../../lease-wire.js';
-import type { AttemptRun } from '../../runtimes/attempt.js';
-import { withRetry } from '../../runtimes/step-runtime.js';
+import type { RunMode } from '../../launch-context.js';
+import type { CommandExit } from '../../tool-launch/process-stop.js';
+import { attemptEnv } from '../attempt-marker.js';
+import type { LeaseWire } from '../lease-wire.js';
+import type { AttemptRun } from '../runtimes/attempt.js';
+import { withRetry } from '../runtimes/step-runtime.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { launchEnv } from '../../../launch-context.js';
-import { MAX_TIMER_DELAY, shellArgv, STOPPED_EXIT_CODE } from '../../shell-command.js';
-import { AttemptResult } from '../../attempt-result.js';
-import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
-import type { WorkflowFailure } from '../../types.js';
-import { git } from '../../worktree.js';
-import type { LocalConfig } from '../../../types.js';
+import { launchEnv } from '../../launch-context.js';
+import { MAX_TIMER_DELAY, shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
+import { AttemptResult } from '../attempt-result.js';
+import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../store.js';
+import type { WorkflowFailure } from '../types.js';
+import { git } from '../worktree.js';
+import type { LocalConfig } from '../../types.js';
 import { agentPrompt, withoutPrompt, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolClosed, type ToolLauncher } from './local-tool-adapter.js';
 
 // ─── The local loop's steps on a step runtime ────────────

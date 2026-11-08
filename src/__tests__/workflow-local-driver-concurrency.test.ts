@@ -7,7 +7,7 @@ import { type LocalConfig } from '../types.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { LeaseIdSchema } from '../workflow/lease-wire.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
-import { type LocalToolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
+import { type LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';

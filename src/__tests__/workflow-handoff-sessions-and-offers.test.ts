@@ -16,7 +16,7 @@ import { claimOffered, claimRun, publishRun, resumeRun, settledSteps } from '../
 import { pendingRecords, queueRunRecord } from '../workflow/records.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun } from '../workflow/run-controls.js';
-import type { LocalToolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
+import type { LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
 import { installOwner, readRun } from '../workflow/store.js';
 import { PublishedRuns, type Taker } from '../workflow-published-runs.js';
 import type { WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';

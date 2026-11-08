@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runtimeCommand, runtimeLauncher } from '../workflow/drivers/local/runtime-steps.js';
-import { toolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
+import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
+import { toolAdapter } from '../workflow/steps/local-tool-adapter.js';
 import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 
 /** An attempt on a step runtime whose `cancel`, like the real one, stops only an exec it has sent. */

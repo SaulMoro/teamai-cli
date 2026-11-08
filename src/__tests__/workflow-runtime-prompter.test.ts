@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runtimePrompter } from '../workflow/drivers/local/runtime-steps.js';
+import { runtimePrompter } from '../workflow/steps/runtime-steps.js';
 import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 import { RunIdSchema } from '../workflow/store.js';
 import type { PromptEnd } from '../workflow/runtimes/step-runtime.js';

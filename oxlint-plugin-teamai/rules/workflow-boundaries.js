@@ -8,6 +8,7 @@ const SKILL = 'src/workflow/drivers/skill/';
 const LOCAL = 'src/workflow/drivers/local/';
 const PLACE = 'src/workflow/place/';
 const FLEET = 'src/workflow/fleet/';
+const STEPS = 'src/workflow/steps/';
 const DISCOVERY = 'src/workflow/discovery/';
 const BENCHMARK = 'src/benchmark/';
 const SCORERS = 'src/scorers/';
@@ -79,14 +80,24 @@ const ENTRIES = [
     // engine.ts stages, before it saves a run, the evidence a step that settled there left in its clone.
     // index.ts moves the home of a command a step started in its clone to that clone's own install.
     // check-run.ts clones and sets up the commit a check runs on, for a benchmark and a scorer alike.
-    entries: { 'place.ts': ['src/index.ts', 'src/workflow/engine.ts', 'src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/fleet/owner.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`, 'src/scorers/check-run.ts'], 'setup.ts': ['src/scorers/check-run.ts'] },
+    entries: { 'place.ts': ['src/index.ts', 'src/workflow/engine.ts', 'src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/steps/prompt.ts', 'src/workflow/fleet/owner.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`, 'src/scorers/check-run.ts'], 'setup.ts': ['src/scorers/check-run.ts'] },
     testEntries: ['place.ts', 'team-without.ts', 'role-copy.ts', 'data.ts'],
   },
-  // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   {
     folder: LOCAL,
-    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts', 'src/workflow-drive.ts'], 'local-tool-adapter.ts': [], 'runtime-steps.ts': [] },
-    testEntries: ['local-driver.ts', 'local-tool-adapter.ts', 'runtime-steps.ts'],
+    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-drive.ts'] },
+    testEntries: ['local-driver.ts'],
+  },
+  // A step as a driver runs it: the local driver runs every prompt step through prompt.ts, and a fleet member the prompt
+  // an owner offered; workflow-published-runs.ts judges an offered run by the tool it would launch for its prompt steps.
+  {
+    folder: STEPS,
+    entries: {
+      'prompt.ts': ['src/workflow/drivers/local/local-driver.ts', 'src/workflow/fleet/member.ts', 'src/workflow-published-runs.ts'],
+      'runtime-steps.ts': ['src/workflow/drivers/local/local-driver.ts'],
+      'local-tool-adapter.ts': ['src/workflow/drivers/local/local-driver.ts'],
+    },
+    testEntries: ['prompt.ts', 'local-tool-adapter.ts', 'runtime-steps.ts'],
   },
   // The fleet: the owner's side is a step runtime, the member's a command's; the records are read by publish too.
   {

@@ -31,7 +31,7 @@ import { writeJsonAtomic } from '../../../utils/fs.js';
 export async function keep(input: { resultPath: string }, output: string): Promise<void> {
   await writeJsonAtomic(input.resultPath, { output });
 }
-`, undefined, { filename: 'src/workflow/drivers/local/local-tool-adapter.ts' });
+`, undefined, { filename: 'src/workflow/steps/local-tool-adapter.ts' });
 
   rule.valid('allows the write through AttemptResult.write', `
 import { AttemptResult } from '../../attempt-result.js';

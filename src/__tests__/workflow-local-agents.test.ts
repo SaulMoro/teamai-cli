@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { getDataHome, TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
-import type { LocalToolRun } from '../workflow/drivers/local/local-tool-adapter.js';
+import type { LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
 
 const state = vi.hoisted(() => ({
   config: undefined as LocalConfig | undefined,
@@ -24,8 +24,8 @@ vi.mock('../config.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../workflow/drivers/local/local-tool-adapter.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workflow/drivers/local/local-tool-adapter.js')>();
+vi.mock('../workflow/steps/local-tool-adapter.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workflow/steps/local-tool-adapter.js')>();
   const run = async (_tool: string, input: LocalToolRun) => {
     state.runs.push({ agent: input.agent });
     return { started: true as const, exitCode: 0 };
