@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { stopProcess } from '../tool-launch/process-stop.js';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
+import { MAX_TIMER_DELAY } from './shell-command.js';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */
 export const AGENT_PATHS: readonly string[] = agentConfigPaths();
@@ -478,8 +479,9 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
     child.on('close', (code) => resolve(code ?? 1));
   });
 
-  // At its timeout git stops with every process it started, such as a filter that never returns.
-  const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => { void stopProcess(child, exited, false)(); }, options.timeoutMs);
+  // At its timeout git stops with every process it started, such as a filter that never returns. A timeout longer than a
+  // timer can wait is none: Node would fire the timer at once.
+  const timer = options.timeoutMs === undefined || options.timeoutMs > MAX_TIMER_DELAY ? undefined : setTimeout(() => { void stopProcess(child, exited, false)(); }, options.timeoutMs);
   child.stdin.on('error', () => {});
   child.stdin.end('input' in options ? options.input : undefined);
 

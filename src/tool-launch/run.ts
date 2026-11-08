@@ -49,7 +49,8 @@ export async function runTool(input: { executable: string; args: string[]; cwd: 
   child.stderr?.setEncoding('utf8').on('data', (text: string) => { stderr.push(text); active(); });
   const exited = new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('close', (code) => resolve(code ?? 1)); });
   const stop = stopProcess(child, exited, detached);
-  const timer = setTimeout(() => { stopped ??= 'timeout'; void stop(); }, input.timeoutMs);
+  // A timeout longer than a timer can wait (about 24.8 days) is none: Node would fire the timer at once.
+  const timer = input.timeoutMs > MAX_TIMER_MS ? undefined : setTimeout(() => { stopped ??= 'timeout'; void stop(); }, input.timeoutMs);
 
   active();
   const onAbort = (): void => { void stop(); };
