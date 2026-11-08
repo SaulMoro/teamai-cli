@@ -217,6 +217,8 @@ export interface Held {
   step: string;
   reason: string;
   missing: Missing[];
+  /** The tool whose usage limit holds the step until it resets, as the driver named it in `limited`. */
+  limited?: string;
 }
 
 /**
