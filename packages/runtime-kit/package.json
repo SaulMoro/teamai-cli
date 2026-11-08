@@ -6,6 +6,7 @@
   "exports": {
     "./journal": "./src/journal.ts",
     "./ledger": "./src/ledger.ts",
+    "./outer": "./src/outer.ts",
     "./places": "./src/places.ts",
     "./serve": "./src/serve.ts"
   }
