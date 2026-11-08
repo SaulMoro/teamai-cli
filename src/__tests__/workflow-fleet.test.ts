@@ -7,7 +7,8 @@ import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
-import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
+import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
+import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { shadowedFleetEntries } from '../workflow/fleet/owner.js';
 import { RuntimeOptionsSchema } from '@teamai/runtime-protocol';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
@@ -676,5 +677,29 @@ describe('fleet entries of one driver definition', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'any', can: { network: true, isolation: 'sandbox' } }), fleet({ pool: 'box', can: { isolation: 'worktree' } })])).toEqual([
       'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the more specific entry first.',
     ]);
+  });
+});
+
+describe('where a member runs an attempt', () => {
+  /** A member's own driver `name` whose runtimes offer `cans` in order, `local` for the local runtime. */
+  async function driverOf(cans: Array<'local' | { use: string; can: Record<string, boolean> }>): Promise<OpenedDriver> {
+    const acme = team();
+    const { config } = await acme.member('bob');
+    const runtime = localStepRuntime();
+    const runtimes = cans.map((entry): OpenedRuntime => (entry === 'local'
+      ? { kind: 'local', use: 'local', engine: { logins: [] } }
+      : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }));
+    const [first, ...rest] = runtimes;
+    if (!first) throw new Error('no runtime');
+
+    return { driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', file: 'bobs.yaml', config }, asked: 'bobs', runtimes: [first, ...rest] };
+  }
+
+  it('runs on the first runtime of its driver that runs commands, one that does not say it runs none included', async () => {
+    expect(memberPlace(await driverOf([{ use: 'box', can: {} }, 'local']))).toMatchObject({ kind: 'runtime', use: 'box', driver: 'bobs' });
+  });
+
+  it('passes over a runtime that runs no command and its own fleet, and runs here when local comes next', async () => {
+    expect(memberPlace(await driverOf([{ use: 'judge', can: { exec: false } }, { use: 'fleet', can: {} }, 'local']))).toEqual({ kind: 'here' });
   });
 });
