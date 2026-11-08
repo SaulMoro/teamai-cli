@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { RuntimeOptionsSchema, type OpId, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { DriverCan } from '../requirements.js';
+import { toolHomeVariable } from './attempt.js';
 import { isUnansweredFailure, type Initialized, type OpenRequest, type Reattached, type StepRuntime } from './step-runtime.js';
 
 // ─── A runtime through another ───────────────────────────
@@ -171,7 +172,8 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       }
 
       openedWith.set(outerOpened.handle, { credentials: request.credentials, ...(request.unset && { unset: request.unset }) });
-      const [toolHome] = Object.values(request.view?.toolHome ?? {});
+      const variable = request.tool === undefined ? undefined : toolHomeVariable(request.tool);
+      const toolHome = variable === undefined ? undefined : request.view?.toolHome[variable];
 
       if (toolHome !== undefined) toolHomeOf.set(outerOpened.handle, toolHome);
 
