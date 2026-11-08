@@ -1,53 +1,58 @@
 import type { z } from 'zod';
 
-const FENCE = /```[\w-]*[ \t]*\n([\s\S]*?)\n?[ \t]*```/g;
+const FENCE = /```[\w-]*[ \t]*\n?([\s\S]*?)\n?[ \t]*```/g;
 
 /**
- * The JSON value an AI tool's reply holds, checked against `schema` (`JsonValueSchema` for any JSON value), or undefined when it holds none that matches.
+ * The JSON value an AI tool's reply holds, checked against `schema` (`JsonValueSchema` for any JSON value), or
+ * undefined when it holds none that matches.
  *
- * The reply is read as a whole first. Otherwise the last fenced block that holds JSON wins, then the last JSON
- * object or array written in the prose, so a reply that explains itself before or after its answer still counts.
+ * The reply is read as a whole first. Otherwise the fenced blocks that hold JSON, last first, then the JSON objects
+ * and arrays written in the prose, last first: the first one `schema` accepts wins, so a reply that explains itself
+ * before or after its answer, or quotes an example after it, still counts.
  */
 export function extractReply<T>(text: string, schema: z.ZodType<T>): T | undefined {
-  const found = wholeOf(text) ?? lastFencedOf(text) ?? lastInlineOf(text);
+  for (const value of candidatesOf(text)) {
+    const parsed = schema.safeParse(value);
 
-  if (found === undefined) return undefined;
-  const parsed = schema.safeParse(found.value);
-
-  return parsed.success ? parsed.data : undefined;
-}
-
-type Found = { value: unknown } | undefined;
-
-function jsonOf(text: string): Found {
-  try {
-    return { value: JSON.parse(text) };
-  } catch {
-    return undefined;
-  }
-}
-
-function wholeOf(text: string): Found {
-  const trimmed = text.trim();
-
-  return trimmed === '' ? undefined : jsonOf(trimmed);
-}
-
-function lastFencedOf(text: string): Found {
-  const bodies = [...text.matchAll(FENCE)].map((match) => match[1] ?? '');
-
-  for (const body of bodies.toReversed()) {
-    const found = wholeOf(body);
-
-    if (found !== undefined) return found;
+    if (parsed.success) return parsed.data;
   }
 
   return undefined;
 }
 
-/** The last top-level `{…}` or `[…]` in prose that parses as JSON. */
-function lastInlineOf(text: string): Found {
-  let last: Found;
+function* candidatesOf(text: string): Generator<unknown> {
+  const whole = jsonOf(text);
+
+  if (whole !== undefined) {
+    yield whole.value;
+
+    return;
+  }
+
+  for (const match of [...text.matchAll(FENCE)].toReversed()) {
+    const fenced = jsonOf(match[1] ?? '');
+
+    if (fenced !== undefined) yield fenced.value;
+  }
+
+  for (const inline of inlineValuesOf(text).toReversed()) yield inline;
+}
+
+function jsonOf(text: string): { value: unknown } | undefined {
+  const trimmed = text.trim();
+
+  if (trimmed === '') return undefined;
+
+  try {
+    return { value: JSON.parse(trimmed) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every top-level `{…}` or `[…]` in prose that parses as JSON, in order. */
+function inlineValuesOf(text: string): unknown[] {
+  const values: unknown[] = [];
 
   for (let start = 0; start < text.length; start++) {
     if (text[start] !== '{' && text[start] !== '[') continue;
@@ -57,11 +62,11 @@ function lastInlineOf(text: string): Found {
     const found = jsonOf(text.slice(start, end + 1));
 
     if (found === undefined) continue;
-    last = found;
+    values.push(found.value);
     start = end;
   }
 
-  return last;
+  return values;
 }
 
 /** Where the bracket opened at `start` closes, skipping brackets inside JSON strings, or undefined when it never does. */

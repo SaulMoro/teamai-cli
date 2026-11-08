@@ -33,6 +33,16 @@ describe('extractReply', () => {
     expect(extractReply(reply, JsonValueSchema)).toBeUndefined();
   });
 
+  it('reads a fence written on one line after prose', () => {
+    expect(extractReply('Here is the result: ```json {"verdict":"pass"}```', JsonValueSchema)).toEqual({ verdict: 'pass' });
+  });
+
+  it('falls back to an earlier value when the schema rejects the last one', () => {
+    const Verdict = z.object({ verdict: z.enum(['pass', 'fail']) });
+
+    expect(extractReply('```json\n{"verdict":"pass"}\n```\nFor reference, the input was:\n```json\n{"diff":"retries 3"}\n```', Verdict)).toEqual({ verdict: 'pass' });
+  });
+
   it('checks the value against the schema it is given', () => {
     const Verdict = z.object({ verdict: z.enum(['pass', 'fail']) });
 
