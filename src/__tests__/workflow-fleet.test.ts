@@ -945,6 +945,17 @@ describe('fleet entries of one driver definition', () => {
     await runtime.dispose();
   });
 
+  it('declares no person at its tools, whatever its entry promises, so no interactive step goes to the fleet', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
+    const ready = await runtime.init({ options: { pool: 'e2e', can: { hitl: true, network: true } }, mode: 'unattended', checkout: alice.checkout });
+
+    expect(ready).toMatchObject({ ok: true, can: { network: true } });
+    expect(ready.ok && ready.can).not.toHaveProperty('hitl');
+    await runtime.dispose();
+  });
+
   it('names a specific fleet entry a general one before it covers', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'any', can: { network: true, isolation: 'sandbox' } }), fleet({ pool: 'box', can: { isolation: 'worktree' } })])).toEqual([
       'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the more specific entry first.',

@@ -11,7 +11,7 @@ import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { composedStepRuntime } from '../workflow/runtimes/composed.js';
 import type { OpId, OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type ExecEnd, type ExecEvents, type ExecQuestion, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
 import { t3OnFakeServer } from './helpers/t3-runtime.js';
@@ -1597,6 +1597,28 @@ steps:
       counted: number
 `;
 
+/** As PAIR, with a gate before the count: the member asks the owner, whose person answers. */
+const GATED = `schemaVersion: v1alpha1
+name: pair
+description: Writes a mark, asks to keep it, then counts it.
+inputs: { mark: string }
+outputs:
+  counted: steps.keep.outputs.counted
+steps:
+  - id: write
+    workspace: continue
+    env:
+      MARK: "{{ inputs.mark }}"
+    command: echo written > "$MARK"
+  - id: keep
+    needs: [write]
+    workspace: continue
+    approve: "Keep {{ inputs.mark }}?"
+    command: echo '{"counted":1}'
+    output:
+      counted: number
+`;
+
 /** The fleet runtimes a scenario opened, which teardown disposes. */
 const fleetRuntimes: StepRuntime[] = [];
 
@@ -1631,7 +1653,7 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, workflo
     expect(initialized.ok && initialized.can).not.toHaveProperty('prompt');
     const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
     if (opened.kind !== 'ready') throw new Error(opened.failure.message);
-    const exec = (op: OpId, kind: 'command' | 'workflow' = 'command') => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {}, kind);
+    const exec = (op: OpId, kind: 'command' | 'workflow' = 'command', events: ExecEvents = {}) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, events, kind);
     // What this host would send of the prompt: the member renders its own, so none of it reaches the record.
     const prompt = (op: OpId) => runtime.prompt({
       op, handle: opened.handle, env: {}, unset: [], credentials: {}, cwd,
@@ -1695,6 +1717,51 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
     expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
+  }, 90_000);
+
+  it('leases a whole workflow step with a gate inside to a runtime that runs whole workflows', async () => {
+    const whole = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+
+    expect(await readRun(whole.alice.config, whole.run)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
+  }, 60_000);
+
+  it('asks the owner the gate a member\'s whole workflow reached, through the record, and goes on with the answer the owner\'s person gave', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const asked: ExecQuestion[] = [];
+    const ended = exec(newOpId(), 'workflow', { ask: async (question) => {
+      asked.push(question);
+      expect(await owner.record()).toMatchObject({ state: 'asking', question: { step: 'keep', kind: 'approve', message: 'Keep made.txt?' } });
+
+      return { choice: 'yes' };
+    } });
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(asked).toEqual([{ step: 'keep', kind: 'approve', message: 'Keep made.txt?', options: ['yes', 'no'], required: false }]);
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
+    expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
+  }, 90_000);
+
+  it('fails a member\'s whole workflow at its gate when nobody answers where the run is driven', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId(), 'workflow');
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 1 } } });
+    const end = await ended;
+    expect(end.kind === 'exited' && JSON.parse(end.stdout)).toMatchObject({ outcome: 'failed', failure: { code: 'hitl_required', message: expect.stringContaining('Step "keep" of the workflow step "work"') } });
   }, 90_000);
 
   it('offers a prompt step, which a member runs on its own tool from its own copy of the step, then ends with the result its agent wrote', async () => {

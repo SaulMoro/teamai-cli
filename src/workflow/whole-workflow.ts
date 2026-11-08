@@ -12,8 +12,8 @@ import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinit
 
 /**
  * Why the workflow `child`, which step `step` runs, does not go whole, or undefined when it does: it is a workflow file
- * whose children are command or prompt steps that work in the copy the step works in, with nothing a member cannot run
- * on its own.
+ * whose children are command, prompt or gate steps that work in the copy the step works in, with nothing a member
+ * cannot run on its own: a gate the member asks the owner through the attempt's record.
  */
 export function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined): string | undefined {
   // An inline workflow reads the steps and the item around it (scope.ts childScope), which a nested run has none of.
@@ -30,15 +30,14 @@ export function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineW
   for (const inner of child.steps) {
     const what = `step "${inner.id}"`;
 
-    if (inner.command === undefined && inner.prompt === undefined) return `${what} is neither a command nor a prompt step`;
+    // A gate the member asks the owner through the attempt's record, whose person answers it.
+    if (inner.command === undefined && inner.prompt === undefined && inner.hitl === undefined) return `${what} is neither a command, a prompt nor a gate`;
 
     if (inner.answer !== undefined || (inner.command !== undefined && isShipped)) return `${what} runs only on this machine`;
 
     if (stepWorkflow(inner) !== undefined) return `${what} runs a workflow`;
 
     if (inner.interactive) return `${what} needs a person at its tool`;
-
-    if (inner.hitl !== undefined) return `${what} has a gate`;
 
     if (inner.workspace !== undefined && inner.workspace !== 'continue' && inner.workspace !== 'read-only') return `${what} opens a copy of its own`;
 
