@@ -1672,6 +1672,10 @@ You need not stay up. Stop your driver once it offered the attempt, and run `tea
 
 A member that took an attempt writes that it is still there, with the work it pushed so far, three times per `stale_after`. When your driver sees no word from it for longer than `stale_after`, the attempt fails `fleet_member_gone`. Its work up to the last push stays in the step's place, and `teamai workflow retry <run> <step>` offers the step again from there.
 
+`teamai workflow cancel <run>` ends an attempt that is out, with your driver running or stopped. An attempt nobody took is withdrawn. A member that took it stops the step, pushes its work so far, and prints `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`; that work comes into the step's place. A member that does not answer within `stale_after` fails the attempt `fleet_member_gone`, as above.
+
+A member runs the step in a clone of its checkout, so nothing the step writes into its git config reaches the checkout. When a member is killed mid-step, its next `teamai workflow resume --next --pool` first stops the commands that run left, then finishes the attempt it still holds from the work it pushed.
+
 `teamai workflow publish` refuses a run with an attempt out (`fleet_attempts_out`): a claim releases every lease, and the attempt's work comes back into a place on your machine only. Wait for it with `teamai workflow resume <run>`, then publish.
 
 ### A Codex login for step runtimes
