@@ -20,7 +20,6 @@ process.stderr.on('error', () => { stderrOpen = false; });
 const startedFrom = process.env['PASEO_AGENT_ID'];
 
 const status = await serve({
-  input: process.stdin,
   env: process.env,
   // A line teamai could not read is a bug here: it fails where it is written.
   write: (message: RuntimeMessage) => {

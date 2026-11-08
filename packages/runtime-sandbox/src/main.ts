@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
+import { isStartedByTeamai } from '@teamai/runtime-kit/serve';
 import { getUserHome } from '@teamai/tool-core/home';
 import { journal } from './journal.js';
-import { RUNTIME_PROTOCOL_ENV, type RuntimeMessage } from '@teamai/runtime-protocol';
+import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { SandboxOptions } from './options.js';
 import { unreachable, type Provider } from './provider.js';
 import { bwrap } from './providers/bwrap.js';
@@ -48,10 +49,7 @@ const wrapper = calledAs.startsWith(WRAPPER_PREFIX)
   ? { name: calledAs.slice(WRAPPER_PREFIX.length), args: process.argv.slice(2) }
   : mode === 'tool-exec' && wrapped !== undefined ? { name: wrapped, args: process.argv.slice(4) } : undefined;
 
-// teamai starts the runtime with TEAMAI_RUNTIME_PROTOCOL=1, and nothing else serves runtime protocol 1.
-const isStartedByTeamai = process.env[RUNTIME_PROTOCOL_ENV] === '1';
-
-if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai)) {
+if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai(process.env))) {
   // An app starts the wrapper through an npm .cmd shim that keeps no name of its own, with the tool's arguments or
   // none, so anything teamai did not start here is an app's.
   process.stderr.write(`teamai-sandbox${wrapper === undefined ? '' : `-${wrapper.name}`} (sandbox_unavailable): it does not run on Windows. ${NOT_ON_WINDOWS} Run the app and teamai inside WSL2, or give the app the plain tool.\n`);
@@ -60,7 +58,6 @@ if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai)) {
 } else if (wrapper === undefined) {
   // An exec still running when teamai closes stdin keeps the process alive, and records its end: no exit here.
   process.exitCode = await serve({
-    input: process.stdin,
     write: (message: RuntimeMessage) => {
       if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
     },

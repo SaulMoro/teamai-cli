@@ -44,7 +44,8 @@ import { workspaces } from './workspace.js';
 //
 
 export interface Serving {
-  input: Readable;
+  /** Where requests come from, when a test serves another stream; unset, `serveRuntime` reads the process input. */
+  input?: Readable;
   /** The runtime process's environment: it serves only when teamai started it (`serveRuntime`). */
   env: NodeJS.ProcessEnv;
   write(message: RuntimeMessage): void;

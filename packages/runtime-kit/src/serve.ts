@@ -81,6 +81,11 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<v
   }
 }
 
+/** Whether teamai started this runtime process: it starts every runtime with `RUNTIME_PROTOCOL_ENV` set to 1. */
+export function isStartedByTeamai(env: NodeJS.ProcessEnv): boolean {
+  return env[RUNTIME_PROTOCOL_ENV] === '1';
+}
+
 /**
  * Serves runtime protocol 1 on `input` until teamai closes it, and resolves to the exit status the process ends with:
  * 2 when teamai did not start it, which reads nothing then. Each request runs as it comes, without waiting for the
@@ -89,7 +94,7 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<v
 export function serveRuntime({ name, input = process.stdin, env, ledger, handlers, holds, stopped, debug }: ServeRuntime): Promise<number> {
   const { write } = ledger;
 
-  if (env[RUNTIME_PROTOCOL_ENV] !== '1') {
+  if (!isStartedByTeamai(env)) {
     debug(`Runtime ${name} serves runtime protocol 1 only when teamai starts it, with TEAMAI_RUNTIME_PROTOCOL=1, so it reads nothing. Run it as the runtime of a workflow driver, not by itself.`);
 
     return Promise.resolve(2);

@@ -56,7 +56,8 @@ const CHECK_UNSUPPORTED: RuntimeFailure = {
 };
 
 export interface RuntimeDeps {
-  input: Readable;
+  /** Where requests come from, when a test serves another stream; unset, `serveRuntime` reads the process input. */
+  input?: Readable;
   /** Writes one protocol line; once teamai stops reading, a line goes nowhere and the runtime goes on. */
   write: (message: RuntimeMessage) => void;
   journal: Journal;
