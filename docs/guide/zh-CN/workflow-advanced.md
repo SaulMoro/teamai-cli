@@ -1672,6 +1672,10 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 领取尝试的成员每个 `stale_after` 内会写三次自己仍在运行，并附上到目前为止推送的产出。你的驱动超过 `stale_after` 没有收到它的消息时，尝试以 `fleet_member_gone` 失败。它最后一次推送之前的产出留在步骤的位置里，`teamai workflow retry <run> <step>` 会从那里再次发布这个步骤。
 
+`teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。
+
+成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的命令，再从已推送的产出继续完成它仍持有的尝试。
+
 有尝试在外的运行，`teamai workflow publish` 会拒绝（`fleet_attempts_out`）：认领会释放所有租约，而尝试的产出只会回到你机器上的位置。先用 `teamai workflow resume <run>` 等它完成，再发布。
 
 ### 步骤运行时的 Codex 登录
