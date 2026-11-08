@@ -700,7 +700,7 @@ function writtenAt(write: string): number | undefined {
 }
 
 /** How long after its owner's last write to teamai-reports a running run counts as no longer driven. */
-const STALE_WINDOW_MS = 60 * 60_000;
+export const STALE_WINDOW_MS = 60 * 60_000;
 
 /** How old the owner's last write may get before a driver of the owner writes again as it leases. */
 const RENEW_AFTER_MS = 20 * 60_000;

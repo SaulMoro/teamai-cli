@@ -174,7 +174,7 @@ export async function whileNoDriverHere<T>(config: LocalConfig, run: RunId, body
   if (taken.value.kind === 'ran') return { kind: 'held', value: taken.value.value };
   const { step, attempt } = taken.value;
 
-  return { kind: 'busy', error: { code: 'driver_running', message: `Step "${step}" of run ${run} runs on this machine, in the skill driver's runner of attempt ${attempt}. Wait until the skill driver reports it, then try again.` } };
+  return { kind: 'busy', error: { code: 'driver_running', message: `Step "${step}" of run ${run} runs on this machine, in the skill driver's runner of attempt ${attempt}. Wait until the skill driver reports it, then try again; if its coding session has ended, the runner stops an hour after that session last called.` } };
 }
 
 /** Whether agent session `session` drives, with the skill driver, a run of `config`'s scope whose skill.json records no end yet. */

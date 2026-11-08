@@ -15,6 +15,7 @@ import { writeFileAtomic } from '../../../utils/fs.js';
 import { redact } from '../../../utils/redact.js';
 import { attemptEnv } from '../../attempt-marker.js';
 import { runConfinedStep, type ConfinedStepEnd, type ConfinedStepLease } from '../../confined-step.js';
+import { STALE_WINDOW_MS } from '../../handoff.js';
 import { commandEnd, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
 import { attemptDir, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
@@ -101,6 +102,13 @@ async function runAttempt(context: SkillContext, run: RunId, attempt: AttemptId)
     if (prepared.kind === 'prepared') {
       const failure = await setUp(context, run, attempt, prepared);
       const stage = await locked(context, run, (lock) => (failure ? setupFailed(context, lock, attempt, failure) : begin(context, lock, attempt, prepared)));
+
+      // The agent's child works the prompt now, and only this runner calls while it does: it checks the run until the
+      // attempt is reported or stopped, and each check renews this install's hold on the run, so nobody takes over a run
+      // whose step runs here.
+      if (stage.kind === 'gone' && stage.status === 'offered') {
+        await whileOpen(context, run, attempt, { work: new Promise<never>(() => {}), phases: ['offered', 'dispatched'], owned: true });
+      }
 
       if (stage.kind === 'gone') return { data: { runner: { attempt, status: stage.status } } };
 
@@ -259,7 +267,7 @@ async function setupFailed(context: SkillContext, lock: RunLock, attempt: Attemp
  * ran reached only the engine, and an attempt stopped meanwhile is given up before either starts (C9).
  */
 async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, prepared: Extract<Stage, { kind: 'prepared' }>): Promise<Stage> {
-  const state = await ticked(context, lock);
+  const state = (await ticked(context, lock))?.state;
   const open = state && openAttempt(state, attempt);
 
   if (state && open?.phase === 'stopping') return stopped(context, lock, state, attempt);
@@ -344,31 +352,39 @@ function checkIn(context: SkillContext, expiresAt: string | undefined): number {
 
 /**
  * Under the lock: a tick of the run as its driver, which takes no lease (D1), so the runner learns what the engine
- * cancelled while no agent calls. The state it saved.
+ * cancelled while no agent calls. The state it saved, and `lost` when the tick found another install owns the run
+ * (`not_owner`).
  */
-async function ticked(context: SkillContext, lock: RunLock): Promise<SkillState | undefined> {
+async function ticked(context: SkillContext, lock: RunLock): Promise<{ state: SkillState; lost: boolean } | undefined> {
   const state = await readState(context, lock);
 
   if (!state) return undefined;
-  const after = (await runTick(context, lock, state, 'runner')).state;
-  await writeSkillState(context.config, lock, after, context.env.secrets);
+  const after = await runTick(context, lock, state, 'runner');
+  await writeSkillState(context.config, lock, after.state, context.env.secrets);
 
-  return after;
+  return { state: after.state, lost: after.error?.code === 'not_owner' };
 }
 
-/** Under the lock: whether the attempt is still in one of `phases`, once the run is ticked. */
-async function check(context: SkillContext, lock: RunLock, attempt: AttemptId, phases: readonly AttemptState['phase'][]): Promise<{ open: boolean }> {
-  const state = await ticked(context, lock);
-  const phase = state && openAttempt(state, attempt)?.phase;
+/**
+ * Under the lock: whether the attempt is still in one of `phases`, once the run is ticked; with `owned`, also whether
+ * this install still drives the run, which another install took over (`not_owner`) drives there now, and whether the
+ * session called within the stale window: a session that called nothing for that long has likely ended, and a runner
+ * that kept ticking, which renews the run, would hold it here and on teamai-reports for good.
+ */
+async function check(context: SkillContext, lock: RunLock, attempt: AttemptId, { phases, owned }: { phases: readonly AttemptState['phase'][]; owned: boolean }): Promise<{ open: boolean }> {
+  const run = await ticked(context, lock);
+  const silent = run !== undefined && context.now().getTime() - Date.parse(run.state.orchestrator.lastCallAt) >= STALE_WINDOW_MS;
+  const phase = run && !(owned && (run.lost || silent)) ? openAttempt(run.state, attempt)?.phase : undefined;
 
   return { open: phase !== undefined && phases.includes(phase) };
 }
 
 /**
  * Waits for `work`, which runs outside the run lock, checking the run every `RUNNER_POLL_MS` and at `expiresAt`, since
- * a cancel or a deadline reaches only the engine. Undefined once a check finds the attempt out of `phases`: stopped.
+ * a cancel or a deadline reaches only the engine. Undefined once a check finds the attempt out of `phases`: stopped; with
+ * `owned`, also once another install took the run over or the session called nothing for the stale window.
  */
-async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; phases: readonly AttemptState['phase'][]; expiresAt?: string }): Promise<T | undefined> {
+async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; phases: readonly AttemptState['phase'][]; owned?: boolean; expiresAt?: string }): Promise<T | undefined> {
   for (;;) {
     const checking = new AbortController();
     const ended = await Promise.race([input.work.then((value) => ({ value })), context.runners.sleep(checkIn(context, input.expiresAt), checking.signal).then(() => undefined)]);
@@ -376,7 +392,7 @@ async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptI
 
     if (ended) return ended.value;
 
-    if (!(await locked(context, run, (lock) => check(context, lock, attempt, input.phases))).open) return undefined;
+    if (!(await locked(context, run, (lock) => check(context, lock, attempt, { phases: input.phases, owned: input.owned === true }))).open) return undefined;
   }
 }
 
