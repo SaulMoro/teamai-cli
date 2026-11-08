@@ -553,6 +553,13 @@ steps:
 
 如果 teamai 在步骤运行时被终止，运行时会让该步骤的进程继续运行到结束，并记录它是怎么结束的。在 `sbx` 上，恢复的运行会按名字（`sbx ls`）重新找到沙箱。之后 `teamai workflow resume <run> --driver containers` 按[步骤运行时的规则](workflow-advanced.md#驱动定义和步骤运行时)处理：已经结束的 exec 会被读回；仍在运行的会被停止，步骤以 `runtime_interrupted` 失败，但保留它的工作。尝试关闭时容器被删除。
 
+如果沙箱运行时本身被终止（崩溃、`kill -9`），步骤运行的东西按下表结束：
+
+| 提供方 | 步骤的进程 |
+| --- | --- |
+| `seatbelt`、`bwrap` | 随运行时立即结束，即使步骤还在启动中。例外：在 `seatbelt` 上，步骤在自己的会话里（`setsid`）启动的进程。 |
+| `docker`、`podman`、`sbx`、`vercel` | 在沙箱里继续运行；恢复的运行像上面那样停止它们，关闭尝试时删除沙箱。 |
+
 ```sh
 teamai workflow resume r7c41d09e2b6a5f13 --driver containers
 teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮保留下来的工作继续

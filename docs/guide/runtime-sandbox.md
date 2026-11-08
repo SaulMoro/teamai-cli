@@ -553,6 +553,13 @@ The step's record in the run then reads `"status": "succeeded"`, `"limit": "budg
 
 When teamai is killed while a step runs, the runtime keeps running that step's process until it ends and records how it ended. On `sbx`, the resumed run finds the sandbox again by its name (`sbx ls`). `teamai workflow resume <run> --driver containers` then follows the [step runtime rules](workflow-advanced.md#driver-definitions-and-step-runtimes): an exec that already finished is read back, and one still running is stopped and its step fails `runtime_interrupted`, keeping its work. The container is removed when the attempt closes.
 
+When the sandbox runtime itself is killed, however (a crash, `kill -9`), what the step runs ends as follows:
+
+| Provider | The step's processes |
+| --- | --- |
+| `seatbelt`, `bwrap` | End with the runtime, at once, even while the step is still starting. A process the step started in a session of its own (`setsid`) on `seatbelt` is the exception. |
+| `docker`, `podman`, `sbx`, `vercel` | Keep running in the sandbox; the resumed run stops them as above, and closing the attempt removes the sandbox. |
+
 ```sh
 teamai workflow resume r7c41d09e2b6a5f13 --driver containers
 teamai workflow retry r7c41d09e2b6a5f13 review      # goes on from the work the stopped pass kept

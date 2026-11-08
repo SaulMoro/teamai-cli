@@ -58,6 +58,16 @@ const KEPT = ['PATH', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 
 
 const SIGTERM_GRACE_MS = 2_000;
 
+/**
+ * How an exec starts, in the process group of its own it leads: a background shell blocked on fd 3, the read end of a
+ * pipe whose write end only the runtime holds, kills the whole group once that pipe ends (the exec ended, or the runtime
+ * died, however it died), and the exec's command replaces the launching shell without fd 3. The watcher is in place
+ * before the sandbox starts, outside it, so no SIGKILL of the runtime, however early, leaves the step running (after
+ * sandcastle's `bwrapProcess.ts` watcher and `sandboxes/seatbelt.ts` watchdog). A process the step starts in a session
+ * of its own (`setsid`) leaves the group, and outlives it.
+ */
+const LAUNCH = '{ read -r _ || :; kill -9 0; } <&3 >/dev/null 2>&1 &\nexec 3<&-\nexec "$@"';
+
 /** The executable `name` as `pathVariable` finds it, or undefined. */
 export function onPath(name: string, pathVariable: string | undefined): string | undefined {
   if (name.includes('/')) return isExecutable(name) ? name : undefined;
@@ -292,12 +302,15 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       return new Promise((resolve) => {
         // A process group of its own, so a stop ends the step and whatever it started.
         // Found on the runtime's PATH, never on one the step sets.
-        const child = spawn(command, args, { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn('/bin/sh', ['-c', LAUNCH, 'sh', command, ...args], { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
         const pidFile = child.pid === undefined ? undefined : path.join(pidsOf(id), String(child.pid));
 
         if (pidFile) fs.writeFileSync(pidFile, '');
-        child.stdout.setEncoding('utf8').on('data', (data: string) => onOutput('stdout', data));
-        child.stderr.setEncoding('utf8').on('data', (data: string) => onOutput('stderr', data));
+        // Ending the watch pipe ends the group: nothing the step started outlives it, as nothing outlives a bwrap namespace.
+        child.on('exit', () => child.stdio[3]?.destroy());
+        // Pipes, as stdio asks; typed nullable only because node types no fourth stdio entry.
+        child.stdout?.setEncoding('utf8').on('data', (data: string) => onOutput('stdout', data));
+        child.stderr?.setEncoding('utf8').on('data', (data: string) => onOutput('stderr', data));
         child.on('error', (error) => {
           if (pidFile) fs.rmSync(pidFile, { force: true });
           resolve({ kind: 'failed', failure: { code: 'exec_failed', message: `${provider} could not start: ${error.message}` } });
