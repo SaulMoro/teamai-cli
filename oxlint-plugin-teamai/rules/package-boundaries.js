@@ -45,6 +45,21 @@ const TEST_KIT = 'tool-testing';
 /** The runtime protocol, which teamai and every runtime parse with: the one runtime package src/ imports. */
 const RUNTIME_PROTOCOL = 'runtime-protocol';
 
+/** What every runtime process runs of the protocol: the request loop, each op's one end, its journal. */
+const RUNTIME_KIT = 'runtime-kit';
+
+/** The test support every runtime's tests share. */
+const RUNTIME_TEST_KIT = 'runtime-testing';
+
+/**
+ * The workspace imports the protocol may make: the levels and the home it names, and the usage it carries. Anything
+ * more would put a tool's or a runtime's facts in the contract every runtime and teamai parse with.
+ */
+const PROTOCOL_IMPORTS = new Set(['@teamai/shared', '@teamai/tool-core/home', '@teamai/tool-core/launch', '@teamai/tool-core/stdout']);
+
+/** The workspace packages the kit may import: it is bundled into every runtime, so it stays below all of them. */
+const KIT_IMPORTS = new Set([RUNTIME_PROTOCOL, 'shared']);
+
 /**
  * The package a bare specifier names: `@scope/name` or `name`, without a subpath.
  * @param {string} specifier
@@ -95,6 +110,8 @@ export default defineRule({
     const own = packageFolder(from);
     const inApp = from.startsWith('src/');
     const isTest = from.startsWith('src/__tests__/') || /\.test\.[cm]?[jt]sx?$/.test(from);
+    // A package's src/testing/ holds the harness its tests run, which nothing that ships loads.
+    const isTestSupport = isTest || /^packages\/[^/]+\/src\/testing\//.test(from);
 
     if (own === undefined && !inApp) return {};
 
@@ -128,7 +145,7 @@ export default defineRule({
         for (const [name, folder] of packagesByName(root)) {
           if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
 
-          if (inApp && folder.startsWith('runtime-') && folder !== RUNTIME_PROTOCOL) {
+          if (inApp && folder.startsWith('runtime-') && folder !== RUNTIME_PROTOCOL && !(folder === RUNTIME_TEST_KIT && isTest)) {
             context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio, and reads its lines with @teamai/runtime-protocol. ${from} -> ${specifier}.` });
           }
 
@@ -146,6 +163,22 @@ export default defineRule({
 
           if (folder === TEST_KIT && !isTest) {
             context.report({ node, message: `@teamai/tool-testing is test-only: import it from a *.test.ts file, so the conformance kit and vitest never ship in teamai-cli. ${from} -> ${specifier}.` });
+          }
+
+          if (folder === RUNTIME_TEST_KIT && !isTestSupport) {
+            context.report({ node, message: `@teamai/runtime-testing is test-only: import it from a *.test.ts file or a package's src/testing/, so its harness never ships in a runtime or teamai-cli. ${from} -> ${specifier}.` });
+          }
+
+          if (own?.startsWith('runtime-') && folder.startsWith('runtime-') && folder !== own && folder !== RUNTIME_PROTOCOL && folder !== RUNTIME_KIT && folder !== RUNTIME_TEST_KIT) {
+            context.report({ node, message: `A runtime package imports no other runtime but the protocol, the kit and, from its tests, @teamai/runtime-testing: each runtime ships as an executable of its own. ${from} -> ${specifier}.` });
+          }
+
+          if (own === RUNTIME_PROTOCOL && !PROTOCOL_IMPORTS.has(specifier)) {
+            context.report({ node, message: `@teamai/runtime-protocol imports only ${[...PROTOCOL_IMPORTS].join(', ')}, so the contract teamai and every runtime parse with carries no tool's or runtime's facts. ${from} -> ${specifier}.` });
+          }
+
+          if (own === RUNTIME_KIT && !KIT_IMPORTS.has(folder)) {
+            context.report({ node, message: `@teamai/runtime-kit imports only @teamai/runtime-protocol and @teamai/shared: it is bundled into every runtime, so it stays below them all. ${from} -> ${specifier}.` });
           }
         }
       }, (node) => {

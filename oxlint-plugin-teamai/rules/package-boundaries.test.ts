@@ -10,6 +10,10 @@ const workspace = {
   'packages/tool-core/src/definition.ts': 'export const definition = 1;',
   'packages/runtime-sandbox/package.json': JSON.stringify({ name: '@teamai/runtime-sandbox', private: true }),
   'packages/runtime-protocol/package.json': JSON.stringify({ name: '@teamai/runtime-protocol', private: true }),
+  'packages/runtime-kit/package.json': JSON.stringify({ name: '@teamai/runtime-kit', private: true }),
+  'packages/runtime-testing/package.json': JSON.stringify({ name: '@teamai/runtime-testing', private: true }),
+  'packages/runtime-t3/package.json': JSON.stringify({ name: '@teamai/runtime-t3', private: true }),
+  'packages/shared/package.json': JSON.stringify({ name: '@teamai/shared', private: true }),
   'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }),
   'packages/tool-codex/package.json': JSON.stringify({ name: '@teamai/tool-codex', private: true }),
   'packages/tool-definitions/package.json': JSON.stringify({ name: '@teamai/tool-definitions', private: true }),
@@ -161,3 +165,44 @@ rule.valid('allows a package requiring a Node module', `export const fs = requir
 rule.valid('allows a call of a require that takes no module name', `export const resolved = require.resolve('zod');`, inWorkspace('src/workflow/engine.ts'));
 
 rule.valid('leaves a test computing what it loads alone', 'export const load = (name: string) => import(`./fixtures/${name}.js`);', inWorkspace('src/__tests__/engine.test.ts'));
+
+rule.valid('allows a runtime importing the kit', `import { serveRuntime } from '@teamai/runtime-kit/serve';`, inWorkspace('packages/runtime-t3/src/runtime.ts'));
+
+rule.invalid('rejects a runtime importing another runtime', `import { runtime } from '@teamai/runtime-sandbox';`, (output) => {
+  expect(output).toContain('A runtime package imports no other runtime but the protocol, the kit');
+  expect(output).toContain('packages/runtime-t3/src/x.ts -> @teamai/runtime-sandbox');
+}, inWorkspace('packages/runtime-t3/src/x.ts'));
+
+rule.invalid('rejects the protocol importing the kit', `import { serveRuntime } from '@teamai/runtime-kit/serve';`, (output) => {
+  expect(output).toContain('@teamai/runtime-protocol imports only');
+}, inWorkspace('packages/runtime-protocol/src/protocol.ts'));
+
+rule.invalid('rejects the protocol importing a tool fact beyond its levels, home and usage', `import { SIGN_INS } from '@teamai/tool-core/sign-in';`, undefined, inWorkspace('packages/runtime-protocol/src/protocol.ts'));
+
+rule.valid('allows the protocol its levels, home, usage and shared', [
+  `import { ACCESS_LEVELS } from '@teamai/tool-core/launch';`, `import { getUserHome } from '@teamai/tool-core/home';`, `import type { TokenUsage } from '@teamai/tool-core/stdout';`, `import { redact } from '@teamai/shared';`,
+].join('\n'), inWorkspace('packages/runtime-protocol/src/protocol.ts'));
+
+rule.invalid('rejects the kit importing a tool package', `import { getUserHome } from '@teamai/tool-core/home';`, (output) => {
+  expect(output).toContain('@teamai/runtime-kit imports only @teamai/runtime-protocol and @teamai/shared');
+}, inWorkspace('packages/runtime-kit/src/serve.ts'));
+
+rule.valid('allows the kit the protocol and shared', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
+import { redact } from '@teamai/shared';`, inWorkspace('packages/runtime-kit/src/serve.ts'));
+
+rule.valid("allows a runtime's test harness and its tests the runtime test kit", `import { connectRuntime } from '@teamai/runtime-testing/connect';`, inWorkspace('packages/runtime-t3/src/testing/harness.ts'));
+
+rule.valid('allows a src/ test the runtime test kit', `import { bundleRuntime } from '@teamai/runtime-testing/bundle';`, inWorkspace('src/__tests__/helpers/t3-runtime.ts'));
+
+rule.invalid('rejects production code in a runtime importing the runtime test kit', `import { connectRuntime } from '@teamai/runtime-testing/connect';`, (output) => {
+  expect(output).toContain('@teamai/runtime-testing is test-only');
+}, inWorkspace('packages/runtime-t3/src/runtime.ts'));
+
+rule.invalid('rejects src/ production code importing the runtime test kit', `import { bundleRuntime } from '@teamai/runtime-testing/bundle';`, (output) => {
+  expect(output).toContain('src/ never imports a runtime package');
+  expect(output).toContain('@teamai/runtime-testing is test-only');
+}, inWorkspace('src/workflow/engine.ts'));
+
+rule.invalid('rejects src/ test support importing the kit', `import { opLedger } from '@teamai/runtime-kit/ledger';`, (output) => {
+  expect(output).toContain('src/ never imports a runtime package');
+}, inWorkspace('src/__tests__/engine.test.ts'));
