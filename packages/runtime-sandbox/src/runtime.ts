@@ -486,8 +486,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         try {
           await close(handle, ready.provider, isReleased === true);
         } catch (error) {
-          // A place the person released is forgotten all the same, however much of its record can be read. Either way
-          // its sandbox stays: one whose record cannot be read is kept until it can, as the failure says.
+          // A place the person released is forgotten all the same, however much of its record can be read, and its
+          // sandbox is left. One not released stays in the journal for a close once its record can be read.
           let unforgotten = '';
 
           try {
@@ -496,7 +496,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
             unforgotten = ` Its records could not be removed either: ${forgetting instanceof Error ? forgetting.message : String(forgetting)}`;
           }
 
-          write({ event: 'failed', handle, failure: { code: 'runtime_error', message: `Runtime sandbox could not carry out close of ${handle}: ${error instanceof Error ? error.message : String(error)}${unforgotten}` }, ...keptOf(handle, ready.provider) });
+          write({ event: 'failed', handle, failure: { code: 'runtime_error', message: `Runtime sandbox could not carry out close of ${handle}: ${error instanceof Error ? error.message : String(error)}${unforgotten}` }, ...(isReleased === true && keptOf(handle, ready.provider)) });
         }
       },
     },
