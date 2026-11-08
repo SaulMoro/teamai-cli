@@ -105,7 +105,7 @@ export function keptOf(providers: CustomProviders, variables: readonly string[])
 }
 
 /** Whether a provider whose command starts with `executable` runs `command`: the same name, or an absolute path to it. */
-const runsCommand = (executable: string | undefined, command: string): boolean => executable !== undefined
+export const runsCommand = (executable: string | undefined, command: string): boolean => executable !== undefined
   && (executable === command || (path.isAbsolute(executable) && !path.isAbsolute(command) && path.basename(executable) === command));
 
 /** Why the custom provider the runtime's providers option names cannot run `tool`, or undefined when it extends it. */
@@ -210,7 +210,7 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
  * remove it: in the Paseo app, or, as Paseo's CLI cannot unset one provider (0.14 refuses `config unset` on a dynamic
  * key), by editing the config of the Paseo home the member's Paseo uses and reloading the daemon.
  */
-function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): string {
+export function addedNotice(url: string, { id, entry }: ProviderToAdd, name: string): string {
   const runs = entry.command ? entry.command[0] : `${entry.extends}'s own command`;
   const home = Object.entries(entry.env ?? {}).map(([variable, dir]) => `, with ${variable}=${dir}`).join('');
   const paseoDir = paseoHome(process.env);

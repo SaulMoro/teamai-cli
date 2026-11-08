@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -19,9 +20,11 @@ import { z } from 'zod';
 //    agents.json         its agents, workspaces and create receipts, which a restart reads again; an agent that was
 //                        running when it stopped comes back `closed`, as Paseo marks it
 //    behaviour.json      how its next agents behave (`Behaviour`), and which version and models it offers
-//    requests.jsonl      every agent create, cancel and workspace archive it received, for a test to read what crossed
+//    requests.jsonl      every agent create, start, message, cancel and delete, workspace archive and config change it
+//                        received, for a test to read what crossed
 //    stopped.jsonl       each agent a cancel or an archive stopped, once it stopped running, which may be after the answer
 //    answers/<agent>     a person answered the agent's permission request in the app
+//    started.jsonl       each start of a custom provider's command for an agent, with how it ended
 //
 //  An agent finds the result file the way a real one does, in teamai's prompt, and writes its output there.
 //
@@ -357,6 +360,30 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
     timers.add(setTimeout(end, lag));
   };
 
+  /**
+   * Starts the tool of an agent on a custom provider that runs its own command, as Paseo starts it, in the agent's
+   * directory with PASEO_AGENT_ID and PASEO_AGENT_CWD set, and resolves to why it did not start: a command that exits
+   * non-zero, or cannot run. A built-in provider's tool starts on this host, idle, as Paseo's does: nothing to run here.
+   */
+  const startTool = (agent: AgentRecord): Promise<string | undefined> => {
+    const command = behaviour().custom_providers[agent.provider]?.command;
+
+    if (!command) return Promise.resolve(undefined);
+    const [file = '', ...args] = command;
+
+    return new Promise((resolve) => {
+      const child = spawn(file, args, { cwd: agent.cwd, env: { ...process.env, PASEO_AGENT_ID: agent.id, PASEO_AGENT_CWD: agent.cwd }, stdio: 'ignore' });
+
+      const ended = (why: string | undefined): void => {
+        fs.appendFileSync(path.join(state, 'started.jsonl'), `${JSON.stringify({ agentId: agent.id, command, ...(why !== undefined && { failed: why }) })}\n`);
+        resolve(why);
+      };
+
+      child.once('error', (error) => ended(error.message));
+      child.once('exit', (code, signal) => ended(code === 0 ? undefined : `${file} exited with ${signal ?? `code ${code}`}`));
+    });
+  };
+
   /** Runs an agent's turn: its work, a permission it waits on, then its hold or release, then its end. */
   const work = (agent: AgentRecord): void => {
     const { behaviour: does } = agent;
@@ -439,7 +466,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
   };
 
   /** The requests `requests.jsonl` keeps. */
-  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request']);
+  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request', 'list_commands_request', 'send_agent_message_request', 'delete_agent_request']);
 
   /** The requests already held for the delay `models_ms`, `open_ms`, `create_ms` or `archive_ms` gives them. */
   const held = new WeakSet<Inbound>();
@@ -637,7 +664,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
         const agent: AgentRecord = {
           id, provider: message.config.provider, model, thinking, modeId: message.config.modeId ?? null, cwd: fs.realpathSync(message.config.cwd),
-          workspaceId: message.workspaceId ?? '', title: message.config.title ?? null, labels: message.labels, status: 'running', createdAt: now(), updatedAt: now(),
+          workspaceId: message.workspaceId ?? '', title: message.config.title ?? null, labels: message.labels, status: message.initialPrompt === undefined ? 'idle' : 'running', createdAt: now(), updatedAt: now(),
           sessionId: null, permission: false, behaviour: behaviour(), prompt: message.initialPrompt ?? '',
         };
 
@@ -658,7 +685,59 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
             ? { requestId: message.requestId, agent: null, error: 'Connection reset before the create was answered' }
             : { requestId: message.requestId, agent: snapshot(agent), creation: creation(agent), error: null },
         });
+
+        // With no prompt the agent waits, idle, for its first message; Paseo starts Codex's process at create, and
+        // Claude's at the first listing of its commands.
+        if (message.initialPrompt !== undefined) work(agent);
+        else if (baseOf(agent.provider) === 'codex') {
+          void startTool(agent).then((failed) => {
+            if (failed === undefined) return;
+            Object.assign(agent, { status: 'error', lastError: failed });
+            changed(agent);
+          });
+        }
+
+        return;
+      }
+
+      case 'list_commands_request': {
+        const agent = kept.agents[message.agentId];
+
+        if (!agent) {
+          reply({ type: 'list_commands_response', payload: { requestId: message.requestId, agentId: message.agentId, commands: [], error: `Agent not found: ${message.agentId}` } });
+
+          return;
+        }
+
+        void (baseOf(agent.provider) === 'claude' ? startTool(agent) : Promise.resolve(undefined)).then((failed) => {
+          reply({ type: 'list_commands_response', payload: { requestId: message.requestId, agentId: agent.id, commands: [], error: failed ?? null } });
+        });
+
+        return;
+      }
+
+      case 'send_agent_message_request': {
+        const agent = kept.agents[message.agentId];
+
+        if (!agent) {
+          reply({ type: 'send_agent_message_response', payload: { requestId: message.requestId, agentId: message.agentId, accepted: false, error: `Agent not found: ${message.agentId}` } });
+
+          return;
+        }
+
+        Object.assign(agent, { prompt: message.text, status: 'running', permission: agent.behaviour.ask_permission });
+        save();
+        changed(agent);
+        reply({ type: 'send_agent_message_response', payload: { requestId: message.requestId, agentId: agent.id, accepted: true, error: null } });
         work(agent);
+
+        return;
+      }
+
+      case 'delete_agent_request': {
+        delete kept.agents[message.agentId];
+        save();
+        reply({ type: 'agent_deleted', payload: { requestId: message.requestId, agentId: message.agentId } });
 
         return;
       }

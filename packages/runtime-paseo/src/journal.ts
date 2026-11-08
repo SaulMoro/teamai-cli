@@ -47,6 +47,11 @@ const PlaceSchema = z.discriminatedUnion('kind', [
     cwd: z.string(),
     /** The run's scratch directory, which the place's agents write at its own path. */
     runDir: z.string(),
+    /**
+     * For a place teamai runs through a sandbox (`through: sandbox`): the attempt socket each agent here registers on,
+     * the Paseo provider that runs the tool as teamai's wrapper, and the attempt's tool home, which keeps its sessions.
+     */
+    through: z.object({ socket: z.string(), provider: z.string(), home: z.string().optional() }).optional(),
   }),
   z.object({ kind: z.literal('confined'), run: z.string(), attempt: z.string(), workspace: WorkspaceSchema.optional() }),
 ]);
@@ -112,6 +117,11 @@ const PromptRecordSchema = z.discriminatedUnion('kind', [
      * reached Paseo, which may still start its agent though the create failed; `confirmed` once Paseo showed the agent.
      */
     dispatched: z.enum(['unconfirmed', 'confirmed']).optional(),
+    /**
+     * Through a sandbox, the agent is created with no prompt, and gets it once its wrapper connected: set before the
+     * prompt is sent, so a runtime started again never sends it twice.
+     */
+    sent: z.literal(true).optional(),
     outcome: OpStateSchema.optional(),
   }),
 ]);
