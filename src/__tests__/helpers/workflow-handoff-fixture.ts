@@ -8,6 +8,7 @@ import { SyncManager, defaultSyncMeta, getRepoIdentity } from '../../session-flo
 import type { LocalConfig } from '../../types.js';
 import { syncScorersThenWorkflows } from '../../scorers/team-sync.js';
 import { leaseNext, reportAttempt, startRun } from '../../workflow/engine.js';
+import { resumeRun } from '../../workflow/handoff.js';
 import { updateRun } from '../../workflow/store.js';
 import type { DriverIdentity, RunState } from '../../workflow/types.js';
 import { ensureWorktree, fetchMissingCommits, headCommit } from '../../workflow/worktree.js';
@@ -335,6 +336,15 @@ export async function start({ config }: Member): Promise<string> {
   const started = await startRun(config, 'build', {}, { secrets: await knownSecrets(config) });
   if ('error' in started) throw new Error(started.error.message);
   return String(started.data.run);
+}
+
+/**
+ * Takes the offer of a run `member` published back, as `workflow resume` does before it drives, so the member's own
+ * drivers lease its steps again.
+ */
+export async function takeBack(member: Member, runId: string): Promise<void> {
+  const resumed = await resumeRun(member.config, runId, { claim: false, checkout: member.checkout });
+  if (!resumed.ok) throw new Error(resumed.error.message);
 }
 
 /** Leases the next step to `member` and reports it succeeded; returns its id. */

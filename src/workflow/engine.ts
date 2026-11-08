@@ -14,7 +14,7 @@ import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
 import { getDataHome, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias } from './cache.js';
-import { claimedAway, claimRun, publishRunEnd, reconcileTakenCopies } from './handoff.js';
+import { claimRun, leaseRefusal, publishRunEnd, reconcileTakenCopies, type HandoffError } from './handoff.js';
 import {
   evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, pathValue, resolvePath,
   type Expression, type ExpressionPath,
@@ -2211,6 +2211,9 @@ async function drainDeliveries(config: LocalConfig, runId: string, secrets: Reco
 
 export async function leaseNext(config: LocalConfig, runId: string, driver: DriverIdentity, options: NextOptions = {}): Promise<WorkflowEnvelope> {
   driver = { kind: driver.kind, machine: driver.machine, workspace: driver.workspace };
+  // Set while this install offers the run: it is a person's or a runner's to take, so this call hands out no lease, and
+  // still answers a wait or the run's end.
+  let offeredHere: HandoffError | undefined;
 
   if (options.claim) {
     const claimed = await claimRun(config, runId, { checkout: driver.workspace });
@@ -2222,9 +2225,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     if (unreconciled) return { error: unreconciled };
   } else {
     // A run another install claimed moved on there, so this machine's copy of it leases nothing.
-    const elsewhere = await claimedAway(config, runId);
+    const elsewhere = await leaseRefusal(config, runId);
 
-    if (elsewhere) return { error: elsewhere };
+    if (elsewhere && elsewhere.code !== 'run_offered') return { error: elsewhere };
+    offeredHere = elsewhere;
   }
 
   // Resolved once, so the env this `next` offers against and the secrets its writes, deliveries' included, mask agree.
@@ -2497,6 +2501,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             break;
           }
 
+          if (offeredHere) return { save: JSON.stringify(run) !== before, envelope: { error: offeredHere } };
+
           if (plan.contract && options.base && !run.base) run.base = options.base;
           const { unenforced } = terms.terms;
 
@@ -2526,6 +2532,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         return answer({ wait: { reason: holds.map((item) => item.reason).join('; '), held: holds } });
       }
 
+      // An open lease of this machine is not handed back while the run is offered: the install that takes it releases it.
+      if (offeredHere) return { save: JSON.stringify(run) !== before, envelope: { error: offeredHere } };
       const located = locateStep(run, leased.id);
 
       if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${leased.id}"`) };

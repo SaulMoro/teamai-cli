@@ -17,7 +17,7 @@ import { readRun, runLockPath } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { git as workflowGit, markReadCopy, worktreePath } from '../workflow/worktree.js';
 import { knownSecrets } from '../env-resolution.js';
-import { BUILD, cacheFiles, COPY, creates, deleteRunBranches, DELIVERED_STACK, deliveringStack, dirs, editRun, git, hasCommit, holdBasePin, Member, openPull, originFile, originRef, PACKAGE_VERSION, PAIR, pull, pushCommitTo, receiveHook, runStep, settle, SHIP, STACK, start, startIn, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
+import { BUILD, cacheFiles, COPY, creates, deleteRunBranches, DELIVERED_STACK, deliveringStack, dirs, editRun, git, hasCommit, holdBasePin, Member, openPull, originFile, originRef, PACKAGE_VERSION, PAIR, pull, pushCommitTo, receiveHook, runStep, settle, SHIP, STACK, start, startIn, takeBack, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -33,6 +33,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true, value: { stateRevision: 1 } });
+    await takeBack(alice, runId);
     expect(await runStep(alice, runId)).toBe('two');
     await settle(alice, runId);
     expect(JSON.parse(originFile(acme.origin, `workflows/runs/${runId}/state.json`) ?? '{}')).toMatchObject({ status: 'succeeded', stateRevision: 2 });
@@ -86,6 +87,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     const next = await leaseNext(alice.config, runId, alice.driver);
     if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
     const lease = next.data.lease as { step: string; attempt: string; revision: number };
@@ -107,6 +109,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout });
     if (!claimed.ok) throw new Error(claimed.error.message);
     const claim = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
@@ -130,6 +133,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     expect(await runStep(bob, runId)).toBe('two');
     await settle(bob, runId);
@@ -152,6 +156,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     await runStep(alice, runId);
     receiveHook(acme.origin, 'exit 1');
 
@@ -184,6 +189,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     await runStep(alice, runId);
     const lock = path.join(path.dirname(alice.config.repo.localPath), '.reports-lock');
     expect(await acquireLock(lock)).toBe(true);
@@ -236,11 +242,13 @@ describe('workflow handoff through teamai-reports', () => {
   it.each([
     { status: 'running', end: async () => {} },
     { status: 'succeeded', end: async (alice: Member, runId: string) => {
+      await takeBack(alice, runId);
       await work(alice, runId, 'more.txt');
       await work(alice, runId, 'last.txt');
       await settle(alice, runId);
     } },
     { status: 'failed', end: async (alice: Member, runId: string) => {
+      await takeBack(alice, runId);
       const next = await leaseNext(alice.config, runId, alice.driver, { can: { workspace: [...WORKSPACES] } });
       if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
       const lease = next.data.lease as { attempt: string; revision: number };
@@ -302,6 +310,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true, value: { stateRevision: 1 } });
+    await takeBack(alice, runId);
     const next = await leaseNext(alice.config, runId, alice.driver);
     if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
     const lease = next.data.lease as { attempt: string; revision: number };
@@ -317,6 +326,7 @@ describe('workflow handoff through teamai-reports', () => {
     const alice = await acme.member('alice');
     const runId = await startIn(alice, 'copy');
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true, value: { stateRevision: 1 } });
+    await takeBack(alice, runId);
     const published = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
     const { branch, commit } = await work(alice, runId, 'change.txt', alice.driver, { push: false });
 
@@ -730,6 +740,7 @@ steps:
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     const rebuild = workflowCache.loadWorkflowBundleAt;
     vi.spyOn(workflowCache, 'loadWorkflowBundleAt').mockImplementationOnce(async (...args) => {
+      await takeBack(alice, runId);
       await runStep(alice, runId);
       await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
       return rebuild(...args);

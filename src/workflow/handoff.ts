@@ -36,6 +36,7 @@ import { fetchMissingCommits, git, reconcileCopy } from './worktree.js';
 export type HandoffError =
   | SnapshotError
   | { code: 'not_owner'; owner: HandoffOwner; ownedAt: string; message: string }
+  | { code: 'run_offered'; message: string }
   | { code: 'busy'; message: string }
   | { code: 'invalid_run'; message: string }
   | { code: 'unsupported_repo'; message: string }
@@ -807,11 +808,14 @@ export async function claimOffered(config: LocalConfig, runId: string, options: 
 }
 
 /**
- * Why a driver may not lease run `runId` from this machine's copy: another install claimed it, as the snapshot on this
- * machine's teamai-reports checkout shows it since its last fetch (a pull, a resume, a publish). Reads no network, and
- * checks no run this machine never published, nor a snapshot of another run under that id or one it cannot read.
+ * Why a driver may not lease run `runId` from this machine's copy, asked before every lease that claims nothing: another
+ * install claimed it (`not_owner`), or this install offers it (`run_offered`), so the run is a person's or a runner's to
+ * take, and no driver here leases it until a resume, or a next with `"claim": true`, takes the offer back. Answered from
+ * the snapshot on this machine's teamai-reports checkout since its last fetch (a pull, a resume, a publish). Reads no
+ * network, and checks no run this machine never published, nor a snapshot of another run under that id or one it cannot
+ * read.
  */
-export async function claimedAway(config: LocalConfig, runId: string): Promise<HandoffError | undefined> {
+export async function leaseRefusal(config: LocalConfig, runId: string): Promise<HandoffError | undefined> {
   if (!usesBranchWorktree(config)) return undefined;
   const local = await readRun(config, runId);
 
@@ -821,7 +825,16 @@ export async function claimedAway(config: LocalConfig, runId: string): Promise<H
 
   if (!snapshot?.ok || snapshot.value.createdAt !== local.createdAt) return undefined;
 
-  return snapshot.value.owner.id === (await installOwner(config)).id ? undefined : notOwner(runId, snapshot.value);
+  if (snapshot.value.owner.id !== (await installOwner(config)).id) return notOwner(runId, snapshot.value);
+
+  return snapshot.value.offered === undefined ? undefined : offeredHere(runId);
+}
+
+function offeredHere(runId: string): HandoffError {
+  return {
+    code: 'run_offered',
+    message: `Run ${runId} is offered on teamai-reports for a person or a runner to take, so no driver of this machine leases its steps. To drive it here again, take the offer back: teamai workflow resume ${runId}, or send "claim": true on the next.`,
+  };
 }
 
 /**
