@@ -46,6 +46,8 @@ export interface Sandboxed {
   writable: string[];
   /** Read only: the view's git paths, and this machine's PATH directories and install roots. */
   readable: string[];
+  /** The view's git paths: the folders that hold one stay where they are. */
+  gitPaths: string[];
   /** The member's home, whose container engines' sockets and state no step reaches; never read either. */
   memberHome: string;
   /** The step's own home and temp directory. */
@@ -235,6 +237,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       cwd: spec.cwd,
       writable: [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)].map(realOf).concat(own.home, own.tmp),
       readable: [...view.readonly.map(realOf), ...toolRoots(argv0, env.PATH, home)],
+      gitPaths: view.readonly.map(realOf),
       memberHome: realOf(home),
       home: own.home,
       tmp: own.tmp,
