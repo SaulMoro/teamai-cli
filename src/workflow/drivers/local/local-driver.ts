@@ -967,8 +967,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // The reset the driver last said it waits for, so it says each once.
   let waitSaid: string | undefined;
 
-  /** The tool or instance a prompt lease launches, as `next` names it: the account a usage limit holds. */
-  const launchedTool = (lease: StagedLease): string | undefined => (lease.prompt === undefined || lease.confined
+  /**
+   * The tool or instance a prompt lease launches, as `next` names it: the account a usage limit holds. An answer step's call
+   * runs on the tool `ai.tool` names, and the engine holds no answer step, so it is not keyed here.
+   */
+  const launchedTool = (lease: StagedLease): string | undefined => (lease.prompt === undefined || lease.answer === true || lease.confined
     ? undefined
     : lease.tool ?? toolForOn(slotOf.get(lease.attempt)?.can.default_tool)({ agent: lease.agent, tool: lease.tool }));
 
