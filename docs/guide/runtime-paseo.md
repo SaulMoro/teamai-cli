@@ -444,10 +444,10 @@ In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so t
 ✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
-An agent that stops on its tool's usage limit, or on a rate limit its model's API answered, fails `usage_limited`, with what the tool said, reset time included, and the command that runs the step again once the limit lifts:
+An agent that stops on its tool's usage limit, or on a rate limit its model's API answered, stops the step with what the tool said, reset time included. The step does not fail: teamai launches nothing more on that tool until the limit resets, then runs the step again:
 
 ```text
-✖ Step "fix" failed with usage_limited: The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r3ad62eacc3c191eb fix
+⚠ Step "fix" stopped: The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.
 ```
 
 ## Interactive steps

@@ -353,7 +353,7 @@ teamai workflow cancel r70d31098c8884803
 | `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | 某个步骤的启动请求没有得到回复，而你之后重新登录了 T3，所以 teamai 无法查找那个线程。 | 如果消息里提到的线程还在运行，在 T3 Code 里停止它，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… journal_unreadable: Runtime t3 cannot read its record of t3-r70d…, ~/.teamai/runtime-state/t3/places/….json …` | teamai 记录步骤线程的文件已损坏，所以它不知道该停止哪些线程，并保留这个位置。 | 在 T3 Code 里停止这次运行的线程，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… kept no session for <worktree> in <home> …` | 工具没有在实例的目录里为这个 worktree 保存会话记录：该目录是实例在 T3 里设置的 home path，否则是 `~/.claude` 或 `~/.codex`。所以步骤无法评分。 | 在 T3 Code 的 Settings → Providers 里检查实例的 home path。 |
-| `✖ Step "review" failed with usage_limited: claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): …` | 实例达到了提供方的用量上限。T3 知道重置时间时，冒号后的 T3 消息会写明。 | 等到重置，或换一个 `instance`，然后运行消息末尾给出的重试命令。 |
+| `⚠ Step "review" stopped: claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): …` | 实例达到了提供方的用量上限。T3 知道重置时间时，冒号后的 T3 消息会写明。 | 无需操作：额度重置后 teamai 会再运行该步骤。想现在继续，就换一个 `instance`。 |
 
 ## 目前还不支持
 
