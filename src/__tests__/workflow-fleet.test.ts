@@ -76,6 +76,13 @@ describe('fleet attempts on teamai-reports', () => {
     expect(JSON.stringify(finished)).not.toContain('/home/bob');
   });
 
+  it('offers a command that names absolute paths, as shell commands do', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+
+    expect(await offer(alice, { lease: { ...LEASE, command: 'npm test 2>/dev/null && cp out /tmp/out' } })).toMatchObject({ ok: true, value: { state: 'offered' } });
+  });
+
   it('offers no lease that carries a secret of the owner, and writes nothing', async () => {
     const acme = team();
     const alice = await acme.member('alice');

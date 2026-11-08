@@ -111,7 +111,10 @@ function recordText(record: FleetRecord): string {
  * `secrets`, or an absolute path of this machine, which a member cannot use.
  */
 function unpublishable(record: FleetRecord, secrets: Record<string, string>): FleetError | undefined {
-  const hit = firstUnfit(JsonValueSchema.parse(record), secrets);
+  // A command names the paths it reads and writes, such as /dev/null, wherever it runs: only a secret keeps it here.
+  const inCommand = firstUnfit(record.lease.command, secrets);
+  const commandHit = inCommand?.unfit.kind === 'secret' ? { at: ['lease', 'command'], unfit: inCommand.unfit } : undefined;
+  const hit = commandHit ?? firstUnfit(JsonValueSchema.parse({ ...record, lease: { ...record.lease, command: '' } }), secrets);
 
   if (hit === undefined) return undefined;
   const field = hit.at.join('.');
