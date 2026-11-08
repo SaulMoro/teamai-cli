@@ -173,8 +173,10 @@ import {
   CLAUDE_TOOL_ID,
   detectToolRoot,
   isAgentExcluded,
+  recordedToolHomeDir,
   RELOCATABLE_TOOLS,
   resolveHookScope,
+  resolveToolRootDir,
   scopedToolPaths,
   toolRootRejection,
   type TeamaiConfig,
@@ -280,6 +282,14 @@ function recordToolRoots(localConfig: LocalConfig): void {
 
     if (!root) continue;
     const rejection = toolRootRejection(root);
+
+    // Session lookups read a root anywhere; the sync addresses only roots in the home directory.
+    if (rejection && recordedToolHomeDir(tool, { [tool]: root }) === root) {
+      localConfig.toolRoots = { ...localConfig.toolRoots, [tool]: root };
+      log.warn(`Recorded ${envVar} (${root}): teamai reads ${label} sessions there, and keeps syncing ${label} to `
+        + `${resolveToolRootDir(tool, RELOCATABLE_TOOLS[tool].defaultRoot)}, because ${rejection}.`);
+      continue;
+    }
 
     if (rejection) {
       log.warn(`${envVar} (${root}) was not recorded: ${rejection}.`);

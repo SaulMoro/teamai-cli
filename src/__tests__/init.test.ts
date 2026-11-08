@@ -1606,13 +1606,13 @@ describe('init', () => {
       });
     });
 
-    it('refuses a root outside the home directory and says why', async () => {
+    it('records a root outside the home directory for its sessions, and says the sync keeps the default root', async () => {
       process.env.CLAUDE_CONFIG_DIR = '/opt/claude-config';
 
-      expect(await savedConfig()).not.toHaveProperty('toolRoots');
+      expect(await savedConfig()).toMatchObject({ toolRoots: { claude: '/opt/claude-config' } });
       const { log } = await import('../utils/logger.js');
       expect(vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).join('\n'))
-        .toContain('outside the home directory');
+        .toContain(`teamai reads Claude Code sessions there, and keeps syncing Claude Code to ${path.join(HOME, '.claude')}`);
     });
 
     it('refuses a root nested deeper than the installed-tool check can look', async () => {

@@ -216,7 +216,7 @@ CURSOR_DATA_DIR=~/.cursor-data teamai init
 CURSOR_CONFIG_DIR=~/.cursor-config teamai init
 ```
 
-目录要在 home 下，或在 `~/.config/` 下面。Copilot 用自己的 `COPILOT_HOME`。
+目录在 home 下或 `~/.config/` 下面时，teamai 会同步到那里。home 之外的目录也会记下，但只用于该工具的会话：teamai 从那里读会话，其他文件仍同步到工具的默认根目录，`init` 和 `teamai doctor` 会说明这一点。Copilot 用自己的 `COPILOT_HOME`。
 
 Cursor CLI 会搬两个目录：`CURSOR_DATA_DIR` 放会话记录，`CURSOR_CONFIG_DIR` 放写协同署名设置的 `cli-config.json`。用户级 `mcp.json`、`rules/`、`commands/` 不管这两个变量怎么设都留在 `~/.cursor`，所以它们仍然用默认路径。没设 `CURSOR_CONFIG_DIR` 时，配置根目录取 `$XDG_CONFIG_HOME/cursor`（设了该变量的话），否则取 `~/.cursor`。
 
