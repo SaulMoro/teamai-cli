@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
+import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 
 // The bwrap provider through the runtime's stdio entry point, on a stand-in bwrap that records its argv and runs the
 // command. Only a Linux host proves what the namespaces hide; this one proves what the runtime asks bwrap for.
@@ -28,7 +29,9 @@ beforeEach(() => {
 afterEach(async () => {
   const connections = open.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
+  const recovered = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
+  expectNothingLeft({ dir: host.dir });
   fs.rmSync(host.dir, { recursive: true, force: true });
 });
 

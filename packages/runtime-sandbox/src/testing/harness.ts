@@ -52,6 +52,8 @@ export interface FakeEngine {
   daemon(up: boolean): void;
   /** Makes `rm` fail, as a daemon that cannot remove a container, or work again. */
   failRemove(shouldFail: boolean): void;
+  /** Undoes every fault and delay a test set, as a member mends their engine, so what the test left can be closed. */
+  repair(): void;
   /** Makes an exec whose process a stop or remove killed end `ms` after the command that killed it returned. */
   stopLag(ms: number): void;
   /** Makes a stop wait `ms` before it stops anything, as a daemon slow to answer. */
@@ -174,6 +176,11 @@ export function fakeEngine(dir: string): FakeEngine {
     },
     isListingOwned: () => fs.existsSync(path.join(state, 'owned-listing')),
     ownedListings: () => (fs.existsSync(path.join(state, 'owned-listed')) ? fs.readFileSync(path.join(state, 'owned-listed'), 'utf8').length : 0),
+    repair() {
+      for (const name of fs.readdirSync(state)) {
+        if (['down', 'stop-lag', 'stop-delay', 'stop-hold', 'format-fails', 'create-hold', 'exec-hold', 'owned-hold', 'rm-fails'].includes(name) || name.startsWith('delay-')) fs.rmSync(path.join(state, name), { force: true });
+      }
+    },
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
       else fs.rmSync(path.join(state, 'rm-fails'), { force: true });
@@ -208,7 +215,12 @@ export type Message = z.infer<typeof MessageSchema>;
 
 export interface Connection {
   child: ChildProcessWithoutNullStreams;
+  /** The runtime's executable and the environment it was started with, so another process of it can follow. */
+  executable: string;
+  env: NodeJS.ProcessEnv;
   send(request: Message): void;
+  /** Every request sent so far. */
+  sent: Message[];
   /** The next message, from the start of this connection, that `match` accepts. */
   next(match: (message: Message) => boolean, ms?: number): Promise<Message>;
   /** Every message so far. */
@@ -224,6 +236,7 @@ export interface Connection {
 export function connect(executable: string, env: NodeJS.ProcessEnv): Connection {
   const child = spawn(process.execPath, [executable], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   const messages: Message[] = [];
+  const sent: Message[] = [];
   const invalid: string[] = [];
   const consumed = new Set<Message>();
   let waiters: Array<() => void> = [];
@@ -252,10 +265,16 @@ export function connect(executable: string, env: NodeJS.ProcessEnv): Connection 
 
   return {
     child,
+    executable,
+    env,
     messages,
+    sent,
     invalid,
     stderr: () => stderr,
-    send: (request) => { child.stdin.write(`${JSON.stringify(request)}\n`); },
+    send: (request) => {
+      sent.push(request);
+      child.stdin.write(`${JSON.stringify(request)}\n`);
+    },
     next: (match, ms = 10_000) => new Promise((resolve, reject) => {
       const look = (): boolean => {
         const found = messages.find((message) => !consumed.has(message) && match(message));
