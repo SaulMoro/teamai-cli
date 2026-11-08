@@ -58,34 +58,36 @@ function fakeTarget(engine: Engine): Target {
   };
 }
 
-/** The engine `engine` on this machine, as the member runs it. */
+/**
+ * The engine `engine` on this machine, as the member runs it. The suite runs with a home of its own, and each case
+ * gives the runtime another, so the engine runs through a shim that gives it the member's home, where it keeps its
+ * images, its storage and its sign-in.
+ */
 function realTarget(engine: Engine): Target {
-  const cli = (args: string[]): string => execFileSync(engine, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300_000 });
+  const shim = (dir: string): string => path.join(dir, 'engine-bin');
+  const cli = (dir: string, args: string[]): string => execFileSync(path.join(shim(dir), engine), args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300_000 });
 
   return {
     label: `real ${engine}`,
     engine,
     options: engine === 'sbx' ? { provider: 'sbx' } : { provider: engine, image: REAL_IMAGE },
     async prepare(dir) {
-      if (engine === 'sbx') {
-        // sbx finds its daemon and sign-in through HOME, which each case sets to a home of its own.
-        const shim = path.join(dir, 'sbx-bin');
-        fs.mkdirSync(shim, { recursive: true });
-        fs.writeFileSync(path.join(shim, 'sbx'), `#!/bin/sh\nHOME='${os.homedir()}' exec '${execFileSync('/bin/sh', ['-c', 'command -v sbx'], { encoding: 'utf8' }).trim()}' "$@"\n`, { mode: 0o755 });
+      const found = execFileSync('/bin/sh', ['-c', `command -v ${engine}`], { encoding: 'utf8' }).trim();
+      fs.mkdirSync(shim(dir), { recursive: true });
+      fs.writeFileSync(path.join(shim(dir), engine), `#!/bin/sh\nHOME='${os.userInfo().homedir}' exec '${found}' "$@"\n`, { mode: 0o755 });
+      if (engine === 'sbx') return () => undefined;
 
-        return () => undefined;
-      }
       const context = path.join(dir, 'image');
       fs.mkdirSync(context, { recursive: true });
       fs.writeFileSync(path.join(context, 'Containerfile'), 'FROM docker.io/library/alpine:3\n');
-      cli(['build', '-q', '-t', REAL_IMAGE, '-f', path.join(context, 'Containerfile'), context]);
+      cli(dir, ['build', '-q', '-t', REAL_IMAGE, '-f', path.join(context, 'Containerfile'), context]);
 
-      return () => { spawnSync(engine, ['rmi', '-f', REAL_IMAGE], { stdio: 'ignore' }); };
+      return () => { spawnSync(path.join(shim(dir), engine), ['rmi', '-f', REAL_IMAGE], { stdio: 'ignore' }); };
     },
-    env: (dir) => ({ PATH: engine === 'sbx' ? [path.join(dir, 'sbx-bin'), process.env.PATH].join(path.delimiter) : process.env.PATH, ...(process.env.DOCKER_HOST && { DOCKER_HOST: process.env.DOCKER_HOST }), ...(process.env.CONTAINER_HOST && { CONTAINER_HOST: process.env.CONTAINER_HOST }) }),
+    env: (dir) => ({ PATH: [shim(dir), process.env.PATH].join(path.delimiter), ...(process.env.DOCKER_HOST && { DOCKER_HOST: process.env.DOCKER_HOST }), ...(process.env.CONTAINER_HOST && { CONTAINER_HOST: process.env.CONTAINER_HOST }) }),
     containers: (dir) => (engine === 'sbx'
-      ? SbxListSchema.parse(JSON.parse(execFileSync(path.join(dir, 'sbx-bin', 'sbx'), ['ls', '--json'], { encoding: 'utf8' }))).map(({ name }) => name)
-      : cli(['ps', '-a', '--format', '{{.Names}}']).split('\n')).filter((name) => name.includes(`${RUN}-${ATTEMPT}`)),
+      ? SbxListSchema.parse(JSON.parse(cli(dir, ['ls', '--json']))).map(({ name }) => name)
+      : cli(dir, ['ps', '-a', '--format', '{{.Names}}']).split('\n')).filter((name) => name.includes(`${RUN}-${ATTEMPT}`)),
   };
 }
 
