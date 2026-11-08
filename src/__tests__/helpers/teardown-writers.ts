@@ -6,8 +6,9 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterAll } from 'vitest';
+import { afterAll, beforeEach } from 'vitest';
 import { trackDetachedProcesses } from './detached-processes.js';
+import { leftSkillRunners, RUNNER_EXIT_MS, stopLeftSkillRunners } from './skill-runners.js';
 
 // A recursive removal fails with ENOTEMPTY when something keeps writing into
 // the directory while it is removed. teamai's own detached work is such a
@@ -43,8 +44,18 @@ const POLL_MS = 25;
 // Clocks a test's fake timers cannot freeze, or the join would never time out.
 const now = performance.now.bind(performance);
 
+// A skill runner whose attempt a test left open polls its run for good, and
+// one whose run a removal deletes ends unseen and may write the run back. A
+// removal first stops each runner working in what it removes; the test that
+// left it then fails, below.
+const stoppedRunners: number[] = [];
+function stopRunnersIn(target: fs.PathLike): void {
+  stoppedRunners.push(...stopLeftSkillRunners(tracker.running, { workingIn: target instanceof URL ? fileURLToPath(target) : target.toString() }));
+}
+
 const rmSync = fs.rmSync;
 fs.rmSync = function rmSyncJoiningWriters(target, options) {
+  stopRunnersIn(target);
   try {
     rmSync(target, options);
     return;
@@ -61,6 +72,7 @@ fs.rmSync = function rmSyncJoiningWriters(target, options) {
 };
 const rm = fs.promises.rm;
 fs.promises.rm = async function rmJoiningWriters(target, options) {
+  stopRunnersIn(target);
   try {
     await rm(target, options);
     return;
@@ -76,6 +88,18 @@ fs.promises.rm = async function rmJoiningWriters(target, options) {
 };
 syncBuiltinESMExports();
 
+// Every config loads this setup file, so each test that leaves a runner fails,
+// in whichever file. It runs after the file's own afterEach hooks, even one
+// that threw, and stops the runners still left.
+beforeEach(({ onTestFinished }) => {
+  onTestFinished(() => failOnLeftRunners(stopLeftSkillRunners(tracker.running)), RUNNER_EXIT_MS + 10_000);
+});
+
+function failOnLeftRunners(left: readonly number[]): void {
+  const all = [...stoppedRunners.splice(0), ...left];
+  if (all.length > 0) throw new Error(leftSkillRunners(all));
+}
+
 // Every config loads this setup file first, so this runs after every other
 // teardown, each removal of which could still need the tracker. A child still
 // running would fail to record its own children once the tracker is gone, so
@@ -83,6 +107,8 @@ syncBuiltinESMExports();
 afterAll(async () => {
   await joinWriters();
   if (tracker.running().length === 0) fs.rmSync(trackerRoot, { recursive: true, force: true });
+  // A removal in another afterAll may have stopped a runner after the last test.
+  failOnLeftRunners([]);
 });
 
 async function joinWriters(): Promise<void> {
