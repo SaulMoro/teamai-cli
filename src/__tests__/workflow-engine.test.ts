@@ -2784,6 +2784,18 @@ describe('held-back steps', () => {
     expect(taken).toMatchObject({ data: { lease: { step: 'a', workspace: { branch: expect.stringMatching(/a/) } } } });
   });
 
+  it('holds a step whose requires.labels a driver does not declare every one of, and leases it to a driver that does', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: e2e
+    requires: { labels: [computer-use] }
+    command: node e2e.js
+`));
+
+    expect(await leaseNext(config, runId, driverA, { can: { workspace: [...allModes], labels: ['gpu'] }, base })).toMatchObject({
+      data: { wait: { held: [{ step: 'e2e', missing: ['labels'] }] } },
+    });
+    expect(await leaseNext(config, runId, driverB, { can: { workspace: [...allModes], labels: ['gpu', 'computer-use'] }, base })).toMatchObject({ data: { lease: { step: 'e2e' } } });
+  });
+
   it('holds a requires.env prompt step and leases a requires.env command step for can.env commands', async () => {
     vi.stubEnv('DEPLOY_TOKEN', 'deploy-value');
     const { config, runId } = await startBuild(graph(`  - id: notify

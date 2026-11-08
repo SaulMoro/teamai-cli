@@ -10,15 +10,20 @@ export type Isolation = z.infer<typeof IsolationSchema>;
 
 const EnvKeySchema = z.string().regex(ENV_KEY_RE, 'must be an environment variable name');
 
+/** A label a machine declares for what teamai does not model, such as `computer-use` or `gpu`, as a CI runner's are. */
+export const LabelSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/, 'must be lowercase letters, digits, dot, dash or underscore');
+
 /**
  * `requires:` on a step, and `defaults.requires` in a workflow file, which acts as if written on every step of it.
  * A step that needs a person says `interactive: true`. `env` lists team env keys by name; values never enter the run.
- * `strict: true` makes the block's `isolation` and `network` strict, and a floor for every level inside it.
+ * `strict: true` makes the block's `isolation` and `network` strict, and a floor for every level inside it. `labels`
+ * names what the machine that runs the step must declare, in `workflows.labels` or a fleet entry's `labels`.
  */
 export const RequirementsSchema = z.object({
   network: z.boolean().optional(),
   isolation: IsolationSchema.optional(),
   env: z.array(EnvKeySchema).optional(),
+  labels: z.array(LabelSchema).optional(),
   strict: z.boolean().optional(),
 });
 
@@ -139,6 +144,8 @@ const ENFORCEMENT = {
   prompt: 'strict',
   /** A command step that is not pinned to the host: the driver takes it (`can.commands` is not `pinned`). */
   commands: 'strict',
+  /** `requires.labels`: the driver declares every label (`can.labels`), a promise teamai does not check. */
+  labels: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 
 type Enforcement = typeof ENFORCEMENT;
@@ -158,8 +165,9 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  *   definition runs commands. A prompt it takes still brings its setup, which runs where the prompt runs.
  * - `fullAccess`: the tools its init reports in `permissions` as running without permission prompts. Of a runtime
  *   that reports it, `unattended` holds only for those tools.
+ * - `labels`: what the machine that runs its steps declares: `workflows.labels` for this host, a fleet entry's `labels`.
  */
-export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[] };
+export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[] };
 
 /**
  * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
@@ -263,7 +271,7 @@ export const LeaseSetupSchema = z.object({ command: z.string(), envScope: EnvSco
 export type LeaseSetup = z.infer<typeof LeaseSetupSchema>;
 
 /**
- * The requirements in effect at a level: each level's keys replace the earlier ones, and `env` lists add up. The
+ * The requirements in effect at a level: each level's keys replace the earlier ones, and `env` and `labels` lists add up. The
  * `isolation` and `network` of a strict level, or of a level's `floor`, join the floor, and a value below it is raised.
  */
 export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<InEffect, 'floor'>) | undefined>): InEffect {
@@ -281,6 +289,9 @@ export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<
   const env = [...new Set(given.flatMap((level) => level.env ?? []))];
 
   if (env.length > 0) merged.env = env;
+  const labels = [...new Set(given.flatMap((level) => level.labels ?? []))];
+
+  if (labels.length > 0) merged.labels = labels;
 
   if (floor.isolation === undefined && floor.network === undefined) return merged;
 
@@ -467,6 +478,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true) ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
+    ...((requires.labels ?? []).some((label) => !(can.labels ?? []).includes(label)) ? ['labels' as const] : []),
   ];
 
   const [first, ...rest] = gaps;

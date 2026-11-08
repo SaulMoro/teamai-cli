@@ -1916,7 +1916,7 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
  */
 function beyondSoleDriver(
   sole: SoleDriver,
-  { step, tool, isNamed, missing, missingOn }: { step: string; tool: string | undefined; isNamed: boolean; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+  { step, tool, isNamed, labels, missing, missingOn }: { step: string; tool: string | undefined; isNamed: boolean; labels: readonly string[]; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
 ): WorkflowFailure | undefined {
   const others = sole.offers.length === 1 ? [missing] : sole.offers.map((offer) => missingOn(offer.can));
 
@@ -1948,6 +1948,15 @@ function beyondSoleDriver(
   }
 
   if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
+
+  if (lackedByAll.includes('labels')) {
+    const runtimes = sole.offers.map((offer) => `${offer.runtime} (${offer.can.labels?.join(', ') || 'none'})`).join(', ');
+
+    return {
+      code: 'requirement_unmet',
+      message: `Step "${step}" requires labels ${labels.join(', ')}, and no runtime of driver "${sole.driver}" declares each: ${runtimes}. Add them to workflows.labels on a machine that has them, or run the step with a driver whose fleet entry lists them under labels.`,
+    };
+  }
 
   if (sole.offers.length === 1 || lackedByAll.length > 0) return undefined;
 
@@ -2482,7 +2491,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           if (terms.kind === 'hold' && options.alone) {
             const tool = promptTool(definition, context.toolFor);
 
-            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, labels: mergeRequirements(located.scope.requires, definition.requires).labels ?? [], missing: terms.missing, missingOn });
 
             if (beyond) {
               failStep(state, beyond, run.revision);

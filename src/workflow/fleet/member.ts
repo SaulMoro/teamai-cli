@@ -105,8 +105,19 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
   const finished = await finishLeftClaims(config, { repository, root, member, secrets, place });
 
   if (finished) return finished;
-  // An offer of a kind of step this member's driver does not run is another member's to take.
-  const offers = (await listOffers(config, { pool, repository })).filter((offer) => offer.owner.id !== member.id && place[leaseKind(offer.lease)] !== undefined);
+  const labels = config.workflows?.labels ?? [];
+
+  // An offer of a kind of step this member's driver does not run, or that needs a label this machine does not declare,
+  // is another member's to take.
+  const offers = (await listOffers(config, { pool, repository })).filter((offer) => {
+    if (offer.owner.id === member.id || place[leaseKind(offer.lease)] === undefined) return false;
+    const lacked = (offer.labels ?? []).filter((label) => !labels.includes(label));
+
+    if (lacked.length > 0) log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: its step requires labels ${lacked.join(', ')}, which workflows.labels on this machine does not declare.`);
+
+    return lacked.length === 0;
+  });
+
   let moved = 0;
 
   for (const offer of offers) {
