@@ -1,5 +1,5 @@
 import spawn from 'cross-spawn';
-import type { ChildProcess } from 'node:child_process';
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { Socket } from 'node:net';
 import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
@@ -212,4 +212,19 @@ export function batchLaunchOf(executable: string, args: readonly string[], comsp
 
   // Delayed expansion off: a member who turned it on in the registry would otherwise see `!` change.
   return { ok: true, command: comspec, args: ['/d', '/v:off', '/s', '/c', `"${line}"`] };
+}
+
+/**
+ * Starts `executable` with `args`: on Windows, a batch file (an npm `.cmd` shim) under the system cmd.exe with its
+ * arguments escaped as `batchLaunchOf` escapes them, anything else through cross-spawn. cmd.exe is found from this
+ * process's environment by its absolute path, since the child's may hold no ComSpec and a bare name is looked up in the
+ * cwd first. Throws, as a failed spawn does, when cmd.exe cannot carry the arguments.
+ */
+export function spawnCommand(executable: string, args: readonly string[], options: SpawnOptions): ChildProcess {
+  const comspec = process.env.ComSpec ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`;
+  const batch = process.platform === 'win32' ? batchLaunchOf(executable, args, comspec) : undefined;
+
+  if (batch?.ok === false) throw new Error(batch.message);
+
+  return batch ? nodeSpawn(batch.command, [...batch.args], { ...options, windowsVerbatimArguments: true }) : spawn(executable, [...args], options);
 }

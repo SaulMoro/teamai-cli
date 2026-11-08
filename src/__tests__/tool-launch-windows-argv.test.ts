@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { batchLaunchOf } from '@teamai/tool-core/exec';
+import { batchLaunchOf, spawnCommand } from '@teamai/tool-core/exec';
 import { runTool } from '../tool-launch/run.js';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../tool-launch/tools.js';
 
@@ -139,6 +139,25 @@ describe.runIf(isWindows)('each launch profile through an npm .cmd shim on Windo
     const run = await runTool({ executable: shim, args: ['-p'], cwd: dir, env: confined, stdin: '', timeoutMs: 30_000, detached: false });
 
     expect(Printed.parse(JSON.parse(run.stdout))).toEqual({ argv: ['-p'], stdin: '' });
+  });
+
+  it('delivers a step launch or env exec through spawnCommand its arguments verbatim', async () => {
+    const shim = path.join(dir, 'claude.cmd');
+
+    fs.writeFileSync(shim, NPM_CMD_SHIM);
+    const child = spawnCommand(shim, [PROMPT, ...NASTY_ARGS], { cwd: dir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+
+    child.stdout?.setEncoding('utf8').on('data', (text: string) => { stdout += text; });
+    child.stdin?.end('');
+    const code = await new Promise<number | null>((resolve) => child.once('close', resolve));
+
+    expect(code).toBe(0);
+    expect(Printed.parse(JSON.parse(stdout))).toEqual({ argv: [PROMPT, ...NASTY_ARGS], stdin: '' });
+  });
+
+  it('throws the refusal from spawnCommand, as a failed spawn, when an argument holds a newline', () => {
+    expect(() => spawnCommand(path.join(dir, 'copilot.cmd'), ['-p', MULTILINE], { cwd: dir })).toThrow('cannot pass an argument containing a newline');
   });
 
   it('refuses before starting the shim when a prompt argument holds a newline', async () => {

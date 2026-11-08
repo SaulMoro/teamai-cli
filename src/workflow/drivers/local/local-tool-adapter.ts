@@ -2,7 +2,6 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
 import { launchEnv, type Launch } from '../../../launch-context.js';
 import { opencodeMajorVersion } from '../../../opencode-version.js';
@@ -12,6 +11,7 @@ import type { toolExtrasFor } from '../../../resources/agent-format.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
+import { spawnCommand } from '@teamai/tool-core/exec';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { AttemptResult } from '../../attempt-result.js';
@@ -316,7 +316,8 @@ function spawnLauncher(spawnTool: ToolSpawn): ToolLauncher {
 }
 
 export function createLocalToolAdapter(
-  spawnTool: ToolSpawn = crossSpawn,
+  // A global npm .cmd shim on Windows gets its arguments escaped for cmd.exe twice, which cross-spawn does not do.
+  spawnTool: ToolSpawn = spawnCommand,
   resolveTool: ToolResolve = resolveCliPath,
   // A tool instance's command comes from a config file, so only the PATH directories may hold it.
   resolveInstanceCommand: ToolResolve = resolvePathCommand,
