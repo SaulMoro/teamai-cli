@@ -1634,7 +1634,7 @@ The entry is one runtime to the run, named `my-app through my-sandbox` in its me
 
 teamai opens the outer, then the inner. It stops and closes the inner first, and keeps the outer's place while the inner cannot confirm its stop. That includes a teamai killed while the inner opened its place: no handle teamai recorded names that place, so `workflow cancel` keeps the outer's place and says so until you close the inner's yourself and release the attempt.
 
-A runtime takes part only when it supports it, and the runtimes teamai ships do not yet: until their pages say so, such an entry is for runtimes you write. The inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer; after a restart, the outer's `reattach` carries the prompt's `credentials` again, since it keeps them only in memory.
+A runtime takes part only when it supports it. Of the runtimes teamai ships, the sandbox runtime can be the outer: see [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool). The inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer. The outer's `open` carries the attempt's tool home in `view.toolHome` and the names the prompt goes without in `unset`; after a restart, the outer's `reattach` carries the prompt's `credentials` (`{}` when it had none) and `unset` again, since it keeps them only in memory.
 
 ### Run steps on other members' machines (`fleet`)
 
