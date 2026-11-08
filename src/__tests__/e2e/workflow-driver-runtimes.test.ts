@@ -1799,9 +1799,11 @@ steps:
     const gitconfig = path.join(os.homedir(), '.gitconfig');
     const gitconfigBefore = fs.existsSync(gitconfig) ? fs.readFileSync(gitconfig, 'utf8') : undefined;
     fs.appendFileSync(gitconfig, `[credential]\n\thelper = "!f() { touch '${member}'; }; f"\n`);
+    // The member's checkout pushes there; a push from a step's copy goes to the origin the checkout named before the run.
+    execFileSync('git', ['config', '--local', 'remote.origin.pushurl', `http://127.0.0.1:${port}/team/workflow.git`], { cwd: repo });
     writeFlow('plantcred', `  - id: build
     workspace: new
-    command: git config extensions.worktreeConfig true && git config --worktree credential.helper "!f() { touch '${planted}'; }; f" && git config --worktree remote.origin.pushurl http://127.0.0.1:${port}/team/workflow.git && echo change > planted.txt`);
+    command: git config extensions.worktreeConfig true && git config --worktree credential.helper "!f() { touch '${planted}'; }; f" && echo change > planted.txt`);
     const pulled = await runCLI(['pull'], repo);
     expect(pulled.code).toBe(0);
 
