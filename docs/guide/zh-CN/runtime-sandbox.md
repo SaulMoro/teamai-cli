@@ -440,7 +440,7 @@ runtimes:
 - 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
 - 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
-- `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号或列出它们，不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
+- `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号，也不能用 `ps` 列出进程（macOS 仍允许它读取其他进程的命令行，所以不要在命令行里传递机密），不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
 
 当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行。`bwrap` 没有安装时，修复方法是 `/etc/os-release` 所写发行版的安装命令（Ubuntu 或 Debian 上）：
 
