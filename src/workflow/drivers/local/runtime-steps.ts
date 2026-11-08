@@ -8,7 +8,7 @@ import type { AttemptRun } from '../../runtimes/attempt.js';
 import { withRetry } from '../../runtimes/step-runtime.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../../launch-context.js';
-import { MAX_TIMER_DELAY, shellArgv } from '../../shell-command.js';
+import { MAX_TIMER_DELAY, shellArgv, STOPPED_EXIT_CODE } from '../../shell-command.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
@@ -114,7 +114,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
     if (unready) return unready;
 
-    if (isStopRequested) return { exitCode: 130, stdout: '', stderr: '', output: '' };
+    if (isStopRequested) return { exitCode: STOPPED_EXIT_CODE, stdout: '', stderr: '', output: '' };
     let stderr = '';
     let output = '';
 
@@ -133,7 +133,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
       case 'exited':
         return uncollected ?? { exitCode: end.code, stdout: end.stdout, stderr, output: output || end.stdout };
       case 'cancelled':
-        return { exitCode: 130, stdout: '', stderr, output };
+        return { exitCode: STOPPED_EXIT_CODE, stdout: '', stderr, output };
       case 'interrupted':
         return interrupted();
       case 'left':
@@ -188,7 +188,7 @@ export function runtimeSetup(run: AttemptRun) {
         case 'exited':
           return uncollected ? { failure: uncollected } : { code: end.code, output: output || end.stdout };
         case 'cancelled':
-          return { code: 130, output };
+          return { code: STOPPED_EXIT_CODE, output };
         case 'interrupted':
           return { failure: interrupted() };
         case 'left':
