@@ -40,8 +40,23 @@ describe('the T3 journal', () => {
     const places = journal(dir);
     fs.writeFileSync(places.file(PLACE.handle), JSON.stringify({ ...PLACE, ops: { [FIRST]: { op: FIRST, state: 'running' } } }));
 
-    expect(places.read(PLACE.handle)).toEqual({ kind: 'unreadable', file: places.file(PLACE.handle), why: expect.stringContaining('ops') });
+    expect(places.read(PLACE.handle)).toEqual({ kind: 'unreadable', handle: PLACE.handle, file: places.file(PLACE.handle), why: expect.stringContaining('ops') });
     expect(places.placeOf(FIRST)).toMatchObject({ kind: 'unreadable' });
+  });
+
+  it('reads a place whose operations cannot be listed as unreadable, naming their folder, and so does a lookup by op', () => {
+    const places = journal(dir);
+    places.open(PLACE);
+    places.update({ handle: PLACE.handle, op: FIRST }, () => ({ state: { op: FIRST, state: 'running' } }));
+    const ops = path.join(dir, encodeURIComponent(PLACE.handle));
+    fs.chmodSync(ops, 0o000);
+
+    try {
+      expect(places.read(PLACE.handle)).toEqual({ kind: 'unreadable', handle: PLACE.handle, file: ops, why: expect.stringContaining('EACCES') });
+      expect(places.placeOf(FIRST)).toEqual({ kind: 'unreadable', handle: PLACE.handle, file: ops, why: expect.stringContaining('EACCES') });
+    } finally {
+      fs.chmodSync(ops, 0o700);
+    }
   });
 
   it('forgets a place and every operation of it once removed', () => {

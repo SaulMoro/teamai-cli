@@ -1653,7 +1653,7 @@ export function serve(options: ServeOptions): Promise<number> {
     if (read.kind === 'unreadable') {
       cancelledUnread.add(op);
 
-      return fail(op, { ...unreadable(handle ?? decodeURIComponent(path.basename(read.file, '.json')), read), code: CANCEL_FAILED });
+      return fail(op, { ...unreadable(handle ?? read.handle ?? op, read), code: CANCEL_FAILED });
     }
 
     let known = read.kind === 'found' ? read.place : undefined;

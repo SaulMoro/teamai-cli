@@ -109,6 +109,17 @@ export function serveRuntime({ name, input, env, ledger, handlers, holds, stoppe
     }
   };
 
+  /** Whether the runtime holds `op`: when it cannot tell, it may, so the line is dropped rather than answered. */
+  const mayHold = (op: OpId): boolean => {
+    try {
+      return holds(op);
+    } catch (error) {
+      debug(`Runtime ${name} could not tell whether it holds ${op}, so it drops the line that names it: ${error instanceof Error ? error.message : String(error)}`);
+
+      return true;
+    }
+  };
+
   /** Answers a line that is no protocol request with the failure of the request it names, if it names one. */
   const unreadable = (text: string, why: string): void => {
     const message = `Not a protocol ${RUNTIME_PROTOCOL} request: ${why}`;
@@ -120,7 +131,7 @@ export function serveRuntime({ name, input, env, ledger, handlers, holds, stoppe
       // Not JSON: it names nothing.
     }
 
-    if (named.op !== undefined && holds(named.op)) debug(`Dropped a line that names ${named.op}, which runtime ${name} already runs or answered: ${message}`);
+    if (named.op !== undefined && mayHold(named.op)) debug(`Dropped a line that names ${named.op}, which runtime ${name} already runs or answered: ${message}`);
     else if (named.op !== undefined) write({ op: named.op, event: 'failed', failure: { code: named.type === 'cancel' ? CANCEL_FAILED : 'runtime_protocol', message } });
     else if (named.handle !== undefined) write({ event: 'failed', handle: named.handle, failure: { code: 'runtime_protocol', message } });
     else if (named.type === 'init') write({ type: 'init', ok: false, error: { code: 'runtime_protocol', message } });

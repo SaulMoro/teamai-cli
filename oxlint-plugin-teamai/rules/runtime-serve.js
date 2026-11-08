@@ -46,11 +46,12 @@ function property(object, name) {
 }
 
 /**
- * Whether `node` is the process input: `process.stdin`, or a value named `input`, the name the runtime kit gives it.
+ * Whether `node` is the process input: `process.stdin`, `stdin` from `node:process`, or a value named `input`, the name
+ * the runtime kit gives it.
  * @param {ESTree.Node | undefined} node
  */
 function isProcessInput(node) {
-  if (node?.type === 'Identifier') return node.name === 'input';
+  if (node?.type === 'Identifier') return node.name === 'input' || node.name === 'stdin';
 
   return node?.type === 'MemberExpression' && !node.computed && node.property.type === 'Identifier'
     && (node.property.name === 'input' || (node.property.name === 'stdin' && node.object.type === 'Identifier' && node.object.name === 'process'));
@@ -82,10 +83,10 @@ export default defineRule({
         const name = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' ? callee.property.name : undefined;
         const [options] = node.arguments;
 
-        if (name === 'createInterface' && options?.type === 'ObjectExpression') {
-          const input = property(options, 'input');
+        if (name === 'createInterface' && options !== undefined) {
+          const input = options.type === 'ObjectExpression' ? property(options, 'input') : undefined;
 
-          if (input?.type === 'Property' && isProcessInput(input.value)) {
+          if ((input?.type === 'Property' && isProcessInput(input.value)) || isProcessInput(options)) {
             report(node, 'Read requests with serveRuntime from @teamai/runtime-kit/serve, not a readline over the process input: the kit answers an unreadable line and a handler that threw as protocol 1 says, for every runtime alike.');
           }
         }

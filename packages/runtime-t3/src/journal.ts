@@ -96,8 +96,20 @@ export type PlaceRecord = z.infer<typeof PlaceSchema> & {
   launches: Record<string, LaunchRecord>;
 };
 
-/** A place's record: none once it was removed, or one that is there but cannot be read, which is not the same. */
-export type PlaceRead = { kind: 'found'; place: PlaceRecord } | { kind: 'missing' } | { kind: 'unreadable'; file: string; why: string };
+/**
+ * A place's record: none once it was removed, or one that is there but cannot be read, which is not the same. An
+ * unreadable one names its place when the journal knows it.
+ */
+export type PlaceRead = { kind: 'found'; place: PlaceRecord } | { kind: 'missing' } | { kind: 'unreadable'; file: string; why: string; handle?: string };
+
+/** The keys of `store`, kept in `dir`, or why that folder cannot be listed. */
+function keysIn(store: { keys(): string[] }, dir: string): { kind: 'listed'; keys: string[] } | { kind: 'unreadable'; file: string; why: string } {
+  try {
+    return { kind: 'listed', keys: store.keys() };
+  } catch (error) {
+    return { kind: 'unreadable', file: dir, why: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 export interface Journal {
   read(handle: string): PlaceRead;
@@ -129,14 +141,19 @@ export function journal(dir: string): Journal {
   const read = (handle: string): PlaceRead => {
     const own = places.read(handle);
 
-    if (own.kind !== 'found') return own;
+    if (own.kind === 'unreadable') return { ...own, handle };
+
+    if (own.kind === 'missing') return own;
     const conversations = conversationsOf(handle);
     const place: PlaceRecord = { ...own.record, ops: {}, threads: {}, launches: {} };
+    const listed = keysIn(conversations, path.join(dir, encodeURIComponent(handle)));
 
-    for (const op of conversations.keys()) {
+    if (listed.kind === 'unreadable') return { ...listed, handle };
+
+    for (const op of listed.keys) {
       const found = conversations.read(op);
 
-      if (found.kind === 'unreadable') return found;
+      if (found.kind === 'unreadable') return { ...found, handle };
 
       if (found.kind === 'missing') continue;
       const { state, thread, launch } = found.record;
@@ -154,8 +171,11 @@ export function journal(dir: string): Journal {
     read,
     placeOf(op) {
       let unreadable: PlaceRead = { kind: 'missing' };
+      const listed = keysIn(places, dir);
 
-      for (const handle of places.keys()) {
+      if (listed.kind === 'unreadable') return listed;
+
+      for (const handle of listed.keys) {
         const found = read(handle);
 
         if (found.kind === 'found' && found.place.ops[op] !== undefined) return found;

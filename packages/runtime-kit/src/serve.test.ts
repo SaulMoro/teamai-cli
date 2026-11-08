@@ -9,7 +9,7 @@ const OP = 'op-0123abcd' as OpId;
 const HELD = 'op-89abcdef' as OpId;
 
 /** A runtime served over an in-memory stdin, with the handlers `make` gives over a set that answers nothing. */
-function served(make: (write: (message: RuntimeMessage) => void) => Partial<RuntimeHandlers> = () => ({}), env: NodeJS.ProcessEnv = { [RUNTIME_PROTOCOL_ENV]: '1' }) {
+function served(make: (write: (message: RuntimeMessage) => void) => Partial<RuntimeHandlers> = () => ({}), env: NodeJS.ProcessEnv = { [RUNTIME_PROTOCOL_ENV]: '1' }, holds = (op: OpId): boolean => op === HELD) {
   const input = new PassThrough();
   const written: RuntimeMessage[] = [];
   const debugged: string[] = [];
@@ -23,7 +23,7 @@ function served(make: (write: (message: RuntimeMessage) => void) => Partial<Runt
     env,
     ledger,
     handlers: { init: nothing, open: nothing, exec: nothing, prompt: nothing, cancel: nothing, collect: nothing, reattach: nothing, close: nothing, ...make(write) },
-    holds: (op) => op === HELD,
+    holds,
     stopped: 'its fake agent',
     debug: (line) => debugged.push(line),
   });
@@ -133,5 +133,16 @@ describe('a runtime process teamai did not start', () => {
 
     expect(await runtime.done).toBe(0);
     expect(env).toEqual({ PATH: '/usr/bin' });
+  });
+});
+
+describe('a line it cannot read that names an op whose records it cannot read', () => {
+  it('is dropped, since those records may hold the op, and says why for debugging', async () => {
+    const runtime = served(() => ({}), { [RUNTIME_PROTOCOL_ENV]: '1' }, () => { throw new Error('EACCES: permission denied, scandir'); });
+
+    await runtime.send(`{"type":"prompt","op":"${OP}"}`);
+
+    expect(runtime.written).toEqual([]);
+    expect(runtime.debugged).toEqual([`Runtime fake could not tell whether it holds ${OP}, so it drops the line that names it: EACCES: permission denied, scandir`, expect.stringContaining(`Dropped a line that names ${OP}`)]);
   });
 });

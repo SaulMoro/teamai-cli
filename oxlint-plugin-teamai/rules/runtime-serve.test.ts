@@ -17,6 +17,13 @@ export const lines = readline.createInterface({ input: process.stdin });`, (outp
 rule.invalid('rejects a readline over the input a runtime is served on', `import { createInterface } from 'node:readline';
 export const serve = (input: NodeJS.ReadableStream) => createInterface({ input });`);
 
+rule.invalid('rejects a readline over stdin from node:process, or given positionally', `import { stdin } from 'node:process';
+import { createInterface } from 'node:readline';
+export const named = createInterface({ input: stdin });
+export const positional = createInterface(process.stdin);`, (output) => {
+  expect(output.match(/Read requests with serveRuntime/g)).toHaveLength(2);
+});
+
 rule.invalid('rejects a runtime parsing requests itself', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 export const read = (line: string) => RuntimeRequestSchema.safeParse(JSON.parse(line));`, (output) => {
   expect(output).toContain('Leave parsing requests to serveRuntime');
