@@ -261,7 +261,15 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       if (innerSeen.kind === 'failed') return innerSeen;
 
       if (outerSeen.kind === 'gone' && innerSeen.kind === 'gone') return { kind: 'gone' };
-      const seen = [outerSeen.kind === 'alive' ? { runtime: outer, ...outerSeen } : undefined, innerSeen.kind === 'alive' ? { runtime: inner, ...innerSeen } : undefined];
+
+      // A prompt that finished while teamai was stopped kept its session where a live one does: the attempt's tool home.
+      const toolHome = toolHomeOf.get(parsed.outer);
+
+      const innerOps = innerSeen.kind === 'alive' && toolHome !== undefined
+        ? innerSeen.ops.map((state) => (state.state === 'finished' ? { ...state, session: { ...state.session, home: toolHome } } : state))
+        : undefined;
+
+      const seen = [outerSeen.kind === 'alive' ? { runtime: outer, ...outerSeen } : undefined, innerSeen.kind === 'alive' ? { runtime: inner, ...innerSeen, ...(innerOps && { ops: innerOps }) } : undefined];
 
       for (const one of seen) for (const state of one?.ops ?? []) if (one) ranBy.set(state.op, one.runtime);
       const display = (innerSeen.kind === 'alive' ? innerSeen.display : undefined) ?? (outerSeen.kind === 'alive' ? outerSeen.display : undefined);
