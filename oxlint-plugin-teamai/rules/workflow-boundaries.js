@@ -92,7 +92,12 @@ const ENTRIES = [
   // The fleet: the owner's side is the local driver's, the member's a command's; the records are read by publish too.
   {
     folder: FLEET,
-    entries: { 'owner.ts': ['src/workflow/drivers/local/local-driver.ts'], 'member.ts': ['src/workflow-commands.ts'], 'record.ts': ['src/workflow/handoff.ts', 'src/workflow/drivers/local/local-driver.ts'] },
+    // A cancel with no live driver reaches a fleet attempt through its record (runtimes/cancelled.ts).
+    entries: {
+      'owner.ts': ['src/workflow/drivers/local/local-driver.ts', 'src/workflow/runtimes/cancelled.ts'],
+      'member.ts': ['src/workflow-commands.ts'],
+      'record.ts': ['src/workflow/handoff.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/runtimes/cancelled.ts'],
+    },
     testEntries: ['record.ts', 'owner.ts', 'member.ts'],
   },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },
