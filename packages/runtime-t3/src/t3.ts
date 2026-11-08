@@ -360,7 +360,10 @@ export async function connectT3(resource: URL, auth: OAuthClientProvider, author
     // The SDK sent the person to T3's sign-in page; the code comes back on the loopback redirect.
     await transport.finishAuth(await authorize());
     const signedIn = new Client({ name: 'teamai-runtime-t3', version: '1' });
-    await signedIn.connect(new StreamableHTTPClientTransport(resource, { authProvider: auth }));
+    // The person approved once. A grant narrower than the run needs leaves no token for it, and a second page would
+    // open where nothing listens for its approval any more, so the connection fails instead.
+    const approved: OAuthClientProvider = { ...auth, redirectToAuthorization: () => { throw new UnauthorizedError('T3 Code granted a sign-in narrower than the run needs.'); } };
+    await signedIn.connect(new StreamableHTTPClientTransport(resource, { authProvider: approved }));
 
     return t3Over(signedIn);
   }

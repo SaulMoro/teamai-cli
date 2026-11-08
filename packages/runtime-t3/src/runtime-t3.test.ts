@@ -650,7 +650,7 @@ describe('teamai-runtime-t3', () => {
         expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: expect.stringMatching(/^Approve teamai in T3 Code with Full access, since runtime_mode is full-access \(silent sign-in failed: found no t3 command .*\)\. If no browser opened, visit: http:\/\/127\.0\.0\.1:\d+\/oauth\/mcp\/authorize\?\S+$/) }]);
       });
 
-      it('fails sign_in_too_narrow, naming the fix, when the person approves only Auto access in T3\'s page', async () => {
+      it('fails sign_in_too_narrow, naming the fix, when the person approves only Auto access in T3\'s page, which it opens once', async () => {
         const browser = fakeBrowser(dir);
         const runtime = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
 
@@ -663,6 +663,10 @@ describe('teamai-runtime-t3', () => {
             message: 'teamai\'s T3 Code sign-in was approved without Full access, which runtime_mode full-access needs. Start the workflow again and pick Full access in the page T3 Code opens, or remove runtime_mode: full-access.',
           },
         });
+        // A second page could not complete: the run already answered, and nothing listens for its approval.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        expect(browser.visits()).toEqual(['/oauth/mcp/authorize']);
+        expect(noticesOf(runtime)).toHaveLength(1);
       });
     });
 
