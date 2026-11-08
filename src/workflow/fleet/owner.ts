@@ -170,13 +170,14 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
 
 /**
  * How a prompt a member finished ends for the owner: with the tool it picked and the result and usage it wrote, or, when
- * it launched no tool, as the failure that stopped it. The member's session stays on its machine; `attempt` names it.
+ * it launched no tool, as the failure that stopped it. Its session is the one the member pushed to the team session
+ * archive; a member that named none leaves `attempt` in its place, which no later step finds to continue.
  */
 function promptEnded(result: FleetResult, attempt: AttemptId): Extract<PromptEnd, { kind: 'finished' | 'failed' }> {
   if (result.tool === undefined) return { kind: 'failed', failure: result.failure ?? { code: 'tool_failed', message: result.stderr || 'The fleet member launched no tool for the prompt step.' } };
 
   return {
-    kind: 'finished', session: { tool: result.tool, id: attempt },
+    kind: 'finished', session: { tool: result.tool, id: result.session ?? attempt },
     result: { ...(result.outputs !== undefined && { output: result.outputs }), ...(result.failure && { failure: result.failure }) },
     ...(result.tokens && { usage: result.tokens }),
   };

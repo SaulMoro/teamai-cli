@@ -1659,7 +1659,8 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
       const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } });
 
       expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
-      expect(await ended).toEqual({ kind: 'finished', session: { tool: 'claude', id: owner.attempt }, result: { output: { ok: true } }, usage: expect.any(Object) });
+      // The session Claude ran on Bob's machine, by the id Claude gave it, not the attempt's.
+      expect(await ended).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f-]{27}$/) }, result: { output: { ok: true } }, usage: expect.any(Object) });
       expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work.')]) })]);
       expect(JSON.stringify(claude.calls())).not.toContain('A prompt this host rendered.');
     } finally {

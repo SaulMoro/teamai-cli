@@ -20,6 +20,7 @@ import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-
 import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import os from 'node:os';
+import { openSessionArchive } from '../session-flow/archive.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -320,6 +321,22 @@ describe('a member taking a prompt attempt', () => {
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
     expect(claude.calls()).toHaveLength(1);
     expect(claude.calls()[0]?.args).not.toContain('--model');
+  });
+
+  it('archives the session its tool ran, so the owner continues it from the team session archive', async () => {
+    claudeOnPath('{"ok":true}');
+
+    const { record, alice } = await takeForged((forged) => {
+      forged.lease = { step: 'write', prompt: 'Write made.txt.', env: {} };
+    }, useClaude, PROMPTED);
+
+    const session = record?.state === 'finished' ? record.result.session : undefined;
+    expect(session).toEqual(expect.any(String));
+    await readableReportsWorktree(alice.config);
+    const archive = openSessionArchive(alice.config);
+    const restored = await archive.restore({ platform: 'claude-code', sessionId: session ?? '' }, { platform: 'claude-code', cwd: alice.checkout });
+    await archive.close();
+    expect(restored).toEqual({ status: 'restored', sessionId: expect.any(String) });
   });
 
   it('fails the attempt, keeping what the tool answered out of it, when the member cannot push the work the tool made', async () => {

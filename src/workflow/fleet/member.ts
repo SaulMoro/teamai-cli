@@ -11,7 +11,7 @@ import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../tool-launch/process-stop.js';
-import { attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
+import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
 import { stopLeftAttempt } from '../runtimes/cancelled.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '../runtimes/step-runtime.js';
@@ -31,7 +31,8 @@ import { driverIdentity } from '../../driver-identity.js';
 import { withRunningCli } from '../../env-exec.js';
 import { resolveWorkflowEnv } from '../../env-resolution.js';
 import { resolveRunMode } from '../../launch-context.js';
-import { openSessionArchive } from '../../session-flow/archive.js';
+import { archiveSessions, openSessionArchive } from '../../session-flow/archive.js';
+import { AgentSession } from '../../session-flow/agent-session.js';
 import { JsonValueSchema } from '../../utils/json.js';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 
@@ -425,10 +426,13 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
     if (unclosed) log.warn(unclosed.message);
     const outputs = JsonValueSchema.safeParse(body.outputs);
 
+    if (body.tool !== undefined && body.session !== undefined) await archiveSession(config, { run, work, session: { tool: body.tool, id: body.session } });
+
     return {
       exitCode: body.exitCode ?? (body.outcome === 'success' ? 0 : 1), stderr: (body.message ?? '').slice(0, 400),
       ...(body.outputs !== undefined && outputs.success && { outputs: outputs.data }),
       ...(body.tool !== undefined && { tool: body.tool }),
+      ...(body.session !== undefined && { session: body.session }),
       ...(body.model !== undefined && { model: body.model }),
       ...(body.tokens !== undefined && { tokens: body.tokens }),
       ...(body.failure !== undefined && { failure: { code: body.failure.code, message: body.failure.message } }),
@@ -442,6 +446,21 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
       await exit;
     },
   };
+}
+
+/**
+ * Pushes the session a prompt step ran on this member to the team session archive, filed under the business repository
+ * of clone `work`, so the owner's later step continues it, as `publish --sessions` does. A session that does not reach
+ * the archive leaves the step's end as it is: a later step that continues it starts a new session and says why.
+ */
+async function archiveSession(config: LocalConfig, { run, work, session }: { run: RunId; work: string; session: { tool: string; id: string } }): Promise<void> {
+  const platform = AgentSession.platformForTool(session.tool);
+
+  if (!platform) return;
+  const holding = await attemptHoldingSession(config, run, session);
+  const archived = await archiveSessions(config, [[{ platform, sessionId: session.id, ...(holding && { storeDir: holding.storeDir }) }]], { run, checkout: work });
+
+  if (archived.status === 'failed') log.warn(`The ${session.tool} session ${session.id} of run ${run} did not reach the team session archive, so a later step that continues it starts a new session: ${archived.message}`);
 }
 
 /**
