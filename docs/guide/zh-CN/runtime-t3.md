@@ -338,6 +338,7 @@ teamai workflow cancel r70d31098c8884803
 | --- | --- | --- |
 | `T3 Code is not running on this machine.` | 这里没有 T3 服务。teamai 读取 `~/.t3/userdata/server-runtime.json`，或 `$T3CODE_HOME/userdata/…` | 打开 T3 Code，或运行 `t3 serve`，然后重新运行。 |
 | `T3 Code at http://127.0.0.1:3773 does not answer. Open T3 Code, or run \`t3 serve\` …` | T3 留下了服务文件，但那里没有服务应答。 | 打开 T3 Code，或运行 `t3 serve`，然后重新运行。 |
+| `… (t3_version): T3 Code runs version 0.1.7…; teamai-runtime-t3 needs T3 Code 0.1.8 or later …` | 你的 T3 Code 比 teamai 测试过的版本旧。 | 更新 T3 Code，然后重新运行。 |
 | `… (login_required): … could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ~/.t3/bin/t3) …` | 无人值守运行没有有效的登录，`t3` 命令也没能创建一个。括号里的文字说明原因。 | 确认在 teamai 运行的 shell 里 `t3 auth session list` 能正常工作，然后重新运行。或者从终端启动一次工作流，在页面里批准 teamai。 |
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai 的登录允许的模式比线程运行的模式窄。 | 删除 `~/.teamai/runtime-state/t3/credentials.json` 并重新运行：teamai 会重新登录；如果 T3 Code 询问，用 Auto 权限批准。或者设置 `runtime_mode`。 |
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | 有人在 T3 的登录页面里选了比 Full access 窄的权限。 | 重新启动工作流并选 Full access，或者删掉 `runtime_mode: full-access`。 |

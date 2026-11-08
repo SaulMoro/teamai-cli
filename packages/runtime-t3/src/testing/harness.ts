@@ -60,7 +60,7 @@ export interface FakeT3Config {
   token: string;
   /** The sign-in session the token belongs to: T3 finds a repeated launch only under the session that sent it. Unset: `session-1`. */
   namespace?: string;
-  environment: { environmentId: string; label: string; serverVersion: string };
+  environment: { environmentId: string; label: string; serverVersion?: string };
   projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null; scripts?: Array<{ id: string; name: string; command: string; runOnWorktreeCreate: boolean; runOnSettle?: boolean }> }>;
   providers: FakeProvider[];
   agent: FakeAgent;
@@ -198,7 +198,7 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
 
   let current: FakeT3Config = {
     token: 'fake-t3-token-0123456789',
-    environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.7-fake' },
+    environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.8-fake' },
     projects: [{ id: 'project-1', title: 'acme-app', workspaceRoot, deletedAt: null }],
     providers: [CLAUDE, CODEX],
     agent: { output: { verdict: 'approve' } },

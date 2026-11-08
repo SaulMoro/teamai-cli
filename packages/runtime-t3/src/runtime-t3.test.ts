@@ -86,6 +86,32 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
+    it.each([
+      ['an older version', '0.1.7-nightly.20261103.4119', 'runs version 0.1.7-nightly.20261103.4119'],
+      ['no version', undefined, 'did not say which version it runs'],
+    ])('refuses a T3 Code that reports %s, naming the version it needs and the update', async (_, serverVersion, said) => {
+      signIn(t3);
+      t3.config({ environment: { environmentId: 'env-fake-1', label: 'fake-laptop', ...(serverVersion !== undefined && { serverVersion }) } });
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
+        type: 'init', ok: false,
+        error: { code: 't3_version', message: `T3 Code ${said}; teamai-runtime-t3 needs T3 Code 0.1.8 or later. Update T3 Code, then start the workflow again.` },
+      });
+    });
+
+    it('runs on a nightly of the oldest T3 Code it needs', async () => {
+      signIn(t3);
+      t3.config({ environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.8-nightly.20261104.4200' } });
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ type: 'init', ok: true });
+    });
+
     // The `t3` command on this machine creates a pairing code, and teamai approves its own sign-in with it, as T3's page would.
     it.each(['attended', 'unattended'] as const)('signs in with no page in an %s run, through a pairing code the t3 command creates, and keeps the credential to itself', async (mode) => {
       const browser = fakeBrowser(dir);

@@ -18,7 +18,7 @@ import type { ConversationRecord, Journal, LaunchRecord, PlaceRead, PlaceRecord,
 import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type Driver, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde, type ServedInstances } from './tool-instances.js';
-import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { T3Error, tooOld, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 import type { T3Command } from './t3-command.js';
 
 // ─── teamai-runtime-t3 ───
@@ -922,6 +922,15 @@ export function serve(options: ServeOptions): Promise<number> {
       }
 
       const [environment, providers, here, fromThread] = asking.value;
+      const old = tooOld(environment);
+
+      if (old !== undefined) {
+        void connected.t3.close().catch(() => {});
+        write({ type: 'init', ok: false, error: { code: 't3_version', message: old } });
+
+        return;
+      }
+
       const settings = readSettings(options.t3Home);
       const project = projectSettings(settings, here);
 

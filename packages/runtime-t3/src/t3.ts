@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import semver from 'semver';
 import { z } from 'zod';
 import { ScriptSchema } from './settings.js';
 
@@ -13,6 +14,18 @@ import { ScriptSchema } from './settings.js';
 export const EnvironmentSchema = z.object({ environmentId: z.string().min(1), label: z.string(), serverVersion: z.string().optional() });
 
 export type Environment = z.infer<typeof EnvironmentSchema>;
+
+/** The oldest T3 Code this runtime runs against: the version it is tested against, whose nightlies count as it. */
+export const OLDEST_T3 = '0.1.8';
+
+/** Why this runtime does not run against the T3 Code of `environment`, when it is older than `OLDEST_T3` or says no version. */
+export function tooOld({ serverVersion }: Environment): string | undefined {
+  const version = serverVersion === undefined ? null : semver.coerce(serverVersion);
+
+  if (version !== null && semver.gte(version, OLDEST_T3)) return undefined;
+
+  return `T3 Code ${serverVersion === undefined ? 'did not say which version it runs' : `runs version ${serverVersion}`}; teamai-runtime-t3 needs T3 Code 0.1.8 or later. Update T3 Code, then start the workflow again.`;
+}
 
 const ModelSchema = z.object({ id: z.string().min(1), options: z.array(z.object({ id: z.string(), values: z.array(z.unknown()) })).optional() });
 
