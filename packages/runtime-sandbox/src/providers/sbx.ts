@@ -118,7 +118,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
 
   /** Every sandbox name `sbx ls --json` lists, within COMMAND_MS, or what sbx said instead. */
   const list = async (): Promise<{ ok: true; names: string[] } | { ok: false; message: string }> => {
-    const ran = await cli(['ls', '--json'], { timeoutMs: COMMAND_MS });
+    const ran = await cli(['ls', '--json'], { timeoutMs: COMMAND_MS, isListing: true });
     const names = ran.kind === 'ran' && ran.code === 0 ? namesListed(ran.stdout) : undefined;
 
     return names !== undefined ? { ok: true, names } : { ok: false, message: messageOf(ran) || 'it printed no list' };
@@ -199,7 +199,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
 
   /** Whether sbx keeps the warm template of `plan` already; a list sbx cannot give is taken as not, so it is saved again. */
   const isSaved = async (plan: WarmPlan): Promise<boolean> => {
-    const ran = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS });
+    const ran = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS, isListing: true });
 
     try {
       const listed = ran.kind === 'ran' && ran.code === 0 ? TemplatesSchema.safeParse(JSON.parse(ran.stdout)) : undefined;
@@ -249,7 +249,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
 
   /** The services whose login sbx's proxy holds for every sandbox, which it injects into a tool's requests. */
   const storedLogins = async (): Promise<{ ok: true; services: ReadonlySet<string> } | { ok: false; failure: RuntimeFailure }> => {
-    const ran = await cli(['secret', 'ls', '--global', '--json']);
+    const ran = await cli(['secret', 'ls', '--global', '--json'], { isListing: true });
     let parsed: z.infer<typeof StoredSchema> | undefined;
 
     try {

@@ -196,7 +196,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   };
 
   const find: Provider['find'] = async (key) => {
-    const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`], { timeoutMs: COMMAND_MS });
+    const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`], { timeoutMs: COMMAND_MS, isListing: true });
 
     if (listed.kind === 'ran' && listed.code === 0) return { ok: true, id: listed.stdout.trim().split('\n').find((line) => line !== '') };
 
@@ -270,7 +270,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     find,
 
     async owned() {
-      const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}{{.Label "teamai.judge"}} {{.Label "teamai.warm-by"}}'], { timeoutMs: COMMAND_MS });
+      const listed = await cli(['ps', '-a', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.ID}} {{.Label "teamai.run"}} {{.Label "teamai.attempt"}}{{.Label "teamai.judge"}} {{.Label "teamai.warm-by"}}'], { timeoutMs: COMMAND_MS, isListing: true });
 
       if (!(listed.kind === 'ran' && listed.code === 0)) return sandboxFailed(`${engine} could not list the containers this runtime's journal owns: ${why(listed)}`);
       const lines = listed.stdout.split('\n').map((line) => line.trim().split(' '));
