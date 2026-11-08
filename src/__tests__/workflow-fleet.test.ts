@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext } from '../workflow/engine.js';
-import { claimAttempt, expireClaim, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
+import { claimAttempt, expireClaim, finishAttempt, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
 import { publishRun } from '../workflow/handoff.js';
 import { AttemptIdSchema, installOwner, RunIdSchema } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
@@ -59,6 +59,21 @@ describe('fleet attempts on teamai-reports', () => {
     expect(await expireClaim(alice.config, claimed.value)).toMatchObject({ ok: true, value: { state: 'expired' } });
     expect(await recordProgress(bob.config, claimed.value, 'e'.repeat(40))).toMatchObject({ ok: false, error: { code: 'state_moved' } });
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'expired', pushed: 'f'.repeat(40) } });
+  });
+
+  it('keeps a finished step\'s result when its stderr names a path of the member\'s machine, and leaves that stderr out', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const claimed = await claimAttempt(bob.config, offered.value, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+
+    await finishAttempt(bob.config, claimed.value, { exitCode: 0, stderr: 'warning: cache at /home/bob/.cache/build is stale', to: 'e'.repeat(40), outputs: { built: true } }, {});
+
+    const finished = await readAttemptRecord(alice.config, RUN, ATTEMPT);
+    expect(finished).toMatchObject({ ok: true, value: { state: 'finished', result: { exitCode: 0, to: 'e'.repeat(40), outputs: { built: true } } } });
+    expect(JSON.stringify(finished)).not.toContain('/home/bob');
   });
 
   it('offers no lease that carries a secret of the owner, and writes nothing', async () => {

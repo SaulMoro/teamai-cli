@@ -161,13 +161,15 @@ export async function expireClaim(config: LocalConfig, claimed: Claimed): Promis
 }
 
 /**
- * Writes how claim `claimed` ended. A result that may not leave this machine fails the attempt instead, naming the
+ * Writes how claim `claimed` ended. A stderr snippet that may not leave this machine, such as a tool's warning that
+ * names its cwd, is left out and the result stands; any other field that may not fails the attempt instead, naming the
  * field, so the owner does not wait on it.
  */
 export async function finishAttempt(config: LocalConfig, claimed: Claimed, result: FleetResult, secrets: Record<string, string>): Promise<Written<FleetRecord>> {
   const finished: FleetRecord = { ...claimed, write: randomUUID(), state: 'finished', finishedAt: new Date().toISOString(), result };
-  const unfit = unpublishable(finished, secrets);
-  const record: FleetRecord = unfit ? { ...finished, result: { exitCode: 1, stderr: unfit.message } } : finished;
+  const quiet: FleetRecord = { ...finished, result: { ...result, stderr: 'Its stderr is not shown here: it names a path of the member\'s machine or a secret.' } };
+  const fit = [finished, quiet].find((candidate) => unpublishable(candidate, secrets) === undefined);
+  const record: FleetRecord = fit ?? { ...finished, result: { exitCode: 1, stderr: unpublishable(quiet, secrets)?.message ?? '' } };
   const written = await writeRecord(config, record, { replaces: claimed.write, message: `[teamai] Finish attempt ${claimed.attempt} of run ${claimed.run}` });
 
   return written.ok ? { ok: true, value: record } : written;
