@@ -45,18 +45,37 @@ export function spentTokens(run: RunState, under: (id: string) => boolean): numb
 
 /** The tokens `states` spent, and those archived or released under `under`. A step with no pass yet is not parsed. */
 function spentBy(states: readonly StepState[], run: RunState, under: (id: string) => boolean): number {
-  let spent = 0;
+  return budgeted(usageBy(states, run, under));
+}
+
+/** The tokens `states` spent, and those archived or released under `under`, by kind. */
+function usageBy(states: readonly StepState[], run: RunState, under: (id: string) => boolean): Required<TokenUsage> {
+  const spent = { input: 0, output: 0, cachedInput: 0 };
+
+  const add = (tokens: TokenUsage | undefined): void => {
+    spent.input += tokens?.input ?? 0;
+    spent.output += tokens?.output ?? 0;
+    spent.cachedInput += tokens?.cachedInput ?? 0;
+  };
 
   for (const state of states) {
-    for (const pass of state.passes ?? []) spent += budgeted(pass.tokens);
+    for (const pass of state.passes ?? []) add(pass.tokens);
     const current = settled(state) ? passOf(state) : undefined;
 
-    if (current) spent += budgeted(current.tokens);
+    if (current) add(current.tokens);
   }
 
-  for (const entry of [...run.archive ?? [], ...run.releasedTokens ?? []]) if (under(entry.step)) spent += budgeted(entry.tokens);
+  for (const entry of [...run.archive ?? [], ...run.releasedTokens ?? []]) if (under(entry.step)) add(entry.tokens);
 
   return spent;
+}
+
+/**
+ * The tokens every step of run `run` spent, by kind: what the nested run of a workflow step leased whole returns, so the
+ * owner counts it against the budgets around that step.
+ */
+export function spentUsage(run: RunState): Required<TokenUsage> {
+  return usageBy(run.steps.filter((state) => settled(state) || state.passes?.length), run, () => true);
 }
 
 /**
