@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
+import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 
 // The seatbelt provider through the runtime's stdio entry point: on a stand-in sandbox-exec that records the profile and
 // runs the command, and, on macOS, on the real one, which alone proves what the profile hides.
@@ -27,7 +28,9 @@ beforeEach(() => {
 afterEach(async () => {
   const connections = open.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
+  const recovered = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
+  expectNothingLeft({ dir: host.dir });
   fs.rmSync(host.dir, { recursive: true, force: true });
 });
 

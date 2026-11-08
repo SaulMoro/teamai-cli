@@ -6,6 +6,7 @@ import { build } from 'esbuild';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { connect, tempDir, type Connection, type Message } from '../testing/harness.js';
+import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 import { ATTEMPT, exec, HANDLE, newOp, openPlace, placeIn, RUN, type Place } from '../testing/native-harness.js';
 
 // The vercel provider through the runtime's stdio entry point, bundled as it ships but with `@vercel/sandbox` replaced
@@ -51,7 +52,9 @@ beforeEach(() => {
 afterEach(async () => {
   const connections = open.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
+  const recovered = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
+  expectNothingLeft({ dir, vercelState: stateDir });
   // A sandbox a test left open holds read-only git paths.
   execFileSync('chmod', ['-R', 'u+w', dir]);
   fs.rmSync(dir, { recursive: true, force: true });

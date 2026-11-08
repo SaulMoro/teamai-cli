@@ -5,6 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from '../testing/harness.js';
+import { expectNothingLeft } from '../testing/leaks.js';
 
 // One spec for the container providers, through the runtime's stdio entry point, run against the fake engine
 // (testing/fake-engine.mjs) always, and against the real engines CONTAINER_SPEC_ENGINES names (`docker,podman,sbx`).
@@ -133,8 +134,9 @@ for (const target of TARGETS) {
       const connections = open.splice(0);
       await Promise.all(connections.map((connection) => connection.end()));
       expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
-      // Every case closes what it opened: no container of the attempt is left.
+      // Every case closes what it opened: no container of the attempt, process or attempt's state is left.
       expect(target.containers(dir)).toEqual([]);
+      expectNothingLeft({ dir: home });
     });
 
     function start(extra: NodeJS.ProcessEnv = {}): Connection {

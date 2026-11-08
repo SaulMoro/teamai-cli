@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleRuntime, tempDir, type Connection } from '../testing/harness.js';
 import { exec, HANDLE, init, nativeHost, newOp, openPlace, placeIn, startOn, type NativeHost, type Place } from '../testing/native-harness.js';
+import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 
 // What a native sandbox keeps a step from, on the real sandbox-exec (macOS) or bwrap (Linux), through the runtime's
 // stdio entry point: one probe set for both, after sandcastle's tests/containment.test.ts.
@@ -111,7 +112,10 @@ for (const native of NATIVE) {
     afterEach(async () => {
       const connections = open.splice(0);
       await Promise.all(connections.map((connection) => connection.end()));
-      expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
+      const recovered = await closeLeftovers(connections);
+      expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
+      expectNothingLeft({ dir: host.dir });
+      expectNothingLeft({ dir: short });
       fs.rmSync(host.dir, { recursive: true, force: true });
       fs.rmSync(short, { recursive: true, force: true });
     });

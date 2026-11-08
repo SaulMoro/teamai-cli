@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { InitInstance } from '@teamai/runtime-protocol';
 import { LAUNCHABLE } from './providers/cli.js';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
+import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
 
 // The sandbox wrapper through its `tool-exec` entry point (`teamai-sandbox-<tool>`, the runtime's executable under
 // another name), against the runtime over its stdio on a fake docker, with this test as the inner runtime that
@@ -64,7 +65,9 @@ afterEach(async () => {
   for (const socket of registered.splice(0)) socket.destroy();
   const connections = opened.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
+  const recovered = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
+  expectNothingLeft({ dir, containers: engine.containers });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
