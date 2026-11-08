@@ -38,7 +38,7 @@ export async function runTool(input: { executable: string; args: string[]; cwd: 
     if (input.idleTimeoutMs === undefined) return;
 
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { stopped ??= 'idle'; void stop(); }, input.idleTimeoutMs);
+    idleTimer = setTimeout(() => { if (!input.signal?.aborted) stopped ??= 'idle'; void stop(); }, input.idleTimeoutMs);
   };
 
   child.stdout?.setEncoding('utf8').on('data', (text: string) => { stdout.push(text); active(); });
