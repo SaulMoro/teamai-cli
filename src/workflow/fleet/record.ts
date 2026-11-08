@@ -526,13 +526,14 @@ function offeredMarker(config: LocalConfig, run: RunId, attempt: AttemptId): str
 }
 
 /**
- * Notes, before the offer is written, that attempt `attempt` goes to pool `pool` from the exec `op`, so a restarted owner
- * waits on it again and a cancel with no live driver reaches it.
+ * Notes, before the offer is written, that attempt `attempt` goes to pool `pool` from the exec `offer.op`, with
+ * `offer.staleAfterMs`, so a restarted owner offers it as it was going to and waits on it again, and a cancel with no
+ * live driver reaches it.
  */
-export async function markOffered(config: LocalConfig, run: RunId, attempt: AttemptId, pool: string, op?: OpId): Promise<void> {
+export async function markOffered(config: LocalConfig, run: RunId, attempt: AttemptId, pool: string, offer?: { op: OpId; staleAfterMs: number }): Promise<void> {
   const file = offeredMarker(config, run, attempt);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, `${JSON.stringify({ pool, ...(op !== undefined && { op }) })}\n`, 'utf8');
+  await fs.writeFile(file, `${JSON.stringify({ pool, ...offer })}\n`, 'utf8');
 }
 
 /** `attempts/<attempt>/fleet-claim.json` in this install's data home: this install claimed the attempt as a member. */
@@ -545,9 +546,9 @@ async function isClaimedHere(config: LocalConfig, run: RunId, attempt: AttemptId
   return fs.access(claimedMarker(config, run, attempt)).then(() => true, () => false);
 }
 
-const OfferedMarkerSchema = z.object({ pool: z.string().min(1), op: OpIdSchema.optional() });
+const OfferedMarkerSchema = z.object({ pool: z.string().min(1), op: OpIdSchema.optional(), staleAfterMs: z.number().int().positive().optional() });
 
-/** What this install noted when it offered attempt `attempt`: its pool and the exec that offered it; undefined when it offered it to none. */
+/** What this install noted when it offered attempt `attempt`: its pool, the exec that offered it and its stale_after; undefined when it offered it to none. */
 export async function readOfferedMarker(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<z.infer<typeof OfferedMarkerSchema> | undefined> {
   const text = await fs.readFile(offeredMarker(config, run, attempt), 'utf8').catch(() => undefined);
   const parsed = text === undefined ? undefined : OfferedMarkerSchema.safeParse(jsonOf(text));

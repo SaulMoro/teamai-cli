@@ -359,8 +359,10 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
   const earlier = await readAttemptRecord(config, run, attempt);
 
   if (!earlier.ok) return failed(fleetFailure(earlier.error));
-  // An attempt offered before waits on the pool and stale_after its offer named, whatever fleet entry reached it now.
-  const { pool, staleAfterMs } = earlier.value === 'absent' ? input : earlier.value;
+  // An attempt offered before waits on the pool and stale_after its offer named, and one this exec noted but a killed
+  // teamai never wrote is offered as noted, whatever fleet entry reached it now.
+  const noted = earlier.value === 'absent' ? await readOfferedMarker(config, run, attempt) : undefined;
+  const { pool, staleAfterMs } = earlier.value !== 'absent' ? earlier.value : noted?.op === op ? { pool: noted.pool, staleAfterMs: noted.staleAfterMs ?? input.staleAfterMs } : input;
 
   if (earlier.value === 'absent') {
     const repository = getRepoIdentity(root);
@@ -382,7 +384,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     const pushed = await git(root, ['push', '--quiet', 'origin', `${start}:${ref}`]);
 
     if (pushed.code !== 0) return failed({ code: 'push_failed', message: `Step "${step}" could not push its start commit to ${ref} on origin, so no fleet member can take it: ${pushed.stderr.trim()}` });
-    await markOffered(config, run, attempt, pool, op);
+    await markOffered(config, run, attempt, pool, { op, staleAfterMs });
     const offered = await offerAttempt(config, { run, attempt, pool, repository, owner: await installOwner(config), start, staleAfterMs, lease, definition: runDefinition(state), values: values.values, secrets });
 
     if (!offered.ok) return failed(fleetFailure(offered.error));
