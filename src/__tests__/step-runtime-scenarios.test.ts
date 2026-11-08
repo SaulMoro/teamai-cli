@@ -18,6 +18,8 @@ import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { dirs, git, startIn, team, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
+import { fakeAgent } from '@teamai/tool-testing/fake-agent';
+import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
@@ -1549,6 +1551,19 @@ steps:
     command: ${SLOW_COMMAND}
 `;
 
+/** A prompt step that names its tool, so the owner offers it on a fleet that lists the tool. */
+const PROMPTED = `schemaVersion: v1alpha1
+name: slow
+description: Reviews the work.
+steps:
+  - id: work
+    workspace: new
+    tool: claude
+    prompt: Review the work.
+    output:
+      ok: boolean
+`;
+
 /** The fleet runtimes a scenario opened, which teardown disposes. */
 const fleetRuntimes: StepRuntime[] = [];
 
@@ -1567,23 +1582,30 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND }: { workflow?: string; command?: string } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools }: { workflow?: string; command?: string; tools?: string[] } = {}) {
   const acme = team({ slow: workflow });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   const run = RunIdSchema.parse(await startIn(alice, 'slow'));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES] } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
   const open = async (cwd = alice.checkout, options: RuntimeOptions = { stale_after: '60s' }) => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
     fleetRuntimes.push(runtime);
-    expect(await runtime.init({ options, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { prompt: false, remote: true } });
+    const initialized = await runtime.init({ options, mode: 'unattended', checkout: alice.checkout });
+    expect(initialized).toMatchObject({ ok: true, can: { remote: true }, launchesAgents: true });
+    expect(initialized.ok && initialized.can).not.toHaveProperty('prompt');
     const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
     if (opened.kind !== 'ready') throw new Error(opened.failure.message);
     const exec = (op: OpId) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {}, 'command');
+    // What this host would send of the prompt: the member renders its own, so none of it reaches the record.
+    const prompt = (op: OpId) => runtime.prompt({
+      op, handle: opened.handle, env: {}, unset: [], credentials: {}, cwd,
+      lease: { step: 'work', tool: 'claude', prompt: 'A prompt this host rendered.', result: path.join(cwd, 'result.json'), permissions: 'unattended', interactive: false },
+    }, {});
 
-    return { runtime, handle: opened.handle, exec };
+    return { runtime, handle: opened.handle, exec, prompt };
   };
 
   const record = async () => eventually(async () => {
@@ -1611,11 +1633,39 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     await owner.record();
     await readableReportsWorktree(owner.bob.config);
 
-    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { kind: 'here' } });
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } });
 
     expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: '{"made":1}' });
     expect(fs.readFileSync(path.join(place, 'done.txt'), 'utf8')).toBe('done\n');
+  }, 60_000);
+
+  it('offers a prompt step, which a member runs on its own tool from its own copy of the step, then ends with the result its agent wrote', async () => {
+    const owner = await ownerOf({ workflow: PROMPTED, tools: ['claude'] });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}' });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { prompt } = await owner.open(place);
+
+    try {
+      const ended = prompt(newOpId());
+      expect(await owner.record()).toMatchObject({ state: 'offered', lease: { step: 'work', prompt: 'Review the work.' } });
+      await readableReportsWorktree(owner.bob.config);
+
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } });
+
+      expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+      expect(await ended).toEqual({ kind: 'finished', session: { tool: 'claude', id: owner.attempt }, result: { output: { ok: true } }, usage: expect.any(Object) });
+      expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work.')]) })]);
+      expect(JSON.stringify(claude.calls())).not.toContain('A prompt this host rendered.');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
   }, 60_000);
 
   it('offers the step\'s command, and leaves the attempt out for a later resume when its teamai stops', async () => {

@@ -1237,7 +1237,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           return runPromptStep({
             config, lock, driver, lease, adapter, tools: options.tools, toolPaths: options.toolPaths, archive, signal: controller.signal, mode, staged: launch,
             secrets: { ...turn.secrets, ...maskedCredentials }, askPerson,
-            onRuntime: stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }) },
+            onRuntime: stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }) },
           });
         })() });
       }
