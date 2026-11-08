@@ -3,8 +3,10 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { Socket } from 'node:net';
 import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
-import { isBareCommandName } from './cli-path.js';
-import { findOnPath } from './lookpath.js';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { isBareCommandName, pickWindowsCommand, WIN_EXEC_EXTENSIONS } from './cli-path.js';
+import { pathDirs } from './lookpath.js';
 
 export interface ExecOptions {
   cwd?: string;
@@ -216,11 +218,19 @@ export function batchLaunchOf(executable: string, args: readonly string[], comsp
   return { ok: true, command: comspec, args: ['/d', '/v:off', '/s', '/c', `"${line}"`] };
 }
 
-/** `executable` as the child's PATH finds it when it is a bare name, such as the `claude` a member types, else as given. */
+/**
+ * `executable` as the child's PATH finds it when it is a bare name, such as the `claude` a member types, else as given.
+ * Only a launchable file counts: npm puts an extensionless sh shim beside `claude.cmd`, and cmd.exe cannot start it.
+ */
 function onChildPath(executable: string, env: NodeJS.ProcessEnv | undefined): string {
+  if (!isBareCommandName(executable)) return executable;
   const pathEnv = env?.PATH ?? env?.Path ?? process.env.PATH;
 
-  return isBareCommandName(executable) ? findOnPath(executable, pathEnv === undefined ? {} : { pathEnv }) ?? executable : executable;
+  const found = pathDirs(pathEnv === undefined ? {} : { pathEnv })
+    .flatMap((dir) => WIN_EXEC_EXTENSIONS.map((ext) => path.join(dir, executable + ext)))
+    .filter((file) => existsSync(file));
+
+  return pickWindowsCommand(found.join('\n')) ?? executable;
 }
 
 /**
