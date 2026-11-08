@@ -146,6 +146,12 @@ A skill child's `result.json` may carry `changed`, paths relative to the place. 
 
 ### Describe and start
 
+Where the guards of several rows hold, the first row in the order below answers:
+
+- Describe: R1 or R31, R16, R2 or R23, R17, R30 (R3 under it), R27, R18, R3, R4.
+- Start: R29, R8, R25, R9, R10.
+- Resume or takeover: R22, before the lock; in run mode `unattended`, R24 for a run `WorkflowClient.carried` cannot read, then R8 and R24 as the run stands before the claim; then R20 or R21, R8, the S rows of a skill.json kept here that the claim did not replace, R24, R28, R19.
+
 | Row | State | Input | Guard | Effects | Next | Action |
 |---|---|---|---|---|---|---|
 | R1 | none | describe | run mode `attended`, `invoke: deny` and the caller has agent evidence | none | none | describe `ask.kind: local` with the reason and the start the person runs: in an app's session (`SESSION_APPS`) the `--driver <app driver>` start, from the place the app names, else R2's `--driver local` start |
