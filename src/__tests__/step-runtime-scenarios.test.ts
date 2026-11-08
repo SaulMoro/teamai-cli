@@ -18,7 +18,7 @@ import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
-import { dirs, git, startIn, team, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
+import { dirs, git, pull, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
 import { fakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext } from '../workflow/engine.js';
@@ -1815,9 +1815,10 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
   const acme = team({ slow: workflow, ...workflows }, files);
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+  await beforeStart?.(alice);
   const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
   const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }), ...(isPromptless && { prompt: false as const }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
@@ -2022,6 +2023,27 @@ steps:
     const whole = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
 
     expect(await readRun(whole.alice.config, whole.run)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
+  }, 60_000);
+
+  it('leaves an attempt whose run\'s definitions this member does not find for another member, rather than claiming and failing it', async () => {
+    // Alice runs a workflow she changed and did not push, so the run pins no team commit and Bob's copy differs.
+    const owner = await ownerOf({ beforeStart: async (alice) => {
+      const clone = alice.config.repo.localPath;
+      fs.writeFileSync(path.join(clone, 'workflows', 'slow.yaml'), SLOW.replace('description: ', 'description: Changed here. '));
+      git(clone, 'commit', '-qam', 'unpushed change');
+      await pull(alice);
+    } });
+    const { exec } = await owner.open();
+    void exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' } } });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+    expect(infos).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^Left attempt ${owner.attempt} of run ${owner.run} for another member: it finds no definition of the run here: `)));
   }, 60_000);
 
   it('leaves a whole workflow step one of whose steps requires a label this member does not declare for another member', async () => {
