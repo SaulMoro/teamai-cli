@@ -213,7 +213,7 @@ function withPath(picked: JsonValue | undefined, from: JsonValue, fields: PathFi
 
   if (field === undefined || isIndex(field) || picked === from) return from;
 
-  if (!isJsonObject(from)) return picked;
+  if (!isJsonObject(from) || !Object.hasOwn(from, field)) return picked;
 
   const value = from[field];
 
@@ -262,11 +262,19 @@ export async function offerAttempt(config: LocalConfig, input: {
   return written.ok ? { ok: true, value: record } : written;
 }
 
-/** Replaces offer `offered` with this install's claim; another member's claim first answers `state_moved`. */
+/**
+ * Replaces offer `offered` with this install's claim; another member's claim first answers `state_moved`. The claim is
+ * noted in this install's data home before it is written, so a restarted member finishes only claims it wrote.
+ */
 export async function claimAttempt(config: LocalConfig, offered: Offered, member: HandoffOwner): Promise<Written<Claimed>> {
   const now = new Date().toISOString();
   const claim: Claimed = { ...offered, write: randomUUID(), state: 'claimed', member, claimedAt: now, progressAt: now, pushed: offered.start };
+  const marker = claimedMarker(config, offered.run, offered.attempt);
+  await fs.mkdir(path.dirname(marker), { recursive: true });
+  await fs.writeFile(marker, `${JSON.stringify({ write: claim.write })}\n`, 'utf8');
   const written = await writeRecord(config, claim, { replaces: offered.write, message: `[teamai] Claim attempt ${offered.attempt} of run ${offered.run}` });
+
+  if (!written.ok && written.error.code === 'state_moved') await fs.rm(marker, { force: true });
 
   return written.ok ? { ok: true, value: claim } : written;
 }
@@ -356,38 +364,47 @@ function parseRecord(text: string, run: string, attempt: string): Written<FleetR
 }
 
 /**
+ * The records of run `run`, or of every run, as this machine's copy of `teamai-reports` holds them: refresh it first. A
+ * record that does not parse, or names another run or attempt than its path, is left out.
+ */
+async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecord[]> {
+  const root = path.join(getReportsDir(config), ATTEMPTS_DIR);
+  const runs = run === undefined ? (await fs.readdir(root, { withFileTypes: true }).catch(() => [])).flatMap((entry) => (entry.isDirectory() ? [entry.name] : [])) : [run];
+  const records: FleetRecord[] = [];
+
+  for (const name of runs) {
+    const files = await fs.readdir(path.join(root, name)).catch(() => []);
+
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const text = await fs.readFile(path.join(root, name, file), 'utf8').catch(() => '');
+      const parsed = parseRecord(text, name, file.slice(0, -'.json'.length));
+
+      if (parsed.ok) records.push(parsed.value);
+    }
+  }
+
+  return records;
+}
+
+/**
  * The attempts offered to pool `pool` for business repository `repository`, oldest offer first, as this machine's copy
  * of `teamai-reports` holds them: refresh it first.
  */
 export async function listOffers(config: LocalConfig, { pool, repository }: { pool: string; repository: string }): Promise<Offered[]> {
-  const root = path.join(getReportsDir(config), ATTEMPTS_DIR);
-  const runs = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  const offers: Offered[] = [];
-
-  for (const run of runs) {
-    if (!run.isDirectory()) continue;
-    const files = await fs.readdir(path.join(root, run.name)).catch(() => []);
-
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const text = await fs.readFile(path.join(root, run.name, file), 'utf8').catch(() => '');
-      const parsed = parseRecord(text, run.name, file.slice(0, -'.json'.length));
-
-      if (parsed.ok && parsed.value.state === 'offered' && parsed.value.pool === pool && parsed.value.repository === repository) offers.push(parsed.value);
-    }
-  }
+  const offers = (await listRecords(config)).flatMap((record) => (record.state === 'offered' && record.pool === pool && record.repository === repository ? [record] : []));
 
   return offers.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }
 
 type Gone = Extract<FleetRecord, { state: 'expired' | 'cancelling' | 'cancelled' }>;
 
-/** When the claim of `record`, expired, cancelled or asked to stop, stopped counting. */
+/** When the owner gave the claim of `record` up or cancelled it, by the owner's clock: a member's may be off. */
 function goneAt(record: Gone): string {
   switch (record.state) {
     case 'expired': return record.expiredAt;
     case 'cancelling': return record.cancelAt;
-    case 'cancelled': return record.cancelledAt;
+    case 'cancelled': return record.cancelAt;
     default: {
       const unhandled: never = record;
 
@@ -397,27 +414,23 @@ function goneAt(record: Gone): string {
 }
 
 /**
- * The last attempt of step `step` of run `run` whose claim the owner gave up or cancelled after its member pushed work,
- * as this machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step goes on from that work. A
- * cancel its member never answered counts with the work it pushed before: a member that answers later changes nothing.
+ * The last attempt of step `step` of run `run` that this install offered and whose claim it gave up or cancelled after
+ * its member pushed work, as this machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step
+ * goes on from that work. A cancel its member never answered counts with the work it pushed before: a member that
+ * answers later changes nothing.
  */
-export async function lastGoneWork(config: LocalConfig, { run, step, owner }: { run: RunId; step: string; owner: HandoffOwner }): Promise<{ attempt: AttemptId; pushed: string } | undefined> {
-  const dir = path.join(getReportsDir(config), ATTEMPTS_DIR, run);
-  const files = await fs.readdir(dir).catch(() => []);
+export async function lastGoneWork(config: LocalConfig, { run, step }: { run: RunId; step: string }): Promise<{ attempt: AttemptId; pushed: string } | undefined> {
   let last: Gone | undefined;
 
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    const text = await fs.readFile(path.join(dir, file), 'utf8').catch(() => '');
-    const parsed = parseRecord(text, run, file.slice(0, -'.json'.length));
+  for (const record of await listRecords(config, run)) {
+    if (record.state !== 'expired' && record.state !== 'cancelling' && record.state !== 'cancelled') continue;
 
-    if (!parsed.ok || (parsed.value.state !== 'expired' && parsed.value.state !== 'cancelling' && parsed.value.state !== 'cancelled')) continue;
-    const gone = parsed.value;
+    if (record.lease.step !== step || record.pushed === record.start) continue;
 
-    // Only an attempt this install offered: anyone who can write teamai-reports can write a record.
-    if (gone.owner.id !== owner.id || gone.lease.step !== step || gone.pushed === gone.start) continue;
+    // Only an attempt this install offered: anyone who can write teamai-reports can write a record, naming any owner.
+    if (await offeredPool(config, run, record.attempt) === undefined) continue;
 
-    if (last === undefined || goneAt(gone) > goneAt(last)) last = gone;
+    if (last === undefined || goneAt(record) > goneAt(last)) last = record;
   }
 
   return last && { attempt: last.attempt, pushed: last.pushed };
@@ -427,28 +440,18 @@ export async function lastGoneWork(config: LocalConfig, { run, step, owner }: { 
 export type MemberRecord = Exclude<FleetRecord, Offered | Extract<FleetRecord, { state: 'withdrawn' }>>;
 
 /**
- * The records that name member `member` for business repository `repository`, oldest claim first, as this machine's copy
- * of `teamai-reports` holds them: refresh it first. A member that starts stops what its earlier runs of these left, and
- * finishes the claims it still holds before it takes a new offer.
+ * The records of claims this install wrote as member `member` for business repository `repository`, oldest claim
+ * first, as this machine's copy of `teamai-reports` holds them: refresh it first. A member that starts stops what its
+ * earlier runs of these left, and finishes the claims it still holds before it takes a new offer. A record that names
+ * this member for a claim it never wrote here is not its own: anyone who can write teamai-reports can write one.
  */
 export async function listMemberRecords(config: LocalConfig, { member, repository }: { member: HandoffOwner; repository: string }): Promise<MemberRecord[]> {
-  const root = path.join(getReportsDir(config), ATTEMPTS_DIR);
-  const runs = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   const named: MemberRecord[] = [];
 
-  for (const run of runs) {
-    if (!run.isDirectory()) continue;
-    const files = await fs.readdir(path.join(root, run.name)).catch(() => []);
+  for (const record of await listRecords(config)) {
+    if (record.state === 'offered' || record.state === 'withdrawn') continue;
 
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const text = await fs.readFile(path.join(root, run.name, file), 'utf8').catch(() => '');
-      const parsed = parseRecord(text, run.name, file.slice(0, -'.json'.length));
-
-      if (!parsed.ok || parsed.value.state === 'offered' || parsed.value.state === 'withdrawn') continue;
-
-      if (parsed.value.member.id === member.id && parsed.value.repository === repository) named.push(parsed.value);
-    }
+    if (record.member.id === member.id && record.repository === repository && await isClaimedHere(config, record.run, record.attempt)) named.push(record);
   }
 
   return named.sort((left, right) => left.claimedAt.localeCompare(right.claimedAt));
@@ -501,6 +504,16 @@ export async function markOffered(config: LocalConfig, run: RunId, attempt: Atte
   const file = offeredMarker(config, run, attempt);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, `${JSON.stringify({ pool })}\n`, 'utf8');
+}
+
+/** `attempts/<attempt>/fleet-claim.json` in this install's data home: this install claimed the attempt as a member. */
+function claimedMarker(config: LocalConfig, run: RunId, attempt: AttemptId): string {
+  return path.join(attemptDir(config, run, attempt), 'fleet-claim.json');
+}
+
+/** Whether this install wrote a claim of attempt `attempt`. */
+async function isClaimedHere(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<boolean> {
+  return fs.access(claimedMarker(config, run, attempt)).then(() => true, () => false);
 }
 
 /** The pool this install offered attempt `attempt` to, or undefined when it offered it to none. */

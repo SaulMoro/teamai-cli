@@ -93,7 +93,16 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       return runClaim(config, { claim: record, root, secrets, member, from: saved });
     }, { waitMs: 0 });
 
-    if (held.kind === 'held' && held.value) return held.value;
+    if (held.kind !== 'held' || !held.value) continue;
+
+    // A claim it cannot finish, such as one whose ref is gone, keeps the member from no other work: the owner gives
+    // it up after stale_after.
+    if ('error' in held.value) {
+      log.warn(`Left attempt ${record.attempt} of run ${record.run}, which this member claimed before: ${held.value.error.message}`);
+      continue;
+    }
+
+    return held.value;
   }
 
   return undefined;
@@ -169,7 +178,9 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   const save = async (message: string): Promise<{ to: string } | { error: string }> => {
     const saved = await pushWork({ work, ref, message, memberConfig, parent: tip, index: path.join(dir, 'snapshot.index') });
 
+    // A commit one push URL took is where the next save goes on from, so every URL still takes it fast-forward.
     if ('to' in saved) tip = saved.to;
+    else if (saved.taken !== undefined) tip = saved.taken;
 
     return saved;
   };
@@ -184,11 +195,20 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
 
     // A write of the claim that answered state_moved: the owner cancelled it, which the member answers once the step
     // stopped, or gave it up, after which nothing the member does counts. Either way the step stops.
+    // A claimed record naming this member is a write of its own that landed though it could not tell, as when origin
+    // took the push and its answer was lost: only the claim's member writes a claimed record over a claim.
     const moved = async (error: FleetError): Promise<void> => {
       if (gone !== undefined || cancelling !== undefined) return;
       const now = await readAttemptRecord(config, run, attempt);
+      const record = now.ok && now.value !== 'absent' && 'member' in now.value && now.value.member.id === member.id ? now.value : undefined;
 
-      if (now.ok && now.value !== 'absent' && now.value.state === 'cancelling' && now.value.member.id === member.id) cancelling = now.value;
+      if (record?.state === 'claimed') {
+        latest = record;
+
+        return;
+      }
+
+      if (record?.state === 'cancelling') cancelling = record;
       else gone = error.message;
       await command.stop();
     };
@@ -334,7 +354,7 @@ function definedStep({ definition, workflows }: Definitions, stepPath: string):
  * stages into `index`, a file of its own, so the step's own HEAD and index stay as the step left them while it still
  * runs. The step ran there, so only the programs of `memberConfig` that its config names run.
  */
-async function pushWork({ work, ref, message, memberConfig, parent, index }: { work: string; ref: string; message: string; memberConfig: MemberConfig; parent: string; index: string }): Promise<{ to: string } | { error: string }> {
+async function pushWork({ work, ref, message, memberConfig, parent, index }: { work: string; ref: string; message: string; memberConfig: MemberConfig; parent: string; index: string }): Promise<{ to: string } | { error: string; taken?: string }> {
   await fs.rm(index, { force: true });
   const snapshotGit = untrustedGit({ ...hostGitEnv(), GIT_INDEX_FILE: index }, undefined, memberConfig);
   const read = await snapshotGit(work, ['read-tree', parent]);
@@ -354,11 +374,17 @@ async function pushWork({ work, ref, message, memberConfig, parent, index }: { w
 
   if (targets.length === 0) return { error: `The member could not push the step's work to ${ref}: its checkout names no origin.` };
 
+  const failed: string[] = [];
+
   for (const target of targets) {
     const pushed = await remoteGit(work, { kept: target.kept, env: hostGitEnv() }, ['push', '--quiet', target.url, `${to}:${ref}`], snapshotGit);
 
-    if (pushed.code !== 0) return { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
+    if (pushed.code !== 0) failed.push(pushed.stderr.trim());
   }
 
-  return { to };
+  if (failed.length === 0) return { to };
+  const error = `The member could not push the step's work to ${ref}: ${failed.join('; ')}`;
+
+  // Saved only once every push URL holds it, as the owner fetches from its own origin.
+  return failed.length < targets.length ? { error, taken: to } : { error };
 }
