@@ -11,7 +11,7 @@ import { resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.j
 import { log } from '../utils/logger.js';
 import { execCommand } from '../utils/exec.js';
 import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
-import { getDataHome, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
+import { getDataHome, JsonObjectSchema, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias } from './cache.js';
 import { claimRun, leaseRefusal, publishRunEnd, reconcileTakenCopies, takeoverFor, type HandoffError } from './handoff.js';
@@ -1068,8 +1068,12 @@ function startWorkflowStep(
  * `for_each` step, the outcome and the results of its items. A workflow step or `for_each` item that delivers goes on
  * to deliver what it wrote; a `for_each` step delivers nothing of its own, its items do.
  */
-function finishStep(run: RunState, state: StepState, definition: WorkflowStep, result: WorkflowResult): void {
-  const settlement: Parameters<typeof succeed>[1] = { settledAt: result.settledAt };
+/**
+ * Settles workflow step `state` from how its workflow ended: run here as its children, or by a runtime that took it
+ * whole, whose attempt's own fields (`attempt`) the step keeps beside the result.
+ */
+function finishStep(run: RunState, state: StepState, definition: WorkflowStep, result: WorkflowResult, attempt: Omit<Parameters<typeof succeed>[1], 'settledAt'> = {}): StepState {
+  const settlement: Parameters<typeof succeed>[1] = { ...attempt, settledAt: result.settledAt };
 
   if (result.end !== undefined) settlement.end = result.end;
 
@@ -1085,9 +1089,7 @@ function finishStep(run: RunState, state: StepState, definition: WorkflowStep, r
       failed.failure = result.failure;
     }
 
-    fail(state, failed);
-
-    return;
+    return fail(state, failed);
   }
 
   const delivers = definition.deliver === 'pr' && (!definition.forEach || isItem(state));
@@ -1095,12 +1097,16 @@ function finishStep(run: RunState, state: StepState, definition: WorkflowStep, r
   // A branch that holds nothing beyond the run base opens no pull request, so work a step inside wrote elsewhere would be lost.
   const left = delivers && !delivery && definition.workflow !== undefined ? workLeftUndelivered(run, state) : undefined;
 
-  if (delivery) startDelivery(state, settlement, delivery);
-  else if (left) {
+  if (delivery) return startDelivery(state, settlement, delivery);
+
+  if (left) {
     const key = { step: state.id, pass: state.pass ?? 1, settledAt: result.settledAt, branch: left.branch, head: left.head };
     const failure = deliveryFailure({ runId: run.id, key }, { kind: 'child_work_left_out', step: left.child.step, branch: left.child.branch });
-    fail(state, { ...settlement, message: failure.message, failure });
-  } else succeed(state, settlement);
+
+    return fail(state, { ...settlement, message: failure.message, failure });
+  }
+
+  return succeed(state, settlement);
 }
 
 function childOrUnreadable(run: RunState, scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep): Scope | { unreadable: string } {
@@ -3566,7 +3572,11 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
 
     if (delivering && reported?.url && !unmatched) delivering.reported = reported.url;
 
+    // A workflow step leased whole settles as it does when its workflow runs here: outputs of a failed end kept.
+    const wholeOutputs = JsonObjectSchema.safeParse(report.outputs);
+
     const settledStep = outcome === 'released' ? release(step)
+      : defined?.workflow !== undefined ? finishStep(run, step, defined, { outcome: outcome === 'success' ? 'succeeded' : 'failed', settledAt: run.revision, end: report.end, ...(wholeOutputs.success && { outputs: wholeOutputs.data }), failure }, settlement)
       : outcome !== 'success' ? fail(step, { ...settlement, failure })
         : delivering ? startDelivery(step, successful, delivering)
           : succeed(step, successful);
