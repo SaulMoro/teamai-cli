@@ -8,18 +8,19 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { errnoCode } from '../utils/fs.js';
 
 /** Text kinds whose content is archived, masked, by extension, with the media type the judge is told. */
-const TEXT_TYPES: Readonly<Record<string, string>> = {
+const TEXT_TYPES = new Map(Object.entries({
   '.txt': 'text/plain', '.log': 'text/plain', '.json': 'application/json', '.jsonl': 'application/jsonl', '.md': 'text/markdown',
   '.html': 'text/html', '.xml': 'application/xml', '.csv': 'text/csv', '.yaml': 'application/yaml',
-};
+}));
 
 /** Media types of the listed kinds a judge is likely to meet, by extension; any other is `application/octet-stream`. */
-const LISTED_TYPES: Readonly<Record<string, string>> = {
+const LISTED_TYPES = new Map(Object.entries({
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.pdf': 'application/pdf', '.zip': 'application/zip',
-};
+}));
 
 const EvidenceFileSchema = z.discriminatedUnion('kind', [
   /** A text file, masked, cut to what the caps leave of it. `size` is the file's own, in bytes. */
@@ -58,11 +59,14 @@ const STEP_MAX_BYTES = 10 * FILE_MAX_BYTES;
 /** The largest text file read to be masked: the mask reads a file whole, so a larger one is listed instead. */
 const TEXT_READ_MAX_BYTES = 64 * FILE_MAX_BYTES;
 
+/** Text the archive keeps of one file, and whether a cap cut it. */
+type KeptText = Pick<Extract<EvidenceFile, { kind: 'text' }>, 'text' | 'cut'>;
+
 /**
  * `text` whole when it fits in `max` bytes, else its first `max` bytes, never ending inside a character, followed by a
  * line that says it was cut. Masked text only: cutting first could keep the head of a secret the mask no longer sees.
  */
-function cutAt(text: string, max: number): { text: string; cut: boolean } {
+function cutAt(text: string, max: number): KeptText {
   const bytes = Buffer.from(text, 'utf-8');
 
   if (bytes.length <= max) return { text, cut: false };
@@ -97,10 +101,15 @@ async function sha256Of(file: string): Promise<string> {
  * unmasked.
  */
 async function collect(dir: string, mask: (text: string) => string, { leaveOut = [] }: { leaveOut?: readonly string[] } = {}): Promise<ArchivedEvidence | undefined> {
-  const found = await regularFiles(dir).catch((error: unknown) => {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
-    throw error;
-  });
+  let found: string[];
+
+  try {
+    found = await regularFiles(dir);
+  } catch (error) {
+    if (errnoCode(error) !== 'ENOENT') throw error;
+    found = [];
+  }
+
   const names = found.filter((name) => !leaveOut.includes(name));
 
   if (names.length === 0) return undefined;
@@ -110,7 +119,7 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
   for (const name of names) {
     const file = path.join(dir, ...name.split('/'));
     const extension = path.extname(name).toLowerCase();
-    const textType = TEXT_TYPES[extension];
+    const textType = TEXT_TYPES.get(extension);
     const { size } = await fs.stat(file);
 
     const text = textType === undefined || size > TEXT_READ_MAX_BYTES ? undefined : utf8(await fs.readFile(file));
@@ -122,7 +131,7 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
       continue;
     }
 
-    files.push({ kind: 'listed', path: mask(name), type: textType ?? LISTED_TYPES[extension] ?? 'application/octet-stream', size, sha256: await sha256Of(file) });
+    files.push({ kind: 'listed', path: mask(name), type: textType ?? LISTED_TYPES.get(extension) ?? 'application/octet-stream', size, sha256: await sha256Of(file) });
   }
 
   return { version: 1, files };
