@@ -15,7 +15,7 @@ import { gitRoot } from '../../utils/branch-worktree.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
-import { expressionPaths, isIndex } from '../expression.js';
+import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { parseTemplate, renderText, templateExpressions, type TemplateContext } from '../template.js';
@@ -167,10 +167,11 @@ function unpublishable(record: FleetRecord, secrets: Record<string, string>): Fl
  * could not render the env from values: it reads something besides inputs, the item, the run's id and steps' outputs.
  */
 export function leaseValues(step: Pick<WorkflowStep, 'id' | 'env'>, context: TemplateContext): { values: LeaseValues } | { error: string } {
-  const inputs = new Set<string>();
-  const outputs = new Set<string>();
-  let wholeInputs = false;
-  let readsItem = false;
+  const given = JsonValueSchema.safeParse(context.inputs ?? {});
+  const item = JsonValueSchema.safeParse(context.item);
+  let inputs: JsonValue | undefined;
+  let itemValues: JsonValue | undefined;
+  const outputs: Record<string, JsonValue> = {};
 
   for (const [name, text] of Object.entries(step.env ?? {})) {
     const parsed = parseTemplate(text, Object.hasOwn(context, 'item'));
@@ -182,45 +183,48 @@ export function leaseValues(step: Pick<WorkflowStep, 'id' | 'env'>, context: Tem
         return { error: `Step "${step.id}" env ${name} reads steps.${read.step}.${read.field}, which a fleet member cannot render: on the fleet a step's env reads only inputs, item, run.id and steps' outputs.` };
       }
 
-      const [first] = read.fields;
+      if (read.root === 'inputs' && given.success) inputs = withPath(inputs, given.data, read.fields);
 
-      if (read.root === 'inputs') {
-        if (first === undefined || isIndex(first)) wholeInputs = true;
-        else inputs.add(first);
+      if (read.root === 'steps') {
+        const stepOutputs = JsonValueSchema.safeParse(context.steps[read.step]?.outputs);
+        const picked = stepOutputs.success ? withPath(outputs[read.step], stepOutputs.data, read.fields) : undefined;
+
+        if (picked !== undefined) outputs[read.step] = picked;
       }
 
-      if (read.root === 'steps') outputs.add(read.step);
-
-      if (read.root === 'item') readsItem = true;
+      if (read.root === 'item' && item.success) itemValues = withPath(itemValues, item.data, read.fields);
     }
   }
 
-  const values: LeaseValues = {};
-  const given = JsonValueSchema.safeParse(context.inputs ?? {});
-  const all = given.success ? given.data : {};
+  return {
+    values: {
+      ...(inputs !== undefined && { inputs }),
+      ...(Object.keys(outputs).length > 0 && { outputs }),
+      ...(itemValues !== undefined && { item: itemValues }),
+    },
+  };
+}
 
-  if (wholeInputs || !isJsonObject(all)) values.inputs = all;
-  else if (inputs.size > 0) {
-    values.inputs = Object.fromEntries([...inputs].flatMap((name) => {
-      const value = all[name];
+/**
+ * `picked` with what `from` holds at `fields` added, so a record carries only what the env reads: a path that reads an
+ * array element carries the whole array, and a path that reads nothing there adds nothing. A whole value is added as
+ * `from` itself, which a later, longer path then finds already there.
+ */
+function withPath(picked: JsonValue | undefined, from: JsonValue, fields: PathField[]): JsonValue | undefined {
+  const [field, ...rest] = fields;
 
-      return value === undefined ? [] : [[name, value]];
-    }));
-  }
+  if (field === undefined || isIndex(field) || picked === from) return from;
 
-  if (outputs.size > 0) {
-    values.outputs = Object.fromEntries([...outputs].flatMap((id) => {
-      const read = JsonValueSchema.safeParse(context.steps[id]?.outputs);
+  if (!isJsonObject(from)) return picked;
 
-      return read.success ? [[id, read.data]] : [];
-    }));
-  }
+  const value = from[field];
 
-  const item = JsonValueSchema.safeParse(context.item);
+  if (value === undefined) return picked;
 
-  if (readsItem && item.success) values.item = item.data;
+  const into = picked !== undefined && isJsonObject(picked) ? picked : {};
+  const inner = withPath(into[field], value, rest);
 
-  return { values };
+  return inner === undefined ? into : { ...into, [field]: inner };
 }
 
 /** The env of command step `step` in run `run`, rendered from `values` as its owner's lease rendered it from the run. */
