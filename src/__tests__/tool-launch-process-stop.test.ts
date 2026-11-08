@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { processStarts, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from '../tool-launch/process-stop.js';
+import { processStarts, recordGroup, startGroupedCommand, stopGroup, stopProcess, stopRecordedGroup } from '../tool-launch/process-stop.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
@@ -203,6 +203,26 @@ it.skipIf(process.platform === 'win32')('stops every group recorded in a directo
     for (const group of [first, second]) {
       try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
     }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform === 'win32')('stops an attached command and what it started once its starter is gone, from the record it left', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-attached-'));
+  const pidFile = path.join(directory, 'sleep.pid');
+  const started = startGroupedCommand({ command: `sleep 60 & echo $! > ${JSON.stringify(pidFile)}; wait`, cwd: directory, env: process.env, detached: false, group: directory });
+  const alive = (pid: number): boolean => { try { return process.kill(pid, 0); } catch { return false; } };
+  try {
+    for (let probe = 0; probe < 100 && !(fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== ''); probe += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    const sleeper = Number(fs.readFileSync(pidFile, 'utf8'));
+
+    // A starter killed now leaves only what it recorded: no handle of this process reaches the command.
+    await stopRecordedGroup(directory);
+
+    expect(alive(sleeper)).toBe(false);
+    expect((await started.exit).exitCode).not.toBe(0);
+  } finally {
+    await started.stop();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
