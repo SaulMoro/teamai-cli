@@ -6289,3 +6289,44 @@ describe('a step in a run whose only driver has a runtime that lacks its workspa
     } }] });
   });
 });
+
+describe('a workflow step leased whole', () => {
+  // A check that ends rejected, which its workflow maps to failed, with the verdict it read as the workflow's output.
+  const files = {
+    check: workflow('check', `  - id: look
+    command: node look.js
+    end: rejected
+    output:
+      verdict: string
+`, 'ends:\n  rejected: failed\noutputs:\n  verdict: steps.look.outputs.verdict\n'),
+    ship: workflow('ship', `  - id: check
+    workflow: check
+`),
+  };
+
+  const settledCheck = async (config: LocalConfig, runId: string) => {
+    const run = await readRun(config, runId as RunState['id']);
+    if (run === 'missing' || run === 'corrupt') throw new Error(`run ${runId} is ${run}`);
+    const check = run.steps.find((step) => step.id === 'check');
+    if (check?.status !== 'failed') return { status: check?.status };
+    return { status: check.status, end: check.end, outputs: check.outputs };
+  };
+
+  it('settles as the same step does when its workflow runs here, outputs of a failed end included', async () => {
+    const here = await startTree(files, 'ship');
+    await driveWith(here.config, here.runId, { 'check.look': { outputs: { verdict: 'no' } } });
+    const expanded = await settledCheck(here.config, here.runId);
+    expect(expanded).toEqual({ status: 'failed', end: 'rejected', outputs: { verdict: 'no' } });
+
+    const whole = await startTree(files, 'ship');
+    const lease = leaseIn(await leaseNext(whole.config, whole.runId, driverA, { can: { workflow: true } }));
+    expect(lease.step).toBe('check');
+    // What the local driver reports from the whole workflow a member ran: the nested run's end and outputs.
+    const reported = await reportAttempt(whole.config, whole.runId, {
+      attempt: lease.attempt, revision: lease.revision, driver: driverA, outcome: 'failed', exitCode: 1, end: 'rejected', outputs: { verdict: 'no' },
+    });
+    if ('error' in reported) throw new Error(reported.error.message);
+
+    expect(await settledCheck(whole.config, whole.runId)).toEqual(expanded);
+  });
+});
