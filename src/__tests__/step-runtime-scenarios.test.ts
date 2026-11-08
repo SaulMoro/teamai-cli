@@ -22,7 +22,7 @@ import { dirs, git, startIn, team, WORKSPACES } from './helpers/workflow-handoff
 import { leaseNext } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
-import { readAttemptRecord } from '../workflow/fleet/record.js';
+import { claimAttempt, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, RunIdSchema } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { shellArgv } from '../workflow/shell-command.js';
@@ -1692,10 +1692,10 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND }: { workflow?:
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
-  const open = async (cwd = alice.checkout) => {
+  const open = async (cwd = alice.checkout, options: RuntimeOptions = { stale_after: '60s' }) => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
     fleetRuntimes.push(runtime);
-    expect(await runtime.init({ options: { stale_after: '60s' }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { prompt: false, remote: true } });
+    expect(await runtime.init({ options, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { prompt: false, remote: true } });
     const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
     if (opened.kind !== 'ready') throw new Error(opened.failure.message);
     const exec = (op: OpId) => runtime.exec({ op, handle: opened.handle, argv: shellArgv(command), env: {}, unset: [], credentials: {}, cwd }, {});
@@ -1789,5 +1789,26 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     const third = await owner.open();
     expect(await third.runtime.reattach(third.handle)).toEqual({ kind: 'alive', ops: [{ op, state: 'cancelled' }] });
   });
+
+  it('waits on a reconnected attempt for as long as its offer allows, whatever fleet entry the restarted teamai reached it through', async () => {
+    const owner = await ownerOf();
+    const first = await owner.open();
+    const op = newOpId();
+    const left = first.exec(op);
+    const offered = await owner.record();
+    if (offered.state !== 'offered') throw new Error(`not offered: ${offered.state}`);
+    expect(await claimAttempt(owner.bob.config, offered, await installOwner(owner.bob.config))).toMatchObject({ ok: true });
+    await first.runtime.dispose();
+    await left;
+
+    const second = await owner.open(owner.alice.checkout, { pool: 'gpu', stale_after: '1s' });
+    await second.runtime.reattach(second.handle);
+    const reconnected = second.exec(op);
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await second.runtime.dispose();
+
+    expect(await reconnected).toMatchObject({ kind: 'failed', failure: { code: 'runtime_interrupted' } });
+    expect(await owner.record()).toMatchObject({ state: 'claimed', pool: 'default', staleAfterMs: 60_000 });
+  }, 30_000);
 });
 
