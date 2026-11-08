@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { getTeamaiHomeDir } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
 import { log } from '../../utils/logger.js';
+import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
@@ -128,6 +129,29 @@ async function readRegular(file: string): Promise<Buffer | undefined> {
 /** The account a Codex login file is for, or undefined when it does not parse as one. */
 const CodexAuthSchema = z.object({ tokens: z.object({ account_id: z.string().min(1) }) });
 
+/**
+ * Whether `file` holds a whole login: a JSON object. An empty or cut file, as a login Codex 0.166 or earlier still
+ * writes leaves it, is none, so no step copies it.
+ */
+async function holdsLogin(file: string): Promise<boolean> {
+  const body = await readRegular(file);
+
+  try {
+    return body !== undefined && z.record(z.string(), z.unknown()).safeParse(JSON.parse(body.toString('utf8'))).success;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The lock an attended teamai process holds while it checks `tool`'s dedicated login and signs in when it is missing.
+ * Every teamai process on the machine shares the dedicated home, so a sign-in in one is waited for by the others. It
+ * sits beside the login lock, so a step that holds the login never waits for it.
+ */
+function signInLockFile(tool: LoginTool): string {
+  return path.join(path.dirname(loginHome(tool)), `${tool}-sign-in.lock`);
+}
+
 function accountOf(body: Buffer): string | undefined {
   try {
     return CodexAuthSchema.parse(JSON.parse(body.toString('utf8'))).tokens.account_id;
@@ -217,7 +241,8 @@ const lastLoginCheck = new Map<LoginTool, Promise<unknown>>();
  * Makes sure `tool`'s dedicated home holds a login before the step that brings it (`step`) opens its place. Attended at
  * a terminal (`canAsk`), it says why in one line and runs the tool's own login command there for the member, once;
  * otherwise it fails `credential_missing`, naming that command and the retry to run after it. Steps of this process
- * check in turn, so one that starts while another signs in finds that login.
+ * check in turn, and teamai processes on this machine under a sign-in lock, so one that starts while another signs in
+ * finds that login.
  */
 export function ensureLogin(tool: LoginTool, input: { step: { run: string; id: string }; canAsk: boolean }): Promise<WorkflowFailure | undefined> {
   const checked = (lastLoginCheck.get(tool) ?? Promise.resolve()).then(() => signInWhenMissing(tool, input));
@@ -226,10 +251,30 @@ export function ensureLogin(tool: LoginTool, input: { step: { run: string; id: s
   return checked;
 }
 
-async function signInWhenMissing(tool: LoginTool, { step, canAsk }: Parameters<typeof ensureLogin>[1]): Promise<WorkflowFailure | undefined> {
+async function signInWhenMissing(tool: LoginTool, input: Parameters<typeof ensureLogin>[1]): Promise<WorkflowFailure | undefined> {
+  // Only an attended step signs in. An unattended one reads the file alone, and takes one still being written as none.
+  if (!input.canAsk) return signInHeld(tool, input);
+  const lock = signInLockFile(tool);
+  let isTold = false;
+
+  while (!await acquireLock(lock)) {
+    if (!isTold) log.info(`Waiting for the ${TOOL_NAMES[tool]} sign-in another teamai process runs (${lock}).`);
+    isTold = true;
+    await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+  }
+
+  try {
+    // Checked once held, so a login another process just made is found rather than made again.
+    return await signInHeld(tool, input);
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof ensureLogin>[1]): Promise<WorkflowFailure | undefined> {
   const file = path.join(loginHome(tool), LOGIN_FILES[tool]);
 
-  if (await readRegular(file)) return undefined;
+  if (await holdsLogin(file)) return undefined;
   const why = `Step "${step.id}" signs ${TOOL_NAMES[tool]} in on the login teamai keeps apart from your daily one, and ${loginHome(tool)} has no ${TOOL_NAMES[tool]} login yet.`;
   const retry = `teamai workflow retry ${step.run} ${step.id}`;
 
@@ -250,7 +295,7 @@ async function signInWhenMissing(tool: LoginTool, { step, canAsk }: Parameters<t
     return { code: 'credential_missing', message: `${loginCommand(tool)} could not start (${ended.error}), so the step did not run. Make ${tool} runnable here, run it once, then run: ${retry}` };
   }
 
-  if (ended.code === 0 && await readRegular(file)) return undefined;
+  if (ended.code === 0 && await holdsLogin(file)) return undefined;
 
   return { code: 'credential_missing', message: `${loginCommand(tool)} ended with status ${ended.code} and left no login in ${file}, so the step did not run. Run it again, then run: ${retry}` };
 }
