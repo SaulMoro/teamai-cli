@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { stopProcess } from '../../tool-launch/process-stop.js';
 import type { DriverCan } from '../requirements.js';
-import type { OpId, OpState } from '@teamai/runtime-protocol';
+import { boundedStdout, type OpId, type OpState } from '@teamai/runtime-protocol';
 import type { ExecEnd, Lost, StepRuntime } from './step-runtime.js';
 
 /** How an exec of this runtime ended: never lost, since it runs in teamai's own process. */
@@ -80,7 +80,8 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
           : error ? { kind: 'failed', failure: { code: 'exec_failed', message: `${command} could not be started: ${error.message}` } }
             : { kind: 'exited', code, stdout };
 
-        ended.set(request.op, { handle: request.handle, end });
+        // Kept within protocol 1's bound for as long as this process lives; the exec's caller gets the whole stdout.
+        ended.set(request.op, { handle: request.handle, end: end.kind === 'exited' ? { ...end, stdout: boundedStdout(end.stdout) } : end });
 
         return end;
       }),

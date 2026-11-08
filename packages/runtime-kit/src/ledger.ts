@@ -1,4 +1,4 @@
-import type { OpId, OpState, RuntimeMessage } from '@teamai/runtime-protocol';
+import { boundedStdout, type OpId, type OpState, type RuntimeMessage } from '@teamai/runtime-protocol';
 
 /** How an operation ended: any state it retains but `running`. */
 export type OpEnd = Exclude<OpState, { state: 'running' }>;
@@ -29,7 +29,7 @@ export interface OpLedger {
 /** The events that end an operation: an open's `ready` or `failed`, an exec's or prompt's outcome. */
 const ENDS: ReadonlySet<string> = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
 
-/** The line that says how `ended`'s operation ended. */
+/** The line that says how `ended`'s operation ended: an exec's stdout within protocol 1's bound. */
 function endLine(ended: OpEnd): RuntimeMessage {
   const { op } = ended;
 
@@ -44,7 +44,7 @@ function endLine(ended: OpEnd): RuntimeMessage {
     case 'failed':
       return { op, event: 'failed', failure: ended.failure };
     case 'exited':
-      return { op, event: 'exited', code: ended.code, stdout: ended.stdout };
+      return { op, event: 'exited', code: ended.code, stdout: boundedStdout(ended.stdout) };
     default: {
       const unhandled: never = ended;
 

@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
 import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
-import { RUNTIME_PROTOCOL, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
 
@@ -22,6 +22,19 @@ const NOTICE_SHOWN = 2000;
 
 // The events that end an operation: only the first counts.
 const OP_ENDS = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
+
+/**
+ * The stdout an exec printed: `streamed`, what teamai read of it in `output` events, when the stdout its `exited`
+ * carries is cut to protocol 1's bound and is the end of that; else that stdout, as it is. A runtime that predates the
+ * marker cuts to the bound with none, so a stdout that long counts as cut too, less a half character it dropped.
+ */
+function wholeStdout(streamed: string, exited: string): string {
+  const isMarked = exited.startsWith(STDOUT_CUT);
+  const end = isMarked ? exited.slice(STDOUT_CUT.length) : exited;
+  const isCut = isMarked || end.length >= EXITED_STDOUT_CHARS - 1;
+
+  return isCut && streamed.length > end.length && streamed.endsWith(end) ? streamed : exited;
+}
 
 /**
  * How long an attended `init` may take: a person may have a sign-in page to approve, which the runtime names in a
@@ -442,6 +455,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       if (inFlight) return inFlight.join(events);
       const callers = [events];
       let accepted: ReturnType<typeof displayOf> | undefined;
+      // Every stdout chunk the runtime streamed, which is the whole stdout an `exited` carries only the end of.
+      let streamed = '';
 
       const ended = new Promise<ExecEnd>((resolveEnd) => {
         const resolve = (end: ExecEnd): void => {
@@ -468,6 +483,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
             }
 
             case 'output':
+              if (event.stream === 'stdout') streamed += event.data;
+
               for (const caller of callers) caller.onOutput?.(event.stream, event.data);
 
               return;
@@ -477,7 +494,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
               return;
             case 'exited':
               ops.delete(request.op);
-              resolve({ kind: 'exited', code: event.code, stdout: event.stdout });
+              resolve({ kind: 'exited', code: event.code, stdout: wholeStdout(streamed, event.stdout) });
 
               return;
             case 'cancelled':

@@ -20,7 +20,7 @@ import { z } from 'zod';
 //    > {"type":"exec","op":"op-8b10…","handle":"…","argv":[...],"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-8b10…","event":"accepted"}
 //    < {"op":"op-8b10…","event":"output","stream":"stdout","data":"…"}
-//    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…complete stdout…"}
+//    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…stdout, its last 64 KiB past that…"}
 //    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"provided":[...],"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-91c4…","event":"accepted"}                                     accepted before the slow launch
 //    < {"op":"op-91c4…","event":"display","display":{"label":"…","url":"…"}}        once the agent exists; neither accepts nor ends it
@@ -51,12 +51,34 @@ import { z } from 'zod';
 //    > {"type":"init","protocol":1,"mode":"recover","options":{...}}
 //    < {"type":"init","ok":true,"can":{}}
 //
+//  An `exited` (and a reattach's `exited` state) carries the command's whole stdout up to `EXITED_STDOUT_CHARS`, and past
+//  that only its end, after `STDOUT_CUT` (`boundedStdout`), so neither a runtime nor teamai holds a line without bound.
+//  teamai gives the step the whole stdout it read in the exec's `output` events when the runtime's ends it, so a
+//  command that prints more than the bound still gets its outputs; an `exited` teamai saw no output of, as one a
+//  runtime reports after teamai restarted, gives only the end.
+//
 //  `max_parallel` and `credentials` in a driver definition's options are teamai's: it strips them before `init`, so a
 //  runtime never sees or validates them. The credential values travel only in requests, in memory: on `open` for the
 //  attempt, and on each `exec` and `prompt` that gets them, so a runtime that restarted holds none and needs none.
 //
 
 export const RUNTIME_PROTOCOL = 1;
+
+/** The most of a command's stdout an `exited` carries, in UTF-16 code units: 64 KiB of text, far above any answer. */
+export const EXITED_STDOUT_CHARS = 64 * 1024;
+
+/** What starts the stdout of an `exited` that carries only the end of it. */
+export const STDOUT_CUT = '[teamai: only the last 64 KiB of stdout follow]\n';
+
+/** `stdout` as an `exited` carries it: whole up to the bound, else its end after `STDOUT_CUT`, never half a character. */
+export function boundedStdout(stdout: string): string {
+  if (stdout.length <= EXITED_STDOUT_CHARS) return stdout;
+  const end = stdout.slice(stdout.length - EXITED_STDOUT_CHARS);
+  const first = end.charCodeAt(0);
+
+  // A low surrogate first is the second half of a character whose first half was cut.
+  return `${STDOUT_CUT}${first >= 0xdc00 && first <= 0xdfff ? end.slice(1) : end}`;
+}
 
 /**
  * The variable every process of a step gets, on the host and on a runtime's place: the run's scratch directory, which

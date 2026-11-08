@@ -285,8 +285,11 @@ function open(request) {
   send({ op: request.op, event: 'ready', ...shown() });
 }
 
+// Protocol 1 bounds the stdout an `exited` carries: past 64 KiB, its end after a marker.
+const bounded = (stdout) => (stdout.length <= 64 * 1024 ? stdout : `[teamai: only the last 64 KiB of stdout follow]\n${stdout.slice(stdout.length - 64 * 1024)}`);
+
 function settle(op, outcome) {
-  if (outcome.state === 'exited') send({ op, event: 'exited', code: outcome.code, stdout: outcome.stdout });
+  if (outcome.state === 'exited') send({ op, event: 'exited', code: outcome.code, stdout: bounded(outcome.stdout) });
   else if (outcome.state === 'failed') send({ op, event: 'failed', failure: outcome.failure });
   else send({ op, event: 'cancelled' });
 }
@@ -378,7 +381,7 @@ function exec(request) {
     keepEnd(request.op, { kind: 'exec', handle: request.handle, outcome });
 
     if (!cancelled && dieAt('exec-exited')) return;
-    send(cancelled ? { op: request.op, event: 'cancelled' } : { op: request.op, event: 'exited', code: outcome.code, stdout });
+    send(cancelled ? { op: request.op, event: 'cancelled' } : { op: request.op, event: 'exited', code: outcome.code, stdout: bounded(stdout) });
     exitWhenIdle();
   });
 }
@@ -615,7 +618,7 @@ function reattach(request) {
       return { op, state, ...rest };
     }
 
-    if (record.outcome?.state === 'exited') return { op, state: 'exited', code: record.outcome.code, stdout: record.outcome.stdout };
+    if (record.outcome?.state === 'exited') return { op, state: 'exited', code: record.outcome.code, stdout: bounded(record.outcome.stdout) };
 
     if (record.outcome?.state === 'cancelled') return { op, state: 'cancelled' };
 

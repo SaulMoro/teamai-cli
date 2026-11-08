@@ -66,7 +66,10 @@ export function isUnansweredFailure(failure: RuntimeFailure): boolean {
  */
 export type Lost = { kind: 'lost'; failure: RuntimeFailure };
 
-/** How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. */
+/**
+ * How an exec ended. `exited` carries the whole stdout a live run read; one a reattach reports after a restart carries
+ * it up to protocol 1's bound, and past that its end.
+ */
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure } | Lost;
 
 /**

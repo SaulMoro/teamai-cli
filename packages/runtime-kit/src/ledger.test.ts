@@ -50,3 +50,13 @@ describe('an operation that ends', () => {
     expect(ledger.unkept(OP)).toBeUndefined();
   });
 });
+
+describe('an exec that ends', () => {
+  it('carries the last 64 KiB of its stdout after a marker when it printed more', () => {
+    const { written, ledger } = ledgerWritten();
+
+    ledger.end({ op: OP, state: 'exited', code: 0, stdout: `early${'x'.repeat(65_536)}` });
+
+    expect(written).toEqual([{ op: OP, event: 'exited', code: 0, stdout: `[teamai: only the last 64 KiB of stdout follow]\n${'x'.repeat(65_536)}` }]);
+  });
+});

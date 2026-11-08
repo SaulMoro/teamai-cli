@@ -207,6 +207,17 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     expect(output.join('')).toBe('from-teamai\n');
   });
 
+  // Protocol 1 bounds the stdout an `exited` carries; the step still gets all of it, from the stream.
+  it('ends an exec that prints more than 64 KiB with its whole stdout', async () => {
+    const runtime = await start();
+    const opened = await runtime.open(openRequest(), async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+
+    const end = await runtime.exec(execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write("start" + "x".repeat(100000) + "end")']), {});
+
+    expect(end).toEqual({ kind: 'exited', code: 0, stdout: `start${'x'.repeat(100_000)}end` });
+  });
+
   it('sets the credentials an exec brings over its process\'s environment', async () => {
     const runtime = await start();
     const opened = await runtime.open(openRequest(), async () => {});
