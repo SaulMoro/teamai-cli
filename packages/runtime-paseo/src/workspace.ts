@@ -222,19 +222,28 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
    * still runs there; an attempt that shares it stops only its own agents, as does one on a workspace the member had
    * open, which teamai never archives.
    */
-  async function stopPlace(live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | undefined> {
+  /**
+   * Stops a place's agents: by archiving its workspace when nobody else works there, else one by one. Says what it left on
+   * purpose, the agents it stopped in a workspace the member works in, or why it could not stop them.
+   */
+  async function stopPlace(live: Daemon, handle: string, place: Place, deadline: number): Promise<RuntimeFailure | { kept: string[] } | undefined> {
     // A confined prompt's place before its prompt came: no workspace, so no agent.
     if (!place.workspace) return undefined;
     const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
-    /** Stops this handle's agents and leaves the workspace open, for another handle or the member who works there too. */
-    const stopOwn = async (): Promise<RuntimeFailure | undefined> => {
+    /**
+     * Stops this handle's agents and leaves the workspace open: to another handle, whose close archives it, or to the
+     * member who works there, where the stopped agents stay.
+     */
+    const stopOwn = async ({ isMembers }: { isMembers: boolean }): Promise<RuntimeFailure | { kept: string[] }> => {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record, deadline)))).flatMap((failure) => (failure ? [failure.message] : []));
 
-      return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : undefined;
+      return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : { kept: isMembers ? keptOf(handle) : [] };
     };
 
-    if ((place.kind === 'worktree' && place.member) || !journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) return stopOwn();
+    if (place.kind === 'worktree' && place.member) return stopOwn({ isMembers: true });
+
+    if (!journal.handlesIn({ id: place.workspace.id, ...(place.kind === 'worktree' && { directory: place.cwd }) }).every((other) => other === handle)) return stopOwn({ isMembers: false });
 
     const { id: workspaceId, name } = place.workspace;
 
@@ -256,7 +265,7 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
       return { code: 'close_failed', message: `Paseo's list of the agents in workspace ${name} (${workspaceId}) ${why}, so teamai cannot tell whether the member works there, and archived nothing. Close the step again; if it still fails, archive the workspace in the Paseo app.` };
     }
 
-    if (listed.ids.length > 0) return stopOwn();
+    if (listed.ids.length > 0) return stopOwn({ isMembers: true });
 
     const archiving = (async (): Promise<{ refused?: string }> => {
       try {
@@ -317,7 +326,7 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
     };
   };
 
-  /** What a released place whose close failed leaves on purpose: each of its agents, which may still run in Paseo. */
+  /** Each agent of a place, as a close names what it leaves: one a failed close of a released place leaves may still run. */
   const keptOf = (handle: string): string[] => journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [`Paseo agent ${record.create.agentId}`] : []));
 
   /** Forgets a place the person released though its close failed: its prompts' follows stop, and its record goes. */
@@ -394,15 +403,17 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
     // A place with no Paseo workspace has no agent to stop: it closes without the daemon.
     const live = place?.workspace && (await state.reachBy(deadline));
 
-    const failure = place?.workspace && (live && !('code' in live)
+    const stopped = place?.workspace && (live && !('code' in live)
       ? (await unseen(live, handle, place, deadline)) ?? (await stopPlace(live, handle, place, deadline))
       : withoutDaemon(live, `stop the agents of ${handle} or archive its workspace`, 'close the attempt again'));
 
-    if (failure) {
-      closeFailed(failure);
+    if (stopped && 'code' in stopped) {
+      closeFailed(stopped);
 
       return;
     }
+
+    const kept = stopped ? stopped.kept : [];
 
     // Its agents stopped: a prompt that has not ended ends cancelled, once, before its record goes. One this process
     // already ended with an end its record could not keep ended so.
@@ -418,7 +429,7 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
     journal.forget(handle);
 
     for (const { op } of ops) ledger.forget(op);
-    write({ event: 'closed', handle });
+    write({ event: 'closed', handle, ...(kept.length > 0 && { kept }) });
   }
 
   return { open, adopt, displayOf, keptOf, forgetReleased, closePlace };
