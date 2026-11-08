@@ -19,6 +19,8 @@ import noLowValueComments from './rules/no-low-value-comments.js';
 import suppressionReason from './rules/suppression-reason.js';
 import yamlParse from './rules/yaml-parse.js';
 import packageBoundaries from './rules/package-boundaries.js';
+import runtimeServe from './rules/runtime-serve.js';
+import testSeams from './rules/test-seams.js';
 import toolRegistry from './rules/tool-registry.js';
 import mockSource from './rules/mock-source.js';
 import untrustedFinishGit from './rules/untrusted-finish-git.js';
@@ -51,6 +53,8 @@ export default definePlugin({
     'suppression-reason': suppressionReason,
     'yaml-parse': yamlParse,
     'package-boundaries': packageBoundaries,
+    'runtime-serve': runtimeServe,
+    'test-seams': testSeams,
     'tool-registry': toolRegistry,
     'mock-source': mockSource,
     'untrusted-finish-git': untrustedFinishGit,

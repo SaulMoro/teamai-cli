@@ -106,6 +106,10 @@
     "teamai/tool-facts": "error",
     // packages/* never imports src/, src/ never imports a runtime package, and a package is reached only by its name.
     "teamai/package-boundaries": "error",
+    // A runtime serves protocol 1 only through @teamai/runtime-kit: no request loop or op end of its own.
+    "teamai/runtime-serve": "error",
+    // A package's test reaches its own package only through the module it is named after, src/testing/ and the package's exports.
+    "teamai/test-seams": "error",
     // TOOLS, LAUNCH_ADAPTERS and ADAPTER_REGISTRY are read only through src/tool-registry.ts.
     "teamai/tool-registry": "error",
     // A test mocks a module where it is defined: a mock of a re-export misses package code that imports the module itself.
