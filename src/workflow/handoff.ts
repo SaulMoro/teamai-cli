@@ -13,7 +13,7 @@ import { gitRoot } from '../utils/branch-worktree.js';
 import { canonicalJson } from '../utils/canonical-json.js';
 import { sanitizeGitUrl } from '../utils/redact.js';
 import { fetchReportsOriginFile, readReportsOriginFile, updateReports, type ReportsChange, type ReportsWriteContext } from '../utils/reports-branch.js';
-import { loadWorkflowBundle, loadWorkflowBundleAt, loadWorkflowTree, type WorkflowBundle } from './cache.js';
+import { loadWorkflowBundle, loadWorkflowBundleAt, loadWorkflowTree, teamCommitReach, type WorkflowBundle } from './cache.js';
 import { stepLoops } from './loop.js';
 import { pendingRecords, publishPendingRecords, type RecordDelivery } from './records.js';
 import {
@@ -1331,6 +1331,19 @@ export async function definitionsOf(config: LocalConfig, snapshot: RunSnapshot):
   const same = (bundle: WorkflowBundle): boolean => bundle.sourceHash === snapshot.sourceHash
     && definitionHash(bundle.definition, bundle.workflows) === snapshot.definitionHash;
 
+  // Anyone who can write teamai-reports writes the snapshot, so a team commit it names counts only when this member would
+  // run that commit itself: one only a side branch or teamai-reports holds could carry any command, a scorer's check.run
+  // among them.
+  const pin = snapshot.teamPin?.revision;
+
+  if (pin !== undefined && await teamCommitReach(config, pin) === 'elsewhere') {
+    return refused({
+      code: 'definition_mismatch',
+      teamRevision: pin,
+      message: `Run ${snapshot.run} pins its team scorers to team commit ${pin}, which neither this machine's team checkout nor the team's default branch on origin holds. A run continues only with scorers the team's default branch has: once that commit is on it, run teamai pull, then claim again.`,
+    });
+  }
+
   // No team commit holds a default: only the default this teamai ships can be the one that ran, whatever the name resolves to here.
   if (snapshot.origin?.source === 'default') {
     const shipped = DefaultWorkflows.named(snapshot.name);
@@ -1357,6 +1370,24 @@ export async function definitionsOf(config: LocalConfig, snapshot: RunSnapshot):
     return refused({
       code: 'definition_mismatch',
       message: `Run ${snapshot.run} runs workflow "${snapshot.name}" without a team commit that holds its sources, and this machine's copy differs. Once the machine that ran it has pushed its workflows, run teamai pull and try again.`,
+    });
+  }
+
+  const reach = await teamCommitReach(config, revision);
+
+  if (reach === 'missing') {
+    return refused({
+      code: 'definition_mismatch',
+      teamRevision: revision,
+      message: `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which this machine cannot read: the team repo does not have it, even after fetching origin. Fetch that commit into the team repo, then try again.`,
+    });
+  }
+
+  if (reach === 'elsewhere') {
+    return refused({
+      code: 'definition_mismatch',
+      teamRevision: revision,
+      message: `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which neither this machine's team checkout nor the team's default branch on origin holds, and this machine's copy differs. A run continues only with workflows the team's default branch has: once that commit is on it, run teamai pull, then claim again.`,
     });
   }
 

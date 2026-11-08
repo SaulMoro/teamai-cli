@@ -24,7 +24,8 @@ import { locate, valueNode, type WorkflowFiles } from './parse-context.js';
 import { stepWorkflow, type CachedWorkflow, type OutputSchema, type ResolvedWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowStep } from './types.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
-import { createGit } from '../utils/git.js';
+import { createGit, getDefaultBranch } from '../utils/git.js';
+import { git as gitAt } from './worktree.js';
 import {
   remotelyReachableRevision, revisionHoldsSources, withoutStaleTeamRevision, type ReachableRevision,
 } from '../utils/team-revision.js';
@@ -853,6 +854,22 @@ export async function loadWorkflowBundleAt(config: LocalConfig, name: string, re
 
     return loadWorkflowBundle(at, name);
   });
+}
+
+/**
+ * Where team commit `revision` is, for a member about to read workflows at it: `member` when the member would run it
+ * itself, as its team checkout or the team's default branch on origin holds it; `elsewhere` when only another ref has it,
+ * such as a side branch or teamai-reports, whose commits come from whoever can push there; `missing` when the team repo
+ * lacks it even after fetching origin, which `withTeamRevision` then reports with the fetch's own error.
+ */
+export async function teamCommitReach(config: LocalConfig, revision: string): Promise<'member' | 'elsewhere' | 'missing'> {
+  const repoRoot = isSelfMode(config) ? getBusinessRoot(config) : config.repo.localPath;
+  const present = async (): Promise<boolean> => (await gitAt(repoRoot, ['cat-file', '-e', `${revision}^{commit}`])).code === 0;
+
+  if (!await present() && ((await gitAt(repoRoot, ['fetch', '--quiet', 'origin'])).code !== 0 || !await present())) return 'missing';
+  const reaches = async (tip: string): Promise<boolean> => (await gitAt(repoRoot, ['merge-base', '--is-ancestor', revision, tip])).code === 0;
+
+  return await reaches('HEAD') || await reaches(`refs/remotes/origin/${await getDefaultBranch(repoRoot)}`) ? 'member' : 'elsewhere';
 }
 
 /**
