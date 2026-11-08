@@ -1546,6 +1546,9 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     };
   };
 
+  /** What a released place whose close failed leaves on purpose: each of its agents, which may still run in Paseo. */
+  const keptOf = (handle: string): string[] => journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [`Paseo agent ${record.create.agentId}`] : []));
+
   /** Forgets a place the person released though its close failed: its prompts' follows stop, and its record goes. */
   function forgetReleased(handle: string): void {
     for (const { op } of journal.promptsOf(handle)) {
@@ -1582,8 +1585,10 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     const prompts = journal.promptsOf(handle);
 
     const closeFailed = (failure: RuntimeFailure): void => {
-      if (release) forgetReleased(handle);
-      write({ event: 'close_failed', handle, failure });
+      if (!release) return write({ event: 'close_failed', handle, failure });
+      const kept = keptOf(handle);
+      forgetReleased(handle);
+      write({ event: 'close_failed', handle, failure, ...(kept.length > 0 && { kept }) });
     };
 
     // A prompt that has not sent its create yet ends cancelled, and never sends it: the place it would run in closes.
@@ -1778,15 +1783,19 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
       } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
       else if (request.type === 'close') {
         // A released place is forgotten though its close failed; a journal that cannot remove it is named.
-        let kept = '';
+        let unforgotten = '';
+        let kept: string[] = [];
 
         try {
-          if (request.release) forgetReleased(request.handle);
+          if (request.release) {
+            kept = keptOf(request.handle);
+            forgetReleased(request.handle);
+          }
         } catch (forgetting) {
-          kept = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} readable and writable, then release it again.`;
+          unforgotten = ` teamai-runtime-paseo could not forget the released attempt either (${forgetting instanceof Error ? forgetting.message : String(forgetting)}); make ${journal.root} readable and writable, then release it again.`;
         }
 
-        write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${kept}` } });
+        write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message: `${message}${unforgotten}` }, ...(kept.length > 0 && { kept }) });
       }
       else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });
       else write({ event: 'failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
