@@ -29,6 +29,9 @@ import type { ExecEnd, ExecEvents, StepRuntime } from '../runtimes/step-runtime.
 /** How often the owner reads the attempt's record while a member runs it. */
 const RECORD_POLL_MS = 1_000;
 
+/** The longest an owner waits between two reads of a record that did not change: each such read doubles the wait. */
+const RECORD_POLL_MAX_MS = 30_000;
+
 const FleetOptionsSchema = z.object({
   pool: z.string().min(1).default(DEFAULT_FLEET_POOL),
   stale_after: z.string().default('30m').transform((text, ctx) => {
@@ -339,12 +342,15 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
   let lastSeen: { write: string; at: number } | undefined;
   let isCancelWritten = false;
   const woken = AbortSignal.any([cancel, leave]);
+  // A record that does not change is read less often, down to a third of stale_after, so a staleness is seen in time.
+  const slowestPollMs = Math.min(RECORD_POLL_MAX_MS, Math.max(RECORD_POLL_MS, Math.floor(staleAfterMs / 3)));
+  let pollMs = RECORD_POLL_MS;
 
   for (;;) {
     if (leave.aborted) return { kind: 'left' };
     const read = await readAttemptRecord(config, run, attempt);
 
-    if (!read.ok && read.error.code === 'fleet_record_unreadable') return failed(fleetFailure(read.error));
+    if (!read.ok && (read.error.code === 'fleet_record_unreadable' || read.error.code === 'fleet_record_newer')) return failed(fleetFailure(read.error));
     const record = read.ok && read.value !== 'absent' ? read.value : undefined;
 
     if (record?.state === 'finished') {
@@ -368,7 +374,10 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       return { kind: 'cancelled', message: `Step "${step}" was cancelled, and the fleet member ${record.member.user} that ran it stopped it.${record.pushed === record.start ? '' : ` Its work up to ${record.pushed} is kept.`}` };
     }
 
-    if (record !== undefined && record.write !== lastSeen?.write) lastSeen = { write: record.write, at: Date.now() };
+    if (record !== undefined && record.write !== lastSeen?.write) {
+      lastSeen = { write: record.write, at: Date.now() };
+      pollMs = RECORD_POLL_MS;
+    }
 
     if ((record?.state === 'claimed' || record?.state === 'cancelling') && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
       const expired = await expireClaim(config, record);
@@ -393,7 +402,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       }
     }
 
-    await sleep(RECORD_POLL_MS, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
+    await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
+    pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
 }
 

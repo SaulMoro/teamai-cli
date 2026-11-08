@@ -39,7 +39,6 @@ import type { DriverIdentity, RunState, RunStatus, WorkflowFailure } from './typ
 import { definedFields } from '../utils/defined-fields.js';
 import { parseYaml } from '../utils/yaml.js';
 
-
 function hasTeamaiCode(failure: WorkflowFailure | undefined): failure is WorkflowFailure & { code: FailureCode } {
   return failure !== undefined && isFailureCode(failure.code);
 }
