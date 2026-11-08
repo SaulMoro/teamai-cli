@@ -315,10 +315,16 @@ async function drive(profile: Profile, scenario: DeliveryConformanceScenario): P
         release();
         break;
       case 'publish': {
+        // The local driver delivers in its own process, holding the run's driver lock, and publish refuses a run a
+        // driver of this machine runs: the person stops it first.
+        if (profile === 'local') {
+          process.kill(pid, 'SIGKILL');
+          await driving.catch(() => undefined);
+        }
         const published = await teamai('alice', ['workflow', 'publish', run]);
         expect(envelope(published), said(published)).toMatchObject({ data: { publication: 'published' } });
         stopped = true;
-        process.kill(pid, 'SIGKILL');
+        if (profile !== 'local') process.kill(pid, 'SIGKILL');
         release();
         await driving.catch(() => undefined);
         member = 'bob';
