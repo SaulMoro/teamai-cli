@@ -111,6 +111,20 @@ describe('taking over a run its owner drives', () => {
     expect(await resumeRefusal(bob.config, RunIdSchema.parse(runId), session, { published: true, claim: true })).toMatchObject({ code: 'owner_active' });
   });
 
+  it('counts a write dated further ahead than the stale window as undated, so no write id holds a run longer than two windows', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { acme, bob, runId } = await aliceDrives();
+    const wrote = Date.now();
+
+    // A write a few minutes ahead of this clock is the owner's clock running fast: the owner still drives.
+    vi.setSystemTime(wrote - 5 * MINUTE);
+    expect(await resumeRun(bob.config, runId, { claim: true, checkout: bob.checkout, takeover: 'unattended' })).toMatchObject({ ok: false, error: { code: 'owner_active' } });
+
+    vi.setSystemTime(wrote - 61 * MINUTE);
+    expect(await resumeRun(bob.config, runId, { claim: true, checkout: bob.checkout, takeover: 'unattended' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    expect(published(acme, runId).owner.user).toBe('bob');
+  });
+
   it('refuses a driver\'s "claim": true, which cannot carry the person\'s yes', async () => {
     const { bob, runId } = await aliceDrives();
 

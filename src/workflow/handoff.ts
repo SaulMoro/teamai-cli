@@ -695,11 +695,16 @@ function writeId(): string {
 
 const TIMED_WRITE = /^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-/** When write `write` was made, in milliseconds, when its id carries the time. */
+/**
+ * When write `write` was made, in milliseconds, when its id carries the time. A time further ahead than the stale
+ * window comes from a clock more than that window fast, or from an id anyone who can write teamai-reports made up to
+ * hold a run past the window; either way it says nothing, so it counts as undated, as an older teamai's id does.
+ */
 function writtenAt(write: string): number | undefined {
   const timed = TIMED_WRITE.exec(write);
+  const at = timed ? Number.parseInt(`${timed[1]}${timed[2]}`, 16) : undefined;
 
-  return timed ? Number.parseInt(`${timed[1]}${timed[2]}`, 16) : undefined;
+  return at !== undefined && at - Date.now() <= STALE_WINDOW_MS ? at : undefined;
 }
 
 /** How long after its owner's last write to teamai-reports a running run counts as no longer driven. */
