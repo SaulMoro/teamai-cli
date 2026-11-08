@@ -209,7 +209,7 @@ describe('#1083 workflow run records', () => {
     'merge_conflict', 'base_config', 'push_failed', 'workspace_base', 'unreported_changes', 'bad_session',
     'missing_env', 'env_unavailable', 'env_conflict', 'timeout', 'budget_exceeded', 'budget_unmeasured',
     'setup_failed', 'setup_dirty', 'setup_secret', 'delivery_failed', 'protected_path',
-    'trial_prepare_failed', 'clone_prepare_failed',
+    'trial_prepare_failed', 'clone_prepare_failed', 'bad_delivery', 'no_base_branch',
   ])('publishes the classified step failure %s', (code) => {
     const failed = runState({
       status: 'failed',

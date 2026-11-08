@@ -15,6 +15,8 @@ export const FAILURE_CODES = [
   'merge_conflict', 'base_config', 'push_failed', 'workspace_base', 'bad_session',
   ...LIMIT_FAILURES,
   'delivery_failed', 'protected_path',
+  // A step's workflow output whose definition cannot deliver what it declares, as admission refuses it.
+  'bad_delivery',
   'trial_prepare_failed', 'clone_prepare_failed', 'role_unavailable',
   'confined_invalid', 'confined_tool_unavailable', 'confined_failed', 'confined_reply_invalid', 'confined_report_mismatch',
   'runtime_failed', 'runtime_interrupted', 'runtime_lost', 'requirement_unmet', 'login_missing', 'login_held', 'login_not_written_back',
