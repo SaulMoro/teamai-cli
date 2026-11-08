@@ -555,22 +555,31 @@ describe('the fleet', () => {
     expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
   }, 180_000);
 
-  it('stops the command a killed local driver left running when the run is cancelled', async () => {
+  // One step at a time, the default, runs the command attached to the driver's terminal; in parallel, in a group of its own.
+  it.each([{ parallel: 'workflows.max_parallel: 4', isDefault: false }, { parallel: 'the default max_parallel', isDefault: true }])('stops the command a killed local driver left running when the run is cancelled, with $parallel', async ({ isDefault }) => {
+    const config = path.join(dataHomeOf('alice'), 'config.yaml');
+    const kept = fs.readFileSync(config, 'utf8');
+    if (isDefault) fs.writeFileSync(config, kept.replace('workflows:\n  max_parallel: 4\n', ''));
     const pidFile = path.join(homeOf('alice'), 'hold.pid');
     fs.rmSync(pidFile, { force: true });
     const before = new Set(runsOf('alice'));
     let alicePid = 0;
-    const started = teamai('alice', ['workflow', 'start', 'hold', '--driver', 'local'], (pid) => { alicePid = pid; });
-    await waitOn(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 60_000, () => alicePid, started);
-    const command = Number(fs.readFileSync(pidFile, 'utf8'));
-    const run = runsOf('alice').find((name) => !before.has(name)) ?? '';
-    process.kill(alicePid, 'SIGKILL');
-    await started;
-    expect(isAlive(command)).toBe(true);
 
-    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+    try {
+      const started = teamai('alice', ['workflow', 'start', 'hold', '--driver', 'local'], (pid) => { alicePid = pid; });
+      await waitOn(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 60_000, () => alicePid, started);
+      const command = Number(fs.readFileSync(pidFile, 'utf8'));
+      const run = runsOf('alice').find((name) => !before.has(name)) ?? '';
+      process.kill(alicePid, 'SIGKILL');
+      await started;
+      expect(isAlive(command)).toBe(true);
 
-    expect(cancel.code, said(cancel)).toBe(0);
-    expect(await until(() => !isAlive(command), 10_000), `the step's command ${command} still runs after workflow cancel`).toBe(true);
+      const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+
+      expect(cancel.code, said(cancel)).toBe(0);
+      expect(await until(() => !isAlive(command), 10_000), `the step's command ${command} still runs after workflow cancel`).toBe(true);
+    } finally {
+      fs.writeFileSync(config, kept);
+    }
   }, 180_000);
 });
