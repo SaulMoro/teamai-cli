@@ -1,3 +1,5 @@
+import type { HostRoute } from './provider.js';
+
 // ─── A credential that points at this machine itself ───
 //
 //  A URL credential on this machine itself, such as a model gateway on localhost, would mean the sandbox's own loopback
@@ -72,4 +74,9 @@ export function rewrittenMasks(given: Record<string, string>, sent: Record<strin
 /** What masks the credentials a process got: each value teamai gave, and each as the sandbox got it. */
 export function maskedAsGiven(given: Record<string, string>, sent: Record<string, string>) {
   return { ...given, ...rewrittenMasks(given, sent) };
+}
+
+/** `credentials` as a sandbox gets them: a URL on this machine itself at the name `host` gives it there. */
+export function inSandbox(credentials: Record<string, string>, host: HostRoute): Record<string, string> {
+  return host.ok ? toAlias(credentials, host.alias) : credentials;
 }
