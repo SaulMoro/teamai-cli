@@ -49,7 +49,7 @@ beforeAll(async () => {
 beforeEach(() => {
   dir = tempDir();
   engine = fakeEngine(dir);
-  engine.image(IMAGE, { claude: TOOL, codex: TOOL, 'acme-claude': TOOL });
+  engine.image(IMAGE, { claude: TOOL, codex: TOOL, opencode: TOOL, 'acme-claude': TOOL });
   fs.mkdirSync(path.join(dir, 'home'));
   hostBin = path.join(dir, 'host-bin');
   wrappers = path.join(dir, 'wrappers');
@@ -290,6 +290,20 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(execsIn()).toHaveLength(1);
     expect(execsIn()[0]).toEqual(expect.arrayContaining(['exec', '-i', '-w', path.join(at.worktree, 'src'), 'claude', '-p']));
     expect(containerOf(execsIn()[0] ?? [])).toBe(attemptContainer());
+  });
+
+  it("runs OpenCode in the attempt's sandbox with no sign-in teamai gives, as its free models need none", async () => {
+    const connection = start();
+
+    expect(await init(connection)).toMatchObject({ ok: true, can: { tools: expect.arrayContaining(['opencode']) } });
+    const at = place();
+    const handle = await openFor(connection, at, { tool: 'opencode', variable: 'XDG_DATA_HOME', credentials: {} });
+    await register(handle, null);
+    const ran = await wrapper('opencode', ['run', 'Review it.'], { cwd: at.worktree, stdin: 'exit 0' });
+
+    expect(ran).toMatchObject({ code: 0, stderr: '' });
+    expect(reportOf(ran)).toMatchObject({ tool: 'opencode', args: ['run', 'Review it.'], set: [] });
+    expect(execsIn()[0]).toEqual(expect.arrayContaining(['-e', 'XDG_DATA_HOME', 'opencode', 'run']));
   });
 
   it('runs in a worktree teamai names through a symlink, at the path the sandbox mounts', async () => {

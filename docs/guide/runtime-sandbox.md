@@ -480,13 +480,16 @@ runtimes:
 An app's runtime, such as T3 Code's or Paseo's, launches a tool through a binary you can set: a T3 provider instance's Binary path, or a Paseo custom provider's `command`. Set it to teamai's wrapper, and the thread stays in your app while the tool runs in the attempt's sandbox. teamai-cli installs one wrapper per tool:
 
 ```sh
-command -v teamai-sandbox-claude teamai-sandbox-codex teamai-sandbox-codebuddy
+command -v teamai-sandbox-claude teamai-sandbox-codex teamai-sandbox-codebuddy teamai-sandbox-opencode
 # /usr/local/bin/teamai-sandbox-claude
 # /usr/local/bin/teamai-sandbox-codex
 # /usr/local/bin/teamai-sandbox-codebuddy
+# /usr/local/bin/teamai-sandbox-opencode
 teamai-sandbox-claude --version          # the host tool's own version, so the app sees a working binary
 # 2.1.318 (Claude Code)
 ```
+
+OpenCode runs on its free models there: teamai gives it no sign-in.
 
 A team instance runs through a link named after it, and the wrapper runs that instance's `command` with its home variable:
 

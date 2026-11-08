@@ -17,9 +17,12 @@ import { boundedTail } from '../bounded-tail.js';
  */
 export const WORKSPACES: Can['workspace'] = ['read-only', 'new', 'continue', 'clone', 'team'];
 
-/** The tools a step runtime can launch, as `can.tools` lists those a sandbox holds. */
-// oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
-export const LAUNCHABLE = ['claude', 'codex', 'codebuddy'] as const;
+/**
+ * The tools a step runtime can launch, as `can.tools` lists those a sandbox holds: teamai's EXEC_RUNTIME_TOOLS, and
+ * OpenCode, which only an app's runtime launches here, through `teamai-sandbox-opencode`.
+ */
+// oxlint-disable-next-line teamai/tool-facts -- by their executables; a runtime package cannot read teamai's tool registry
+export const LAUNCHABLE = ['claude', 'codex', 'codebuddy', 'opencode'] as const;
 
 /**
  * The `/bin/sh -c` arguments that print each of `commands` a sandbox holds, one per line. The commands go in as

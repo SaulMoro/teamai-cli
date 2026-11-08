@@ -10,6 +10,7 @@ import type { LAUNCHABLE } from './providers/cli.js';
 //    sbx      the service sbx's proxy holds a login for (`sbx secret ls`), which it injects and never lets in
 //    teamai   a sign-in variable teamai gives each of the tool's execs by name (`init.credentials.env`)
 //             a login teamai copies into the attempt's tool home (`init.credentials.logins`, `codex: login`)
+//    none     OpenCode, whose free models need no sign-in
 //
 //  Otherwise a step would start and stop at the tool's own "Not logged in", whose next step cannot be followed there.
 //  A tool that cannot sign in is left out of `can.tools` and listed in `init`'s `unavailable` with how to sign it in,
@@ -22,10 +23,12 @@ export type SignInProvider = 'sbx' | 'docker' | 'podman' | 'seatbelt' | 'bwrap' 
 interface SignIn {
   /** The variables the tool signs in with, as teamai finds them (`SIGN_IN_VARIABLES`). */
   env: readonly string[];
+  /** Whether the tool runs with no sign-in at all, as OpenCode does on its free models. */
+  needsNoSignIn?: true;
   /** The sbx service whose stored login sbx's proxy injects for it, when sbx keeps one. */
   sbx?: string;
   /** How to sign it in, as the rest of a sentence that starts with the tool's name, per provider. */
-  hint: Record<SignInProvider, string>;
+  hint?: Record<SignInProvider, string>;
   /** The variable that points the tool at a gateway, and the token it signs in to that gateway with, when it reads one. */
   gateway?: GatewayVariables;
 }
@@ -70,6 +73,8 @@ export const SIGN_IN = {
     },
   },
   codebuddy: { env: SIGN_IN_VARIABLES.codebuddy.signIn, hint: { sbx: CODEBUDDY, docker: CODEBUDDY, podman: CODEBUDDY, seatbelt: CODEBUDDY, bwrap: CODEBUDDY, vercel: CODEBUDDY } },
+  // teamai gives OpenCode no sign-in variable, so in a sandbox it runs its free models.
+  opencode: { env: [], needsNoSignIn: true },
 } satisfies Record<(typeof LAUNCHABLE)[number], SignIn>;
 
 /** How `tool` signs in inside a sandbox, when this runtime knows. */
@@ -137,8 +142,10 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
     return service !== undefined && stored.has(service);
   };
 
-  const isSignedIn = (tool: string): boolean => isGivenSignIn(tool, credentials) || isStored(tool);
-  const how = (tool: string): string => signInOf(tool)?.hint[provider] ?? 'teamai knows no way to sign it in inside a sandbox';
+  const needsNoSignIn = (tool: string): boolean => signInOf(tool)?.needsNoSignIn === true;
+
+  const isSignedIn = (tool: string): boolean => needsNoSignIn(tool) || isGivenSignIn(tool, credentials) || isStored(tool);
+  const how = (tool: string): string => signInOf(tool)?.hint?.[provider] ?? 'teamai knows no way to sign it in inside a sandbox';
 
   const kept = tools.filter(isStored);
 
@@ -161,7 +168,7 @@ export function offerSignedIn({ tools, provider, credentials, stored, env = {}, 
    * command, or else its tool's executable, so the sandbox need hold only that one.
    */
   const verdicts = instances.filter((instance) => signInOf(instance.tool) !== undefined).map(({ name, tool, command = tool }) => {
-    if (!isGivenSignIn(tool, credentials, name) && !isStored(tool)) {
+    if (!needsNoSignIn(tool) && !isGivenSignIn(tool, credentials, name) && !isStored(tool)) {
       return { name, why: `${name}, an instance of ${tool}, cannot sign in inside this ${provider} sandbox, so a step there would stop at its "Not logged in": ${how(tool)}. Then start again.` };
     }
 
