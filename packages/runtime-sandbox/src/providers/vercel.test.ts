@@ -2,10 +2,9 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { connect, tempDir, type Connection, type Message } from '../testing/harness.js';
+import { bundleRuntimeWith, connect, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 import { ATTEMPT, exec, HANDLE, newOp, openPlace, placeIn, RUN, type Place } from '../testing/native-harness.js';
 
@@ -31,12 +30,9 @@ let imageDir: string;
 const open: Connection[] = [];
 
 beforeAll(async () => {
-  const out = tempDir();
-  executable = path.join(out, 'teamai-runtime-sandbox.mjs');
-  await build({
-    entryPoints: [path.join(HERE, '..', 'main.ts')], outfile: executable, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
+  executable = await bundleRuntimeWith({
+    outfile: path.join(tempDir(), 'teamai-runtime-sandbox.mjs'),
     alias: { '@vercel/sandbox': path.join(HERE, '..', 'testing', 'vercel-fake-sdk.ts') },
-    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
   });
 }, 60_000);
 
@@ -52,9 +48,9 @@ beforeEach(() => {
 afterEach(async () => {
   const connections = open.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  const recovered = await closeLeftovers(connections);
-  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
-  expectNothingLeft({ dir, vercelState: stateDir });
+  const { invalid, recovered } = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...invalid]).toEqual([]);
+  await expectNothingLeft({ connections: [...connections, ...recovered], dir, vercelState: stateDir });
   // A sandbox a test left open holds read-only git paths.
   execFileSync('chmod', ['-R', 'u+w', dir]);
   fs.rmSync(dir, { recursive: true, force: true });

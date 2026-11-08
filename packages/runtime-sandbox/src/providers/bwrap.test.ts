@@ -29,9 +29,9 @@ beforeEach(() => {
 afterEach(async () => {
   const connections = open.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  const recovered = await closeLeftovers(connections);
-  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
-  expectNothingLeft({ dir: host.dir });
+  const { invalid, recovered } = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...invalid]).toEqual([]);
+  await expectNothingLeft({ connections: [...connections, ...recovered], dir: host.dir });
   fs.rmSync(host.dir, { recursive: true, force: true });
 });
 

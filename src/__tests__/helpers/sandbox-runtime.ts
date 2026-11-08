@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
+import { bundleRuntime } from '@teamai/runtime-testing/bundle';
 
 const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'runtime-sandbox', 'src');
 
@@ -13,12 +13,7 @@ const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.
  */
 export async function sandboxOnFake(provider: 'docker' | 'sbx'): Promise<{ command: string; args: (state: string) => string[]; options: { provider: 'docker'; image: string } | { provider: 'sbx'; agent: string } }> {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sandbox-runtime-')));
-  const executable = path.join(dir, 'teamai-runtime-sandbox.mjs');
-
-  await build({
-    entryPoints: [path.join(PACKAGE, 'main.ts')], outfile: executable, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
-  });
+  const executable = await bundleRuntime({ entry: path.join(PACKAGE, 'main.ts'), outfile: path.join(dir, 'teamai-runtime-sandbox.mjs') });
 
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
