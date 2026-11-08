@@ -555,6 +555,23 @@ describe('the fleet', () => {
     expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
   }, 180_000);
 
+  it('withdraws an attempt through its record when the owner\'s driver was stopped before the cancel', async () => {
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    // A stop the driver hears, as Ctrl-C: it leaves the attempt out for a later resume.
+    process.kill(alicePid, 'SIGTERM');
+    await started;
+
+    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+
+    expect(cancel.code, said(cancel)).toBe(0);
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'withdrawn' })]);
+  }, 180_000);
+
   it('takes no attempt on a driver definition of the member\'s own, as resume --next reads none', async () => {
     const mine = path.join(homeOf('carol'), '.teamai', 'drivers', 'mine.yaml');
     fs.mkdirSync(path.dirname(mine), { recursive: true });
