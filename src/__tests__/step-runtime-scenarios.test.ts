@@ -22,7 +22,7 @@ import { dirs, git, startIn, team, WORKSPACES } from './helpers/workflow-handoff
 import { leaseNext } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
-import { claimAttempt, readAttemptRecord } from '../workflow/fleet/record.js';
+import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, RunIdSchema } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { shellArgv } from '../workflow/shell-command.js';
@@ -1788,6 +1788,20 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     // A teamai with no wait of its own, as workflow cancel with no live driver, reads the record.
     const third = await owner.open();
     expect(await third.runtime.reattach(third.handle)).toEqual({ kind: 'alive', ops: [{ op, state: 'cancelled' }] });
+  });
+
+  it('offers an attempt a teamai killed before its offer to the pool and stale_after it was going to, whatever fleet entry reached it now', async () => {
+    const owner = await ownerOf();
+    const op = newOpId();
+    // What a teamai killed between noting the offer and writing it left.
+    await markOffered(owner.alice.config, owner.run, owner.attempt, 'gpu', { op, staleAfterMs: 120_000 });
+    const second = await owner.open(owner.alice.checkout, { pool: 'default', stale_after: '1s' });
+
+    const reconnected = second.exec(op);
+
+    expect(await owner.record()).toMatchObject({ state: 'offered', pool: 'gpu', staleAfterMs: 120_000 });
+    await second.runtime.dispose();
+    await reconnected;
   });
 
   it('waits on a reconnected attempt for as long as its offer allows, whatever fleet entry the restarted teamai reached it through', async () => {
