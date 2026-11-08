@@ -161,7 +161,7 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && line.event === 'gone')).toEqual({ event: 'gone', handle });
   });
 
-  it('never archives a workspace the member had open in Paseo on that directory before teamai opened it, as on their checkout for a read-only step, and stops only its own agents', async () => {
+  it('never archives a workspace the member had open in Paseo on that directory before teamai opened it, as on their checkout for a read-only step, stops only its own agents, and names them as left there', async () => {
     // The member works in this directory in Paseo, as in their own checkout, which a read-only step runs in.
     behave({ output: { ok: true }, member_workspaces: [worktree] });
     const runtime = start();
@@ -173,13 +173,13 @@ describe('teamai-runtime-paseo', () => {
 
     runtime.send({ type: 'close', handle });
 
-    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle, kept: [`Paseo agent ${createdAgent('op-0000000b')}`] });
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
     // The member's workspace stays open in Paseo, on the same id.
     expect(worktreeWorkspace()).toBe(workspace);
   });
 
-  it('never archives its workspace once the member works there too, as when they open the same checkout in Paseo during a read-only step, and stops only its own agents', async () => {
+  it('never archives its workspace once the member works there too, as when they open the same checkout in Paseo during a read-only step, stops only its own agents, and names them as left there', async () => {
     behave({ output: { ok: true }, member_joins: true });
     const runtime = start();
     await ready(runtime);
@@ -189,7 +189,7 @@ describe('teamai-runtime-paseo', () => {
 
     runtime.send({ type: 'close', handle });
 
-    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle, kept: [`Paseo agent ${createdAgent('op-0000000b')}`] });
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
     const kept = JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { title: string | null; status: string }> };
     expect(Object.values(kept.agents).filter((agent) => agent.title === 'member').map((agent) => agent.status)).toEqual(['idle']);
