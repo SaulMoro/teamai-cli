@@ -60,8 +60,9 @@ describe('bwrap: init', () => {
 
   it('fails sandbox_unavailable naming how to install it when bwrap is missing, and runs nothing', async () => {
     fs.rmSync(path.join(host.fakes, 'bwrap'));
+    fs.writeFileSync(path.join(host.dir, 'os-release'), 'ID=debian\n');
     // Without /usr/bin, where a Linux machine that has bwrap keeps it.
-    const reply = await init(start({ PATH: [host.fakes, host.tools].join(path.delimiter) }), { provider: 'bwrap' });
+    const reply = await init(start({ PATH: [host.fakes, host.tools].join(path.delimiter), SANDBOX_TEST_OS_RELEASE: path.join(host.dir, 'os-release') }), { provider: 'bwrap' });
 
     expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
     expect(String((reply.error as Message).message)).toContain('sudo apt install bubblewrap');
