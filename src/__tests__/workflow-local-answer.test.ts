@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 /** Claude in `bin` as its recorded call prints it, keeping its sessions under `home`. */
-function claudeIn(bin: string, home: string, options: { answer?: string; answers?: Array<{ when: string; answer: string }> }): FakeAgent {
+function claudeIn(bin: string, home: string, options: Omit<Parameters<typeof fakeAgent>[1], 'bin'>): FakeAgent {
   vi.stubEnv('HOME', home);
   const agent = fakeAgent(claudeFake, { bin, ...options });
   agents.push(agent);
@@ -164,6 +164,31 @@ outputs: { color: steps.ask.outputs.color }
     expect(claude.calls()).toHaveLength(2);
     expect(await readRun(config, z.string().parse(runId))).toMatchObject({
       steps: [{ id: 'ask', status: 'failed', failure: { code: 'invalid_output', message: expect.stringContaining('Blue, I think.') } }],
+    });
+  });
+
+  it('stops a tool that prints nothing for workflows.idle_timeout, and fails the step naming the limit', async () => {
+    const { config, workspace, runId, bin } = await answering(COLOR_JSON);
+    config.workflows = { tools: {}, idle_timeout: '1s' };
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: '{"color":"blue"}', always: ['slow'], slowMs: 20_000 });
+    const started = Date.now();
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(await readRun(config, z.string().parse(runId))).toMatchObject({
+      steps: [{ id: 'ask', status: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('printed nothing for 1s') } }],
+    });
+  });
+
+  it('refuses an idle limit that is no duration, naming the setting to fix', async () => {
+    const { config, workspace, runId, bin } = await answering(COLOR_JSON);
+    config.workflows = { tools: {}, idle_timeout: 'soon' };
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: '{"color":"blue"}' });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(claude.calls()).toEqual([]);
+    expect(await readRun(config, z.string().parse(runId))).toMatchObject({
+      steps: [{ id: 'ask', status: 'failed', failure: { code: 'tool_unconfigured', message: expect.stringContaining('workflows.idle_timeout is "soon"') } }],
     });
   });
 

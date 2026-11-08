@@ -754,6 +754,12 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 - 加上 `workspace: new` 后，它在自己的 worktree 中回答，该 worktree 位于运行开始时的提交，因此 `for_each` 的各项最多按其 `max_parallel` 并排运行。这个 worktree 不含你未提交的改动，也不含 pull 交付给工具的文件。修改它同样会让回答以 `read_only_dirty` 失败。回答成功后 teamai 删除这个 worktree，运行成功后删除它的分支。
 - 在不是 git 仓库的目录中，没有办法检查回答，所以在本地驱动上，那里的回答互不等待，无论有没有 `workspace: new`。
 - 提示词没有默认超时，请给这个步骤设置一个。
+- `workflows.idle_timeout` 是写在 `~/.teamai/config.yaml` 或某个工作区 `config.yaml` 里的一个时长：工具在这么长时间内没有任何输出时会被停止，步骤以 `tool_failed` 失败；不是时长的值会让步骤以 `tool_unconfigured` 失败。Claude 只在调用结束时打印回答，所以给它的时长要超过它最长的回答所需时间：
+
+  ```yaml
+  workflows:
+    idle_timeout: 5m
+  ```
 - 没有安装工具时它以 `tool_unavailable` 失败，成员指定的工具无法运行时以 `tool_unconfigured` 失败，调用失败时以 `tool_failed` 失败，回答里没有符合其 `output` 的 JSON 时以 `invalid_output` 失败。调用能继续其会话的工具（Claude、OpenCode）会先在同一会话里、在步骤的 timeout 内被再问一次，并附上它上次的回答。
 
 其他驱动把 answer 步骤当作带 `answer: true`、没有独立工作区的提示词租约；带 `workspace: new` 时，租约带有一个只读的 `workspace` 合约，指向它自己的分支。驱动准备租约，在 `cwd` 中回答提示词并报告 outputs；准备过程像其他只读步骤一样占用检出目录或那个 worktree，并记录快照。
