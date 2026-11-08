@@ -381,6 +381,20 @@ describe('a prompt attempt in a container', () => {
     expect(JSON.stringify(connection.messages)).not.toContain('gateway-secret-1');
   });
 
+  it('masks a base URL whose start is another base URL, when the step printed that start in a write of its own', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    const credentials = { ANTHROPIC_BASE_URL: 'http://localhost:4000', OPENAI_BASE_URL: 'http://localhost:4000/v1?key=gateway-secret-2' };
+
+    expect((await openPlace(connection, at, newOp(), { credentials })).ready).toMatchObject({ event: 'ready' });
+    const ran = await exec(connection, { argv: ['/bin/sh', '-c', 'printf %s "$ANTHROPIC_BASE_URL"; sleep 0.3; printf "%s\\n" "${OPENAI_BASE_URL#"$ANTHROPIC_BASE_URL"}"'], credentials, cwd: at.worktree });
+
+    expect(ran.end).toMatchObject({ event: 'exited', code: 0 });
+    expect(ran.output).toBe(ran.end.stdout);
+    expect(JSON.stringify(connection.messages)).not.toContain('gateway-secret-2');
+  });
+
   it('ends an exec that prints past protocol 1\'s bound with the end of what it streamed, marked as cut, and reattaches with the same', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

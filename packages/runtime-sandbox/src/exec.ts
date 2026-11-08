@@ -32,26 +32,53 @@ const RESTOP_MS = 1_000;
 type Journaled = { op: OpId } & ExecRecord;
 
 /**
- * Masks a stream with `masks` as if it were one text: each chunk's last characters, as many as the longest mask, wait
- * for the next chunk or the end, so a value the stream splits across chunks is masked whole, and what it gives out
- * joined is the text masked.
+ * Masks a stream with `masks` as if it were one text. The text not given out yet waits, unmasked, for the next chunk or
+ * the end: at least the longest mask's length less one, and back to the start of any value it would split, so a value
+ * the stream splits across chunks, or one that starts with another, is masked whole, and no chunk ends inside a
+ * character. What it gives out joined is the text masked.
  */
 function maskedStream(masks: Record<string, string>) {
-  const held = Math.max(0, ...Object.values(masks).map((value) => value.length));
+  const values = Object.values(masks).filter((value) => value !== '');
+  const held = Math.max(1, ...values.map((value) => value.length)) - 1;
+  const masked = (text: string): string => redact(text, { envSecrets: masks, patterns: false });
   let rest = '';
+
+  /** Where `text` may be given out up to: no value starts before it and ends after it. */
+  const cutOf = (text: string): number => {
+    let cut = Math.max(0, text.length - held);
+
+    for (let isMoved = true; isMoved;) {
+      isMoved = false;
+
+      for (const value of values) {
+        const at = cut > 0 ? text.lastIndexOf(value, cut - 1) : -1;
+
+        if (at >= 0 && at + value.length > cut) {
+          cut = at;
+          isMoved = true;
+        }
+      }
+    }
+
+    const last = text.charCodeAt(cut - 1);
+
+    // A high surrogate last is the first half of a character whose second half follows.
+    return last >= 0xd800 && last <= 0xdbff ? cut - 1 : cut;
+  };
 
   return {
     push(chunk: string): string {
-      const masked = redact(`${rest}${chunk}`, { envSecrets: masks, patterns: false });
-      rest = masked.slice(Math.max(0, masked.length - held));
+      const text = `${rest}${chunk}`;
+      const cut = cutOf(text);
+      rest = text.slice(cut);
 
-      return masked.slice(0, masked.length - rest.length);
+      return masked(text.slice(0, cut));
     },
     flush(): string {
       const last = rest;
       rest = '';
 
-      return last;
+      return masked(last);
     },
   };
 }
