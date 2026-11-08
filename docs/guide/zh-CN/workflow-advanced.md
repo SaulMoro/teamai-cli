@@ -1677,7 +1677,7 @@ while :; do teamai workflow resume --next --pool build; sleep 60; done
 
 要同时领取多个尝试，就运行多个循环。不带运行 id 的 `teamai workflow resume` 会列出当前检出的 origin 上正在外面的尝试：池、状态、领取它的成员，以及它最近一次进度。
 
-哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。带 `requires.labels` 的步骤交给 `labels` 选项列出每个标签的 fleet 条目，成员只有在它的 `workflows.labels` 也列出每个标签时才接；其他成员会跳过它并记录原因。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
+哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。带 `requires.labels` 的步骤交给 `labels` 选项列出每个标签的 fleet 条目，成员只有在它的 `workflows.labels` 也列出每个标签时才接；其他成员会跳过它并记录原因。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。成员会把这个会话推送到团队会话归档，之后带 `session: continue` 的步骤就在你这里接着它继续。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
 每个 fleet 条目在自己的 `pool` 里提供尝试，第一个 `can` 适合某步骤的条目接走它。多个 pool 就是多个 fleet 条目，更具体的放在前面：`can` 被前面某个条目覆盖的 fleet 条目永远拿不到步骤，`workflow start` 会对此发出警告。
 

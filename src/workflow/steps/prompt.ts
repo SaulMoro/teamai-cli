@@ -638,7 +638,7 @@ async function promptPickedThere({ config, lock, driver, lease, onRuntime, signa
     case 'finished': {
       await AttemptResult.write(result, end.result, secrets);
       const tool = end.session.tool;
-      const body: ReportInput = { attempt: lease.attempt, revision: lease.revision, driver, tool, outcome: 'success', exitCode: 0 };
+      const body: ReportInput = { attempt: lease.attempt, revision: lease.revision, driver, tool, session: end.session.id, outcome: 'success', exitCode: 0 };
 
       if ('output' in end.result) body.outputs = end.result.output;
 

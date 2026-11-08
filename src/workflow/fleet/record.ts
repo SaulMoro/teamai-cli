@@ -87,8 +87,12 @@ const FleetResultSchema = z.object({
   outputs: JsonValueSchema.optional(),
   stderr: z.string(),
   to: CommitSchema.optional(),
-  /** A prompt step's: the tool the member ran it on, its model and tokens, and why it failed, as the member's report said. */
+  /**
+   * A prompt step's: the tool the member ran it on, the id of the session it ran there, which the member pushed to the team
+   * session archive, its model and tokens, and why it failed, as the member's report said.
+   */
   tool: z.string().min(1).optional(),
+  session: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   tokens: TokenUsageSchema.optional(),
   failure: z.object({ code: z.string().min(1), message: z.string() }).optional(),
