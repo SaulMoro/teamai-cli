@@ -230,5 +230,9 @@ export async function spinner(text: string): Promise<Ora> {
     return ora({ text, isSilent: true });
   }
 
-  return ora({ text, color: 'cyan', discardStdin: false });
+  // ora clears its line in rows of the terminal's width, so a terminal that reports none, such as a 0x0 pty, makes
+  // that clear endless: it writes without pause and the process never runs its SIGTERM handler. Print the plain lines.
+  const hasWidth = (process.stderr.columns ?? 0) > 0;
+
+  return ora({ text, color: 'cyan', discardStdin: false, ...(!hasWidth && { isEnabled: false }) });
 }
