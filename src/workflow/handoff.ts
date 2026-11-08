@@ -1342,12 +1342,16 @@ export async function definitionsOf(config: LocalConfig, snapshot: RunSnapshot):
   // run that commit itself: one only a side branch or teamai-reports holds could carry any command, a scorer's check.run
   // among them.
   const pin = snapshot.teamPin?.revision;
+  const pinned = pin === undefined ? undefined : await teamCommitReach(config, pin);
 
-  if (pin !== undefined && await teamCommitReach(config, pin) === 'elsewhere') {
+  if (pin !== undefined && pinned?.kind === 'elsewhere') {
     return refused({
       code: 'definition_mismatch',
       teamRevision: pin,
-      message: `Run ${snapshot.run} pins its team scorers to team commit ${pin}, which neither this machine's team checkout nor the team's default branch on origin holds. A run continues only with scorers the team's default branch has: once that commit is on it, run teamai pull, then claim again.`,
+      // In self mode the team's files are the business repository's, whose HEAD may be any branch the member works on.
+      message: pinned.selfMode
+        ? `Run ${snapshot.run} pins its team scorers to team commit ${pin}, which neither this machine's checkout at ${pinned.checkout} nor the team's default branch on origin holds. A run continues only with scorers the team's default branch has: once that commit is on it, run teamai pull, then claim again; or, if you trust a branch that holds it, check that branch out in ${pinned.checkout}, then claim again.`
+        : `Run ${snapshot.run} pins its team scorers to team commit ${pin}, which neither this machine's team checkout nor the team's default branch on origin holds. A run continues only with scorers the team's default branch has: once that commit is on it, run teamai pull, then claim again.`,
     });
   }
 
@@ -1382,19 +1386,23 @@ export async function definitionsOf(config: LocalConfig, snapshot: RunSnapshot):
 
   const reach = await teamCommitReach(config, revision);
 
-  if (reach === 'missing') {
+  if (reach.kind === 'missing') {
     return refused({
       code: 'definition_mismatch',
       teamRevision: revision,
-      message: `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which this machine cannot read: the team repo does not have it, even after fetching origin. Fetch that commit into the team repo, then try again.`,
+      message: reach.fetchError === undefined
+        ? `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which this machine cannot read: the team repo at ${reach.checkout} does not have it, even after fetching origin. Fetch that commit into the team repo, then try again.`
+        : `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which this machine cannot read: the team repo at ${reach.checkout} does not have it, and fetching origin failed (${sanitizeGitUrl(reach.fetchError)}). Fetch that commit into the team repo, then try again.`,
     });
   }
 
-  if (reach === 'elsewhere') {
+  if (reach.kind === 'elsewhere') {
     return refused({
       code: 'definition_mismatch',
       teamRevision: revision,
-      message: `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which neither this machine's team checkout nor the team's default branch on origin holds, and this machine's copy differs. A run continues only with workflows the team's default branch has: once that commit is on it, run teamai pull, then claim again.`,
+      message: reach.selfMode
+        ? `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which neither this machine's checkout at ${reach.checkout} nor the team's default branch on origin holds, and this machine's copy differs. A run continues only with workflows the team's default branch has: once that commit is on it, run teamai pull, then claim again; or, if you trust a branch that holds it, check that branch out in ${reach.checkout}, then claim again.`
+        : `Run ${snapshot.run} runs workflow "${snapshot.name}" as of team commit ${revision}, which neither this machine's team checkout nor the team's default branch on origin holds, and this machine's copy differs. A run continues only with workflows the team's default branch has: once that commit is on it, run teamai pull, then claim again.`,
     });
   }
 
