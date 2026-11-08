@@ -241,7 +241,9 @@ export async function resolveDriver(config: LocalConfig, name: string, { persona
     ok: false,
     failure: {
       code: 'driver_not_found',
-      message: `No driver definition is named "${name}". Add drivers/${name}.yaml to the team repo and run teamai pull, add ~/.teamai/drivers/${name}.yaml for yourself, or use --driver local.`,
+      message: personal
+        ? `No driver definition is named "${name}". Add drivers/${name}.yaml to the team repo and run teamai pull, add ~/.teamai/drivers/${name}.yaml for yourself, or use --driver local.`
+        : `No driver definition of the team or teamai is named "${name}", and a definition in ~/.teamai/drivers/ does not count here. Add drivers/${name}.yaml to the team repo and run teamai pull, or use --driver local.`,
     },
   };
 }
