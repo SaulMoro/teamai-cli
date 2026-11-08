@@ -50,5 +50,5 @@ export const exited = { op: 'op-1', event: 'exited', code: 0, stdout: '' };`, { 
 rule.valid('leaves a runtime not yet on the kit alone while it still serves the protocol', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });`, { filename: 'packages/runtime-paseo/src/runtime.ts' });
 
 rule.invalid('fails a runtime left on the list once it no longer serves the protocol itself', `export const nothing = 1;`, (output) => {
-  expect(output).toContain('packages/runtime-sandbox/src/runtime.ts no longer serves runtime protocol 1 itself');
-}, { filename: 'packages/runtime-sandbox/src/runtime.ts' });
+  expect(output).toContain('packages/runtime-paseo/src/runtime.ts no longer serves runtime protocol 1 itself');
+}, { filename: 'packages/runtime-paseo/src/runtime.ts' });
