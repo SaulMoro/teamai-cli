@@ -21,13 +21,16 @@ describe('a workflow started from an app\'s agent session', () => {
   let dataHome: string;
   const session = { CLAUDE_CODE_SESSION_ID: 'session-in-a-thread' };
   const thread = { ...session, T3CODE_THREAD_ID: 'thread-1' };
-  const definitionFile = (): string => path.join(os.homedir(), '.teamai', 'drivers', 't3.yaml');
+  const paseoAgent = { ...session, PASEO_AGENT_ID: 'agent-1' };
+  const definitionFile = (driver = 't3'): string => path.join(os.homedir(), '.teamai', 'drivers', `${driver}.yaml`);
 
-  /** The member's own `t3` definition: the toy runtime, which a person reaches through its app, then `local`. */
-  const writeT3 = (toy: Record<string, unknown> = {}): void => {
-    fs.mkdirSync(path.dirname(definitionFile()), { recursive: true });
-    fs.writeFileSync(definitionFile(), stringify({ schemaVersion: 'v1alpha1', name: 't3', tool: 'claude', runtimes: [{ use: 'toy', options: { state, can: { hitl: true }, agent: { output: { ok: true } }, ...toy } }, { use: 'local' }] }));
+  /** The member's own definition of an app's driver: the toy runtime, which a person reaches through its app, then `local`. */
+  const writeApp = (driver: string, toy: Record<string, unknown> = {}): void => {
+    fs.mkdirSync(path.dirname(definitionFile(driver)), { recursive: true });
+    fs.writeFileSync(definitionFile(driver), stringify({ schemaVersion: 'v1alpha1', name: driver, tool: 'claude', runtimes: [{ use: 'toy', options: { state, can: { hitl: true }, agent: { output: { ok: true } }, ...toy } }, { use: 'local' }] }));
   };
+
+  const writeT3 = (toy: Record<string, unknown> = {}): void => writeApp('t3', toy);
 
   const writeFlow = (name: string, body: string): void => {
     fs.writeFileSync(path.join(repo, '.teamai', 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\n${body}`);
@@ -100,6 +103,7 @@ steps:
   beforeEach(() => {
     state = fs.mkdtempSync(path.join(sandbox, 'toy-state-'));
     fs.rmSync(definitionFile(), { force: true });
+    fs.rmSync(definitionFile('paseo'), { force: true });
   });
 
   afterAll(() => {
@@ -190,6 +194,23 @@ steps:
     const stopped = envelope(started);
     const waiting = 'data' in stopped ? stopped.data.hitl_waiting as { run: string; resume: string } | undefined : undefined;
     expect(waiting?.resume, started.stderr).toBe(`teamai workflow resume ${waiting?.run ?? ''} --driver t3 --confirmed`);
+  });
+
+  it('offers the start on Paseo\'s driver in a Paseo agent, and relays the gates of the run it starts there', async () => {
+    writeApp('paseo');
+
+    const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, paseoAgent);
+
+    expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: {
+      kind: 'background', start: 'teamai workflow start review --driver paseo', background: 'Each prompt step appears in Paseo as an agent of its own.',
+    } } } });
+    expect(inits()).toEqual([expect.objectContaining({ mode: 'check' })]);
+
+    const started = await runCLI(['workflow', 'start', 'shipit', '--driver', 'paseo'], repo, paseoAgent);
+
+    const stopped = envelope(started);
+    const waiting = 'data' in stopped ? stopped.data.hitl_waiting as { run: string; resume: string } | undefined : undefined;
+    expect(waiting, started.stderr).toMatchObject({ resume: `teamai workflow resume ${waiting?.run ?? ''} --driver paseo` });
   });
 
   it('decides the gate as before on the local driver, which no person reaches from the session', async () => {
