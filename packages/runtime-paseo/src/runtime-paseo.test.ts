@@ -3120,6 +3120,31 @@ describe('teamai-runtime-paseo', () => {
     expect(await ready(start(env))).toMatchObject({ type: 'init', ok: true });
   });
 
+  it('answers a check on the client inside the Paseo app, and leaves teamai\'s state and the temp directory as they were', async () => {
+    const cli = paseoApp(path.join(dir, 'app'), TEST_CLIENT);
+    fs.mkdirSync(path.join(dir, 'home', '.local', 'bin'), { recursive: true });
+    fs.symlinkSync(cli, path.join(dir, 'home', '.local', 'bin', 'paseo'));
+    const tmp = path.join(dir, 'tmp');
+    fs.mkdirSync(tmp);
+    const state = path.join(dir, 'home', '.teamai');
+    fs.mkdirSync(path.join(state, 'runtime-state'), { recursive: true });
+    fs.writeFileSync(path.join(state, 'config.json'), '{}');
+
+    /** Every file and directory under `root`, with each file's bytes. */
+    const tree = (root: string): Record<string, string> => Object.fromEntries(fs.readdirSync(root, { recursive: true, withFileTypes: true })
+      .map((entry) => {
+        const at = path.join(entry.parentPath, entry.name);
+
+        return [path.relative(root, at), entry.isFile() ? fs.readFileSync(at, 'base64') : 'directory'];
+      }));
+
+    const before = tree(state);
+
+    expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: path.dirname(process.execPath), TMPDIR: tmp }), { mode: 'check' })).toMatchObject({ type: 'init', ok: true, prompt: true });
+    expect(tree(state)).toEqual(before);
+    expect(fs.readdirSync(tmp)).toEqual([]);
+  });
+
   it('fails init naming the file, rather than load it, when a file of the client in the Paseo app does not match the app\'s own hash', async () => {
     const cli = paseoApp(path.join(dir, 'app'), TEST_CLIENT, 'node_modules/ws/package.json');
     fs.mkdirSync(path.join(dir, 'home', '.local', 'bin'), { recursive: true });

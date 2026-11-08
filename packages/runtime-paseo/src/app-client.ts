@@ -136,9 +136,10 @@ function closureOf(archive: Archive): string[] {
 
 /**
  * The directory of the client inside the Paseo app whose CLI script `cli` is, unpacked into `keep` once per app build;
- * undefined when `cli` is not the app's script; or why it cannot be unpacked.
+ * undefined when `cli` is not the app's script; or why it cannot be unpacked. With `unpackInto`, a build `keep` does
+ * not hold yet is unpacked there instead, and `keep` is only read: a caller that writes nothing of its own removes it.
  */
-export function clientInApp(cli: string, keep: string): { dir: string } | RuntimeFailure | undefined {
+export function clientInApp(cli: string, { keep, unpackInto }: { keep: string; unpackInto?: string }): { dir: string } | RuntimeFailure | undefined {
   const script = fs.realpathSync(cli);
   const resources = path.dirname(path.dirname(script));
   const asar = path.join(resources, 'app.asar');
@@ -151,14 +152,17 @@ export function clientInApp(cli: string, keep: string): { dir: string } | Runtim
   try {
     const archive = openArchive(asar);
     const version = ManifestSchema.parse(JSON.parse(readEntry(archive, `${packageFrom(archive, '', '@getpaseo/client')}/package.json`).toString('utf8'))).version ?? 'unknown';
-    const kept = path.join(keep, `${version}-${archive.build.slice(0, 16)}`);
+    const build = `${version}-${archive.build.slice(0, 16)}`;
+    const keptClient = path.join(keep, build, 'node_modules', '@getpaseo', 'client');
+
+    if (fs.existsSync(path.join(keptClient, 'package.json'))) return { dir: keptClient };
+    const into = unpackInto ?? keep;
+    const kept = path.join(into, build);
     const client = path.join(kept, 'node_modules', '@getpaseo', 'client');
 
-    if (fs.existsSync(path.join(client, 'package.json'))) return { dir: client };
-
     // Unpacked beside where it is kept, then renamed into place, so a runtime never loads a half-written client.
-    fs.mkdirSync(keep, { recursive: true });
-    const unpacking = fs.mkdtempSync(path.join(keep, '.unpacking-'));
+    fs.mkdirSync(into, { recursive: true });
+    const unpacking = fs.mkdtempSync(path.join(into, '.unpacking-'));
 
     try {
       for (const name of closureOf(archive).flatMap((dir) => filesUnder(archive, dir))) {

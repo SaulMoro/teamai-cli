@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import {
@@ -589,10 +590,25 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
   };
 
   async function init(request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> {
+    if (request.mode !== 'check') return initIn(request, { reply: write });
+    // A check writes nothing of teamai's: a client it has to unpack from the Paseo app goes into a directory of its own,
+    // removed before it answers.
+    const unpackInto = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-paseo-check-'));
+    const remove = (): void => fs.rmSync(unpackInto, { recursive: true, force: true });
+
+    try {
+      await initIn(request, { unpackInto, reply: (line) => { remove(); write(line); } });
+    } finally {
+      remove();
+    }
+  }
+
+  /** Answers `init` through `reply`, unpacking a client from the Paseo app into `unpackInto` when it is given. */
+  async function initIn(request: Extract<RuntimeRequest, { type: 'init' }>, { unpackInto, reply }: { unpackInto?: string; reply: typeof write }): Promise<void> {
     const parsed = parseOptions(request.options);
 
     if (!parsed.ok) {
-      write({ type: 'init', ok: false, error: parsed.failure });
+      reply({ type: 'init', ok: false, error: parsed.failure });
 
       return;
     }
@@ -612,23 +628,23 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
       // Only to stop what it ran: no sign-in or tool check, and no connection until a cancel or close needs one. A config
       // it cannot read fails each stop that needs the daemon, naming why, never the init that stops nothing.
       recoverAt = address;
-      write({ type: 'init', ok: true, can: {} });
+      reply({ type: 'init', ok: true, can: {} });
 
       return;
     }
 
     if ('code' in address) {
-      write({ type: 'init', ok: false, error: address });
+      reply({ type: 'init', ok: false, error: address });
 
       return;
     }
 
     const { url } = address;
 
-    const client = await loadClient(process.env);
+    const client = await loadClient(process.env, unpackInto === undefined ? {} : { unpackInto });
 
     if ('code' in client) {
-      write({ type: 'init', ok: false, error: client });
+      reply({ type: 'init', ok: false, error: client });
 
       return;
     }
@@ -636,7 +652,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     const connected = await connect(url, client);
 
     if ('code' in connected) {
-      write({ type: 'init', ok: false, error: connected });
+      reply({ type: 'init', ok: false, error: connected });
 
       return;
     }
@@ -667,7 +683,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     // A check connects and lists, and keeps nothing: providers are added only by an open, and no step will follow.
     if (request.mode === 'check') {
       await connected.close();
-      write(tools.length > 0
+      reply(tools.length > 0
         ? { type: 'init', ok: true, prompt: true, can: { exec: false, env: false, hitl: false, unattended: false, tools: tools.map(({ name }) => name) } }
         : { type: 'init', ok: false, error: { code: 'tool_unavailable', message: `teamai-runtime-paseo can run no tool on the Paseo daemon at ${connected.url} now: ${Object.values(unavailable).join(' ')}` } });
 
