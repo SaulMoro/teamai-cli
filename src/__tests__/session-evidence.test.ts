@@ -65,6 +65,15 @@ describe('evidence a step left in its out/ directory', () => {
     ]);
   });
 
+  it('keeps the first 100 files of a step, by path, and counts the ones it left out', async () => {
+    for (let index = 0; index < 102; index += 1) fs.writeFileSync(path.join(out, `shot-${String(index).padStart(3, '0')}.png`), 'x');
+
+    const evidence = await SessionEvidence.collect(out, mask);
+
+    expect(evidence?.files.map((file) => file.path)).toEqual(Array.from({ length: 100 }, (_, index) => `shot-${String(index).padStart(3, '0')}.png`));
+    expect(evidence?.leftOut).toBe(2);
+  });
+
   it('lists a text file too large to mask whole in memory, over 64 MiB, instead of reading it', async () => {
     const bytes = Buffer.alloc(64 * 1024 * 1024 + 1, 'x');
     fs.writeFileSync(path.join(out, 'huge.log'), bytes);

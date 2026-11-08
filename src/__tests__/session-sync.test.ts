@@ -407,6 +407,16 @@ describe('evidence archived beside a session', () => {
     expect(mgr.writtenFiles()).toContain(`sessions/repos/${encodeRepoIdentity(identity)}/alice/${name}.evidence.json`);
   });
 
+  it('drops the evidence a session kept when a later step of it left none', async () => {
+    const mgr = new SyncManager(repoRoot);
+    const name = named(written(await mgr.saveSession(mkSession(), mkMeta(), { evidence: evidence('first') })));
+
+    await mgr.saveSession(mkSession(), mkMeta(), { evidence: 'none' });
+
+    expect(mgr.loadEvidence(identity, name, 'alice')).toBeUndefined();
+    expect(fs.readdirSync(path.join(repoDirOf(identity), 'alice')).filter((file) => file.endsWith('.evidence.json'))).toEqual([]);
+  });
+
   it('moves with a session renamed off a local path, and goes with a deleted one', async () => {
     const mgr = new SyncManager(repoRoot);
     const leaked = `fix ${path.join(os.homedir(), 'app/src/retry.ts')}`;

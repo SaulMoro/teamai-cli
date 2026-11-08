@@ -217,6 +217,16 @@ describe('the evidence a step left beside a pushed session', () => {
     expect(prompt).toContain('## evidence/logs/check.log\n\nchecked with <REDACTED:KEY>');
     expect(prompt).not.toContain('s3cr3t-value');
   });
+  it('tells the judge how many files of the step the archive left out', () => {
+    const session: Session = {
+      sessionId: SESSION, title: 'check', cwd: '/tmp/proj', platform: 'claude-code', createdAt: NOW, updatedAt: NOW,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Check the page.' }], timestamp: NOW }],
+    };
+    const evidence: ArchivedEvidence = { version: 1, files: [{ kind: 'listed', path: 'shot-000.png', type: 'image/png', size: 1, sha256: 'c'.repeat(64) }], leftOut: 3 };
+
+    expect(judgeSession({ platform: 'claude-code', found: { session }, captures: [], mask: (text) => text, evidence }).manifest.evidenceLeftOut).toBe(3);
+  });
+
   it('keeps the end of a long transcript in the prompt beside a long log, which it cuts to its share, and writes the log whole', async () => {
     const long = (word: string): string => `${word} `.repeat(60_000);
     const session: Session = {

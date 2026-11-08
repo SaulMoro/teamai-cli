@@ -161,7 +161,7 @@ export interface JudgedSession {
   body: string;
   /** The text files of the evidence its step left, masked, by their path in the evidence directory. */
   stepEvidence: Array<{ path: string; text: string }>;
-  manifest: { subject: SessionSubject; kind: 'session'; gaps: EvidenceGap[]; skills?: SkillsEvidence; evidence?: StepEvidenceListing[] };
+  manifest: { subject: SessionSubject; kind: 'session'; gaps: EvidenceGap[]; skills?: SkillsEvidence; evidence?: StepEvidenceListing[]; evidenceLeftOut?: number };
   context: SessionLabelContext;
   /** The owning scope's mask: the rubric prompt goes through it too, since a scorer may quote a team secret. */
   mask: (text: string) => string;
@@ -196,6 +196,8 @@ export function judgeSession({ platform, found, captures, mask, agent: archived,
   const step = stepEvidenceOf(evidence, mask);
 
   if (evidence) manifest.evidence = step.listing;
+
+  if (evidence?.leftOut !== undefined) manifest.evidenceLeftOut = evidence.leftOut;
 
   const framing = `## evidence.json\n\n${JSON.stringify(manifest)}\n\n## transcripts/session.md\n\n`.length
     + stepPromptSections(step.files).reduce((sum, section) => sum + `\n\n## ${section.title}\n\n`.length + section.body.length, 0);
