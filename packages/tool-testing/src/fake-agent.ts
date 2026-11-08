@@ -61,6 +61,8 @@ export interface FakeAgent {
   readonly executable: string;
   /** Every call so far, in order: its arguments, the prompt it read on stdin, and its cwd. */
   calls(): FakeAgentCall[];
+  /** The processes of this fake still alive, which it then kills: an `afterEach` expects none, whoever started them. */
+  stopLeft(): number[];
 }
 
 /**
@@ -71,9 +73,11 @@ export interface FakeAgent {
 export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptions): FakeAgent {
   const executable = path.join(options.bin, recording.executable);
   const log = path.join(options.bin, `${recording.executable}.calls.jsonl`);
+  const pids = path.join(options.bin, `${recording.executable}.pids`);
 
   const settings = {
     log,
+    pids,
     version: recording.version,
     data: recording.data,
     markers: FAKE_AGENT_MARKERS,
@@ -90,12 +94,31 @@ export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptio
 
   return {
     executable,
+    stopLeft: () => {
+      const listed = fs.existsSync(pids) ? fs.readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) : [];
+      const alive = listed.filter(isAlive);
+
+      for (const pid of alive) process.kill(pid, 'SIGKILL');
+
+      return alive;
+    },
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => Call.parse(JSON.parse(line))) : []),
   };
 }
 
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const ENGINE = String.raw`
 const fs = require('node:fs');
+fs.appendFileSync(settings.pids, process.pid + '\n');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -145,15 +168,7 @@ export function runFakeAgent(executable: string, args: readonly string[], prompt
 
 /** The fakes `runFakeAgent` started that are still alive, which it then kills: an `afterEach` expects none. */
 export function leftFakeAgents(): number[] {
-  const alive = [...started].filter((pid) => {
-    try {
-      process.kill(pid, 0);
-
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  const alive = [...started].filter(isAlive);
 
   started.clear();
 

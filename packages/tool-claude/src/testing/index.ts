@@ -7,7 +7,7 @@ const recorded = (name: string): string => fs.readFileSync(new URL(`../fixtures/
  * result object or, with `--output-format stream-json`, after an init and an assistant line. A JSON reply goes in
  * `structured_output` when the call gives `--json-schema`. Its session goes where Claude Code keeps it, under
  * `CLAUDE_CONFIG_DIR` or `~/.claude`, in a project directory cut at 200 characters with Claude Code's hash, unless the
- * call passes `--no-session-persistence`.
+ * call passes `--no-session-persistence`. `--resume <id>` continues that session, under the same id.
  */
 export const claudeFake = {
   executable: 'claude',
@@ -18,7 +18,7 @@ export const claudeFake = {
     transcript: recorded('claude-code-transcript.jsonl'),
   },
   script: String.raw`
-  const sessionId = randomUUID();
+  const sessionId = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : randomUUID();
   const streams = args.includes('stream-json') || args.includes('--output-format=stream-json');
   const model = args.includes('--model') ? args[args.indexOf('--model') + 1] : 'claude-sonnet-4-5';
   if (streams) await say(JSON.stringify({ type: 'system', subtype: 'init', session_id: sessionId, model, cwd: process.cwd() }));
@@ -42,7 +42,7 @@ export const claudeFake = {
     const project = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '', '.claude'), 'projects', dir);
     const fill = (text) => text.replaceAll('{{cwd}}', cwd).replaceAll('{{sessionId}}', sessionId);
     fs.mkdirSync(project, { recursive: true });
-    fs.writeFileSync(path.join(project, sessionId + '.jsonl'), fill(data.transcript) + '\n');
+    fs.appendFileSync(path.join(project, sessionId + '.jsonl'), fill(data.transcript) + '\n');
     if (does('subagent')) {
       const agents = path.join(project, sessionId, 'subagents');
       fs.mkdirSync(agents, { recursive: true });

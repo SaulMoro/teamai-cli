@@ -11,11 +11,16 @@ import { runTool } from './run.js';
 import type { TokenUsage } from './stdout.js';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf, type LaunchOrderTool } from './tools.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
+import { extractReply } from '@teamai/tool-core/reply';
+import type { z } from 'zod';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 
 /** An AI call's answer, and the tool that gave it. */
 export type CallResult = { text: string; tool: LaunchOrderTool; tokens?: TokenUsage };
+
+/** A call asked for a value: the last answer, the value it holds or undefined when none held one, and how often it asked. */
+export type ReplyResult<T> = CallResult & { reply: T | undefined; asked: number };
 
 export interface CallOptions {
   /** Who in teamai makes the call, which the launched session carries as `LAUNCHED_BY_ENV`. */
@@ -27,10 +32,54 @@ export interface CallOptions {
   cwd?: string;
   /** Stops the tool, as its timeout does. */
   signal?: AbortSignal;
+  /**
+   * Stops a tool that prints nothing for this long, in ms. Only for a tool whose call streams its progress, such as
+   * OpenCode's events: one that prints its answer at the end, as `claude -p --output-format json` does, would be stopped.
+   */
+  idleTimeout?: number;
+}
+
+export interface ReplyOptions extends CallOptions {
+  /** How many more times to ask, in the same session, when a reply holds no value `schema` accepts. Default 1. */
+  retries?: number;
 }
 
 export interface ToolCaller {
   callTool(prompt: string, options: CallOptions): Promise<CallResult>;
+  /**
+   * Asks for a value `schema` accepts, and when the reply holds none, asks again in the same session, up to `retries`
+   * times, for a tool whose call can continue its session. A tool that cannot is asked once.
+   */
+  callForReply<T>(prompt: string, schema: z.ZodType<T>, options: ReplyOptions): Promise<ReplyResult<T>>;
+}
+
+const DEFAULT_REPLY_RETRIES = 1;
+
+/** The tokens of two calls together, by kind. */
+function addTokens(first: TokenUsage | undefined, second: TokenUsage | undefined): TokenUsage | undefined {
+  if (first === undefined || second === undefined) return first ?? second;
+  const sum: TokenUsage = {};
+
+  for (const kind of ['input', 'output', 'cachedInput'] as const) {
+    const a = first[kind];
+    const b = second[kind];
+
+    if (a !== undefined || b !== undefined) sum[kind] = (a ?? 0) + (b ?? 0);
+  }
+
+  return sum;
+}
+
+/** What a tool is told when its reply held no value: what it said, and to reply with the value alone. */
+function retryPrompt(previous: string, retriesLeft: number): string {
+  return `Your previous reply did not hold a JSON value that matches what was asked.
+
+Retries remaining after this attempt: ${retriesLeft}.
+
+Previous reply:
+${previous.trim() || '(empty)'}
+
+Reply with only the corrected JSON value, with no other text. Do not change files or run commands.`;
 }
 
 export interface ToolCallerDeps {
@@ -121,10 +170,10 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     return picking;
   };
 
-  const callTool: ToolCaller['callTool'] = async (prompt, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, scope, cwd = process.cwd(), signal }) => {
-      const { tool, executable } = await pick(scope);
+  /** One run of the picked tool: its answer, and the session it ran in when the tool reported one. */
+  const callOnce = async ({ tool, executable }: Picked, prompt: string, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, cwd = process.cwd(), signal, idleTimeout }: CallOptions, session?: string): Promise<CallResult & { session?: string }> => {
       const { call } = launchAdapterOf(tool);
-      log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s`);
+      log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
       const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-call-'));
 
       try {
@@ -132,10 +181,16 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
         const promptFile = path.join(scratch, 'prompt.md');
 
         if (call.prompt === 'file') await fs.writeFile(promptFile, prompt);
-        const args = call.args({ prompt, promptFile, lastMessageFile });
-        const run = await runTool({ executable, args, cwd, env: callEnv(launchedBy, tool), stdin: call.prompt !== 'stdin' ? '' : 'stdinOf' in call ? call.stdinOf(prompt) : prompt, timeoutMs: timeout, detached: false, signal });
+        const resumed = session !== undefined && 'resume' in call ? call.resume.args(session) : [];
+        const args = [...call.args({ prompt, promptFile, lastMessageFile }), ...resumed];
+        const run = await runTool({ executable, args, cwd, env: callEnv(launchedBy, tool), stdin: call.prompt !== 'stdin' ? '' : 'stdinOf' in call ? call.stdinOf(prompt) : prompt, timeoutMs: timeout, idleTimeoutMs: idleTimeout, detached: false, signal });
 
         if (run.timedOut) throw new CallError('call_failed', `AI call timed out after ${Math.round(timeout / 1000)}s (tool: ${tool})`);
+
+        if (run.idle && idleTimeout !== undefined) {
+          throw new CallError('call_failed', `AI call printed nothing for ${idleTimeout / 1000}s, longer than its idle limit (tool: ${tool}). Raise the idle limit if this tool works silently for longer.`);
+        }
+
         const lastMessage = await fs.readFile(lastMessageFile, 'utf8').catch(() => undefined);
         const reading = call.read({ stdout: run.stdout, lastMessage });
 
@@ -144,9 +199,11 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
           throw new CallError('call_failed', `AI call failed (tool: ${tool}): ${reason}`);
         }
 
-        const result: CallResult = { text: reading.text, tool };
+        const result: CallResult & { session?: string } = { text: reading.text, tool };
 
         if (reading.tokens) result.tokens = reading.tokens;
+
+        if (reading.session !== undefined) result.session = reading.session;
 
         return result;
       } finally {
@@ -154,6 +211,35 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
       }
   };
 
+  const callTool: ToolCaller['callTool'] = async (prompt, options) => {
+    const { session: _session, ...result } = await callOnce(await pick(options.scope), prompt, options);
 
-  return { callTool };
+    return result;
+  };
+
+  const callForReply: ToolCaller['callForReply'] = async (prompt, schema, { retries = DEFAULT_REPLY_RETRIES, ...options }) => {
+    const chosen = await pick(options.scope);
+    // A tool whose call cannot continue its session is asked once: a fresh session would redo the work.
+    const cap = 'resume' in launchAdapterOf(chosen.tool).call ? retries : 0;
+    let answer = await callOnce(chosen, prompt, options);
+    let reply = extractReply(answer.text, schema);
+    let asked = 1;
+    let tokens = answer.tokens;
+
+    for (; reply === undefined && answer.session !== undefined && asked <= cap; asked++) {
+      log.debug(`[tool-launch] ${chosen.tool} replied with no value the call accepts; asking again (${asked} of ${cap})`);
+      answer = await callOnce(chosen, retryPrompt(answer.text, cap - asked), options, answer.session);
+      reply = extractReply(answer.text, schema);
+      tokens = addTokens(tokens, answer.tokens);
+    }
+
+    const { session: _session, ...last } = answer;
+    const result = { ...last, reply, asked };
+
+    if (tokens) result.tokens = tokens;
+
+    return result;
+  };
+
+  return { callTool, callForReply };
 }

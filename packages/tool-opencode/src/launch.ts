@@ -3,6 +3,8 @@ import { answered, failed, jsonLines, type CallOutput, type CallReading, type La
 import { readToolMetadata } from '@teamai/tool-core/stdout';
 
 
+const OpenCodeSession = z.object({ sessionID: z.string() });
+
 const OpenCodeEvent = z.union([
   z.object({ type: z.literal('text'), part: z.object({ text: z.string() }) }),
   z.object({ type: z.literal('error'), error: z.object({ message: z.string() }) }),
@@ -21,13 +23,26 @@ function readOpenCodeRun({ stdout }: CallOutput): CallReading {
 
   if (error !== undefined || !text) return failed(error);
 
-  return answered(text, readToolMetadata(stdout)?.tokens);
+  const session = jsonLines(stdout).flatMap((line) => {
+    const parsed = OpenCodeSession.safeParse(line);
+
+    return parsed.success ? [parsed.data.sessionID] : [];
+  }).at(-1);
+
+  return answered(text, readToolMetadata(stdout)?.tokens, session);
 }
 
 /** How teamai launches OpenCode headless. */
 export const launch = {
   opencode: {
-    call: { evidence: 'verified', prompt: 'stdin', args: () => ['run', '--format', 'json'], read: readOpenCodeRun },
+    call: {
+      evidence: 'verified',
+      prompt: 'stdin',
+      args: () => ['run', '--format', 'json'],
+      read: readOpenCodeRun,
+      // `opencode run --help` of 2.1.2: `-s, --session` continues a session by its id.
+      resume: { evidence: 'docs', args: (session) => ['--session', session] },
+    },
     // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
     step: { evidence: 'verified', unattended: { args: ['--auto'], evidence: 'docs' } },
     confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
