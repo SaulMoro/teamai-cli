@@ -34,7 +34,7 @@ export const DEFAULT_FLEET_POOL = 'default';
 /** Where the records of every offered attempt live on `teamai-reports`. */
 const ATTEMPTS_DIR = 'workflows/attempts';
 
-const OwnerSchema = z.object({ id: z.string().min(1), user: z.string() });
+const OwnerSchema = z.strictObject({ id: z.string().min(1), user: z.string() });
 
 /** A full commit id, never a name git would resolve on the reading machine, such as a branch or `stash@{0}`, or read as an option. */
 const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be a full commit id');
@@ -44,13 +44,13 @@ const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be 
  * `env` is the step's rendered `env`. A command step carries its command; a prompt step its rendered prompt, and the
  * limits its turn ends at, which the member keeps on the tool it picks.
  */
-const CommandLeaseSchema = z.object({
+const CommandLeaseSchema = z.strictObject({
   step: z.string().min(1),
   command: z.string().min(1),
   env: z.record(z.string(), z.string()),
 });
 
-const PromptLeaseSchema = z.object({
+const PromptLeaseSchema = z.strictObject({
   step: z.string().min(1),
   prompt: z.string(),
   env: z.record(z.string(), z.string()),
@@ -62,7 +62,7 @@ const PromptLeaseSchema = z.object({
  * which the member renders again from its own copy of the step and the offer's values. The sub-graph is the member's
  * own: the record names none of its steps.
  */
-const WorkflowLeaseSchema = z.object({
+const WorkflowLeaseSchema = z.strictObject({
   step: z.string().min(1),
   workflow: z.literal(true),
   inputs: JsonValueSchema,
@@ -98,7 +98,7 @@ export type LeaseValues = z.infer<typeof LeaseValuesSchema>;
  * as the local loop reports a command (`commandEnd`); the whole stdout stays on the member. `to`: the commit it pushed
  * to the attempt's ref, absent when it pushed none.
  */
-const FleetResultSchema = z.object({
+const FleetResultSchema = z.strictObject({
   exitCode: z.number().int(),
   outputs: JsonValueSchema.optional(),
   stderr: z.string(),
@@ -111,20 +111,24 @@ const FleetResultSchema = z.object({
   session: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   tokens: TokenUsageSchema.optional(),
-  failure: z.object({ code: z.string().min(1), message: z.string() }).optional(),
+  failure: z.strictObject({ code: z.string().min(1), message: z.string() }).optional(),
   /** A whole workflow's: the end its nested run reached. */
   end: z.string().min(1).optional(),
 });
 
 export type FleetResult = z.infer<typeof FleetResultSchema>;
 
-/** The format of the attempt records this teamai writes and reads. */
-const RECORD_VERSION = 1;
+/**
+ * The format of the attempt records this teamai writes and reads. 2: labels, prompt leases, a prompt's session and
+ * whole workflow leases. Every object of a record is strict, so a field this format does not name makes the record
+ * unreadable rather than read without it: a newer format bumps this, and a teamai that reads it refuses it by version.
+ */
+const RECORD_VERSION = 2;
 
 /** What any teamai's record says of its format, whatever else it holds. */
 const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined) });
 
-const OfferedSchema = z.object({
+const OfferedSchema = z.strictObject({
   /** The record's format. A teamai that reads a newer one refuses it, naming the teamai that wrote it (`teamai`). */
   version: z.literal(RECORD_VERSION),
   /** The version of the teamai that wrote the record. */
@@ -169,12 +173,12 @@ const ExpiredSchema = ClaimedSchema.extend({ state: z.literal('expired'), expire
 const WithdrawnSchema = OfferedSchema.extend({ state: z.literal('withdrawn'), withdrawnAt: z.string() });
 
 /** A gate a whole workflow reached on the member, as the owner's person sees it. */
-const QuestionSchema = z.object({
+const QuestionSchema = z.strictObject({
   step: z.string().min(1), kind: z.enum(['approve', 'choose']), message: z.string(), options: z.array(z.string()), required: z.boolean(), default: z.string().optional(),
 }) satisfies z.ZodType<ExecQuestion>;
 
 /** The owner's answer: the choice and note its person gave, or why none comes. */
-const AnswerSchema = z.union([z.object({ choice: z.string().min(1), note: z.string().optional() }), z.object({ refused: z.string().min(1) })]) satisfies z.ZodType<ExecAnswer>;
+const AnswerSchema = z.union([z.strictObject({ choice: z.string().min(1), note: z.string().optional() }), z.strictObject({ refused: z.string().min(1) })]) satisfies z.ZodType<ExecAnswer>;
 
 /**
  * A claim whose whole workflow waits at a gate: the member asks the owner `question`, and keeps asking in its progress
@@ -538,6 +542,13 @@ export async function readAttemptRecord(config: LocalConfig, run: RunId, attempt
   }
 }
 
+/** Whether record text `text` says it is in a format of another teamai's, older or newer than this one's. */
+function isOtherFormat(text: string): boolean {
+  const format = RecordFormatSchema.safeParse(jsonOf(text));
+
+  return format.success && format.data.version !== RECORD_VERSION;
+}
+
 function parseRecord(text: string, run: string, attempt: string): Written<FleetRecord> {
   const raw = jsonOf(text);
   const format = RecordFormatSchema.safeParse(raw);
@@ -547,6 +558,10 @@ function parseRecord(text: string, run: string, attempt: string): Written<FleetR
     const by = format.data.teamai;
 
     return { ok: false, error: { code: 'fleet_record_newer', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${by ?? 'newer than this one'}, in a format this teamai cannot read. Upgrade teamai${by === undefined ? '' : ` to ${by} or later`}.` } };
+  }
+
+  if (format.success && format.data.version < RECORD_VERSION) {
+    return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${format.data.teamai ?? 'older than this one'}, in an older format this teamai does not read. Upgrade teamai on the install that offered it.` } };
   }
 
   const parsed = FleetRecordSchema.safeParse(raw);
@@ -576,7 +591,8 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
       const parsed = parseRecord(text, name, file.slice(0, -'.json'.length));
 
       if (parsed.ok) records.push(parsed.value);
-      else if (parsed.error.code === 'fleet_record_newer') log.warn(`Skipped an attempt: ${parsed.error.message}`);
+      // Another teamai's format is worth saying: one of the two installs is to upgrade.
+      else if (isOtherFormat(text)) log.warn(`Skipped an attempt: ${parsed.error.message}`);
     }
   }
 
