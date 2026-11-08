@@ -281,11 +281,11 @@ describe('a member taking a prompt attempt', () => {
   });
 
   /** Claude as its recorded call prints it, on PATH, answering `answer`; the member's default tool is Claude. */
-  function claudeOnPath(answer: string): FakeAgent {
+  function claudeOnPath(answer: string, before?: string): FakeAgent {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-claude-'));
     dirs.push(root);
     vi.stubEnv('HOME', path.join(root, 'home'));
-    const agent = fakeAgent(claudeFake, { bin: path.join(root, 'bin'), answer });
+    const agent = fakeAgent(claudeFake, { bin: path.join(root, 'bin'), answer, ...(before !== undefined && { before }) });
     vi.stubEnv('PATH', `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`);
     agents.push(agent);
 
@@ -320,6 +320,21 @@ describe('a member taking a prompt attempt', () => {
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
     expect(claude.calls()).toHaveLength(1);
     expect(claude.calls()[0]?.args).not.toContain('--model');
+  });
+
+  it('fails the attempt, keeping what the tool answered out of it, when the member cannot push the work the tool made', async () => {
+    claudeOnPath('{"ok":true}', 'fs.writeFileSync("made.txt", "written\\n");');
+
+    const { record } = await takeForged((forged) => {
+      forged.lease = { step: 'write', prompt: 'Write made.txt.', env: {} };
+    }, async (members) => {
+      await useClaude(members);
+      // Origin refuses the member's work on the attempt's branch, as a protected branch would.
+      const origin = git(members.bob.checkout, 'remote', 'get-url', 'origin');
+      fs.writeFileSync(path.join(origin, 'hooks', 'pre-receive'), '#!/bin/sh\nwhile read old new ref; do git log -1 --format=%s "$new" | grep -q "^\\[teamai\\] write" && exit 1; done\nexit 0\n', { mode: 0o755 });
+    }, PROMPTED);
+
+    expect(record).toMatchObject({ state: 'finished', result: { failure: { code: 'push_failed' } } });
   });
 
   it('refuses a prompt the team\'s workflow does not define for the step, and launches no tool', async () => {

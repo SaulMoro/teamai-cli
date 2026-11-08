@@ -353,7 +353,8 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
 
     if (cancelling) return answered(config, cancelling, 'to' in saved ? saved.to : latest.pushed);
 
-    if ('error' in saved) return finish({ ...ran, exitCode: ran.exitCode === 0 ? 1 : ran.exitCode, stderr: saved.error });
+    // A prompt's owner reads its end from `failure`, not the exit code.
+    if ('error' in saved) return finish({ ...ran, exitCode: ran.exitCode === 0 ? 1 : ran.exitCode, stderr: saved.error, failure: { code: 'push_failed', message: saved.error } });
 
     // A restarted member goes on from work its killed run pushed, which is the step's work even when this run adds none.
     return finish(saved.to === claim.start ? ran : { ...ran, to: saved.to });
