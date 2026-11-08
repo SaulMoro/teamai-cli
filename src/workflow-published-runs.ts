@@ -285,10 +285,11 @@ function labelLacks(runs: readonly StepRun[], declared: readonly string[] | unde
   const labels = [...new Set(short.flatMap((run) => lackedLabels(run, declared)))];
   const steps = short.map((run) => run.step);
 
-  return [{
-    reason: `${listOf(steps)} require${steps.length > 1 ? '' : 's'} labels ${listOf(labels)}, which workflows.labels on this machine does not declare`,
-    fix: 'add them to workflows.labels on a machine that has them',
-  }];
+  const reason = steps.length > 1
+    ? `${listOf(steps)} require labels ${listOf(labels)}, which workflows.labels on this machine does not declare`
+    : `${listOf(steps)} requires labels ${listOf(labels)}, which workflows.labels on this machine does not declare`;
+
+  return [{ reason, fix: 'add them to workflows.labels on a machine that has them' }];
 }
 
 /** What `runs` require of env that `env` cannot give here: a key with no value, or any key while the team env is unreadable. */
