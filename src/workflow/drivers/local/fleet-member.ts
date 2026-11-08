@@ -5,6 +5,7 @@
  * commits and pushes what the step did so far and writes that it is still there, so the owner can tell a gone member
  * from a slow one.
  */
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { HandoffOwner } from '../../snapshot.js';
 import type { LocalConfig } from '../../../types.js';
@@ -14,7 +15,7 @@ import { attemptRef, claimAttempt, finishAttempt, fleetFailure, listOffers, reco
 import { commandOutputs } from '../../protocol.js';
 import { attemptDir, takeRunLock } from '../../store.js';
 import type { WorkflowEnvelope } from '../../types.js';
-import { commitWork, git, hostGitEnv, readMemberConfig, untrustedGit, type MemberConfig } from '../../worktree.js';
+import { git, hostGitEnv, readMemberConfig, untrustedGit, type MemberConfig } from '../../worktree.js';
 
 /**
  * Takes and runs the oldest attempt pool `pool` offers for `repository` that another member did not claim first, from
@@ -80,7 +81,16 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
   const added = await git(root, ['worktree', 'add', '--quiet', '--detach', work, start]);
 
   if (added.code !== 0) return finish({ exitCode: 1, stderr: `The member could not check out ${start}: ${added.stderr.trim()}` });
-  const save = (message: string): Promise<{ to: string } | { error: string }> => pushWork({ work, ref, message, memberConfig });
+  // Each save is a commit on the one before, so the ref only moves forward.
+  let tip = start;
+
+  const save = async (message: string): Promise<{ to: string } | { error: string }> => {
+    const saved = await pushWork({ work, ref, message, memberConfig, parent: tip, index: path.join(dir, 'snapshot.index') });
+
+    if ('to' in saved) tip = saved.to;
+
+    return saved;
+  };
 
   try {
     const env = { ...process.env, ...lease.env };
@@ -130,17 +140,26 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
 }
 
 /**
- * Commits what the step changed in `work` and pushes it to `ref`: the commit `ref` then holds. The step ran there, so
- * only the programs of `memberConfig` that its config names run.
+ * Snapshots what the step has in `work` as a commit on `parent` and pushes it to `ref`: the commit `ref` then holds. It
+ * stages into `index`, a file of its own, so the step's own HEAD and index stay as the step left them while it still
+ * runs. The step ran there, so only the programs of `memberConfig` that its config names run.
  */
-async function pushWork({ work, ref, message, memberConfig }: { work: string; ref: string; message: string; memberConfig: MemberConfig }): Promise<{ to: string } | { error: string }> {
-  const workGit = untrustedGit(hostGitEnv(), undefined, memberConfig);
-  const committed = await commitWork(work, message, undefined, workGit);
+async function pushWork({ work, ref, message, memberConfig, parent, index }: { work: string; ref: string; message: string; memberConfig: MemberConfig; parent: string; index: string }): Promise<{ to: string } | { error: string }> {
+  await fs.rm(index, { force: true });
+  const snapshotGit = untrustedGit({ ...hostGitEnv(), GIT_INDEX_FILE: index }, undefined, memberConfig);
+  const read = await snapshotGit(work, ['read-tree', parent]);
+  const added = read.code === 0 ? await snapshotGit(work, ['add', '-A']) : read;
+  const tree = added.code === 0 ? await snapshotGit(work, ['write-tree']) : added;
 
-  if ('error' in committed) return { error: `The member could not commit the step's work: ${committed.error}` };
+  if (tree.code !== 0) return { error: `The member could not commit the step's work: ${tree.stderr.trim()}` };
+  const unchanged = await snapshotGit(work, ['diff-tree', '--quiet', parent, tree.stdout.trim()]);
 
-  if (committed.from === committed.to) return { to: committed.to };
-  const pushed = await workGit(work, ['push', '--quiet', 'origin', `${committed.to}:${ref}`]);
+  if (unchanged.code === 0) return { to: parent };
+  const committed = await snapshotGit(work, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', parent, '-m', message]);
 
-  return pushed.code === 0 ? { to: committed.to } : { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
+  if (committed.code !== 0) return { error: `The member could not commit the step's work: ${committed.stderr.trim()}` };
+  const to = committed.stdout.trim();
+  const pushed = await snapshotGit(work, ['push', '--quiet', 'origin', `${to}:${ref}`]);
+
+  return pushed.code === 0 ? { to } : { error: `The member could not push the step's work to ${ref}: ${pushed.stderr.trim()}` };
 }

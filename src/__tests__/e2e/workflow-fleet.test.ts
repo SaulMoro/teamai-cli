@@ -44,6 +44,12 @@ const ONE = flow('one', `  - id: build
     command: node -e "require('fs').writeFileSync('built.txt', 'B')"
 `);
 
+/** Leaves a file uncommitted past a progress write, then checks that git still shows it so: the member's beat left it alone. */
+const LOOK = flow('look', `  - id: look
+    workspace: new
+    command: node -e "require('fs').writeFileSync('made.txt', 'M'); setTimeout(() => process.exit(3 * Number(!require('child_process').execSync('git status --porcelain').toString().includes('made.txt'))), 4000)"
+`);
+
 /** Three items, each written by the member that runs it. */
 const FAN = `schemaVersion: v1alpha1
 name: fan
@@ -208,6 +214,7 @@ describe('the fleet', () => {
       'workflows/split.yaml': SPLIT,
       'workflows/slow.yaml': SLOW,
       'workflows/one.yaml': ONE,
+      'workflows/look.yaml': LOOK,
       'workflows/fan.yaml': FAN,
       'drivers/build-fleet.yaml': stringify(FLEET),
       'drivers/fan-fleet.yaml': stringify(FAN_FLEET),
@@ -329,6 +336,21 @@ describe('the fleet', () => {
 
     expect(answers.filter((answer) => answer.data?.ran !== undefined), `${said(bob)}\n${said(carol)}`).toEqual([{ data: { ran: expect.objectContaining({ run, step: 'build', exit_code: 0 }) } }]);
     expect(answers.filter((answer) => answer.data?.idle !== undefined)).toEqual([{ data: { idle: { offered: 0 } } }]);
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  }, 180_000);
+
+  it('writes progress without committing in the step\'s copy while the step runs, and takes the step\'s work at its end', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'look', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+
+    const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']);
+
+    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'look', exit_code: 0 } } });
     const done = await started;
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   }, 180_000);
