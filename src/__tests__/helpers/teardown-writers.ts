@@ -46,11 +46,21 @@ const now = performance.now.bind(performance);
 
 // A skill runner whose attempt a test left open polls its run for good, and
 // one whose run a removal deletes ends unseen and may write the run back. A
-// removal first stops each runner working in what it removes; the test that
-// left it then fails, below.
+// removal of a directory first stops each runner working in it, whatever
+// started it; the test that left it then fails, below.
 const stoppedRunners: number[] = [];
 function stopRunnersIn(target: fs.PathLike): void {
-  stoppedRunners.push(...stopLeftSkillRunners(tracker.running, { workingIn: target instanceof URL ? fileURLToPath(target) : target.toString() }));
+  const dir = target instanceof URL ? fileURLToPath(target) : target.toString();
+  if (!isDirectory(dir)) return;
+  stoppedRunners.push(...stopLeftSkillRunners(tracker.running, { workingIn: dir }));
+}
+
+function isDirectory(target: string): boolean {
+  try {
+    return fs.lstatSync(target).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 const rmSync = fs.rmSync;

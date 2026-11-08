@@ -74,3 +74,19 @@ it.skipIf(process.platform === 'win32')('stops only the skill runners working in
     }
   }
 });
+
+it.skipIf(process.platform === 'win32')('stops a runner working in a directory it is given though no tracked process started it, as one a confined tool started without NODE_OPTIONS', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-skill-runners-'));
+  roots.push(root);
+  const checkout = path.join(root, 'checkout');
+  fs.mkdirSync(checkout);
+  const untracked = runner(root, ['workflow', 'report', 'r0123456789abcdef', '--driver', 'skill', '--attempt', 'a00000003'], checkout);
+  try {
+    expect(stopLeftSkillRunners(() => [], { exitMs: 0, workingIn: checkout })).toEqual([untracked.pid]);
+    expect(groupAlive(untracked.pid), 'the untracked runner was stopped').toBe(false);
+  } finally {
+    for (const pid of [untracked.pid, untracked.step]) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  }
+});

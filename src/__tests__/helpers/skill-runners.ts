@@ -16,14 +16,17 @@ const now = performance.now.bind(performance);
  * runner is a detached `teamai workflow report <run> --driver skill --attempt <a>` that leads a process group of its
  * own, works in its run's checkout, and ends at its next check once its attempt is reported or stopped. Waits `exitMs`
  * for the runners to end, then stops each one left: its process group, and the groups its step's setup and command
- * lead, which outlive it. `workingIn`: only the runners whose working directory is in that directory. Synchronous, so
- * a synchronous removal can call it. On Windows a runner leads no process group, so nothing is checked there.
+ * lead, which outlive it. `workingIn`: the runners whose working directory is in that directory, whatever started
+ * them, since `running()` misses one a process without the tracker preload started, as a confined tool, whose
+ * environment drops NODE_OPTIONS. Synchronous, so a synchronous removal can call it. On Windows a runner leads no
+ * process group, so nothing is checked there.
  */
 export function stopLeftSkillRunners(running: () => number[], options: { exitMs?: number; workingIn?: string } = {}): number[] {
   const { exitMs = RUNNER_EXIT_MS, workingIn } = options;
   const live = () => {
-    const runners = skillRunners(running());
-    return workingIn === undefined || runners.length === 0 ? runners : runnersWorkingIn(runners, workingIn);
+    if (workingIn === undefined) return skillRunners(running());
+    const runners = skillRunners();
+    return runners.length === 0 ? runners : runnersWorkingIn(runners, workingIn);
   };
   const deadline = now() + exitMs;
   let left = live();
@@ -51,11 +54,14 @@ export function leftSkillRunners(left: readonly number[]): string {
 
 interface ProcessRow { pid: number; ppid: number; pgid: number; zombie: boolean; command: string }
 
-/** Each of `pids` that is a live skill runner, so a pid the system gave to another process since is never signalled. */
-function skillRunners(pids: readonly number[]): number[] {
-  if (process.platform === 'win32' || pids.length === 0) return [];
-  const runners = processTable().filter((row) => !row.zombie && / workflow report \S+ --driver skill --attempt /.test(row.command));
-  return pids.filter((pid) => runners.some((row) => row.pid === pid));
+/**
+ * Each of `pids` that is a live skill runner, so a pid the system gave to another process since is never signalled;
+ * without `pids`, every live skill runner on this machine.
+ */
+function skillRunners(pids?: readonly number[]): number[] {
+  if (process.platform === 'win32' || pids?.length === 0) return [];
+  const runners = processTable().filter((row) => !row.zombie && / workflow report \S+ --driver skill --attempt /.test(row.command)).map((row) => row.pid);
+  return pids === undefined ? runners : pids.filter((pid) => runners.includes(pid));
 }
 
 /** Each of `runners` whose working directory is `dir` or inside it. */
