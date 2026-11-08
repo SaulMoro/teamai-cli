@@ -41,6 +41,7 @@ import type { Session } from '@teamai/tool-core/sessions/ir';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema, isJsonObject } from '../types.js';
 import { titleSpellsLocalPath, type LocalPathRoots } from './scrub.js';
+import { ArchivedEvidenceSchema, type ArchivedEvidence } from './session-evidence.js';
 import { messageToDict, messageFromDict } from '@teamai/tool-core/sessions/ir';
 import { parseJson } from '../utils/json.js';
 
@@ -694,8 +695,9 @@ export class SyncManager {
   /**
    * Save through the archive lock, including deduplication and index repair. `pathsRewritten` says the caller rewrote
    * this machine's paths (`--scrub`): a session pushed before under a title that spelled one then moves to its new name.
+   * `evidence`, already masked, is kept beside the session and replaces what it had; without it, what it had stays.
    */
-  async saveSession(session: Session, meta: SessionSyncMeta, opts: { pathsRewritten?: boolean } = {}): Promise<ArchiveWriteResult<string>> {
+  async saveSession(session: Session, meta: SessionSyncMeta, opts: { pathsRewritten?: boolean; evidence?: ArchivedEvidence } = {}): Promise<ArchiveWriteResult<string>> {
     const archivedCwdValue = await archivedCwd(meta.origin.cwd);
 
     const archivedMeta: SessionSyncMeta = {
@@ -710,6 +712,7 @@ export class SyncManager {
       { ...session, cwd: archivedCwdValue },
       archivedMeta,
       spellsLocalPath,
+      opts.evidence,
     ));
   }
 
@@ -868,7 +871,7 @@ export class SyncManager {
       for (const file of fs.readdirSync(authorDir)) {
         if (!file.endsWith('.meta.json')) continue;
         const sessionName = file.slice(0, -'.meta.json'.length);
-        const source = { jsonl: path.join(authorDir, `${sessionName}.jsonl`), meta: path.join(authorDir, file) };
+        const source = { jsonl: path.join(authorDir, `${sessionName}.jsonl`), meta: path.join(authorDir, file), evidence: path.join(authorDir, `${sessionName}.evidence.json`) };
 
         if (!committed.has(relative(source.meta))) continue; // never committed: not part of the move
         let meta: SessionSyncMeta;
@@ -889,8 +892,8 @@ export class SyncManager {
         );
 
         if (existing && ![target.jsonl, target.meta].every((f) => committedTo.has(relative(f)))) continue;
-        // Only committed files take part: a local-only sibling stays where it is.
-        const kinds = (['jsonl', 'meta'] as const).filter((kind) => committed.has(relative(source[kind])));
+        // Only committed files take part: a local-only sibling stays where it is. The evidence goes with its session.
+        const kinds = (['jsonl', 'meta', 'evidence'] as const).filter((kind) => committed.has(relative(source[kind])));
 
         if (existing && (meta.sync.pushedAt ?? '') <= pushedAt(target.meta)) {
           for (const kind of kinds) fs.rmSync(source[kind], { force: true });
@@ -930,6 +933,7 @@ export class SyncManager {
     return {
       jsonl: path.join(dir, `${sessionName}.jsonl`),
       meta: path.join(dir, `${sessionName}.meta.json`),
+      evidence: path.join(dir, `${sessionName}.evidence.json`),
     };
   }
 
@@ -1134,7 +1138,7 @@ export class SyncManager {
    * @param meta Sync metadata
    * @returns Path of the written jsonl file (relative to repoRoot)
    */
-  private saveSessionLocked(session: Session, meta: SessionSyncMeta, spellsLocalPath: (title: string) => boolean): string {
+  private saveSessionLocked(session: Session, meta: SessionSyncMeta, spellsLocalPath: (title: string) => boolean, evidence: ArchivedEvidence | undefined): string {
     const repoId = meta.origin.repoIdentity;
     const author = meta.origin.author;
     this.moveRepoDirToCurrentName(repoId);
@@ -1154,7 +1158,11 @@ export class SyncManager {
     const paths = this.sessionPaths(repoId, author, sessionName);
     const retiredPaths = retired ? this.sessionPaths(repoId, author, retired) : undefined;
 
-    for (const file of [paths.jsonl, paths.meta, retiredPaths?.jsonl, retiredPaths?.meta]) if (file) this.guardWrite(file);
+    // Evidence the session keeps: the new one, else what it had under its retired name; a rename carries it along.
+    const keptEvidence = evidence ? `${JSON.stringify(evidence, null, 2)}\n` : retiredPaths && fs.existsSync(retiredPaths.evidence) ? fs.readFileSync(retiredPaths.evidence, 'utf-8') : undefined;
+    const evidenceFiles = [...(keptEvidence !== undefined ? [paths.evidence] : []), ...(retiredPaths && fs.existsSync(retiredPaths.evidence) ? [retiredPaths.evidence] : [])];
+
+    for (const file of [paths.jsonl, paths.meta, retiredPaths?.jsonl, retiredPaths?.meta, ...evidenceFiles]) if (file) this.guardWrite(file);
 
     // Resolve/repair the index before installing the pair: a rebuild must
     // never adopt half of this transaction as an existing archive.
@@ -1166,8 +1174,9 @@ export class SyncManager {
     const files = [
       { file: paths.jsonl, content: session.messages.map((m) => JSON.stringify(messageToDict(m))).join('\n') + '\n' },
       { file: paths.meta, content: JSON.stringify(meta, null, 2) },
+      ...(keptEvidence !== undefined ? [{ file: paths.evidence, content: keptEvidence }] : []),
       // A retired pair has no content: it is backed up like a replaced file, then dropped on commit.
-      ...(retiredPaths ? [{ file: retiredPaths.jsonl }, { file: retiredPaths.meta }] : []),
+      ...(retiredPaths ? [{ file: retiredPaths.jsonl }, { file: retiredPaths.meta }, ...(fs.existsSync(retiredPaths.evidence) ? [{ file: retiredPaths.evidence }] : [])] : []),
     ].map((file: { file: string; content?: string }) => ({ ...file, temp: `${file.file}.${token}.tmp`, backup: `${file.file}.${token}.bak`, backedUp: false, installed: false }));
 
     let committed = false;
@@ -1291,6 +1300,22 @@ export class SyncManager {
     };
 
     return { session, meta };
+  }
+
+  /**
+   * The evidence the step of an archived session left, as it was pushed with the session, or undefined when it has
+   * none. Throws when the file is there but does not parse, as `loadSession` throws for its session.
+   */
+  loadEvidence(repoIdentity: string | null, sessionName: string, author?: string): ArchivedEvidence | undefined {
+    if (sessionName !== path.basename(sessionName) || /^\.\.?$/.test(sessionName)) throw new Error(`Invalid session name: ${sessionName}`);
+    const { evidence } = this.sessionPaths(repoIdentity, author ?? this.findAuthor(repoIdentity, sessionName), sessionName);
+
+    if (!fs.existsSync(evidence)) return undefined;
+    const parsed = ArchivedEvidenceSchema.safeParse(parseJson(fs.readFileSync(evidence, 'utf-8')));
+
+    if (!parsed.success) throw new Error(`Evidence file ${evidence} does not hold evidence teamai archived: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+
+    return parsed.data;
   }
 
   /** Search the repo directory for which author owns sessionName */
@@ -1456,6 +1481,8 @@ export class SyncManager {
     if (fs.existsSync(paths.jsonl)) fs.unlinkSync(paths.jsonl);
 
     if (fs.existsSync(paths.meta)) fs.unlinkSync(paths.meta);
+
+    if (fs.existsSync(paths.evidence)) fs.unlinkSync(paths.evidence);
 
     this.removeIndexEntry(repoIdentity, sessionName, resolvedAuthor);
   }
