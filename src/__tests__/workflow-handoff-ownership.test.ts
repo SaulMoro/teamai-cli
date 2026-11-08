@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext } from '../workflow/engine.js';
@@ -5,6 +6,8 @@ import { claimOffered, publishRun, resumeRun } from '../workflow/handoff.js';
 import { managedReport, resumeRefusal } from '../workflow/protocol.js';
 import { readRun, RunIdSchema } from '../workflow/store.js';
 import { BUILD, dirs, git, type Member, originFile, start, team } from './helpers/workflow-handoff-fixture.js';
+import { sharedTeam, skillHarness } from './helpers/skill-harness.js';
+import { AttemptIdSchema, type AttemptId, type RunId } from '../workflow/store.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -158,5 +161,76 @@ describe('taking over a run its owner drives', () => {
 
     vi.setSystemTime(Date.now() + 45 * MINUTE);
     expect(await resumeRun(bob.config, runId, { claim: false, checkout: bob.checkout })).toMatchObject({ ok: false, error: { code: 'owner_active' } });
+  });
+});
+
+const PROMPTED = `schemaVersion: v1alpha1
+name: prompted
+description: One prompt step.
+steps:
+  - id: write
+    prompt: Write it.
+`;
+
+/** Alice's skill session drives her published run of `prompted`: its prompt step is dispatched to her child agent. */
+async function aliceDispatched(): Promise<{ made: Awaited<ReturnType<typeof skillHarness>>; run: RunId; attempt: AttemptId; written: () => string; bob: () => ReturnType<ReturnType<typeof sharedTeam>['install']> }> {
+  const shared = sharedTeam({ prompted: PROMPTED });
+  const install = await shared.install('alice');
+  const made = await skillHarness({}, { install });
+  dirs.push(made.root);
+  const started = await made.call({ kind: 'start', name: 'prompted', answers: { confirmed: false }, inputs: undefined });
+  if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+  const { run } = started.data.turn;
+  expect(await publishRun(install.config, run, { checkout: install.checkout, env: {} })).toMatchObject({ ok: true });
+  expect(await resumeRun(install.config, run, { claim: false, checkout: install.checkout })).toMatchObject({ ok: true });
+  await made.call({ kind: 'choose', run, choice: 'h1' });
+  let attempt: string | undefined;
+  for (let poll = 0; poll < 10 && attempt === undefined; poll += 1) {
+    const answer = await made.call({ kind: 'next', run, wait: false });
+    const turn = 'data' in answer && 'turn' in answer.data ? answer.data.turn : undefined;
+    attempt = turn?.actions.flatMap((action) => (action.kind === 'dispatch' ? [action.attempt] : []))[0];
+  }
+  if (attempt === undefined) throw new Error('no dispatch came up');
+  const dispatched = AttemptIdSchema.parse(attempt);
+  await made.call({ kind: 'ack', run, attempt: dispatched });
+  const written = (): string => JSON.parse(execFileSync('git', ['--git-dir', install.config.repo.remote, 'show', `teamai-reports:workflows/runs/${run}/state.json`], { encoding: 'utf8' })).write;
+  return { made, run, attempt: dispatched, written, bob: () => shared.install('bob') };
+}
+
+describe('the skill driver keeps a run it drives', () => {
+  it('writes the run again while its child works a prompt step past the renewal age, though the session calls nothing', async () => {
+    const { made, written } = await aliceDispatched();
+    const before = written();
+
+    // Only the runners move: a sleep moves the clock and wakes them, and a runner then waits at the run lock until the next.
+    await made.context.runners.sleep(21 * MINUTE);
+    await made.context.runners.sleep(MINUTE);
+
+    expect(written()).not.toBe(before);
+  });
+
+  it('stops checking the run once its session has called nothing for the stale window, so a session that ended holds the run no longer', async () => {
+    const { made, run, attempt } = await aliceDispatched();
+
+    await made.context.runners.sleep(59 * MINUTE);
+    await made.context.runners.sleep(MINUTE / 2);
+    expect(await made.context.runners.alive(run, attempt)).toBe(true);
+
+    await made.context.runners.sleep(MINUTE);
+    await made.context.runners.sleep(MINUTE);
+    expect(await made.context.runners.alive(run, attempt)).toBe(false);
+  });
+
+  it('stops checking the run once another install took it over, and leaves the run to it', async () => {
+    const { made, run, attempt, bob } = await aliceDispatched();
+    const taker = await bob();
+    expect(await resumeRun(taker.config, run, { claim: false, checkout: taker.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    expect(await made.context.runners.alive(run, attempt)).toBe(true);
+
+    // A sleep wakes the runner, which then waits at the run lock until the next.
+    await made.context.runners.sleep(2 * MINUTE);
+    await made.context.runners.sleep(MINUTE);
+
+    expect(await made.context.runners.alive(run, attempt)).toBe(false);
   });
 });
