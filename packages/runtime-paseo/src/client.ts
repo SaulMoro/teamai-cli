@@ -20,7 +20,8 @@ import { clientInApp } from './app-client.js';
 //    PASEO_CLIENT_PATH          the directory of an @getpaseo/client package, when set
 //    else `paseo` on PATH       its real path, then the CLI package that holds it, whose dependencies hold the client;
 //    or ~/.local/bin/paseo      or, for the Paseo app's CLI script, the client inside the app, unpacked into
-//                               ~/.teamai/runtime-state/paseo-client (app-client.ts); ~/.local/bin is where the app's
+//                               ~/.teamai/runtime-state/paseo-client (app-client.ts), or, for a check, which writes
+//                               nothing of teamai's, into a directory it removes; ~/.local/bin is where the app's
 //                               install-CLI action links the script, which PATH may not hold
 //
 //  The client's own dependencies, @getpaseo/protocol and ws, resolve from the client's directory, as its code does.
@@ -82,8 +83,11 @@ function clientBeside(cli: string): string | undefined {
   }
 }
 
-/** The directory of the client package and its version, or why none can be used. */
-function findClient(env: NodeJS.ProcessEnv): { dir: string; version: string } | RuntimeFailure {
+/**
+ * The directory of the client package and its version, or why none can be used. `unpackInto`: where a client inside the
+ * Paseo app that teamai has not kept yet is unpacked, instead of teamai's runtime state.
+ */
+function findClient(env: NodeJS.ProcessEnv, unpackInto: string | undefined): { dir: string; version: string } | RuntimeFailure {
   const given = env.PASEO_CLIENT_PATH;
   let dir: string | undefined;
 
@@ -108,7 +112,7 @@ function findClient(env: NodeJS.ProcessEnv): { dir: string; version: string } | 
     }
 
     const beside = clientBeside(cli);
-    const located = beside === undefined ? clientInApp(cli, path.join(getUserHome(), '.teamai', 'runtime-state', 'paseo-client')) : { dir: beside };
+    const located = beside === undefined ? clientInApp(cli, { keep: path.join(getUserHome(), '.teamai', 'runtime-state', 'paseo-client'), ...(unpackInto !== undefined && { unpackInto }) }) : { dir: beside };
 
     if (located && 'code' in located) return located;
     dir = located?.dir;
@@ -150,9 +154,13 @@ async function loadExport<TExport extends object>(from: string, specifier: strin
   return parsed.data[name] as TExport;
 }
 
-/** Loads the installed Paseo client, or says what is missing and how to install it. */
-export async function loadClient(env: NodeJS.ProcessEnv): Promise<PaseoClient | RuntimeFailure> {
-  const found = findClient(env);
+/**
+ * Loads the installed Paseo client, or says what is missing and how to install it. `unpackInto`: a directory of the
+ * caller's, which it removes, for a client inside the Paseo app that teamai has not kept yet, so loading writes nothing
+ * of teamai's.
+ */
+export async function loadClient(env: NodeJS.ProcessEnv, { unpackInto }: { unpackInto?: string } = {}): Promise<PaseoClient | RuntimeFailure> {
+  const found = findClient(env, unpackInto);
 
   if ('code' in found) return found;
 
