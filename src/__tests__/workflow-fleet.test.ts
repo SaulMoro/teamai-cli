@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { claimAttempt, expireClaim, finishAttempt, lastGoneWork, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
@@ -241,4 +242,141 @@ describe('publishing a run with an attempt out on a fleet pool', () => {
     expect(refused.ok ? '' : refused.error.message).toContain(`fleet pool build`);
     expect(refused.ok ? '' : refused.error.message).toContain(`teamai workflow resume ${runId}`);
   });
+});
+
+/** A command that marks that it started, then runs until it is stopped, writing work as it goes. */
+const SLOW = `schemaVersion: v1alpha1
+name: slow
+description: Works until stopped.
+steps:
+  - id: work
+    workspace: new
+    command: echo begun > begun.txt; sleep 60
+`;
+
+/** A command that goes on from what the attempt's ref holds: it fails unless the work an earlier run left is there. */
+const AGAIN = `schemaVersion: v1alpha1
+name: slow
+description: Goes on from earlier work.
+steps:
+  - id: work
+    workspace: new
+    command: test -f left.txt && echo again > again.txt
+`;
+
+/**
+ * Alice starts workflow `slow`, defined as `definition` with command `command`, and offers its step with `staleAfterMs`;
+ * answers both members, the run and the offer.
+ */
+async function offerSlow(staleAfterMs: number, { definition = SLOW, command = 'echo begun > begun.txt; sleep 60' } = {}) {
+  const acme = team({ slow: definition });
+  const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+  const started = await startRun(alice.config, 'slow', {}, { secrets: {} });
+  if (!('data' in started)) throw new Error(started.error.message);
+  const run = RunIdSchema.parse(String(started.data.run));
+  const state = await readRun(alice.config, run);
+  if (state === 'missing' || state === 'corrupt') throw new Error(`run ${run} is ${state}`);
+  const startCommit = git(alice.checkout, 'rev-parse', 'HEAD');
+  git(alice.checkout, 'push', '-q', 'origin', `HEAD:refs/heads/teamai/attempts/${run}/${ATTEMPT}`);
+  const offered = await offerAttempt(alice.config, {
+    run, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(alice.config), start: startCommit, staleAfterMs, secrets: {},
+    lease: { step: 'work', command, env: {} },
+    definition: { name: state.name, sourceHash: state.sourceHash, definitionHash: definitionHash(state.definition, state.workflows), teamRevision: state.teamRevision, origin: state.origin },
+    values: {},
+  });
+  if (!offered.ok) throw new Error(offered.error.message);
+  await readableReportsWorktree(bob.config);
+
+  return { alice, bob, run, startCommit, offered: offered.value };
+}
+
+async function recordOf(member: Member, run: ReturnType<typeof RunIdSchema.parse>) {
+  const read = await readAttemptRecord(member.config, run, ATTEMPT);
+
+  return read.ok && read.value !== 'absent' ? read.value : undefined;
+}
+
+async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): Promise<T> {
+  const deadline = Date.now() + ms;
+
+  for (;;) {
+    const value = await read();
+
+    if (value !== undefined) return value;
+
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+describe('cancelling an attempt through its record', () => {
+  it('withdraws an offer no member claimed, which no member then takes', async () => {
+    const { bob, run, offered, alice } = await offerSlow(60_000);
+
+    expect(await cancelAttempt(alice.config, offered)).toMatchObject({ ok: true, value: { state: 'withdrawn' } });
+    await readableReportsWorktree(bob.config);
+    expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} }))
+      .toEqual({ data: { idle: { offered: 0 } } });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'withdrawn' });
+  });
+
+  it('stops the member\'s step, which pushes its work and answers cancelled', async () => {
+    const { alice, bob, run, startCommit } = await offerSlow(3_000);
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+    // The member's first beat pushed the file the step wrote.
+    const running = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' && record.pushed !== startCommit ? record : undefined;
+    });
+
+    expect(await cancelAttempt(alice.config, running)).toMatchObject({ ok: true, value: { state: 'cancelling' } });
+
+    expect(await taking).toEqual({ data: { cancelled: { run, attempt: ATTEMPT, step: 'work' } } });
+    const cancelled = await recordOf(alice, run);
+    expect(cancelled).toMatchObject({ state: 'cancelled', member: { id: (await installOwner(bob.config)).id } });
+    if (cancelled?.state !== 'cancelled') return;
+    git(alice.checkout, 'fetch', '-q', 'origin', `refs/heads/teamai/attempts/${run}/${ATTEMPT}`);
+    expect(git(alice.checkout, 'show', `${cancelled.pushed}:begun.txt`)).toBe('begun');
+    await readableReportsWorktree(alice.config);
+    expect(await lastGoneWork(alice.config, { run, step: 'work', owner: await installOwner(alice.config) })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
+  }, 60_000);
+});
+
+describe('a restarted member', () => {
+  it('stops the command it left running, and finishes the claim it held from the work it pushed', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN, command: 'test -f left.txt && echo again > again.txt' });
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    // What a member killed mid-step left: its work so far on the attempt's ref, and the step's command still running.
+    const ref = `refs/heads/teamai/attempts/${run}/${ATTEMPT}`;
+    git(bob.checkout, 'fetch', '-q', 'origin', ref);
+    const work = path.join(path.dirname(bob.checkout), 'bob-left');
+    git(bob.checkout, 'worktree', 'add', '-q', '--detach', work, 'FETCH_HEAD');
+    fs.writeFileSync(path.join(work, 'left.txt'), 'kept\n');
+    git(work, 'add', '-A');
+    git(work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'left');
+    git(work, 'push', '-q', 'origin', `HEAD:${ref}`);
+    git(bob.checkout, 'worktree', 'remove', '--force', work);
+    fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
+    const left = startGroupedCommand({ command: 'sleep 60', cwd: bob.checkout, env: process.env, detached: true, group: attemptDir(bob.config, run, ATTEMPT) });
+    let isLeftRunning = true;
+    void left.exit.then(() => { isLeftRunning = false; });
+    await readableReportsWorktree(bob.config);
+
+    try {
+      const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+
+      expect(isLeftRunning).toBe(false);
+      expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+      const finished = await recordOf(alice, run);
+      expect(finished).toMatchObject({ state: 'finished', result: { exitCode: 0, to: expect.any(String) } });
+      if (finished?.state !== 'finished' || finished.result.to === undefined) return;
+      git(alice.checkout, 'fetch', '-q', 'origin', ref);
+      expect(git(alice.checkout, 'show', `${finished.result.to}:left.txt`)).toBe('kept');
+      expect(git(alice.checkout, 'show', `${finished.result.to}:again.txt`)).toBe('again');
+    } finally {
+      await left.stop();
+    }
+  }, 60_000);
 });

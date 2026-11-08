@@ -4,13 +4,16 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
-import { AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
 import { attemptRun, attemptRuntimePath, maskAttemptResults, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, releaseLogin, writeLoginBack } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './step-runtime.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
+import { stopRecordedGroup } from '../../tool-launch/process-stop.js';
+import { cancelOffer } from '../fleet/owner.js';
+import { offeredPool } from '../fleet/record.js';
 
 // ─── What cancelled attempts left on their step runtimes ─
 //
@@ -43,6 +46,14 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
 
     return attempt.success ? [attempt.data] : [];
   });
+
+  // What a killed driver of this install started for a cancelled attempt, which leads a process group of its own, and
+  // what a fleet member runs for one, which only the attempt's record reaches.
+  for (const attempt of cancelled) {
+    await stopRecordedGroup(attemptDir(config, run, attempt));
+
+    if (await offeredPool(config, run, attempt) !== undefined) log.info(await cancelOffer(config, run, attempt));
+  }
 
   const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)]);
 

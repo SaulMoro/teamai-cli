@@ -38,6 +38,11 @@ const SLOW = flow('slow', `  - id: long
     command: node -e "const fs = require('fs'); if (fs.existsSync('partial.txt')) { fs.writeFileSync('done.txt', 'D'); process.exit(0); } fs.writeFileSync('partial.txt', 'P'); setInterval(() => {}, 1000)"
 `);
 
+/** A command on the owner's own machine that runs until stopped, writing its pid where the test reads it. */
+const HOLD = flow('hold', `  - id: hold
+    command: node -e "require('fs').writeFileSync(require('os').homedir() + '/hold.pid', String(process.pid)); setInterval(() => {}, 1000)"
+`);
+
 /** One command step. */
 const ONE = flow('one', `  - id: build
     workspace: new
@@ -270,6 +275,23 @@ function runStateOf(member: string, run: string): { steps: Step[] } {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as { steps: Step[] } : { steps: [] };
 }
 
+/** The ids of `member`'s runs. */
+function runsOf(member: string): string[] {
+  const dir = path.join(dataHomeOf(member), 'workflows', 'runs');
+
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)) : [];
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function join(member: string): Promise<void> {
   fs.mkdirSync(binOf(member), { recursive: true });
   fs.writeFileSync(path.join(binOf(member), 'claude'), fakeTool({ tool: 'claude', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
@@ -295,6 +317,7 @@ describe('the fleet', () => {
       'workflows/split.yaml': SPLIT,
       'workflows/slow.yaml': SLOW,
       'workflows/one.yaml': ONE,
+      'workflows/hold.yaml': HOLD,
       'workflows/look.yaml': LOOK,
       'workflows/fan.yaml': FAN,
       'drivers/build-fleet.yaml': stringify(FLEET),
@@ -485,4 +508,69 @@ describe('the fleet', () => {
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(records(run).map((record) => [record.state, record.lease.step]).sort()).toEqual([['finished', 'part[0]'], ['finished', 'part[1]'], ['finished', 'part[2]']]);
   }, 240_000);
+  it('stops a member\'s step when the owner cancels the run, and the member pushes its work and answers the cancel', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; });
+    await waitOn(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000, () => bobPid, taking);
+
+    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+    expect(cancel.code, said(cancel)).toBe(0);
+
+    const answered = await taking;
+    expect(answered.envelope(), said(answered)).toEqual({ data: { cancelled: { run, attempt: records(run)[0]?.attempt, step: 'long' } } });
+    const [cancelled] = records(run);
+    expect(cancelled).toMatchObject({ state: 'cancelled' });
+    expect(originGit('show', `${cancelled?.pushed ?? ''}:partial.txt`)).toBe('P');
+    const ended = await started;
+    expect(ended.envelope(), said(ended)).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
+  }, 180_000);
+
+  it('cancels a member\'s step through its record when the owner\'s driver is gone', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    process.kill(alicePid, 'SIGKILL');
+    await started;
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; });
+    await waitOn(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000, () => bobPid, taking);
+
+    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+    expect(cancel.code, said(cancel)).toBe(0);
+    expect(records(run)).toEqual([expect.objectContaining({ state: expect.stringMatching(/^cancell(ing|ed)$/) })]);
+
+    const answered = await taking;
+    expect(answered.envelope(), said(answered)).toMatchObject({ data: { cancelled: { run, step: 'long' } } });
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
+  }, 180_000);
+
+  it('stops the command a killed local driver left running when the run is cancelled', async () => {
+    const pidFile = path.join(homeOf('alice'), 'hold.pid');
+    fs.rmSync(pidFile, { force: true });
+    const before = new Set(runsOf('alice'));
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'hold', '--driver', 'local'], (pid) => { alicePid = pid; });
+    await waitOn(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 60_000, () => alicePid, started);
+    const command = Number(fs.readFileSync(pidFile, 'utf8'));
+    const run = runsOf('alice').find((name) => !before.has(name)) ?? '';
+    process.kill(alicePid, 'SIGKILL');
+    await started;
+    expect(isAlive(command)).toBe(true);
+
+    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+
+    expect(cancel.code, said(cancel)).toBe(0);
+    expect(await until(() => !isAlive(command), 10_000), `the step's command ${command} still runs after workflow cancel`).toBe(true);
+  }, 180_000);
 });

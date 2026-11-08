@@ -98,16 +98,33 @@ const ClaimedSchema = OfferedSchema.extend({ state: z.literal('claimed'), member
 
 const FinishedSchema = ClaimedSchema.extend({ state: z.literal('finished'), finishedAt: z.string(), result: FleetResultSchema });
 
-/** A claim the owner gave up once no progress came for `stale_after`: nothing the member writes later counts. */
-const ExpiredSchema = ClaimedSchema.extend({ state: z.literal('expired'), expiredAt: z.string() });
+/**
+ * A claim the owner gave up once no progress came for `stale_after`, or no answer to its cancel (`cancelAt`): nothing the
+ * member writes later counts.
+ */
+const ExpiredSchema = ClaimedSchema.extend({ state: z.literal('expired'), expiredAt: z.string(), cancelAt: z.string().optional() });
 
-export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, FinishedSchema, ExpiredSchema]);
+/** An offer the owner took back, before any member claimed it: the step was cancelled. */
+const WithdrawnSchema = OfferedSchema.extend({ state: z.literal('withdrawn'), withdrawnAt: z.string() });
+
+/** A claim the owner asked its member to stop, which the member answers with `cancelled` once its step stopped. */
+const CancellingSchema = ClaimedSchema.extend({ state: z.literal('cancelling'), cancelAt: z.string() });
+
+/** A cancelled claim: the member stopped its step and pushed its work up to `pushed`, which a retry goes on from. */
+const CancelledSchema = CancellingSchema.extend({ state: z.literal('cancelled'), cancelledAt: z.string() });
+
+export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, FinishedSchema, ExpiredSchema, WithdrawnSchema, CancellingSchema, CancelledSchema]);
 
 export type FleetRecord = z.infer<typeof FleetRecordSchema>;
 
 type Offered = Extract<FleetRecord, { state: 'offered' }>;
 
 export type Claimed = Extract<FleetRecord, { state: 'claimed' }>;
+
+export type Cancelling = Extract<FleetRecord, { state: 'cancelling' }>;
+
+/** A record no write replaces: whatever its member does later changes nothing. */
+export type Settled = Extract<FleetRecord, { state: 'finished' | 'expired' | 'withdrawn' | 'cancelled' }>;
 
 export type FleetError =
   | { code: 'state_moved'; message: string }
@@ -260,12 +277,35 @@ export async function recordProgress(config: LocalConfig, claimed: Claimed, push
   return written.ok ? { ok: true, value: progressed } : written;
 }
 
-/** Gives up claim `claimed`, whose member wrote no progress for longer than the pool allows. */
-export async function expireClaim(config: LocalConfig, claimed: Claimed): Promise<Written<Extract<FleetRecord, { state: 'expired' }>>> {
+/**
+ * Gives up claim `claimed`, whose member wrote no progress for longer than the pool allows, or did not answer the cancel
+ * of it in that time.
+ */
+export async function expireClaim(config: LocalConfig, claimed: Claimed | Cancelling): Promise<Written<Extract<FleetRecord, { state: 'expired' }>>> {
   const expired: Extract<FleetRecord, { state: 'expired' }> = { ...claimed, write: randomUUID(), state: 'expired', expiredAt: new Date().toISOString() };
   const written = await writeRecord(config, expired, { replaces: claimed.write, message: `[teamai] Expire attempt ${claimed.attempt} of run ${claimed.run}` });
 
   return written.ok ? { ok: true, value: expired } : written;
+}
+
+/**
+ * Cancels attempt `record` through its record: an offer no member claimed is withdrawn, and a claim becomes `cancelling`,
+ * which its member answers once it stopped the step. Another write first answers `state_moved`.
+ */
+export async function cancelAttempt(config: LocalConfig, record: Offered | Claimed): Promise<Written<Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }>>> {
+  const now = new Date().toISOString();
+  const cancel: Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }> = record.state === 'offered' ? { ...record, write: randomUUID(), state: 'withdrawn', withdrawnAt: now } : { ...record, write: randomUUID(), state: 'cancelling', cancelAt: now };
+  const written = await writeRecord(config, cancel, { replaces: record.write, message: `[teamai] Cancel attempt ${record.attempt} of run ${record.run}` });
+
+  return written.ok ? { ok: true, value: cancel } : written;
+}
+
+/** Answers the cancel of claim `cancelling`: its member stopped the step, whose work up to `pushed` is on the attempt's ref. */
+export async function answerCancel(config: LocalConfig, cancelling: Cancelling, pushed: string): Promise<Written<Extract<FleetRecord, { state: 'cancelled' }>>> {
+  const cancelled: Extract<FleetRecord, { state: 'cancelled' }> = { ...cancelling, write: randomUUID(), state: 'cancelled', cancelledAt: new Date().toISOString(), pushed };
+  const written = await writeRecord(config, cancelled, { replaces: cancelling.write, message: `[teamai] Cancelled attempt ${cancelling.attempt} of run ${cancelling.run}` });
+
+  return written.ok ? { ok: true, value: cancelled } : written;
 }
 
 /**
@@ -338,27 +378,66 @@ export async function listOffers(config: LocalConfig, { pool, repository }: { po
   return offers.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }
 
+/** When the claim of `record`, expired or cancelled, stopped counting. */
+function goneAt(record: Extract<FleetRecord, { state: 'expired' | 'cancelled' }>): string {
+  return record.state === 'expired' ? record.expiredAt : record.cancelledAt;
+}
+
 /**
- * The last attempt of step `step` of run `run` whose claim the owner gave up after its member pushed work, as this
- * machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step goes on from that work.
+ * The last attempt of step `step` of run `run` whose claim the owner gave up or cancelled after its member pushed work,
+ * as this machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step goes on from that work.
  */
 export async function lastGoneWork(config: LocalConfig, { run, step, owner }: { run: RunId; step: string; owner: HandoffOwner }): Promise<{ attempt: AttemptId; pushed: string } | undefined> {
   const dir = path.join(getReportsDir(config), ATTEMPTS_DIR, run);
   const files = await fs.readdir(dir).catch(() => []);
-  let last: Extract<FleetRecord, { state: 'expired' }> | undefined;
+  let last: Extract<FleetRecord, { state: 'expired' | 'cancelled' }> | undefined;
 
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     const text = await fs.readFile(path.join(dir, file), 'utf8').catch(() => '');
     const parsed = parseRecord(text, run, file.slice(0, -'.json'.length));
 
-    // Only an attempt this install offered: anyone who can write teamai-reports can write a record.
-    if (!parsed.ok || parsed.value.state !== 'expired' || parsed.value.owner.id !== owner.id || parsed.value.lease.step !== step || parsed.value.pushed === parsed.value.start) continue;
+    if (!parsed.ok || (parsed.value.state !== 'expired' && parsed.value.state !== 'cancelled')) continue;
+    const gone = parsed.value;
 
-    if (last === undefined || parsed.value.expiredAt > last.expiredAt) last = parsed.value;
+    // Only an attempt this install offered: anyone who can write teamai-reports can write a record.
+    if (gone.owner.id !== owner.id || gone.lease.step !== step || gone.pushed === gone.start) continue;
+
+    if (last === undefined || goneAt(gone) > goneAt(last)) last = gone;
   }
 
   return last && { attempt: last.attempt, pushed: last.pushed };
+}
+
+/** A record a member's claim wrote: claimed, finished, given up, cancelling or cancelled. */
+export type MemberRecord = Exclude<FleetRecord, Offered | Extract<FleetRecord, { state: 'withdrawn' }>>;
+
+/**
+ * The records that name member `member` for business repository `repository`, oldest claim first, as this machine's copy
+ * of `teamai-reports` holds them: refresh it first. A member that starts stops what its earlier runs of these left, and
+ * finishes the claims it still holds before it takes a new offer.
+ */
+export async function listMemberRecords(config: LocalConfig, { member, repository }: { member: HandoffOwner; repository: string }): Promise<MemberRecord[]> {
+  const root = path.join(getReportsDir(config), ATTEMPTS_DIR);
+  const runs = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const named: MemberRecord[] = [];
+
+  for (const run of runs) {
+    if (!run.isDirectory()) continue;
+    const files = await fs.readdir(path.join(root, run.name)).catch(() => []);
+
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const text = await fs.readFile(path.join(root, run.name, file), 'utf8').catch(() => '');
+      const parsed = parseRecord(text, run.name, file.slice(0, -'.json'.length));
+
+      if (!parsed.ok || parsed.value.state === 'offered' || parsed.value.state === 'withdrawn') continue;
+
+      if (parsed.value.member.id === member.id && parsed.value.repository === repository) named.push(parsed.value);
+    }
+  }
+
+  return named.sort((left, right) => left.claimedAt.localeCompare(right.claimedAt));
 }
 
 /**
