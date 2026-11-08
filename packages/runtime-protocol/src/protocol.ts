@@ -230,8 +230,9 @@ export const PromptLeaseSchema = z.object({
   prompt: z.string(),
   /**
    * The file the agent writes the workflow result to, in the place's result directory. The runtime lets the agent
-   * write this one file without asking, whatever `permissions` is, as teamai's own launch does (for Claude,
-   * `--allowedTools=Edit(/<result>)`), so an attended step asks for no approval for it and an unattended one does not fail on it.
+   * write in that directory without asking, whatever `permissions` is, as teamai's own launch does (for Claude,
+   * `--allowedTools=Edit(/<result's directory>/**)`), so an attended step asks for no approval for its result or the
+   * evidence it leaves beside it, and an unattended one does not fail on them.
    */
   result: z.string().min(1),
   /** A session of the same tool to continue. */

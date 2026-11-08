@@ -156,9 +156,10 @@ export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor:
   const resume = input.resume ? ['--resume', input.resume] : [];
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
 
-  // Claude's and CodeBuddy's default mode asks before any write, so the result file, and only it, is allowed: the mode
+  // Claude's and CodeBuddy's default mode asks before any write, so the result file's directory, the attempt's out/,
+  // and only it, is allowed: the step writes its result there, and the evidence archived with its session. The mode
   // stays as it is. One argument: the flag is variadic, and would take a prompt after it as a rule too.
-  const result = `--allowedTools=Edit(/${permissionRulePath(input.resultPath)})`;
+  const result = `--allowedTools=Edit(/${permissionRulePath(path.dirname(input.resultPath))}/**)`;
 
   switch (family) {
     case 'claude': {

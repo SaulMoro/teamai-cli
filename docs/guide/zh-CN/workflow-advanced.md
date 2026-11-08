@@ -2019,7 +2019,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | --- | --- |
 | `step`、`tool` | 步骤，以及启动智能体用的工具，它是你的 `can.tools` 之一 |
 | `model` | 启动时使用的 `name` 和可选的 `effort`：步骤的，否则是它的智能体定义的；没有时用工具的默认值 |
-| `prompt`、`result` | 完整的提示，以及智能体写入结果的文件。像 teamai 自己的启动那样，让智能体无需询问就能写这一个文件：对 Claude 是 `--allowedTools=Edit(/<result>)`。不要为此改变任何模式 |
+| `prompt`、`result` | 完整的提示，以及智能体写入结果的文件。像 teamai 自己的启动那样，让智能体无需询问就能在该文件所在目录里写入：对 Claude 是 `--allowedTools=Edit(/<结果文件所在目录>/**)`。步骤在那里留下随会话归档的证据文件。不要为此改变任何模式 |
 | `resume` | 同一个工具中要继续的会话 id，用于之后的轮次。智能体继续了它时，在 `finished` 里写 `"resumed":true`。你开了新会话时不写或写 `false`，teamai 就不会把新会话连到旧会话上 |
 | `permissions` | `approval-required`；你的 `can.unattended` 接下这类步骤时为 `unattended` |
 | `interactive` | 有人在步骤中工作时为 `true`；只有声明了 `can.hitl` 的运行时会收到 |
