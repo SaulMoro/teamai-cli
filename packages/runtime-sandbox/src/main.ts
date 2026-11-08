@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getUserHome } from '@teamai/tool-core/home';
 import { journal } from './journal.js';
-import type { RuntimeMessage } from '@teamai/runtime-protocol';
+import { RUNTIME_PROTOCOL_ENV, type RuntimeMessage } from '@teamai/runtime-protocol';
 import type { SandboxOptions } from './options.js';
 import { unreachable, type Provider } from './provider.js';
 import { bwrap } from './providers/bwrap.js';
@@ -48,13 +48,21 @@ const wrapper = calledAs.startsWith(WRAPPER_PREFIX)
   ? { name: calledAs.slice(WRAPPER_PREFIX.length), args: process.argv.slice(2) }
   : mode === 'tool-exec' && wrapped !== undefined ? { name: wrapped, args: process.argv.slice(4) } : undefined;
 
-if (PLATFORM === 'win32' && (wrapper !== undefined || process.argv.length > 2)) {
-  // teamai starts the runtime with no argument; an app starts the wrapper with the tool's, through an npm .cmd shim
-  // that keeps no name of its own, so any argument here is an app's.
+// teamai starts the runtime with TEAMAI_RUNTIME_PROTOCOL=1, and nothing else serves runtime protocol 1.
+const isStartedByTeamai = process.env[RUNTIME_PROTOCOL_ENV] === '1';
+
+if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai)) {
+  // An app starts the wrapper through an npm .cmd shim that keeps no name of its own, with the tool's arguments or
+  // none, so anything teamai did not start here is an app's.
   process.stderr.write(`teamai-sandbox${wrapper === undefined ? '' : `-${wrapper.name}`} (sandbox_unavailable): it does not run on Windows. ${NOT_ON_WINDOWS} Run the app and teamai inside WSL2, or give the app the plain tool.\n`);
   // No exit: on Windows a write to a pipe is asynchronous, and the message must reach the app.
   process.exitCode = 2;
+} else if (wrapper === undefined && !isStartedByTeamai) {
+  process.stderr.write('teamai-runtime-sandbox serves runtime protocol 1 only when teamai starts it, with TEAMAI_RUNTIME_PROTOCOL=1, so it reads nothing. Run it as the runtime of a workflow driver, not by itself.\n');
+  process.exitCode = 2;
 } else if (wrapper === undefined) {
+  // Nothing this runtime starts serves runtime protocol 1.
+  delete process.env[RUNTIME_PROTOCOL_ENV];
   serve({
     input: process.stdin,
     write: (message: RuntimeMessage) => {
