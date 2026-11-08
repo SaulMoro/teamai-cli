@@ -1,10 +1,13 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { type LocalToolAdapter, type LocalToolResult } from '../workflow/drivers/local/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun } from '../workflow/store.js';
 import { log } from '../utils/logger.js';
-import { dirs, parallelFixture, toolPaths } from './helpers/workflow-local-driver-fixture.js';
+import { dirs, parallelFixture, projectAiTool, toolPaths } from './helpers/workflow-local-driver-fixture.js';
 import { dirs as handoffDirs, onGitHub, originFile, startIn, team } from './helpers/workflow-handoff-fixture.js';
 
 _setDriverPollMs(20);
@@ -111,6 +114,62 @@ describe('a usage limit across the parallel steps of a run, under the local driv
     expect(later.map(({ step }) => step).sort()).toEqual(['one', 'two', 'three'].filter((step) => step !== beside).sort());
     expect(later.map(({ step }) => step)).toContain(limited);
     expect(later.every(({ at }) => at >= resetsAt)).toBe(true);
+  }, 20_000);
+
+  it('runs an answer step beside a limited prompt step without leasing it over and over', async () => {
+    // The command before the answer step ends once the prompt step has hit its limit, so the answer step is ready during it.
+    const marks = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-usage-'));
+    dirs.push(marks);
+    const hit = path.join(marks, 'hit');
+    // The answer step's call runs on the tool ai.tool names, found on PATH, not through the adapter: it notes when it ran.
+    const answeredAt = path.join(marks, 'answered');
+    const bin = path.join(marks, 'bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    fs.writeFileSync(path.join(bin, 'hermes'), `#!${process.execPath}\nrequire('fs').appendFileSync(${JSON.stringify(answeredAt)}, Date.now() + '\\n');\nprocess.stdout.write('hi\\n');\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}:/bin`);
+    vi.stubEnv('TEAMAI_AI_TOOL', '');
+    const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
+name: build
+description: A prompt beside a command that an answer step follows.
+steps:
+  - id: zero
+    needs: []
+    command: node -e "const t = setInterval(() => { if (require('fs').existsSync(process.argv[1])) clearInterval(t); }, 20)" ${hit}
+  - id: one
+    needs: []
+    workspace: new
+    prompt: Implement the first part.
+  - id: ask
+    needs: [zero]
+    answer: Say hi.
+    output:
+      text: string
+`, 3);
+    projectAiTool(config, 'hermes');
+    const resetsAt = Math.ceil((Date.now() + 4000) / 1000) * 1000;
+    let launches = 0;
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async () => {
+        launches += 1;
+        if (launches > 1) return { started: true as const, exitCode: 0 };
+        fs.writeFileSync(hit, '');
+
+        return claudeLimit(resetsAt);
+      }),
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    // The answer step's call is not the prompt's launch, so the limit does not hold it, and the run is not rewritten while it waits.
+    const answers = fs.readFileSync(answeredAt, 'utf8').trim().split('\n').map(Number);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toBeLessThan(resetsAt);
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(`run ${runId} is ${run}`);
+    expect(run.revision).toBeLessThan(40);
   }, 20_000);
 
   const FIX = `schemaVersion: v1alpha1
