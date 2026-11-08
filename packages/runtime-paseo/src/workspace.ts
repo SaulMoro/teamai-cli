@@ -4,6 +4,7 @@ import { resolvedDir, type AgentPrompt, type Place } from './journal.js';
 import { isStillRunning, isStopped, late, STOP_SETTLE_MS, withoutDaemon, type Conversations } from './conversation.js';
 import type { ProcessState } from './process-state.js';
 import type { EnsureProvider } from './providers.js';
+import { openThrough } from './sandbox.js';
 
 // ─── An attempt's place ──────────────────────────────────
 //
@@ -16,7 +17,7 @@ export type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
 
 /** The places of this process: each attempt's workspace, from its open to its close. */
 export function workspaces(state: ProcessState, { ensureProvider, conversation }: { ensureProvider: EnsureProvider; conversation: Conversations }) {
-  const { journal, ledger, write, fail, waiting, closeStops, opens, turns, creates } = state;
+  const { journal, ledger, write, fail, waiting, closeStops, opens, turns, creates, targets } = state;
   const { settle, cancelAgent, dispatch, agentDisplay } = conversation;
 
   /** Runs `task` once every open this process began before on `directory` has ended. */
@@ -63,8 +64,9 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
 
     write({ op, event: 'accepted', handle });
 
-    // The first open that runs a team instance init offered before its provider existed adds that provider.
-    if (request.tool !== undefined) {
+    // The first open that runs a team instance init offered before its provider existed adds that provider; one through
+    // a sandbox runs on the wrapper's provider instead.
+    if (request.tool !== undefined && request.outer === undefined) {
       const failure = await ensureProvider(live, request.tool, op);
 
       if (failure) {
@@ -72,6 +74,22 @@ export function workspaces(state: ProcessState, { ensureProvider, conversation }
 
         return;
       }
+    }
+
+    const target = request.tool === undefined ? undefined : targets.get(request.tool);
+
+    if (request.outer !== undefined && target) {
+      const through = await openThrough(state, live, { ...request, outer: request.outer }, target);
+
+      if ('code' in through) {
+        fail(op, through);
+
+        return;
+      }
+
+      const current = journal.place(handle);
+
+      if (current?.kind === 'worktree') journal.savePlace(handle, { ...current, through });
     }
 
     const opened = handle;

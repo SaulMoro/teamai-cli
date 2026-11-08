@@ -405,6 +405,30 @@ runtimes:
   - use: local
 ```
 
+## Through a sandbox
+
+A runtime entry `use: paseo` with `through: sandbox` runs each prompt step's tool in the attempt's sandbox, while its agent stays in the Paseo app. Paseo runs the tool as teamai's wrapper, [`teamai-sandbox-<tool>`](runtime-sandbox.md#through-an-app-teamai-sandbox-tool), on a Paseo custom provider. When the daemon runs on this machine and holds no provider that runs the wrapper, teamai adds one at the first open, named after the wrapper, and the run says so once, as for a team instance:
+
+```yaml
+# drivers/paseo-sandboxed.yaml
+schemaVersion: v1alpha1
+name: paseo-sandboxed
+runtimes:
+  - use: paseo
+    through: sandbox
+    options:
+      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
+  - use: local
+```
+
+```json
+{ "teamai-sandbox-claude": { "extends": "claude", "label": "teamai-sandbox-claude", "command": ["/usr/local/bin/teamai-sandbox-claude"] } }
+```
+
+The step's agent is created with no prompt. teamai registers it on the attempt's socket, starts its tool, and sends the prompt only once the sandbox says that agent's wrapper connected. When the sandbox refuses the wrapper, or it does not connect within 30 s, teamai deletes the agent and the step fails `isolation_unproven`, so the prompt never reaches a tool outside the sandbox. A runtime started again after a crash registers the agent again. The step's session is read in the attempt's tool home.
+
+OpenCode does not run through a sandbox on Paseo: Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step's agent from another.
+
 ## Credentials
 
 Paseo keeps an agent's environment in plain text under its home, so this runtime takes no `credentials`, and teamai refuses a definition that gives it one:

@@ -6,6 +6,7 @@ import {
   type RuntimeFailure, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
+import { registerAgent, type Registration } from '@teamai/runtime-kit/outer';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -15,6 +16,7 @@ import type { AgentCreate, AgentPrompt, Place, PromptRecord } from './journal.js
 import { notOffered } from './offer.js';
 import type { Following, ProcessState } from './process-state.js';
 import { isPaseoTool, type EnsureProvider, type PaseoTool } from './providers.js';
+import { handOver, throughOf, type Through } from './sandbox.js';
 
 // ─── One Paseo agent's life ──────────────────────────────
 //
@@ -319,11 +321,12 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
    * A finished prompt's session: its tool and id, and the home it lives in when the runtime can tell. `createdAt`: when
    * Paseo created its agent.
    */
-  const sessionOf = (live: Daemon, { tool, id, createdAt }: { tool: string; id: string; createdAt: string | undefined }): z.infer<typeof PromptSessionSchema> => {
+  const sessionOf = (live: Daemon, { tool, id, createdAt, through }: { tool: string; id: string; createdAt: string | undefined; through: Through | undefined }): z.infer<typeof PromptSessionSchema> => {
     const target = targets.get(tool);
     const created = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
     const since = Number.isNaN(created) ? undefined : created;
-    const home = target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), providerHome: providerHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex', since });
+    // Through a sandbox, the tool keeps its sessions in the attempt's tool home.
+    const home = through?.home ?? (target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), providerHome: providerHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex', since }));
 
     return { tool, id, ...(home !== undefined && { home }) };
   };
@@ -389,9 +392,11 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
    */
   async function launch(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, following: Following, target: Target, how: Launch): Promise<void> {
     const { op } = request;
+    const through = throughOf(how.place);
     // Accepted already: a provider no open added yet for a team instance is added now, which may wait on another runtime.
-    // A cancel or a close meanwhile ends the prompt at once; the add goes on for the instance's later steps.
-    const unadded = await Promise.race([ensureProvider(live, target.name, op), following.stopped]);
+    // A cancel or a close meanwhile ends the prompt at once; the add goes on for the instance's later steps. Through a
+    // sandbox, the tool runs on the wrapper's provider, which the open added.
+    const unadded = through ? undefined : await Promise.race([ensureProvider(live, target.name, op), following.stopped]);
 
     if (!goesOn(op, following) || unadded === 'stopped') return;
 
@@ -401,7 +406,8 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       return;
     }
 
-    const on = targets.get(target.name) ?? target;
+    const known = targets.get(target.name) ?? target;
+    const on = through ? { ...known, provider: through.provider } : known;
     const models = await listModels(live, on.provider, following);
 
     if (!goesOn(op, following) || models === 'stopped') return;
@@ -469,6 +475,18 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
   /** Makes sure the prompt's agent exists, then waits for it to end, and settles the prompt. */
   async function follow(live: Daemon, op: OpId, record: AgentPrompt, following: Following): Promise<void> {
+    const through = throughOf(journal.place(record.handle));
+    // Registered before Paseo can start the agent's wrapper, and again by each runtime that follows the prompt.
+    const registration = through && registerAgent(through.socket, record.create.agentId);
+
+    try {
+      await followAgent(live, op, record, following, { through, registration });
+    } finally {
+      registration?.close();
+    }
+  }
+
+  async function followAgent(live: Daemon, op: OpId, record: AgentPrompt, following: Following, { through, registration }: { through: Through | undefined; registration: Registration | undefined }): Promise<void> {
     const { create } = record;
     const { stopped } = following;
 
@@ -480,7 +498,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       if (!(await live.agent(create.agentId))) {
         // Journaled before it is sent, and kept until Paseo shows the agent: a create that failed may still start it.
         dispatch(op, 'unconfirmed');
-        creation = await live.create(record.cwd, create);
+        creation = await live.create(record.cwd, create, { idle: through !== undefined });
       }
 
       // Only a create never sent, by this process or an earlier one, proves no agent started.
@@ -518,6 +536,26 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' }, following);
 
       return;
+    }
+
+    // Through a sandbox, the agent gets its prompt once its wrapper connected, and only once: a stop meanwhile is
+    // handled below.
+    const current = journal.prompt(op);
+
+    if (through && registration && !(current?.kind === 'agent' && current.sent)) {
+      const markSent = (): void => {
+        const latest = journal.prompt(op);
+
+        if (latest?.kind === 'agent') journal.savePrompt(op, { ...latest, sent: true });
+      };
+
+      const handed = await handOver(live, { record, provider: through.provider, registration, stopped, markSent });
+
+      if (handed !== 'sent' && handed !== 'stopped') {
+        settle(op, { op, state: 'failed', failure: handed }, following);
+
+        return;
+      }
     }
 
     for (;;) {
@@ -626,7 +664,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
               return;
             }
 
-            settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt }), result: { output }, confined: record.answer.kept }, following);
+            settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -662,7 +700,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt }), result }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result }, following);
 
           return;
         }

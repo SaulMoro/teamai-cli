@@ -8,7 +8,7 @@ import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
 import { RUN_DIR_ENV, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { paseoKeyOf, type AgentCreate } from '../journal.js';
-import { CustomProvidersSchema, homeDirOf, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
+import { CustomProvidersSchema, homeDirOf, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, runsCommand, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
 import { isOnThisMachine } from './address.js';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
 import { claudeHomeIn, codexLoginStatus, isCodexExecutable, signInStep, type RunsIn, type SignIn } from './sign-in.js';
@@ -282,10 +282,23 @@ export interface Daemon {
   /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. Fails with no answer in 20 s. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
   /**
+   * Adds to the daemon's `agents.providers` the provider that runs `tool` as teamai's wrapper `id`, from `found` on this
+   * machine, unless one that runs it is there, and checks Paseo finds its command. Callers hold the daemon's providers
+   * across runtimes (`Journal.holdProviders`).
+   */
+  wrapperProvider(wrapper: { id: string; tool: PaseoTool; found: string | null }): Promise<Added>;
+  /**
    * Creates the agent in the workspace of `cwd`, or answers the one a repeated create made. A create that failed says
    * whether it was sent: one Paseo refused may still start its agent, and only one never sent proves none started.
+   * `idle`: the agent is created with no prompt, and waits for its first message.
    */
-  create(cwd: string, create: AgentCreate): Promise<Creation>;
+  create(cwd: string, create: AgentCreate, how?: { idle: boolean }): Promise<Creation>;
+  /** Starts an idle agent's tool: Paseo starts Codex's at the create, and Claude's at the first listing of its commands. */
+  start(agentId: string): Promise<void>;
+  /** Sends an idle agent its first message. */
+  send(agentId: string, text: string): Promise<void>;
+  /** Deletes an agent, which stops its tool; its logs go with it. */
+  remove(agentId: string): Promise<void>;
   agent(agentId: string): Promise<PaseoAgent | null>;
   /** Waits until the agent's turn ends or needs a person. */
   wait(agentId: string): Promise<WaitEnd>;
@@ -676,7 +689,55 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
       return { id: opened.id, name: current?.projectDisplayName ?? opened.name ?? opened.id, directory: opened.directory ?? cwd };
     },
-    async create(cwd, create) {
+    async wrapperProvider({ id, tool, found }) {
+      const cannot = (why: string): Added => ({ cannot: why, added: false });
+      let configured: CustomProviders;
+
+      try {
+        // Read again: another runtime may have added it since this one's init.
+        const parsed = CustomProvidersSchema.safeParse((await api.config.get()).config.providers);
+        configured = parsed.success ? parsed.data : {};
+      } catch (error) {
+        return cannot(`Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\`, then run the step again`);
+      }
+
+      const setUp = `add one on the daemon's host that extends ${tool} with command ${JSON.stringify([id])} (\`paseo daemon config set agents.providers …\`, then \`paseo daemon reload\`)`;
+      let provider = Object.entries(configured).find(([, entry]) => entry.extends === tool && runsCommand(entry.command?.[0], id))?.[0];
+      let added = false;
+
+      if (provider === undefined) {
+        if (!isOnThisMachine(url)) return cannot(`no Paseo provider runs ${id}, and teamai adds one only on a daemon on this machine; ${setUp}`);
+
+        if (found === null) return cannot(`no Paseo provider runs ${id}, and teamai finds no ${id} on its PATH to add one; install teamai-cli where it finds ${id}, or ${setUp}`);
+        const taken = configured[id];
+
+        if (taken !== undefined) return cannot(`no Paseo provider runs ${id}, and the Paseo provider ${id} runs ${taken.command?.[0] ?? `${taken.extends ?? tool}'s own command`} instead, so teamai adds none under that name; point that provider at ${found}`);
+        const entry = { extends: tool, label: id, command: [found] };
+
+        try {
+          await api.config.patch({ providers: { [id]: entry } });
+        } catch (error) {
+          return cannot(`Paseo refused the provider ${id} teamai added for it (${PaseoSaidSchema.parse(error)}); ${setUp}`);
+        }
+
+        provider = id;
+        added = true;
+        custom = new Map(custom).set(id, entry);
+      }
+
+      try {
+        const { providers } = await api.providers.listAvailable();
+
+        if (!providers.some((listed) => listed.provider === provider && listed.available)) {
+          return { cannot: `Paseo does not find the command of its provider ${provider} on the daemon's PATH; install teamai-cli there, then \`paseo daemon reload\``, added };
+        }
+      } catch (error) {
+        return { cannot: `Paseo did not list its providers (${PaseoSaidSchema.parse(error)}); run \`paseo provider ls\` on the daemon's host to see why`, added };
+      }
+
+      return { provider, added };
+    },
+    async create(cwd, create, { idle } = { idle: false }) {
       // Paseo keeps a create's env in plain text and applies it again on resume, so it carries no secret, only the run
       // directory's name: tools use the daemon host's own logins.
       let workspace: Awaited<ReturnType<PaseoApi['workspaces']['open']>>;
@@ -688,7 +749,8 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }
 
       try {
-        await workspace.agents.create(create);
+        const { prompt, ...withoutPrompt } = create;
+        await workspace.agents.create(idle ? withoutPrompt : { ...withoutPrompt, prompt });
 
         return { outcome: 'created' };
       } catch (error) {
@@ -698,6 +760,16 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
     async agent(agentId) {
       return (await client.fetchAgent(agentId))?.agent ?? null;
     },
+    async start(agentId) {
+      const { error } = await client.listCommands(agentId);
+
+      if (error) throw new Error(error);
+    },
+    async send(agentId, text) {
+      // Paseo's client throws a message the daemon did not accept.
+      await client.sendAgentMessage(agentId, text);
+    },
+    remove: (agentId) => client.deleteAgent(agentId),
     wait: (agentId) => client.waitForFinish(agentId, 0),
     cancel: (agentId) => client.cancelAgent(agentId),
     async archive(workspaceId) {

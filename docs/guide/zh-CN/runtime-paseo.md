@@ -405,6 +405,30 @@ runtimes:
   - use: local
 ```
 
+## 通过沙箱运行
+
+`use: paseo` 的 runtime 条目加上 `through: sandbox` 后，每个 prompt step 的工具在 attempt 的沙箱里运行，agent 仍留在 Paseo 应用中。Paseo 通过一个 Paseo 自定义 provider，把工具作为 teamai 的包装器 [`teamai-sandbox-<tool>`](runtime-sandbox.md#通过应用运行teamai-sandbox-tool) 来运行。当 daemon 运行在本机、且没有任何 provider 运行该包装器时，teamai 在第一次 open 时添加一个以包装器命名的 provider，并像团队实例那样在运行中提示一次：
+
+```yaml
+# drivers/paseo-sandboxed.yaml
+schemaVersion: v1alpha1
+name: paseo-sandboxed
+runtimes:
+  - use: paseo
+    through: sandbox
+    options:
+      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
+  - use: local
+```
+
+```json
+{ "teamai-sandbox-claude": { "extends": "claude", "label": "teamai-sandbox-claude", "command": ["/usr/local/bin/teamai-sandbox-claude"] } }
+```
+
+step 的 agent 创建时不带 prompt。teamai 先在 attempt 的 socket 上登记该 agent，再启动它的工具，直到沙箱确认该 agent 的包装器已连接才发送 prompt。若沙箱拒绝包装器，或包装器 30 秒内未连接，teamai 删除该 agent，step 以 `isolation_unproven` 失败，prompt 不会到达沙箱外的工具。崩溃后重新启动的 runtime 会再次登记该 agent。step 的会话从 attempt 的工具主目录读取。
+
+在 Paseo 上，OpenCode 不能通过沙箱运行：Paseo 可能让多个 agent 共用一个 OpenCode 服务，沙箱无法区分 step 的 agent 与其他 agent。
+
 ## 凭据
 
 Paseo 以明文把智能体的环境变量存在它的 home 下，所以这个运行时不接受 `credentials`，给它凭据的定义会被 teamai 拒绝：
