@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { RuntimeOptionsSchema, type OpId, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { DriverCan } from '../requirements.js';
-import { isUnansweredFailure, type Initialized, type Reattached, type StepRuntime } from './step-runtime.js';
+import { isUnansweredFailure, type Initialized, type OpenRequest, type Reattached, type StepRuntime } from './step-runtime.js';
 
 // ─── A runtime through another ───────────────────────────
 //
@@ -128,7 +128,10 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
   const ranBy = new Map<OpId, StepRuntime>();
   // The prompt's credentials each place was opened with, none too, and the names it goes without, by the outer's handle,
   // in memory only, which the outer's reattach of that place carries again. One composed runtime serves every attempt.
-  const openedWith = new Map<string, { credentials: Record<string, string>; unset?: string[] }>();
+  const openedWith = new Map<string, Pick<OpenRequest, 'credentials' | 'unset'>>();
+  // The attempt's tool home each place was opened with, by the outer's handle: the tool runs in the outer's place on it,
+  // so a finished prompt's session is there, whatever home the inner names.
+  const toolHomeOf = new Map<string, string>();
 
   const unknownHandle = (handle: string): RuntimeFailure => ({ code: 'runtime_protocol', message: `Step runtime "${name}" was given handle ${handle}, which is not one it made.` });
 
@@ -168,6 +171,9 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       }
 
       openedWith.set(outerOpened.handle, { credentials: request.credentials, ...(request.unset && { unset: request.unset }) });
+      const [toolHome] = Object.values(request.view?.toolHome ?? {});
+
+      if (toolHome !== undefined) toolHomeOf.set(outerOpened.handle, toolHome);
 
       // A command step's place runs no tool, so the inner, which launches tools, has no place to make for it.
       if (request.tool === undefined) return { kind: 'ready', handle: JSON.stringify({ outer: outerOpened.handle } satisfies ComposedHandle), ...(outerOpened.display && { display: outerOpened.display }) };
@@ -209,7 +215,10 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       if (innerHandle === undefined) return { kind: 'failed', failure: unknownHandle(request.handle) };
       ranBy.set(request.op, inner);
 
-      return inner.prompt({ ...request, handle: innerHandle, credentials: innerCredentials }, events);
+      const end = await inner.prompt({ ...request, handle: innerHandle, credentials: innerCredentials }, events);
+      const toolHome = handle && toolHomeOf.get(handle.outer);
+
+      return end.kind === 'finished' && toolHome ? { ...end, session: { ...end.session, home: toolHome } } : end;
     },
 
     async cancel(op) {
@@ -271,7 +280,10 @@ export function composedStepRuntime({ outer, inner, innerCredentials }: { outer:
       if (!innerClosed.ok && how?.release !== true) return innerClosed;
       const outerClosed = await outer.close(parsed.outer, how);
 
-      if (outerClosed.ok) openedWith.delete(parsed.outer);
+      if (outerClosed.ok) {
+        openedWith.delete(parsed.outer);
+        toolHomeOf.delete(parsed.outer);
+      }
 
       return innerClosed.ok ? outerClosed : innerClosed;
     },
