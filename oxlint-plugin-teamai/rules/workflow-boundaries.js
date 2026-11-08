@@ -85,18 +85,17 @@ const ENTRIES = [
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   {
     folder: LOCAL,
-    // The fleet's owner settles a step as the loop settles a command it started itself.
-    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts', 'src/workflow-drive.ts'], 'local-tool-adapter.ts': [], 'runtime-steps.ts': ['src/workflow/fleet/owner.ts'] },
-    testEntries: ['local-driver.ts', 'local-tool-adapter.ts'],
+    entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts', 'src/workflow-drive.ts'], 'local-tool-adapter.ts': [], 'runtime-steps.ts': [] },
+    testEntries: ['local-driver.ts', 'local-tool-adapter.ts', 'runtime-steps.ts'],
   },
-  // The fleet: the owner's side is the local driver's, the member's a command's; the records are read by publish too.
+  // The fleet: the owner's side is a step runtime, the member's a command's; the records are read by publish too.
   {
     folder: FLEET,
-    // A cancel with no live driver reaches a fleet attempt through its record (runtimes/cancelled.ts).
+    // The owner's side is a step runtime a driver definition opens (runtimes/sources.ts); the command layer reads the default pool.
     entries: {
-      'owner.ts': ['src/workflow/drivers/local/local-driver.ts', 'src/workflow/runtimes/cancelled.ts'],
+      'owner.ts': ['src/workflow/runtimes/sources.ts'],
       'member.ts': ['src/workflow-commands.ts'],
-      'record.ts': ['src/workflow/handoff.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/runtimes/cancelled.ts'],
+      'record.ts': ['src/workflow/handoff.ts', 'src/workflow-commands.ts'],
     },
     testEntries: ['record.ts', 'owner.ts', 'member.ts'],
   },

@@ -66,8 +66,12 @@ export function isUnansweredFailure(failure: RuntimeFailure): boolean {
  */
 export type Lost = { kind: 'lost'; failure: RuntimeFailure };
 
-/** How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. */
-export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure } | Lost;
+/**
+ * How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. A `failed` with
+ * `isStepOutcome` is how the step itself ended, under its own code, such as a fleet member gone, rather than a runtime
+ * that could not run it.
+ */
+export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure; isStepOutcome?: true } | Lost;
 
 /**
  * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage, whether it continued the
@@ -106,6 +110,12 @@ export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean; u
 export interface StepRuntime {
   /** The runtime's name, as a driver definition's `use` names it. */
   readonly name: string;
+  /**
+   * Whether an exec goes on without the teamai that sent it, as one a fleet member runs: a teamai that stops leaves it
+   * running rather than cancelling it, and a restarted one reconnects by sending the same id again rather than stopping
+   * it. Absent: an exec stops with its teamai, since the limits it runs under cannot be kept across the gap.
+   */
+  readonly isExecReconnected?: boolean;
   /**
    * Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers, knowing the
    * names of the `credentials` its definition gives it, the tool `instances` the member may run, and the run's

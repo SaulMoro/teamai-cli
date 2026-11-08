@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { OpIdSchema, type OpId } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getReportsDir, type LocalConfig } from '../../types.js';
 import { gitRoot } from '../../utils/branch-worktree.js';
@@ -20,6 +21,9 @@ import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { parseTemplate, renderText, templateExpressions, type TemplateContext } from '../template.js';
 import type { WorkflowFailure, WorkflowStep } from '../types.js';
+
+/** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
+export const DEFAULT_FLEET_POOL = 'default';
 
 /** Where the records of every offered attempt live on `teamai-reports`. */
 const ATTEMPTS_DIR = 'workflows/attempts';
@@ -499,11 +503,14 @@ function offeredMarker(config: LocalConfig, run: RunId, attempt: AttemptId): str
   return path.join(attemptDir(config, run, attempt), 'fleet.json');
 }
 
-/** Notes, before the offer is written, that attempt `attempt` goes to pool `pool`, so a restarted owner waits on it again. */
-export async function markOffered(config: LocalConfig, run: RunId, attempt: AttemptId, pool: string): Promise<void> {
+/**
+ * Notes, before the offer is written, that attempt `attempt` goes to pool `pool` from the exec `op`, so a restarted owner
+ * waits on it again and a cancel with no live driver reaches it.
+ */
+export async function markOffered(config: LocalConfig, run: RunId, attempt: AttemptId, pool: string, op?: OpId): Promise<void> {
   const file = offeredMarker(config, run, attempt);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, `${JSON.stringify({ pool })}\n`, 'utf8');
+  await fs.writeFile(file, `${JSON.stringify({ pool, ...(op !== undefined && { op }) })}\n`, 'utf8');
 }
 
 /** `attempts/<attempt>/fleet-claim.json` in this install's data home: this install claimed the attempt as a member. */
@@ -516,16 +523,20 @@ async function isClaimedHere(config: LocalConfig, run: RunId, attempt: AttemptId
   return fs.access(claimedMarker(config, run, attempt)).then(() => true, () => false);
 }
 
-/** The pool this install offered attempt `attempt` to, or undefined when it offered it to none. */
-export async function offeredPool(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<string | undefined> {
+const OfferedMarkerSchema = z.object({ pool: z.string().min(1), op: OpIdSchema.optional() });
+
+/** What this install noted when it offered attempt `attempt`: its pool and the exec that offered it; undefined when it offered it to none. */
+export async function readOfferedMarker(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<z.infer<typeof OfferedMarkerSchema> | undefined> {
   const text = await fs.readFile(offeredMarker(config, run, attempt), 'utf8').catch(() => undefined);
+  const parsed = text === undefined ? undefined : OfferedMarkerSchema.safeParse(jsonOf(text));
 
-  if (text === undefined) return undefined;
-  const parsed = z.object({ pool: z.string().min(1) }).safeParse(jsonOf(text));
-
-  return parsed.success ? parsed.data.pool : undefined;
+  return parsed?.success ? parsed.data : undefined;
 }
 
+/** The pool this install offered attempt `attempt` to, or undefined when it offered it to none. */
+export async function offeredPool(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<string | undefined> {
+  return (await readOfferedMarker(config, run, attempt))?.pool;
+}
 
 /** `text` as JSON, or undefined when it does not parse. */
 function jsonOf(text: string): JsonValue | undefined {

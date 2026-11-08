@@ -17,6 +17,11 @@ const OUTPUT_KEPT = 800;
 /** The longest delay `setTimeout` honours. */
 export const MAX_TIMER_DELAY = 2 ** 31 - 1;
 
+/** The argv a command step runs as: its command in the shell, as the local loop runs one. */
+export function shellArgv(command: string): string[] {
+  return process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', command] : ['/bin/sh', '-c', command];
+}
+
 /**
  * Runs `command` through the platform shell in a process group of its own, so a stop reaches everything it started.
  * `signal` and `expiresAt` both stop the group: SIGTERM, then SIGKILL after five seconds. A deadline that already passed

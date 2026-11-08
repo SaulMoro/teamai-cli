@@ -21,7 +21,8 @@ import type { DriverIdentity, WorkflowEnvelope } from '../../src/workflow/types.
 import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
 import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
-import { engineOptions, parseFleetOptions } from '../../src/workflow/runtimes/sources.js';
+import { engineOptions } from '../../src/workflow/runtimes/sources.js';
+import { parseFleetOptions } from '../../src/workflow/fleet/owner.js';
 import { nestedOptions } from '../../src/workflow/runtimes/composed.js';
 import { localStepRuntime } from '../../src/workflow/runtimes/local.js';
 import { parseOptions as parsePaseoOptions } from '../../packages/runtime-paseo/src/options.js';
