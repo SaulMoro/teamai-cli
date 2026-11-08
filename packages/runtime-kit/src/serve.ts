@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { ignoreTypeOfServiceRefusal } from '@teamai/shared/type-of-service';
 import { CANCEL_FAILED, OpIdSchema, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type OpId, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import type { OpLedger } from './ledger.js';
@@ -95,6 +96,8 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
   }
 
   delete env[RUNTIME_PROTOCOL_ENV];
+  // A fetch to an app that resets its connection fails that request, never the runtime.
+  ignoreTypeOfServiceRefusal();
 
   /**
    * Answers a request that threw with a failure of its own: teamai fails every request it waits on when a line names

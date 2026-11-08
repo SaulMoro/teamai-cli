@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { format } from 'node:util';
 import { Command, Option } from 'commander';
 import { setVerbose, setSilent, setStderrOnly, log, writeInfoLine } from './utils/logger.js';
+import { ignoreTypeOfServiceRefusal } from '@teamai/shared/type-of-service';
 import { applyNonInteractiveGitEnv } from './utils/git-env.js';
 import { ensureBundledRuntimeOnPath } from './bundled-runtime.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
@@ -114,6 +115,9 @@ async function notifyWebhook(event: 'push' | 'pull'): Promise<void> {
 // clone at once instead (issue #711). See utils/git-env.ts for each door, and
 // for why ssh's own questions are left to the repository's configuration.
 applyNonInteractiveGitEnv();
+
+// A fetch to a server that resets its connection fails that request, never the CLI.
+ignoreTypeOfServiceRefusal();
 
 const program = new Command();
 
