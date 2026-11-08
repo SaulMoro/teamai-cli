@@ -1630,6 +1630,41 @@ teamai 先打开外层，再打开内层。它先停止并关闭内层；内层�
 
 只有支持这种方式的运行时才能参与，teamai 自带的运行时目前还不支持：在它们的页面说明之前，这种条目用于你自己编写的运行时。内层的 `open` 带有 `outer`，即同一次尝试中外层的句柄，原样传递，让内层能连到外层；重启之后，外层的 `reattach` 会再次带上提示的 `credentials`，因为外层只把它们保存在内存里。
 
+### 在其他成员的机器上运行步骤（`fleet`）
+
+`use: fleet` 把步骤交给同一业务仓库的另一位成员的安装来运行。teamai 在 `teamai-reports` 上发布这个步骤，池中的一位成员领取后在自己的机器上运行，并把产出推送到 origin 的 `teamai/attempts/<run>/<attempt>`。之后你的驱动把这些产出拿进步骤的位置，像自己运行的步骤一样继续。只有你的安装会移动工作流的分支。
+
+```yaml
+# drivers/build-fleet.yaml
+schemaVersion: v1alpha1
+name: build-fleet
+runtimes:
+  - use: fleet
+    options:
+      pool: build          # 可选；默认 default
+      stale_after: 30m     # 可选；默认 30m
+      max_parallel: 4      # 同时最多发出 4 个尝试
+  - use: local
+```
+
+成员领取某个池为当前检出的 origin 发布的最早的尝试：
+
+```sh
+teamai workflow resume --next --pool build   # 指定的池
+teamai workflow resume --next --pool         # default 池
+teamai workflow resume --next                # 和以前一样只领取已发布的运行，从不领取尝试
+```
+
+它输出 `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}`，没有领取时输出 `{"data":{"idle":{"offered":N}}}`。两位成员同时领取同一个尝试时只有一位能拿到，另一位会去试下一个。
+
+哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 目前只接命令步骤。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
+
+你不必一直在线。驱动发出尝试后就可以停掉，之后运行 `teamai workflow resume <run>`：它读取尝试的记录，成员完成时取回产出，没完成就继续等。尝试在外期间，不依赖它的步骤照常在本机运行。
+
+领取尝试的成员每个 `stale_after` 内会写三次自己仍在运行，并附上到目前为止推送的产出。你的驱动超过 `stale_after` 没有收到它的消息时，尝试以 `fleet_member_gone` 失败。它最后一次推送之前的产出留在步骤的位置里，`teamai workflow retry <run> <step>` 会从那里再次发布这个步骤。
+
+有尝试在外的运行，`teamai workflow publish` 会拒绝（`fleet_attempts_out`）：认领会释放所有租约，而尝试的产出只会回到你机器上的位置。先用 `teamai workflow resume <run>` 等它完成，再发布。
+
 ### 步骤运行时的 Codex 登录
 
 Codex 拒绝重复使用的刷新令牌，所以你自己登录的副本一旦在步骤里刷新，你的其他 Codex 会话就会被登出。`credentials: { codex: login }` 改用 teamai 单独保存的登录。第一个需要它、且在终端里运行的 Codex 步骤会替你创建：

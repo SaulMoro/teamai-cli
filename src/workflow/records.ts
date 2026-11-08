@@ -52,6 +52,7 @@ const RECORDED_FAILURES = [
   'trial_prepare_failed', 'clone_prepare_failed', 'role_unavailable',
   'confined_invalid', 'confined_tool_unavailable', 'confined_failed', 'confined_reply_invalid', 'confined_report_mismatch',
   'runtime_failed', 'runtime_interrupted', 'runtime_lost', 'requirement_unmet', 'login_missing', 'login_held', 'login_not_written_back',
+  'fleet_member_gone', 'fleet_unpublishable', 'fleet_record_unreadable', 'fetch_failed',
 ] as const;
 
 type RecordedFailure = (typeof RECORDED_FAILURES)[number];

@@ -10,10 +10,11 @@ import { writeJsonAtomic } from '../../utils/fs.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { shippedRuntimeFile } from '../../default-drivers.js';
+import { durationMs } from '../parse.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import { SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CanSchema, SIGN_IN_VARIABLES, type InitInstance, type SignInVariables, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { credentialSecrets, type StepRuntime } from './step-runtime.js';
@@ -49,7 +50,7 @@ async function isFile(at: string): Promise<boolean> {
 export async function locateRuntime(driver: ResolvedDriver, use: string): Promise<{ ok: true; source: RuntimeSource } | { ok: false; failure: WorkflowFailure }> {
   if (use === 'local') return { ok: true, source: { kind: 'builtin', name: 'local' } };
 
-  if (use === 'skill' || use === 'fleet') {
+  if (use === 'skill') {
     return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", which this version of teamai does not run from a definition. Use local, or a runtime of your own or of the team.` } };
   }
 
@@ -312,7 +313,13 @@ export type OpenedRuntime =
    * which go only to the tool each signs in (`credentialsForTool`). `unavailable`: the tools it cannot run now, with why.
    * `optionsFrom`: where its options were set, for the person: the definition's file, and the member's config when it sets them too.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string> };
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string> }
+  /**
+   * Built in: each command step it takes is offered to the members of `pool` on teamai-reports, and one of them runs it
+   * (`fleet.ts`). `can` is what the definition promises the members' own drivers give: nothing checks it here.
+   * `staleAfterMs`: how long a member may write no progress before the owner gives its claim up.
+   */
+  | { kind: 'fleet'; use: 'fleet'; pool: string; staleAfterMs: number; can: DriverCan; engine: EngineOptions };
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
 export interface OpenedDriver {
@@ -370,11 +377,51 @@ async function runnableInstances(): Promise<InitInstance[]> {
   }));
 }
 
+/** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
+export const DEFAULT_FLEET_POOL = 'default';
+
+const FleetOptionsSchema = z.object({
+  pool: z.string().min(1).default(DEFAULT_FLEET_POOL),
+  stale_after: z.string().default('30m').transform((text, ctx) => {
+    const ms = durationMs(text);
+
+    if (ms !== undefined) return ms;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a positive duration, such as 90s, 30m or 2h' });
+
+    return z.NEVER;
+  }),
+  can: CanSchema.optional(),
+}).strict();
+
+/** The options of the `fleet` runtime, as `init` checks a runtime's own: its pool, `stale_after` in milliseconds, and `can`. */
+export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z.infer<typeof FleetOptionsSchema> } | { ok: false; failure: { key: string; message: string } } {
+  const parsed = FleetOptionsSchema.safeParse(options);
+
+  if (parsed.success) return { ok: true, value: parsed.data };
+  const [issue] = parsed.error.issues;
+
+  return { ok: false, failure: { key: issue?.path.join('.') || 'pool', message: issue?.message ?? 'not valid' } };
+}
+
+/** The `fleet` runtime of `driver`: its pool, and the `can` it promises, which takes command steps only for now. */
+function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof engineOptions>, { ok: true }>): { ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure } {
+  const parsed = parseFleetOptions(split.runtime);
+
+  if (!parsed.ok) return { ok: false, failure: badOption(driver, 'fleet', parsed.failure.key, parsed.failure.message) };
+
+  if (split.credentials.length > 0 || split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, 'fleet', 'credentials', 'each member runs a step with its own driver, so fleet brings no credential') };
+  const { pool, stale_after: staleAfterMs, can = {} } = parsed.value;
+
+  return { ok: true, opened: { kind: 'fleet', use: 'fleet', pool, staleAfterMs, engine: split.engine, can: { ...can, prompt: false, remote: true } } };
+}
+
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
 async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
+
+  if (use === 'fleet') return fleetRuntime(driver, split);
   const located = await locateRuntime(driver, use);
 
   if (!located.ok) return located;

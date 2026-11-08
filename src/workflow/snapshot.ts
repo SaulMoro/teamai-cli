@@ -424,22 +424,60 @@ function holdsLocalPath(text: string): boolean {
 
 type Unfit = { kind: 'secret'; label: string } | { kind: 'path' };
 
-function firstUnpublishable(runId: string, body: Record<string, JsonValue>, envSecrets: Record<string, string>): SnapshotError | undefined {
-  const labelOf = (text: string): string | undefined => {
-    const redacted = redact(text, { envSecrets });
+/** The secret label `redact` gives `text`, or undefined when it finds none. */
+function secretLabelOf(text: string, envSecrets: Record<string, string>): string | undefined {
+  const redacted = redact(text, { envSecrets });
 
-    return redacted === text ? undefined : PLACEHOLDER.exec(redacted)?.[1] ?? 'secret';
-  };
+  return redacted === text ? undefined : PLACEHOLDER.exec(redacted)?.[1] ?? 'secret';
+}
 
+/**
+ * The first string or key in `value` that may not leave this machine, with where it is under `value`: what looks like a
+ * secret (the secret patterns, or a value of `envSecrets`), or an absolute path of this machine.
+ */
+export function firstUnfit(value: JsonValue | undefined, envSecrets: Record<string, string>, at: Array<string | number> = []): { at: Array<string | number>; unfit: Unfit } | undefined {
   const unfitOf = (text: string): Unfit | undefined => {
-    const label = labelOf(text);
+    const label = secretLabelOf(text, envSecrets);
 
     if (label !== undefined) return { kind: 'secret', label };
 
     return holdsLocalPath(text) ? { kind: 'path' } : undefined;
   };
 
-  const found = (step: string | undefined, at: ReadonlyArray<string | number>, unfit: Unfit): SnapshotError => {
+  if (value === null || value === undefined) return undefined;
+
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const hit = firstUnfit(item, envSecrets, [...at, index]);
+
+      if (hit) return hit;
+    }
+
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    const unfit = unfitOf(String(value));
+
+    return unfit === undefined ? undefined : { at, unfit };
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    const unfit = unfitOf(key);
+
+    if (unfit !== undefined) return { at, unfit };
+    const hit = firstUnfit(item, envSecrets, [...at, key]);
+
+    if (hit) return hit;
+  }
+
+  return undefined;
+}
+
+function firstUnpublishable(runId: string, body: Record<string, JsonValue>, envSecrets: Record<string, string>): SnapshotError | undefined {
+  const found = (step: string | undefined, hit: { at: ReadonlyArray<string | number>; unfit: Unfit } | undefined): SnapshotError | undefined => {
+    if (hit === undefined) return undefined;
+    const { at, unfit } = hit;
     const field = fieldPath(at);
     const where = step === undefined ? `field "${field}"` : `step "${step}" field "${field}"`;
     const named: { step?: string; field: string } = step === undefined ? { field } : { step, field };
@@ -466,42 +504,11 @@ function firstUnpublishable(runId: string, body: Record<string, JsonValue>, envS
     }
   };
 
-  const search = (value: JsonValue | undefined, step: string | undefined, at: Array<string | number>): SnapshotError | undefined => {
-    if (value === null || value === undefined) return undefined;
-
-    if (Array.isArray(value)) {
-      for (const [index, item] of value.entries()) {
-        const hit = search(item, step, [...at, index]);
-
-        if (hit) return hit;
-      }
-
-      return undefined;
-    }
-
-    if (!isRecord(value)) {
-      const unfit = unfitOf(String(value));
-
-      return unfit === undefined ? undefined : found(step, at, unfit);
-    }
-
-    for (const [key, item] of Object.entries(value)) {
-      const unfit = unfitOf(key);
-
-      if (unfit !== undefined) return found(step, at, unfit);
-      const hit = search(item, step, [...at, key]);
-
-      if (hit) return hit;
-    }
-
-    return undefined;
-  };
-
   for (const [key, value] of Object.entries(body)) {
     const items = key === 'steps' || key === 'archive' ? value : undefined;
 
     if (!Array.isArray(items)) {
-      const hit = search(value, undefined, [key]);
+      const hit = found(undefined, firstUnfit(value, envSecrets, [key]));
 
       if (hit) return hit;
       continue;
@@ -510,7 +517,7 @@ function firstUnpublishable(runId: string, body: Record<string, JsonValue>, envS
     for (const [index, item] of items.entries()) {
       const step = isRecord(item) ? String(key === 'steps' ? item.id : item.step) : undefined;
       // A step whose id itself looks like a secret is named by its place in the list instead.
-      const hit = step !== undefined && labelOf(step) === undefined ? search(item, step, []) : search(item, undefined, [key, index]);
+      const hit = step !== undefined && secretLabelOf(step, envSecrets) === undefined ? found(step, firstUnfit(item, envSecrets)) : found(undefined, firstUnfit(item, envSecrets, [key, index]));
 
       if (hit) return hit;
     }

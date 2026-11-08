@@ -15,6 +15,7 @@ import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Ta
 import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
+import { takeFleetAttempt } from './workflow/drivers/local/fleet-member.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
@@ -23,7 +24,7 @@ import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriver
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive, drivesHere } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
-import { checkDriver, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { checkDriver, DEFAULT_FLEET_POOL, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { sessionAppOf } from './workflow/session-apps.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
 import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
@@ -1379,6 +1380,8 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
 
 type ResumeOptions = {
   driver?: string; tools?: string; autoApprove?: boolean; claim?: boolean; confirmed?: boolean; parallel?: string; hitl?: string; judge?: boolean; next?: boolean; sandbox?: boolean;
+  /** `--pool [name]`: true when given with no name. */
+  pool?: string | true;
 };
 
 /**
@@ -1389,6 +1392,13 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
   const asked = askedDriver(options.driver);
 
   if (refusedNested(nestedCall(process.env), asks(asked, 'skill'))) return;
+
+  if (options.pool !== undefined && !options.next) {
+    setStderrOnly(true);
+    refuse({ error: { code: 'invalid_arguments', message: '--pool takes an attempt a fleet pool offers, so it goes with --next: teamai workflow resume --next --pool [name]' } });
+
+    return;
+  }
 
   if (options.next || runId === undefined) {
     // A run another member handed over runs on the team's tools, never on this member's own instances.
@@ -1560,6 +1570,12 @@ async function resumeOffered(runId: string | undefined, options: ResumeOptions, 
     return;
   }
 
+  if (options.pool !== undefined) {
+    await takeFleetNext(loaded, options.pool === true ? DEFAULT_FLEET_POOL : options.pool);
+
+    return;
+  }
+
   // A run taken from another member runs on the team's definition, never on one of this member's own.
   const defined = isSkill ? { ok: true as const, opened: undefined } : await openNamedDriver(loaded.config, options.driver, { personal: false });
 
@@ -1588,7 +1604,42 @@ function resumeOfferedRefusal(runId: string | undefined, options: ResumeOptions,
       : { code: 'invalid_arguments', message: '--claim takes over the run you name: teamai workflow resume <run> --claim' };
   }
 
+  if (options.pool !== undefined && asks(asked, 'skill')) {
+    return { code: 'invalid_arguments', message: '--pool runs a fleet attempt in this process, so it takes no --driver skill: teamai workflow resume --next --pool [name]' };
+  }
+
   return refusedDriver(asked, ['local', 'skill']);
+}
+
+/**
+ * Takes and runs the oldest attempt fleet pool `pool` offers for this checkout's business repository that another
+ * member did not take first, or answers `idle` with the count of offered attempts it left.
+ */
+async function takeFleetNext({ config, secrets }: Ready, pool: string): Promise<void> {
+  const root = process.cwd();
+  const repository = getRepoIdentity(root);
+
+  if (!usesBranchWorktree(config)) {
+    refuse({ error: { code: 'unsupported_repo', message: 'workflow resume --next --pool takes the attempts teamai-reports offers, and an http team repo has no teamai-reports.' } });
+
+    return;
+  }
+
+  if (repository === null) {
+    refuse({ error: { code: 'origin_unavailable', message: `${root} has no origin, so resume --next --pool cannot tell which business repository's attempts to take. Run it in a checkout of the business repository.` } });
+
+    return;
+  }
+
+  const unready = await refreshedReports(config);
+
+  if (unready) {
+    refuse({ error: unready });
+
+    return;
+  }
+
+  writeEnvelope(await takeFleetAttempt(config, { pool, repository, root, member: await installOwner(config), secrets }), secrets);
 }
 
 /**

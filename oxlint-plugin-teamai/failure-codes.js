@@ -88,6 +88,8 @@ const answers = ['invalid_json', 'driver_running', 'invalid_run', 'repeated_resp
       'isolated_run',
       // Refusals of teamai workflow publish and a claim while a step of a private workflow is open on this machine.
       'private_open',
+      // Refusals of teamai workflow publish while a step's attempt is out on a fleet pool.
+      'fleet_attempts_out',
       // Refusals of teamai score --run, answered to the member who asked for a pass to be judged.
       'scoring_unavailable', 'pass_not_found', 'scorer_not_found', 'step_ambiguous', 'evidence_missing',
       // Refusals of teamai score --session, answered to the member who asked for a session to be judged.

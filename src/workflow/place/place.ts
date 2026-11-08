@@ -513,7 +513,7 @@ async function stageRole(input: {
  * on the branch did, so no hook, fsmonitor or replacement its config names runs, and what it still starts, such as a
  * filter, gets only `hostGitEnv`. The programs `keepMemberConfig` kept for the run's checkout still run.
  */
-async function copyGit(config: LocalConfig, place: { run: RunId; root: string }): Promise<UntrustedGit> {
+export async function copyGit(config: LocalConfig, place: { run: RunId; root: string }): Promise<UntrustedGit> {
   return untrustedGit(hostGitEnv(), undefined, await keptConfig(config, place));
 }
 

@@ -1636,6 +1636,41 @@ teamai opens the outer, then the inner. It stops and closes the inner first, and
 
 A runtime takes part only when it supports it, and the runtimes teamai ships do not yet: until their pages say so, such an entry is for runtimes you write. The inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer; after a restart, the outer's `reattach` carries the prompt's `credentials` again, since it keeps them only in memory.
 
+### Run steps on other members' machines (`fleet`)
+
+`use: fleet` hands a step to another member's install of the same business repository. teamai offers it on `teamai-reports`, a member of the pool takes it, runs it on their machine, and pushes its work to `teamai/attempts/<run>/<attempt>` on origin. Your driver then takes that work into the step's place and goes on as for a step it ran itself. Only your install moves the workflow's branches.
+
+```yaml
+# drivers/build-fleet.yaml
+schemaVersion: v1alpha1
+name: build-fleet
+runtimes:
+  - use: fleet
+    options:
+      pool: build          # optional; default
+      stale_after: 30m     # optional; 30m
+      max_parallel: 4      # at most 4 attempts out at once
+  - use: local
+```
+
+A member takes the oldest attempt a pool offers for the checkout's origin:
+
+```sh
+teamai workflow resume --next --pool build   # the pool named
+teamai workflow resume --next --pool         # the default pool
+teamai workflow resume --next                # published runs only, as before: never an attempt
+```
+
+It prints `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}`, or `{"data":{"idle":{"offered":N}}}` when it took none. Two members that try the same attempt cannot both take it: the second tries the next one.
+
+Which steps go to the fleet follows the usual routing, with no step key: the order of `runtimes`, what `can` under the fleet's `options` promises (the members' machines give it; teamai does not check it), the step's `requires` and `strict`, and the steps that always stay on this machine. The fleet takes command steps for now. Each ready step, and each item of a `for_each`, is an attempt of its own, up to the fleet's `max_parallel`. Give such a step a workspace, such as `workspace: new`: a step with none runs in your checkout, and a member's changes to it fail the step `read_only_dirty`.
+
+You need not stay up. Stop your driver once it offered the attempt, and run `teamai workflow resume <run>` later: it reads the attempt's record, takes the member's work when it finished, and waits otherwise. Steps that do not need the attempt keep running here while it is out.
+
+A member that took an attempt writes that it is still there, with the work it pushed so far, three times per `stale_after`. When your driver sees no word from it for longer than `stale_after`, the attempt fails `fleet_member_gone`. Its work up to the last push stays in the step's place, and `teamai workflow retry <run> <step>` offers the step again from there.
+
+`teamai workflow publish` refuses a run with an attempt out (`fleet_attempts_out`): a claim releases every lease, and the attempt's work comes back into a place on your machine only. Wait for it with `teamai workflow resume <run>`, then publish.
+
 ### A Codex login for step runtimes
 
 Codex rejects a refresh token used twice, so a copy of your own login that refreshes in a step would log out your other Codex sessions. `credentials: { codex: login }` uses a login teamai keeps apart instead. The first Codex step that needs it, in a terminal, creates it for you:

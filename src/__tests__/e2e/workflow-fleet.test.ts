@@ -1,0 +1,380 @@
+/**
+ * Real CLI: the fleet. Two members, each with their own HOME and data home, share one bare origin, which holds the
+ * business repository and the team repository's teamai-reports. Alice starts a run on a definition whose first runtime
+ * is `fleet`; Bob takes its command step with `workflow resume --next --pool`, runs it on his own machine and pushes
+ * its work to the attempt's ref. Alice need not stay up: a later `workflow resume` collects what Bob wrote.
+ */
+import { execFileSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { stringify } from 'yaml';
+import { CLAUDE_SESSIONS, CLI, fakeTool } from '../helpers/step-runtime-e2e.js';
+
+const URL = 'https://github.com/acme/business.git';
+
+const flow = (name: string, steps: string): string => `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\nsteps:\n${steps}`;
+
+/**
+ * `remote` goes to the fleet; `here`, a prompt step, which the fleet does not take and which needs nothing of `remote`,
+ * runs on Alice's `local` while the fleet holds `remote`.
+ */
+const SPLIT = flow('split', `  - id: remote
+    workspace: new
+    command: node -e "require('fs').writeFileSync('built.txt', 'B'); console.log(JSON.stringify({built:true}))"
+  - id: here
+    needs: []
+    workspace: new
+    prompt: Write here.txt.
+  - id: after
+    needs: [remote, here]
+    command: node -e "process.exit(0)"
+`);
+
+/** Writes part of its work, then waits for a file that never comes, unless an earlier attempt's work is already there. */
+const SLOW = flow('slow', `  - id: long
+    workspace: new
+    command: node -e "const fs = require('fs'); if (fs.existsSync('partial.txt')) { fs.writeFileSync('done.txt', 'D'); process.exit(0); } fs.writeFileSync('partial.txt', 'P'); setInterval(() => {}, 1000)"
+`);
+
+/** One command step. */
+const ONE = flow('one', `  - id: build
+    workspace: new
+    command: node -e "require('fs').writeFileSync('built.txt', 'B')"
+`);
+
+/** Three items, each written by the member that runs it. */
+const FAN = `schemaVersion: v1alpha1
+name: fan
+description: fan
+inputs: { parts: [string] }
+defaults:
+  inputs: { parts: [a, b, c] }
+steps:
+  - id: part
+    workspace: new
+    for_each: inputs.parts
+    env:
+      PART: "{{ item }}"
+    command: node -e "require('fs').writeFileSync('part-' + process.env.PART + '.txt', process.env.PART)"
+`;
+
+const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1 } }, { use: 'local' }] };
+
+/** The default pool, two attempts out at once. */
+const FAN_FLEET = { schemaVersion: 'v1alpha1', name: 'fan-fleet', runtimes: [{ use: 'fleet', options: { max_parallel: 2 } }, { use: 'local' }] };
+
+interface Envelope { data?: Record<string, unknown>; error?: { code: string; message: string } }
+
+interface RunResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; envelope: () => Envelope }
+
+let sandbox = '';
+let origin = '';
+
+const homeOf = (member: string): string => path.join(sandbox, member);
+const workOf = (member: string): string => path.join(homeOf(member), 'work');
+
+/** Each member's PATH starts with a fake Claude Code, which writes each launch to `launches`. */
+const binOf = (member: string): string => path.join(homeOf(member), 'bin');
+const launchesOf = (member: string): string => path.join(homeOf(member), 'launches.jsonl');
+
+function envOf(member: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, HOME: homeOf(member), USERPROFILE: homeOf(member), GIT_CONFIG_GLOBAL: path.join(homeOf(member), '.gitconfig'), GIT_TERMINAL_PROMPT: '0', FORCE_COLOR: '0',
+    PATH: `${binOf(member)}${path.delimiter}${process.env.PATH ?? ''}`, LAUNCHES: launchesOf(member),
+  };
+  delete env.XDG_CONFIG_HOME;
+  delete env.CLAUDE_CONFIG_DIR;
+  delete env.CODEX_HOME;
+
+  return env;
+}
+
+function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env): string {
+  return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+const originGit = (...args: string[]): string => git(sandbox, ['--git-dir', origin, ...args]);
+
+/** Runs the CLI as `member`; `started` gets its pid. A call still running after `limitMs` is stopped, so its output shows where it waited. */
+function teamai(member: string, args: string[], started?: (pid: number) => void, limitMs = 90_000): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: workOf(member), env: envOf(member), stdio: ['ignore', 'pipe', 'pipe'] });
+
+    if (child.pid !== undefined) started?.(child.pid);
+    let stdout = '';
+    let stderr = '';
+    const limit = setTimeout(() => {
+      stderr += `\n[test] ${args.join(' ')} was still running after ${limitMs} ms, so it was stopped`;
+      child.kill('SIGTERM');
+    }, limitMs);
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on('close', (code, signal) => clearTimeout(limit) ?? resolve({
+      code, signal, stdout, stderr,
+      envelope: () => {
+        const line = stdout.trim().split('\n').findLast((item) => item.startsWith('{'));
+
+        if (!line) throw new Error(`no JSON envelope in stdout:\n${stdout}\n${stderr}`);
+
+        return JSON.parse(line) as Envelope;
+      },
+    }));
+  });
+}
+
+const said = (result: RunResult): string => `exit ${result.code}\n${result.stdout}\n${result.stderr}`;
+
+/** The record of each attempt of `run` as origin holds it. */
+function records(run: string): Array<{ attempt: string; state: string; start: string; pushed?: string; lease: { step: string }; result?: { exitCode: number; to?: string } }> {
+  const listed = originGit('ls-tree', '--name-only', `teamai-reports:workflows/attempts/${run}/`);
+
+  return listed.split('\n').filter(Boolean).map((file) => JSON.parse(originGit('show', `teamai-reports:workflows/attempts/${run}/${path.basename(file)}`)) as ReturnType<typeof records>[number]);
+}
+
+async function until(check: () => boolean, ms: number): Promise<boolean> {
+  for (let waited = 0; !check(); waited += 200) {
+    if (waited >= ms) return false;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  return true;
+}
+
+/** Waits for `check`, else stops `pid` and fails with what its run printed. */
+async function waitOn(check: () => boolean, ms: number, pid: () => number, running: Promise<RunResult>): Promise<void> {
+  if (await until(check, ms)) return;
+
+  try {
+    process.kill(pid(), 'SIGTERM');
+  } catch {
+    // It already exited: what it printed says why.
+  }
+
+  expect.fail(said(await running));
+}
+
+/** The runs with an attempt record on origin. */
+function offeredRuns(): string[] {
+  try {
+    return originGit('ls-tree', '--name-only', 'teamai-reports:workflows/attempts/').split('\n').filter(Boolean).map((name) => path.basename(name));
+  } catch {
+    return [];
+  }
+}
+
+/** `member`'s data home for their checkout, which `init --scope workspace` made. */
+function dataHomeOf(member: string): string {
+  const projects = path.join(homeOf(member), '.teamai', 'projects');
+  const found = fs.readdirSync(projects).map((name) => path.join(projects, name))
+    .find((dir) => fs.existsSync(path.join(dir, 'config.yaml')) && fs.readFileSync(path.join(dir, 'config.yaml'), 'utf8').includes(`projectRoot: ${workOf(member)}`));
+
+  if (!found) throw new Error(`no data home for ${workOf(member)}`);
+
+  return found;
+}
+
+type Step = { id: string; status: string; runtime?: string; failure?: { code: string; message: string } };
+
+function runStateOf(member: string, run: string): { steps: Step[] } {
+  const file = path.join(dataHomeOf(member), 'workflows', 'runs', `${run}.json`);
+
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as { steps: Step[] } : { steps: [] };
+}
+
+async function join(member: string): Promise<void> {
+  fs.mkdirSync(binOf(member), { recursive: true });
+  fs.writeFileSync(path.join(binOf(member), 'claude'), fakeTool({ tool: 'claude', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+  fs.writeFileSync(path.join(homeOf(member), '.gitconfig'), ['[user]', `\tname = ${member}`, `\temail = ${member}@example.com`, `[url "file://${origin}"]`, `\tinsteadOf = ${URL}`, ''].join('\n'));
+  git(sandbox, ['clone', '-q', URL, workOf(member)], envOf(member));
+  const init = await teamai(member, ['init', URL, '--provider', 'git', '--agent', 'claude', '--scope', 'workspace', '--force']);
+  expect(init.code, said(init)).toBe(0);
+  const pulled = await teamai(member, ['pull']);
+  expect(pulled.code, said(pulled)).toBe(0);
+}
+
+describe('the fleet', () => {
+  beforeAll(async () => {
+    sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fleet-e2e-')));
+    origin = path.join(sandbox, 'origin.git');
+    git(sandbox, ['init', '-q', '--bare', '-b', 'main', origin]);
+    const seed = path.join(sandbox, 'seed');
+    fs.mkdirSync(seed);
+    git(seed, ['init', '-q', '-b', 'main']);
+    const files: Record<string, string> = {
+      'README.md': '# business\n',
+      'teamai.yaml': `team: acme\nrepo: ${URL}\nprovider: github\n`,
+      'workflows/split.yaml': SPLIT,
+      'workflows/slow.yaml': SLOW,
+      'workflows/one.yaml': ONE,
+      'workflows/fan.yaml': FAN,
+      'drivers/build-fleet.yaml': stringify(FLEET),
+      'drivers/fan-fleet.yaml': stringify(FAN_FLEET),
+    };
+
+    for (const [file, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(seed, file)), { recursive: true });
+      fs.writeFileSync(path.join(seed, file), text);
+    }
+
+    git(seed, ['add', '-A']);
+    git(seed, ['-c', 'user.name=Seed', '-c', 'user.email=seed@example.com', 'commit', '-qm', 'seed']);
+    git(seed, ['push', '-q', origin, 'main']);
+    await join('alice');
+    await join('bob');
+    await join('carol');
+    // Alice runs steps beside the ones the fleet holds; the fleet's own max_parallel is the lower cap.
+    const config = path.join(dataHomeOf('alice'), 'config.yaml');
+    fs.writeFileSync(config, `${fs.readFileSync(config, 'utf8')}workflows:\n  max_parallel: 4\n`);
+  }, 180_000);
+
+  afterAll(() => {
+    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it('runs a step on a member while the owner runs what needs nothing of it, and collects it once the owner comes back', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'split', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    await waitOn(() => offeredRuns().length > 0, 60_000, () => alicePid, started);
+    const [run = ''] = offeredRuns();
+    // `here` needs nothing of `remote`, so it ran on Alice's local while the offer waited for a member.
+    await waitOn(() => runStateOf('alice', run).steps.find((step) => step.id === 'here')?.status === 'succeeded', 60_000, () => alicePid, started);
+    expect(fs.readFileSync(launchesOf('alice'), 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(records(run).map((record) => record.state)).toEqual(['offered']);
+
+    // The owner goes away while the attempt is out.
+    process.kill(alicePid, 'SIGKILL');
+    await started;
+
+    const published = await teamai('alice', ['workflow', 'publish', run]);
+    expect(published.envelope().error?.code, said(published)).toBe('fleet_attempts_out');
+    expect(published.envelope().error?.message).toContain(`teamai workflow resume ${run}`);
+
+    const taken = await teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']);
+    expect(taken.envelope(), said(taken)).toMatchObject({ data: { ran: { run, step: 'remote', exit_code: 0 } } });
+    const [finished] = records(run);
+    expect(finished).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
+    expect(originGit('show', `${finished?.result?.to ?? ''}:built.txt`)).toBe('B');
+
+    // Back, Alice collects Bob's work, and offers `after`, a command step, to the fleet again.
+    let resumePid = 0;
+    const resuming = teamai('alice', ['workflow', 'resume', run], (pid) => { resumePid = pid; });
+    await waitOn(() => records(run).some((record) => record.state === 'offered'), 60_000, () => resumePid, resuming);
+    const next = await teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']);
+    expect(next.envelope(), said(next)).toMatchObject({ data: { ran: { run, step: 'after', exit_code: 0 } } });
+    const resumed = await resuming;
+    expect(resumed.envelope(), said(resumed)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const steps = runStateOf('alice', run).steps;
+    expect(steps.map((step) => [step.id, step.status, step.runtime])).toEqual([['remote', 'succeeded', 'fleet'], ['here', 'succeeded', 'local'], ['after', 'succeeded', 'fleet']]);
+    // The workflow's branch has Bob's commit; only Alice moved it.
+    const branches = originGit('for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/').split('\n');
+    const remoteBranch = branches.find((branch) => branch.includes('remote')) ?? '';
+    expect(originGit('show', `${remoteBranch}:built.txt`)).toBe('B');
+  }, 240_000);
+
+  it('gives up a claim whose member went away once stale_after passed, and a retry goes on from what it pushed', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    process.kill(alicePid, 'SIGKILL');
+    await started;
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; });
+    // Bob pushed part of the work and said so, then went away.
+    expect(await until(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000)).toBe(true);
+    const [claimed] = records(run);
+    process.kill(bobPid, 'SIGKILL');
+    await taking;
+    await new Promise((resolve) => setTimeout(resolve, 7_000));
+
+    const back = await teamai('alice', ['workflow', 'resume', run]);
+    expect(back.envelope(), said(back)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(runStateOf('alice', run).steps[0]?.failure?.code).toBe('fleet_member_gone');
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'expired', pushed: claimed?.pushed })]);
+
+    const retried = await teamai('alice', ['workflow', 'retry', run, 'long']);
+    expect(retried.code, said(retried)).toBe(0);
+    let resumePid = 0;
+    const resuming = teamai('alice', ['workflow', 'resume', run], (pid) => { resumePid = pid; });
+    expect(await until(() => records(run).some((record) => record.state === 'offered'), 60_000)).toBe(true);
+    const offered = records(run).find((record) => record.state === 'offered');
+    // The new attempt starts from the work the gone member last pushed.
+    originGit('merge-base', '--is-ancestor', claimed?.pushed ?? '', offered?.start ?? '');
+    expect(originGit('show', `${offered?.start ?? ''}:partial.txt`)).toBe('P');
+
+    const again = await teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']);
+    expect(again.envelope(), said(again)).toMatchObject({ data: { ran: { run, step: 'long', exit_code: 0 } } });
+    const done = await resuming;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(resumePid).toBeGreaterThan(0);
+    // The expired claim stays as it was.
+    expect(records(run).find((record) => record.attempt === claimed?.attempt)).toMatchObject({ state: 'expired' });
+  }, 300_000);
+
+  it('gives an attempt to one of two members that try at once, and the other takes none', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'one', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+
+    const [bob, carol] = await Promise.all([teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']), teamai('carol', ['workflow', 'resume', '--next', '--pool', 'build'])]);
+    const answers = [bob.envelope(), carol.envelope()];
+
+    expect(answers.filter((answer) => answer.data?.ran !== undefined), `${said(bob)}\n${said(carol)}`).toEqual([{ data: { ran: expect.objectContaining({ run, step: 'build', exit_code: 0 }) } }]);
+    expect(answers.filter((answer) => answer.data?.idle !== undefined)).toEqual([{ data: { idle: { offered: 0 } } }]);
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  }, 180_000);
+
+  it('writes nothing for a member whose claim was given up while it was away, and stops its command', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; });
+    await waitOn(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000, () => bobPid, taking);
+    // Bob's machine sleeps past stale_after: the owner, still up, gives the claim up.
+    process.kill(bobPid, 'SIGSTOP');
+    const failed = await started;
+    process.kill(bobPid, 'SIGCONT');
+
+    expect(failed.envelope(), said(failed)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(runStateOf('alice', run).steps[0]?.failure?.code).toBe('fleet_member_gone');
+    const late = await taking;
+    expect(late.envelope(), said(late)).toMatchObject({ error: { code: 'state_moved' } });
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'expired' })]);
+  }, 180_000);
+
+  it('offers each item of a for_each as an attempt of its own, no more at once than the fleet\'s max_parallel', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'fan', '--driver', 'fan-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length >= 2, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    // Give the loop time to offer a third, which it must not.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(records(run).map((record) => record.state)).toEqual(['offered', 'offered']);
+
+    for (let taken = 0; taken < 3; taken += 1) {
+      await waitOn(() => records(run).some((record) => record.state === 'offered'), 60_000, () => alicePid, started);
+      const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+      expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, exit_code: 0 } } });
+    }
+
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(records(run).map((record) => [record.state, record.lease.step]).sort()).toEqual([['finished', 'part[0]'], ['finished', 'part[1]'], ['finished', 'part[2]']]);
+  }, 240_000);
+});

@@ -21,7 +21,8 @@ import {
 } from './snapshot.js';
 import { openPrivateStep } from './scope.js';
 import { takeOver, type UnleasedStep } from './step-state.js';
-import { installOwner, isRunId, readRun, updateRun } from './store.js';
+import { offeredPool } from './fleet.js';
+import { AttemptIdSchema, installOwner, isRunId, readRun, RunIdSchema, updateRun } from './store.js';
 import { workflowRunBy, type RunPublication, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
 import { attemptHoldingSession } from './runtimes/attempt.js';
 import { basePinBranch, branchName, isIsolated, runBranchPrefix, stepMode, worksInTeam, type LeaseSession, type SessionRef } from './workspace.js';
@@ -53,7 +54,8 @@ export type HandoffError =
   | { code: 'commit_missing'; branch: string; commit: string; message: string }
   | { code: 'branch_diverged'; branch: string; expected: string; actual: string; message: string }
   | { code: 'isolated_run'; message: string }
-  | { code: 'private_open'; step: string; message: string };
+  | { code: 'private_open'; step: string; message: string }
+  | { code: 'fleet_attempts_out'; step: string; message: string };
 
 /** Why a handoff did not happen. */
 type Refusal = { ok: false; error: HandoffError };
@@ -269,6 +271,9 @@ export async function publishRun(
     return refused({ code: 'isolated_run', message: `Run ${runId} has a step in the team workspace, whose clone is on this machine only, so it cannot be published. Start the workflow again on the other machine.` });
   }
 
+  const out = await fleetAttemptOut(config, stored);
+
+  if (out) return refused(out);
   const secrets = await knownSecrets(config, env);
   const projected = projectRun(stored, secrets);
 
@@ -714,6 +719,34 @@ export async function publishRunEnd(config: LocalConfig, runId: string, checkout
   const { error } = publishResult;
 
   return error.code === 'not_owner' ? claimedElsewhere(runId, error.owner, error.ownedAt) : error;
+}
+
+/**
+ * The first step of `run` whose attempt a fleet pool runs: a claim releases every lease, and the attempt's work comes
+ * back into a place on this machine only, so publishing would drop it.
+ */
+async function fleetAttemptOut(config: LocalConfig, run: RunState): Promise<HandoffError | undefined> {
+  const runId = RunIdSchema.safeParse(run.id);
+
+  if (!runId.success) return undefined;
+
+  for (const step of run.steps) {
+    if (step.status !== 'leased') continue;
+    const attempt = AttemptIdSchema.safeParse(step.lease.attempt);
+
+    if (!attempt.success) continue;
+    const pool = await offeredPool(config, runId.data, attempt.data);
+
+    if (pool === undefined) continue;
+
+    return {
+      code: 'fleet_attempts_out',
+      step: step.id,
+      message: `Run ${run.id} has attempt ${step.lease.attempt} of step "${step.id}" out on fleet pool ${pool}. A claim releases every lease, and the attempt's work comes back into a place on this machine only, so it would be dropped. Wait for it with teamai workflow resume ${run.id}, then publish.`,
+    };
+  }
+
+  return undefined;
 }
 
 /**
