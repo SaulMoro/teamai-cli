@@ -189,7 +189,8 @@ export function leaseValues(step: Pick<WorkflowStep, 'id' | 'env'>, context: Tem
         if (picked !== undefined) outputs[read.step] = picked;
       }
 
-      if (read.root === 'item' && item.success) itemValues = withPath(itemValues, item.data, read.fields);
+      // An env that reads the item renders against one, even when the field it reads is missing.
+      if (read.root === 'item' && item.success) itemValues = withPath(itemValues, item.data, read.fields) ?? {};
     }
   }
 

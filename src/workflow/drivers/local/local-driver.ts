@@ -1894,7 +1894,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       const exited = await Promise.race([
         ...[...inFlight.values()].map(({ lease, command }) => command.exit.then((result) => ({ kind: 'command' as const, attempt: lease.attempt, lease, result }))),
-        ...[...dying].map(([attempt, { command }]) => command.stop().then(() => ({ kind: 'stopped' as const, attempt }))),
+        // cancel() already stopped each one, with why: another stop here would turn a fleet cancel into a driver stop.
+        ...[...dying].map(([attempt, { command }]) => command.exit.then(() => ({ kind: 'stopped' as const, attempt }))),
         ...[...prompts].map(([attempt, { exit }]) => exit.then((body) => ({ kind: 'prompt' as const, attempt, body }))),
         ...(question ? [question.exit] : []),
         new Promise<undefined>((resolve) => {
