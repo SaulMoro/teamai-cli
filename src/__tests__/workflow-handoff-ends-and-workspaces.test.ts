@@ -715,6 +715,59 @@ steps:
     expect(await leaseNext(bob.config, runId, bob.driver)).toMatchObject({ data: { lease: { step: 'two', command: 'echo second' } } });
   });
 
+  it('runs no workflow of a team commit that only a side branch holds, and says to pull and claim again', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const bob = await acme.member('bob');
+    // Whoever can push a side branch of the team repo and write teamai-reports names the team commit a run ran at.
+    const teamRepo = alice.config.repo.localPath;
+    git(teamRepo, 'checkout', '-q', '-b', 'side');
+    fs.writeFileSync(path.join(teamRepo, 'workflows', 'build.yaml'), BUILD.replace('echo two', 'echo side'));
+    git(teamRepo, 'commit', '-qam', 'side change');
+    git(teamRepo, 'push', '-q', '-u', 'origin', 'side');
+    const side = git(teamRepo, 'rev-parse', 'HEAD');
+    await pull(alice);
+    const runId = await start(alice);
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    expect(JSON.parse(originFile(acme.origin, `workflows/runs/${runId}/state.json`) ?? '{}')).toMatchObject({ teamRevision: side });
+    expect(JSON.stringify(await readRun(alice.config, runId))).toContain('echo side');
+
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({
+      ok: false,
+      error: { code: 'definition_mismatch', teamRevision: side, message: expect.stringMatching(new RegExp(`${side}.*teamai pull`)) },
+    });
+    expect(await readRun(bob.config, runId)).toBe('missing');
+  });
+
+  it('refuses a claim whose snapshot pins the team scorers to a commit only a side branch holds, so no scorer of it runs', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const bob = await acme.member('bob');
+    const runId = await start(alice);
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    const editor = path.join(path.dirname(acme.origin), 'pin-editor');
+    git(path.dirname(acme.origin), 'clone', '-q', acme.origin, editor);
+    git(editor, 'checkout', '-q', '-b', 'side');
+    fs.writeFileSync(path.join(editor, 'side.txt'), 'side\n');
+    git(editor, 'add', '-A');
+    git(editor, 'commit', '-qm', 'side change');
+    git(editor, 'push', '-q', 'origin', 'side');
+    const side = git(editor, 'rev-parse', 'HEAD');
+    git(editor, 'fetch', '-q', 'origin', 'teamai-reports');
+    git(editor, 'checkout', '-q', '-b', 'reports', 'FETCH_HEAD');
+    const rel = `workflows/runs/${runId}/state.json`;
+    const snapshot: Record<string, unknown> = JSON.parse(fs.readFileSync(path.join(editor, rel), 'utf8'));
+    fs.writeFileSync(path.join(editor, rel), `${JSON.stringify({ ...snapshot, teamPin: { revision: side } }, null, 2)}\n`);
+    git(editor, 'commit', '-qam', 'pin the scorers to the side branch');
+    git(editor, 'push', '-q', 'origin', 'reports:teamai-reports');
+
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({
+      ok: false,
+      error: { code: 'definition_mismatch', teamRevision: side, message: expect.stringMatching(new RegExp(`${side}.*teamai pull`)) },
+    });
+    expect(await readRun(bob.config, runId)).toBe('missing');
+  });
+
   it('lets another teamai-reports writer on the machine through while a claim rebuilds the workflows the run ran', async () => {
     const acme = team();
     const alice = await acme.member('alice');
