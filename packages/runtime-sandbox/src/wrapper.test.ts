@@ -24,7 +24,7 @@ const SECRET = 'sk-ant-oat01-wrapper-test-value';
 /** A tool in the sandbox that reports where it ran, with what, and copies its stdin to stdout. */
 const TOOL = `
 if (process.argv.includes('--version')) { console.log('2.1.0 (Claude Code)'); process.exit(0); }
-const names = ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR', 'APP_ONLY'];
+const names = ['CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR', 'APP_ONLY'];
 const report = { tool: require('node:path').basename(process.argv[1]), args: process.argv.slice(2), cwd: process.cwd(), set: names.filter((name) => process.env[name] !== undefined), home: process.env.CLAUDE_CONFIG_DIR ?? process.env.ACME_CLAUDE_CONFIG_DIR ?? null };
 let input = '';
 process.stdin.on('data', (data) => { input += data; });
@@ -101,10 +101,10 @@ function place(): Place {
 let opCount = 0;
 
 /** Opens the attempt's place for a prompt on `tool`, as teamai opens the outer of a composed entry. */
-async function openFor(connection: Connection, at: Place, { tool = 'claude', variable = 'CLAUDE_CONFIG_DIR', credentials = { CLAUDE_CODE_OAUTH_TOKEN: SECRET } }: { tool?: string; variable?: string; credentials?: Record<string, string> } = {}): Promise<string> {
+async function openFor(connection: Connection, at: Place, { tool = 'claude', variable = 'CLAUDE_CONFIG_DIR', credentials = { CLAUDE_CODE_OAUTH_TOKEN: SECRET }, unset }: { tool?: string; variable?: string; credentials?: Record<string, string>; unset?: string[] } = {}): Promise<string> {
   opCount += 1;
   const op = `op-${opCount.toString(16).padStart(8, '0')}`;
-  connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool, credentials, view: { worktree: at.worktree, readonly: [], result: at.result, runDir: at.runDir, toolHome: { [variable]: at.toolHome } } });
+  connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool, credentials, ...(unset && { unset }), view: { worktree: at.worktree, readonly: [], result: at.result, runDir: at.runDir, toolHome: { [variable]: at.toolHome } } });
   const accepted = await connection.next((message) => message.op === op && message.event === 'accepted');
   expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'ready' });
 
@@ -319,6 +319,17 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(execsIn()[0]).toEqual(expect.arrayContaining(['-w', path.join(at.worktree, 'src')]));
   });
 
+  it('keeps from the tool the credentials its open names the prompt goes without', async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at, { credentials: { CLAUDE_CODE_OAUTH_TOKEN: SECRET, OPENAI_API_KEY: 'openai-value-3c1f' }, unset: ['OPENAI_API_KEY'] });
+    await register(handle, null);
+    const ran = await wrapper('claude', ['-p'], { cwd: at.worktree });
+
+    expect(reportOf(ran).set).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR']);
+  });
+
   it("gives the tool the step's credentials and its home at the attempt's tool home, never the app's env, and no value in any argv or file", async () => {
     const connection = start();
     await init(connection);
@@ -489,6 +500,23 @@ describe('after the runtime restarts', () => {
     const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
 
     expect(ran).toMatchObject({ code: 0, stderr: '' });
+  });
+
+  it('keeps from the tool the credentials a reattach after a restart names the prompt goes without', async () => {
+    const credentials = { CLAUDE_CODE_OAUTH_TOKEN: SECRET, OPENAI_API_KEY: 'openai-value-3c1f' };
+    const first = start();
+    await init(first);
+    const at = place();
+    const handle = await openFor(first, at, { credentials, unset: ['OPENAI_API_KEY'] });
+    await first.end();
+    const second = start();
+    await init(second);
+    second.send({ type: 'reattach', handle, credentials, unset: ['OPENAI_API_KEY'] });
+    await second.next((message) => message.handle === handle && message.event === 'alive');
+    await register(handle, null);
+    const ran = await wrapper('claude', ['-p'], { cwd: at.worktree });
+
+    expect(reportOf(ran).set).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR']);
   });
 
   it("refuses asks with credentials_pending until teamai's reattach brings the credentials back, then grants", async () => {

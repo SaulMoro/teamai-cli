@@ -172,11 +172,11 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   /** The tools whose unused gateway this process told the member about, so it says so once per drive. */
   const toldGateway = new Set<string>();
   /**
-   * The attempt sockets this process serves, by place, each with the step's credentials its grants carry: those of the
-   * place's open, or of teamai's reattach, in memory only; undefined in a runtime that restarted until a reattach brings
-   * them.
+   * The attempt sockets this process serves, by place, each with the step's credentials its grants carry and the names
+   * they go without: those of the place's open, or of teamai's reattach, in memory only; undefined in a runtime that
+   * restarted until a reattach brings them.
    */
-  const sockets = new Map<string, { socket: AttemptSocket; credentials: Record<string, string> | undefined }>();
+  const sockets = new Map<string, { socket: AttemptSocket; credentials: Record<string, string> | undefined; unset: string[] }>();
 
   const write = (message: RuntimeMessage): void => {
     if (isEnd(message)) endsWritten.set(message.op, (endsWritten.get(message.op) ?? 0) + 1);
@@ -333,7 +333,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    */
   const answerOn = (place: string): Answering => async ({ tool, cwd }) => {
     const { provider, can, host, instances } = ready;
-    const credentials = sockets.get(place)?.credentials;
+    const served = sockets.get(place);
+    const credentials = served?.credentials;
+    const unset = served?.unset ?? [];
     const record = journal.place(place);
 
     if (record?.outer === undefined || provider.client === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `No sandbox is open for this attempt any more (${place}).` } };
@@ -384,20 +386,22 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return { ok: false, failure: { code: 'tool_unsupported', message: `${command} is not installed in this sandbox (${where}). Add it to the image or template the sandbox starts from, or run the step with --driver local.` } };
     }
 
-    const client = provider.client(id, { argv: [command], env: { ...inSandbox(credentials, host), ...record.outer.toolHome }, unset: [], cwd: at });
+    // A credential the prompt goes without is not set, as an exec withholds it.
+    const scoped = inSandbox(Object.fromEntries(Object.entries(credentials).filter(([name]) => !unset.includes(name))), host);
+    const client = provider.client(id, { argv: [command], env: { ...scoped, ...record.outer.toolHome }, unset, cwd: at });
 
     return client.ok ? { ok: true, grant: { argv: client.argv, cwd: at, env: client.env, ...(client.signal && { signal: client.signal }) } } : client;
   };
 
   /**
-   * Serves `place`'s socket at `socketPath` in this process, with `credentials` (undefined: not given yet), or gives it
-   * the credentials when it serves it already.
+   * Serves `place`'s socket at `socketPath` in this process, with `credentials` (undefined: not given yet) less the
+   * names in `unset`, or gives it both when it serves it already.
    */
-  const serveSocket = async ({ place, socketPath, credentials }: { place: string; socketPath: string; credentials: Record<string, string> | undefined }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+  const serveSocket = async ({ place, socketPath, credentials, unset }: { place: string; socketPath: string; credentials: Record<string, string> | undefined; unset: string[] }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const served = sockets.get(place);
 
     if (served !== undefined) {
-      if (credentials !== undefined) served.credentials = credentials;
+      if (credentials !== undefined) Object.assign(served, { credentials, unset });
 
       return { ok: true };
     }
@@ -405,7 +409,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const listened = await listen(socketPath, answerOn(place));
 
     if (!listened.ok) return listened;
-    sockets.set(place, { socket: listened.socket, credentials });
+    sockets.set(place, { socket: listened.socket, credentials, unset });
 
     return { ok: true };
   };
@@ -417,7 +421,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     await served?.socket.close();
   };
 
-  const open = async ({ op, run, attempt, view, tool, credentials, deadline }: OpenRequest, current: Ready): Promise<void> => {
+  const open = async ({ op, run, attempt, view, tool, credentials, unset = [], deadline }: OpenRequest, current: Ready): Promise<void> => {
     const { provider } = current;
 
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
@@ -457,7 +461,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const outer = tool !== undefined && provider.client !== undefined ? { socket: socketPathOf({ result: view.result, place: handle }), worktree: view.worktree, toolHome: view.toolHome } : undefined;
 
     if (outer !== undefined) {
-      const served = await serveSocket({ place: handle, socketPath: outer.socket, credentials });
+      const served = await serveSocket({ place: handle, socketPath: outer.socket, credentials, unset });
 
       if (!served.ok) {
         write({ op, event: 'failed', failure: served.failure });
@@ -946,7 +950,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
    * Answers from the journal alone, never the provider, so a stop is read while the engine is down: gone only when the
    * journal holds no place of that handle. A sandbox removed meanwhile is found absent by the next exec or close.
    */
-  const reattach = async (handle: string, provider: Provider, credentials: Record<string, string> | undefined): Promise<void> => {
+  const reattach = async (handle: string, provider: Provider, credentials: Record<string, string> | undefined, unset: string[] = []): Promise<void> => {
     const placeKey = placeOf(handle);
     const place = journal.place(placeKey);
 
@@ -958,7 +962,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
     // A place whose tool an app launches through the wrapper is served again, with the credentials teamai sent again.
     if (place.outer !== undefined) {
-      const served = await serveSocket({ place: placeKey, socketPath: place.outer.socket, credentials });
+      const served = await serveSocket({ place: placeKey, socketPath: place.outer.socket, credentials, unset });
 
       if (!served.ok) warn(`teamai-runtime-sandbox: warning: ${served.failure.message}. The step's tool cannot start in its sandbox until it can.`);
     }
@@ -1136,7 +1140,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       case 'collect':
         return collect(request.handle, provider);
       case 'reattach':
-        return reattach(request.handle, provider, request.credentials);
+        return reattach(request.handle, provider, request.credentials, request.unset);
       case 'close':
         return close(request.handle, provider, request.release === true);
       default: {
