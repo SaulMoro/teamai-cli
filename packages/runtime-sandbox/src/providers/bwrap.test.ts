@@ -157,6 +157,19 @@ describe('bwrap: a step', () => {
     expect(seen).toMatchObject({ home: path.join(own, 'home'), tmp: path.join(own, 'tmp'), token: true });
   });
 
+  it('anchors only the folders above a git path, so a tool directory on PATH inside the worktree leaves its folders removable', async () => {
+    const at = placeIn(host.dir);
+    const bin = path.join(at.worktree, 'node_modules', '.bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const connection = start({ PATH: [host.fakes, bin, host.tools, '/usr/bin', '/bin'].join(path.delimiter) });
+    await init(connection, { provider: 'bwrap' });
+    await openPlace(connection, at);
+
+    await exec(connection, { argv: ['/bin/sh', '-c', 'true'], cwd: at.worktree });
+
+    expect(lastSandbox().binds).not.toContainEqual(['--bind', fs.realpathSync(path.join(at.worktree, 'node_modules'))]);
+  });
+
   it("points Claude Code's own temp directory at the step's, which it writes instead of TMPDIR", async () => {
     host.tool('claude-tmp', 'console.log(process.env.CLAUDE_CODE_TMPDIR)');
     const connection = start();

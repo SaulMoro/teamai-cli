@@ -150,7 +150,7 @@ function anchoredOf({ writable, locked }: { writable: string[]; locked: string[]
 }
 
 /** The profile a step runs under. `memberHome` is the member's home, whose container engines no step reaches. */
-export function profileOf({ writable, readable, memberHome }: Pick<Sandboxed, 'writable' | 'readable' | 'memberHome'>): SeatbeltProfile {
+export function profileOf({ writable, readable, gitPaths, memberHome }: Pick<Sandboxed, 'writable' | 'readable' | 'gitPaths' | 'memberHome'>): SeatbeltProfile {
   const params: string[] = [];
   let count = 0;
 
@@ -164,7 +164,7 @@ export function profileOf({ writable, readable, memberHome }: Pick<Sandboxed, 'w
 
   const filters = (kind: 'subpath' | 'literal', prefix: string, paths: string[]): string => paths.map((at) => `(${kind} ${param(prefix, at)})`).join(' ');
 
-  // A read-only path inside a writable one (the worktree's .git) stays read-only, and the folders holding it stay put.
+  // A read-only path inside a writable one (the worktree's .git) stays read-only, and the folders holding a git path stay put.
   const locked = readable.filter((at) => writable.some((place) => isWithin(at, place)));
   const readRoots = [...new Set([...SYSTEM, ...developerPaths(), ...readable])];
 
@@ -177,7 +177,7 @@ export function profileOf({ writable, readable, memberHome }: Pick<Sandboxed, 'w
     `(deny file-read* file-write* network-outbound process-exec ${filters('literal', 'ENGINE', ENGINE_SOCKETS)} ${filters('subpath', 'ENGINE', ENGINE_HOME.map((name) => path.join(memberHome, name)))})`,
     '(deny mach-lookup (xpc-service-name-prefix ""))',
     ...(locked.length > 0 ? [`(deny file-write* ${filters('subpath', 'LOCKED', locked)})`] : []),
-    ...anchoredOf({ writable, locked }).map((at) => `(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal ${param('ANCHOR', at)})))`),
+    ...anchoredOf({ writable, locked: gitPaths.filter((at) => writable.some((place) => isWithin(at, place))) }).map((at) => `(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal ${param('ANCHOR', at)})))`),
     // Writes through a read-only descriptor (F_MAKECOMPRESSED, F_TRANSFEREXTENTS).
     '(deny system-fcntl (fcntl-command 80 110))',
   ];
