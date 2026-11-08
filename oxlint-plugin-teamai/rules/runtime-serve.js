@@ -20,11 +20,10 @@ const PROCESS_MODULES = new Set(['process', 'node:process']);
  * runtime starts on the kit; this list only shrinks, and an entry that no longer does either fails until it is removed.
  */
 const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
-  // Until Paseo reads no process input of its own: serveRuntime reads it.
+  // Until Paseo and the sandbox read no process input of their own: serveRuntime reads it.
   'packages/runtime-paseo/src/main.ts',
-  // Until the sandbox adopts them, and reads its attempt socket through the kit's eachLine.
-  'packages/runtime-sandbox/src/runtime.ts',
   'packages/runtime-sandbox/src/main.ts',
+  // Until the sandbox reads its attempt socket through the kit's eachLine.
   'packages/runtime-sandbox/src/attempt-socket.ts',
 ]));
 
