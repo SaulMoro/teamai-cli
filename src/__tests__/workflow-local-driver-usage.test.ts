@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { type LocalToolAdapter, type LocalToolResult } from '../workflow/drivers/local/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun } from '../workflow/store.js';
@@ -8,6 +8,33 @@ import { dirs, parallelFixture, toolPaths } from './helpers/workflow-local-drive
 import { dirs as handoffDirs, onGitHub, originFile, startIn, team } from './helpers/workflow-handoff-fixture.js';
 
 _setDriverPollMs(20);
+
+// The person at the terminal: each question gets the next line of `typed`.
+const terminal = vi.hoisted(() => ({ typed: [] as string[], asked: [] as string[] }));
+
+vi.mock('node:readline/promises', () => ({
+  createInterface: () => ({
+    question: async (prompt: string) => {
+      terminal.asked.push(prompt);
+      const line = terminal.typed.shift();
+      if (line === undefined) throw new Error('closed');
+      return line;
+    },
+    close: () => undefined,
+  }),
+}));
+
+/** A person attends at a terminal, typing `lines` in turn. */
+function attendedAt(lines: string[]): void {
+  terminal.typed = [...lines];
+  terminal.asked = [];
+  for (const stream of [process.stdin, process.stderr]) {
+    const { isTTY } = stream;
+    Object.defineProperty(stream, 'isTTY', { value: true, configurable: true });
+    onTestFinished(() => { Object.defineProperty(stream, 'isTTY', { value: isTTY, configurable: true }); });
+  }
+  vi.stubEnv('TEAMAI_MODE', 'attended');
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -110,5 +137,56 @@ steps:
 
     expect(stopped).toEqual({ error: { code: 'usage_limited', message: expect.stringMatching(new RegExp(`^Run ${runId} waits: claude hit its usage limit, which resets at .+, past the 6 hours an unattended run waits for it, and it could not be offered on teamai-reports: .+\\. Continue it here once the limit resets: teamai workflow resume ${runId}, or publish it from here for another machine: teamai workflow publish ${runId}$`)) } });
     expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: [{ id: 'fix', status: 'pending' }] });
+  });
+
+  it('asks a person who attends, and offers the run to another machine when they choose to', async () => {
+    const acme = team({ fix: FIX });
+    const alice = await acme.member('alice');
+    onGitHub(acme.business, [alice]);
+    alice.config.workflows = { tools: { default: 'claude' } };
+    const runId = await startIn(alice, 'fix');
+    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
+    const info = vi.spyOn(log, 'info');
+    attendedAt(['offer']);
+
+    expect(await runLocalDriver(alice.config, runId, alice.checkout, { adapter, toolPaths })).toEqual({
+      data: { handoff: { run: runId, steps: ['fix'], resume: `teamai workflow resume ${runId} --claim` } },
+    });
+
+    expect(terminal.asked).toEqual([expect.stringMatching(/^claude hit its usage limit, which resets at .+\. Wait here until it resets, or offer run r[0-9a-f]+ to another machine on teamai-reports\? \[wait\/offer\] $/)]);
+    expect(info).toHaveBeenCalledWith(`Run ${runId} is offered on teamai-reports, as you chose: another machine continues it with teamai workflow resume ${runId} --claim. To continue it here once the limit resets: teamai workflow resume ${runId}`);
+    expect(JSON.parse(originFile(acme.origin, `workflows/runs/${runId}/state.json`) ?? '{}')).toMatchObject({ offered: { at: expect.any(String) }, steps: [{ id: 'fix', status: 'pending' }] });
+  });
+
+  it('asks a person who attends, and waits for the reset when they choose to', async () => {
+    const { config, workspace, runId } = await parallelFixture(FIX.replace('name: fix', 'name: build'), 1);
+    const resetsAt = Math.ceil((Date.now() + 2000) / 1000) * 1000;
+    const launched: number[] = [];
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async () => {
+        launched.push(Date.now());
+        return launched.length === 1 ? claudeLimit(resetsAt) : { started: true as const, exitCode: 0 };
+      }),
+    };
+    attendedAt(['wait']);
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    expect(terminal.asked).toHaveLength(1);
+    expect(launched).toHaveLength(2);
+    expect(launched[1]).toBeGreaterThanOrEqual(resetsAt);
+  }, 20_000);
+
+  it('stops when the person closes the question, naming resume here and publish elsewhere', async () => {
+    const { config, workspace, runId } = await parallelFixture(FIX.replace('name: fix', 'name: build'), 1);
+    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
+    attendedAt([]);
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toEqual({ error: {
+      code: 'interrupted',
+      message: `The question on the usage limit closed without an answer. Continue run ${runId} here once the limit resets: teamai workflow resume ${runId}, or publish it for another machine: teamai workflow publish ${runId}`,
+    } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'fix', status: 'pending' }] });
   });
 });

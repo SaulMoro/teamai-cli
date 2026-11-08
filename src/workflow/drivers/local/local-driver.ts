@@ -1937,9 +1937,45 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           continue;
         }
 
-        // Only usage limits hold the steps left: wait for the reset.
-        const limitedTools = [...new Set((offered.heldByAll ?? wait.held ?? []).flatMap(({ limited }) => (limited === undefined ? [] : [limited])))];
-        const idle = limitedTools.length > 0 ? limits.whenIdle(Date.now(), limitedTools) : undefined;
+        // Only usage limits hold the steps left: wait for the reset, ask the person who attends, or move on.
+        const limitHolds = (offered.heldByAll ?? wait.held ?? []).flatMap(({ step, limited }) => (limited === undefined ? [] : [{ step, limited }]));
+        const idle = limitHolds.length > 0 ? limits.whenIdle(Date.now(), [...new Set(limitHolds.map(({ limited }) => limited))], { attended: askPerson !== undefined }) : undefined;
+
+        // The run is offered on teamai-reports, as for a step only a person can take, with the steps `tool`'s limit holds.
+        const offerOnLimit = async (tool: string, said: (resume: string) => string, unofferedSaid: (reason: string) => string): Promise<WorkflowEnvelope> => {
+          const steps = [...new Set(limitHolds.flatMap(({ step, limited }) => (limited === tool ? [step] : [])))];
+          const unoffered = await offerToPerson(config, runId, cwd);
+
+          if (unoffered !== undefined) return { error: { code: 'usage_limited', message: unofferedSaid(unoffered) } };
+          const resume = `teamai workflow resume ${runId} --claim`;
+          log.info(said(resume));
+
+          return { data: { handoff: { run: runId, steps, resume } } };
+        };
+
+        const hereOrElsewhere = `Continue it here once the limit resets: teamai workflow resume ${runId}, or publish it from here for another machine: teamai workflow publish ${runId}`;
+
+        if (idle?.kind === 'ask' && askPerson) {
+          const line = await askPerson(`${idle.reason}. Wait here until it resets, or offer run ${runId} to another machine on teamai-reports? [wait/offer] `, new AbortController().signal);
+
+          if (line === undefined) {
+            return { error: { code: 'interrupted', message: `The question on the usage limit closed without an answer. Continue run ${runId} here once the limit resets: teamai workflow resume ${runId}, or publish it for another machine: teamai workflow publish ${runId}` } };
+          }
+
+          const answer = line.trim().toLowerCase();
+
+          if (answer === 'offer' || answer === 'o') {
+            return offerOnLimit(
+              idle.tool,
+              (resume) => `Run ${runId} is offered on teamai-reports, as you chose: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`,
+              (reason) => `Run ${runId} could not be offered on teamai-reports: ${reason}. ${hereOrElsewhere}`,
+            );
+          }
+
+          // An empty line waits, as the question's first choice; anything else asks again.
+          if (answer === '' || answer === 'wait' || answer === 'w') limits.answered(idle.tool, 'wait');
+          continue;
+        }
 
         if (idle?.kind === 'wait') {
           if (waitSaid !== idle.reason) {
@@ -1953,18 +1989,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         // Past the wait, or for a reset after it, the run moves on: it is offered on teamai-reports, as for a person.
         if (idle?.kind === 'past_cap') {
-          const steps = [...new Set((offered.heldByAll ?? wait.held ?? []).flatMap(({ step, limited }) => (limited === idle.tool ? [step] : [])))];
-          const unoffered = await offerToPerson(config, runId, cwd);
+          const quoted = [...new Set(limitHolds.flatMap(({ step, limited }) => (limited === idle.tool ? [`"${step}"`] : [])))];
 
-          if (unoffered !== undefined) {
-            return { error: { code: 'usage_limited', message: `Run ${runId} waits: ${idle.reason}, and it could not be offered on teamai-reports: ${unoffered}. Continue it here once the limit resets: teamai workflow resume ${runId}, or publish it from here for another machine: teamai workflow publish ${runId}` } };
-          }
-
-          const resume = `teamai workflow resume ${runId} --claim`;
-          const quoted = steps.map((step) => `"${step}"`).join(', ');
-          log.info(`${steps.length > 1 ? `Steps ${quoted} wait` : `Step ${quoted} waits`}: ${idle.reason}. So run ${runId} is offered on teamai-reports: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`);
-
-          return { data: { handoff: { run: runId, steps, resume } } };
+          return offerOnLimit(
+            idle.tool,
+            (resume) => `${quoted.length > 1 ? `Steps ${quoted.join(', ')} wait` : `Step ${quoted.join(', ')} waits`}: ${idle.reason}. So run ${runId} is offered on teamai-reports: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`,
+            (reason) => `Run ${runId} waits: ${idle.reason}, and it could not be offered on teamai-reports: ${reason}. ${hereOrElsewhere}`,
+          );
         }
 
         // What the member can change comes first: a step the policy holds on one runtime is held on every runtime that
