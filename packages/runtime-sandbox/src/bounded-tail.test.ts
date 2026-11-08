@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boundedTail, TAIL_CHARS } from './bounded-tail.js';
+import { boundedTail } from './bounded-tail.js';
 
 // The tail of a stream a provider keeps while it streams the whole of it (cases from sandcastle's
 // tests/noSandboxOutputTail.test.ts, on chunks as a pipe delivers them).
@@ -48,8 +48,7 @@ describe('boundedTail', () => {
     expect(text.codePointAt(0)).toBe(0x1f600);
   });
 
-  it('keeps 64 KiB by default', () => {
-    expect(TAIL_CHARS).toBe(64 * 1024);
+  it('keeps the last 64 Ki characters by default', () => {
     expect(tailOf(['y'.repeat(100_000)])).toHaveLength(64 * 1024);
   });
 });

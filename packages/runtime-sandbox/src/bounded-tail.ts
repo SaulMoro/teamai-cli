@@ -8,6 +8,9 @@
 /** How many UTF-16 code units a tail keeps by default: far above any answer a command ends with. */
 export const TAIL_CHARS = 64 * 1024;
 
+/** How much of a command's stderr a provider keeps: its last lines, which say why it failed. */
+export const STDERR_CHARS = 8000;
+
 export interface BoundedTail {
   push(chunk: string): void;
   /** The newest chunks, joined, at most the tail's budget long, never starting with half a character. */
