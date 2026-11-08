@@ -1,0 +1,81 @@
+name: Real sandboxes
+
+# Runs the sandbox runtime's suites on real sandboxes, which the CI of pull requests cannot: bubblewrap and Podman on
+# Linux, and the Windows refusal on a real Windows host with npm's .cmd shims. Kept on the fork's ci/real-sandboxes
+# branch only. Run it from the Actions tab or `gh workflow run real-sandboxes.yml --ref ci/real-sandboxes -f ref=<ref>`;
+# a push to this branch runs it on the default ref.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The branch, tag or commit to test
+        required: true
+        default: wave7/sandbox-sec
+  push:
+    branches:
+      - ci/real-sandboxes
+
+env:
+  REF: ${{ inputs.ref || 'wave7/sandbox-sec' }}
+
+jobs:
+  linux:
+    name: bwrap and Podman (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: git log -1 --format='Testing %H %s'
+      - run: npm ci --ignore-scripts
+      - name: Install bubblewrap and let it make user namespaces
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # A WSL-style drive under /mnt, which a step must never see.
+          sudo mkdir -p /mnt/c/Windows/System32
+          bwrap --version
+          podman version
+      - name: bwrap containment suite (fails rather than skips)
+        run: REQUIRE_NATIVE_SANDBOX=1 npx vitest run packages/runtime-sandbox/src/providers/containment.test.ts packages/runtime-sandbox/src/providers/bwrap.test.ts
+      - name: Container provider spec on Podman and Docker
+        run: CONTAINER_SPEC_ENGINES=podman,docker npx vitest run packages/runtime-sandbox/src/providers/container-spec.test.ts
+
+  windows:
+    name: Windows refusal (windows-latest)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: git log -1 --format='Testing %H %s'
+      - run: npm ci --ignore-scripts
+      - run: npx tsup
+      - name: The runtime refuses init on Windows, naming WSL2
+        run: |
+          reply=$(echo '{"type":"init","protocol":1,"mode":"unattended","options":{"provider":"docker","image":"alpine:3"}}' | node dist/runtime-sandbox.js)
+          echo "$reply"
+          echo "$reply" | grep -q '"code":"sandbox_unavailable"'
+          echo "$reply" | grep -q 'WSL2'
+      - name: The wrapper refuses through npm's .cmd shim, rather than waiting on stdin
+        run: |
+          npm install -g . --ignore-scripts
+          set +e
+          out=$(timeout 60 cmd //c "teamai-sandbox-claude.cmd -p hi" </dev/null 2>&1); code=$?
+          set -e
+          echo "exit $code: $out"
+          test "$code" = 2
+          echo "$out" | grep -q 'does not run on Windows'
