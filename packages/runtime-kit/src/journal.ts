@@ -6,9 +6,10 @@ import { z } from 'zod';
 // ─── What a runtime keeps across its own processes ───────
 //
 //  One file per record, written whole through a rename, so a runtime killed mid-write leaves the previous record, and
-//  two processes that write different records never lose each other's write. A record that is there but cannot be read
-//  is told apart from one that is not there: it may hold work that still runs. `hold` keeps one process at a time on a
-//  key, across processes, for a write that reads what it replaces.
+//  two processes that write different records never lose each other's write. `update` holds its key while it reads and
+//  writes, so two that write the same record never lose one either. A record that is there but cannot be read is told
+//  apart from one that is not there: it may hold work that still runs. `hold` keeps one process at a time on a key,
+//  across processes, for a write that reads what it replaces.
 //
 
 /** A record by its key: none, or one that is there and cannot be read, which is not the same. */
@@ -17,6 +18,12 @@ export type RecordRead<TRecord> = { kind: 'found'; record: TRecord } | { kind: '
 export interface RecordStore<TRecord> {
   read(key: string): RecordRead<TRecord>;
   write(key: string, record: TRecord): void;
+  /**
+   * Writes `key`'s record as `change` makes it from the one there, holding the key across processes meanwhile, so a
+   * write another process makes between the read and this one is never lost; `undefined` writes nothing. A record
+   * there that cannot be read is never written over: that rejects, naming its file.
+   */
+  update(key: string, change: (record: TRecord | undefined) => TRecord | undefined): Promise<void>;
   remove(key: string): void;
   /** Every key the store holds a record for, readable or not. */
   keys(): string[];
@@ -28,36 +35,54 @@ export interface RecordStore<TRecord> {
 export function recordStore<TSchema extends z.ZodType>(dir: string, schema: TSchema): RecordStore<z.infer<TSchema>> {
   const file = (key: string): string => path.join(dir, `${encodeURIComponent(key)}.json`);
 
+  const read = (key: string): RecordRead<z.infer<TSchema>> => {
+    const at = file(key);
+    let text: string;
+
+    try {
+      text = fs.readFileSync(at, 'utf8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { kind: 'missing' };
+
+      return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
+    }
+
+    try {
+      const parsed = schema.safeParse(JSON.parse(text));
+
+      return parsed.success ? { kind: 'found', record: parsed.data } : { kind: 'unreadable', file: at, why: z.prettifyError(parsed.error) };
+    } catch (error) {
+      return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
+  const write = (key: string, record: z.infer<TSchema>): void => {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const temp = `${file(key)}.${process.pid}.${randomUUID()}.tmp`;
+
+    try {
+      fs.writeFileSync(temp, JSON.stringify(record), { mode: 0o600 });
+      fs.renameSync(temp, file(key));
+    } finally {
+      fs.rmSync(temp, { force: true });
+    }
+  };
+
   return {
-    read(key) {
-      const at = file(key);
-      let text: string;
+    read,
+    write,
+    async update(key, change) {
+      const release = await hold(dir, key);
 
       try {
-        text = fs.readFileSync(at, 'utf8');
-      } catch (error) {
-        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { kind: 'missing' };
+        const found = read(key);
 
-        return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
-      }
+        if (found.kind === 'unreadable') throw new Error(`${found.file} cannot be read (${found.why.replace(/\.$/, '')}), so it is not written over.`);
+        const next = change(found.kind === 'found' ? found.record : undefined);
 
-      try {
-        const parsed = schema.safeParse(JSON.parse(text));
-
-        return parsed.success ? { kind: 'found', record: parsed.data } : { kind: 'unreadable', file: at, why: z.prettifyError(parsed.error) };
-      } catch (error) {
-        return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
-      }
-    },
-    write(key, record) {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const temp = `${file(key)}.${process.pid}.${randomUUID()}.tmp`;
-
-      try {
-        fs.writeFileSync(temp, JSON.stringify(record), { mode: 0o600 });
-        fs.renameSync(temp, file(key));
+        if (next !== undefined) write(key, next);
       } finally {
-        fs.rmSync(temp, { force: true });
+        release();
       }
     },
     remove: (key) => fs.rmSync(file(key), { force: true }),

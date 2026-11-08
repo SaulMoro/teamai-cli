@@ -2518,8 +2518,8 @@ describe('teamai-runtime-t3', () => {
         const runtime = start();
         runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
         await runtime.next((line) => line['type'] === 'init');
-        // The place's operations are kept in a folder of its own.
-        const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', encodeURIComponent(first.handle));
+        // Each operation is kept in a record of its own, apart from its place.
+        const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops');
         fs.chmodSync(ops, 0o500);
         runtime.send({ type: 'cancel', op: 'op-00000076' });
         expect(await runtime.next((line) => line['op'] === 'op-00000076')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('EACCES') } });
@@ -2945,18 +2945,37 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.status).toBe('running');
     });
 
-    // The record it cannot read may be another place's: the cancel still stands, so the prompt it cancelled launches nothing.
-    it('launches nothing for a prompt teamai cancelled while another place\'s record could not be read', async () => {
+    // An op's own record names its place, so another place's record that cannot be read says nothing of it: the cancel
+    // stands, and the prompt it cancelled launches nothing.
+    it('launches nothing for a prompt teamai cancelled, whatever another place\'s record holds', async () => {
       const { runtime, handle } = await opened();
       const other = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', 't3-rother-a0000000.json');
       fs.writeFileSync(other, '{broken');
 
       runtime.send({ type: 'cancel', op: 'op-00000076' });
-      expect(await runtime.next((line) => line['op'] === 'op-00000076')).toEqual({ op: 'op-00000076', event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(other) } });
       runtime.send(prompt(handle, 'op-00000076'));
 
       expect(await ended(runtime, 'op-00000076')).toEqual({ op: 'op-00000076', event: 'cancelled' });
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000076' && line['event'] === 'failed')).toEqual([]);
       expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+    });
+
+    // A cancel that cannot read the op's own record cannot tell whether it launched a thread, so it fails, naming it.
+    it('fails a cancel cancel_failed, naming the op\'s record, when that record cannot be read', async () => {
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000007e'));
+      await ended(runtime, 'op-0000007e');
+      await runtime.close();
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops', 'op-0000007e.json');
+      fs.writeFileSync(record, '{broken');
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send({ type: 'cancel', op: 'op-0000007e' });
+
+      expect(await second.next((line) => line['op'] === 'op-0000007e')).toEqual({ op: 'op-0000007e', event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(record) } });
+      expect(fs.readFileSync(record, 'utf8')).toBe('{broken');
     });
 
     // Only a confirmed stop ends an op cancelled, never a mark that teamai cancelled it before the runtime saw its prompt.
@@ -3006,14 +3025,15 @@ describe('teamai-runtime-t3', () => {
     // An op that owned its end without a journaled launch would make the resent prompt join it and never end.
     it('launches nothing for a prompt whose launch it cannot journal, and runs the prompt teamai resends once it can', async () => {
       const { runtime, handle } = await opened();
-      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
-      fs.chmodSync(places, 0o500);
+      const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops');
+      fs.mkdirSync(ops, { recursive: true });
+      fs.chmodSync(ops, 0o500);
 
       runtime.send(prompt(handle, 'op-00000077'));
       expect(await ended(runtime, 'op-00000077')).toEqual({ op: 'op-00000077', event: 'failed', failure: { code: 'runtime_error', message: expect.stringMatching(/^Runtime t3 could not carry out prompt of op-00000077: .*EACCES/) } });
       expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
 
-      fs.chmodSync(places, 0o700);
+      fs.chmodSync(ops, 0o700);
       runtime.send(prompt(handle, 'op-00000077'));
 
       expect(await ended(runtime, 'op-00000077')).toMatchObject({ event: 'finished' });
@@ -3082,7 +3102,7 @@ describe('teamai-runtime-t3', () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-0000007a'));
       await runtime.next((line) => line['op'] === 'op-0000007a' && line['event'] === 'display');
-      const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', encodeURIComponent(handle));
+      const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops');
       fs.chmodSync(ops, 0o500);
       fs.writeFileSync(release, '');
 
@@ -3121,11 +3141,11 @@ describe('teamai-runtime-t3', () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-0000007c'));
       await runtime.next((line) => line['op'] === 'op-0000007c' && line['event'] === 'display');
-      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
-      fs.chmodSync(places, 0o500);
+      const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops');
+      fs.chmodSync(ops, 0o500);
       fs.writeFileSync(release, '');
       const end = await ended(runtime, 'op-0000007c');
-      fs.chmodSync(places, 0o700);
+      fs.chmodSync(ops, 0o700);
       expect(end).toMatchObject({ event: 'finished' });
 
       runtime.send({ type: 'reattach', handle });
@@ -3145,11 +3165,11 @@ describe('teamai-runtime-t3', () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-0000007d'));
       await runtime.next((line) => line['op'] === 'op-0000007d' && line['event'] === 'display');
-      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
-      fs.chmodSync(places, 0o500);
+      const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops');
+      fs.chmodSync(ops, 0o500);
       runtime.send({ type: 'cancel', op: 'op-0000007d' });
       const end = await ended(runtime, 'op-0000007d');
-      fs.chmodSync(places, 0o700);
+      fs.chmodSync(ops, 0o700);
       expect(end).toEqual({ op: 'op-0000007d', event: 'cancelled' });
 
       runtime.send(prompt(handle, 'op-0000007d'));

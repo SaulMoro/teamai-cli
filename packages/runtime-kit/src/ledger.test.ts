@@ -13,11 +13,11 @@ function ledgerWritten() {
 }
 
 describe('an operation that ends', () => {
-  it('is answered with its end once its record is kept, and nothing stands in for that record', () => {
+  it('is answered with its end once its record is kept, and nothing stands in for that record', async () => {
     const { written, ledger } = ledgerWritten();
     const kept: OpEnd[] = [];
 
-    ledger.settle(FINISHED, () => { kept.push(FINISHED); });
+    await ledger.settle(FINISHED, () => { kept.push(FINISHED); });
 
     expect(kept).toEqual([FINISHED]);
     expect(written).toEqual([{ op: OP, event: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { verdict: 'approve' } } }]);
@@ -25,10 +25,10 @@ describe('an operation that ends', () => {
     expect(ledger.endsOf(OP)).toBe(1);
   });
 
-  it('is answered with its true end when its record cannot be kept, says so in a notice, and remembers that end until forgotten', () => {
+  it('is answered with its true end when its record cannot be kept, says so in a notice, and remembers that end until forgotten', async () => {
     const { written, ledger } = ledgerWritten();
 
-    ledger.settle(FINISHED, () => { throw new Error('EACCES: permission denied'); });
+    await ledger.settle(FINISHED, () => { throw new Error('EACCES: permission denied'); });
 
     expect(written).toEqual([
       { event: 'notice', op: OP, message: `Runtime fake could not record how ${OP} ended (EACCES: permission denied), so only this runtime process remembers that end, until the place closes.` },
@@ -41,11 +41,11 @@ describe('an operation that ends', () => {
     expect(ledger.unkept(OP)).toBeUndefined();
   });
 
-  it('stops standing in for the record once a later end of the op is kept', () => {
+  it('stops standing in for the record once a later end of the op is kept', async () => {
     const { ledger } = ledgerWritten();
 
-    ledger.settle(FINISHED, () => { throw new Error('read-only'); });
-    ledger.settle({ op: OP, state: 'cancelled' }, () => {});
+    await ledger.settle(FINISHED, () => { throw new Error('read-only'); });
+    await ledger.settle({ op: OP, state: 'cancelled' }, () => {});
 
     expect(ledger.unkept(OP)).toBeUndefined();
   });

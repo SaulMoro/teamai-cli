@@ -19,7 +19,7 @@ export interface OpLedger {
    * same, since the op did end that way and teamai keeps it as soon as it reads it: this process remembers it
    * (`unkept`) until the op runs here again or its place closes, and says so in a notice about the op.
    */
-  settle(ended: OpEnd, keep: () => void): void;
+  settle(ended: OpEnd, keep: () => Promise<void> | void): Promise<void>;
   /** The end of `op` this process answered and could not journal, which stands in for its record's. */
   unkept(op: OpId): OpEnd | undefined;
   /** Forgets `op`'s unkept end: it runs here again, or its place closed. */
@@ -67,9 +67,9 @@ export function opLedger({ name, write }: { name: string; write: (message: Runti
     write: counted,
     end: (ended) => counted(endLine(ended)),
     endsOf: (op) => ends.get(op) ?? 0,
-    settle(ended, keep) {
+    async settle(ended, keep) {
       try {
-        keep();
+        await keep();
         unkept.delete(ended.op);
       } catch (error) {
         unkept.set(ended.op, ended);

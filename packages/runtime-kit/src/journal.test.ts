@@ -62,6 +62,27 @@ describe('a record store', () => {
   });
 });
 
+describe('an update of a record', () => {
+  const CountSchema = z.object({ count: z.number() });
+
+  it('keeps every write of callers that update one record at once, each from the record it read', async () => {
+    const store = recordStore(dir, CountSchema);
+
+    await Promise.all(Array.from({ length: 20 }, () => store.update('op-1', (record) => ({ count: (record?.count ?? 0) + 1 }))));
+
+    expect(store.read('op-1')).toEqual({ kind: 'found', record: { count: 20 } });
+    expect(store.keys()).toEqual(['op-1']);
+  });
+
+  it('writes nothing over a record it cannot read, and names its file', async () => {
+    const store = recordStore(dir, CountSchema);
+    fs.writeFileSync(store.file('op-1'), '{broken');
+
+    await expect(store.update('op-1', () => ({ count: 1 }))).rejects.toThrow(`${store.file('op-1')} cannot be read`);
+    expect(fs.readFileSync(store.file('op-1'), 'utf8')).toBe('{broken');
+  });
+});
+
 describe('a hold on a key', () => {
   it('keeps a second caller waiting until the first releases it', async () => {
     const order: string[] = [];

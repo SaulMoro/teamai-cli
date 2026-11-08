@@ -128,7 +128,7 @@ const startedFrom = process.env['T3CODE_THREAD_ID'];
 
 const status = await serve({
   write,
-  journal: journal(path.join(state, 'places')),
+  journal: journal(state),
   connect,
   canStart,
   t3Home,
