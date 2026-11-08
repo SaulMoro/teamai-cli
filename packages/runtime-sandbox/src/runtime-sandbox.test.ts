@@ -83,6 +83,19 @@ describe('init', () => {
     expect(JSON.stringify(reply)).toMatch(/Docker Desktop|systemctl start docker/);
   });
 
+  it('fails sandbox_unavailable on Windows for every provider, naming WSL2 and the local driver, and runs no engine', async () => {
+    const everyProvider: Message[] = [{ provider: 'docker', image: IMAGE }, { provider: 'podman', image: IMAGE }, { provider: 'sbx' }, { provider: 'seatbelt' }, { provider: 'bwrap' }, { provider: 'vercel' }];
+
+    for (const options of everyProvider) {
+      const reply = await init(start({ SANDBOX_TEST_PLATFORM: 'win32' }), options);
+
+      expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+      expect(String((reply.error as Message).message)).toMatch(/WSL2.*--driver local/s);
+    }
+
+    expect(engine.calls()).toEqual([]);
+  });
+
   it('fails with sandbox_unavailable when the engine is not installed', async () => {
     const empty = path.join(dir, 'empty-bin');
     fs.mkdirSync(empty);

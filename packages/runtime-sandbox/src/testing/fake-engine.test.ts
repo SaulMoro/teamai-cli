@@ -89,3 +89,25 @@ describe('the fake engine', () => {
     expect(containerDirs()).toEqual([]);
   });
 });
+
+describe('mounts', () => {
+  /** The mounts the fake keeps for the container named `name`. */
+  const mountsOf = (name: string): unknown => {
+    const found = containerDirs().map((id) => JSON.parse(fs.readFileSync(path.join(engine.state, 'containers', id, 'container.json'), 'utf8')) as { name: string; mounts: unknown }).find((container) => container.name === name);
+
+    return found?.mounts;
+  };
+
+  it('reads a Windows source path, drive letter and all, as docker on Windows does', async () => {
+    expect(await docker(['pull', IMAGE])).toMatchObject({ code: 0 });
+    const created = await docker(['run', '-d', '--name', 'win', '-v', 'C:\\Users\\member\\repo:/repo:ro', '-v', 'D:/work/out:/out', '-v', '/srv/cache:/cache:rw', '--entrypoint', '/bin/sh', IMAGE, '-c', 'sleep 3600']);
+
+    expect(created.code).toBe(0);
+    expect(mountsOf('win')).toEqual([
+      { source: 'C:\\Users\\member\\repo', target: '/repo', readonly: true },
+      { source: 'D:/work/out', target: '/out', readonly: false },
+      { source: '/srv/cache', target: '/cache', readonly: false },
+    ]);
+    expect(await docker(['rm', '--force', 'win'])).toMatchObject({ code: 0 });
+  });
+});
