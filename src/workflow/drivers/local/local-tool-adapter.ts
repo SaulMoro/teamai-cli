@@ -444,16 +444,20 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         if (budgeted(metered) > input.budget) stopAt('budget');
       };
 
-      const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStart: active, onStdout });
+      // The timeout counts from the tool's spawn, as the idle limit does: a place and setup a runtime makes first take none of it.
+      let timer: NodeJS.Timeout | undefined;
+
+      const started = (): void => {
+        if (input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_MS) timer ??= setTimeout(() => stopAt('timeout'), input.timeoutMs);
+        active();
+      };
+
+      const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStart: started, onStdout });
 
       function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {
         stopCause ??= limit;
         void processRun.stop();
       }
-
-      const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_MS
-        ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
-        : undefined;
 
       const abort = (): void => {
         const reason: unknown = signal?.reason;

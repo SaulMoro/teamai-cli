@@ -103,6 +103,41 @@ describe('a prompt\'s tool exec\'d on a step runtime', () => {
   });
 });
 
+describe('the timeout of a prompt\'s tool exec\'d on a step runtime', () => {
+  it('counts from when the runtime accepts the tool, so a setup longer than the timeout leaves the tool its whole time', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-timeout-'));
+    const resultPath = path.join(dir, 'out', 'result.json');
+    const view = { worktree: dir, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} };
+    const { run } = commandRun();
+    const launcher = runtimeLauncher({
+      ...run,
+      exec: async (_request, events) => {
+        events.onAccepted?.({});
+        fs.writeFileSync(resultPath, '{"output":{"ok":true}}');
+
+        return { kind: 'exited', code: 0, stdout: '' };
+      },
+    }, {
+      view, tool: 'claude', toolHome: { tool: 'claude', dir: path.join(dir, 'home') }, unset: [], credentials: {},
+      setUp: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        return undefined;
+      },
+    });
+
+    try {
+      const ran = await toolAdapter(launcher, () => 'claude', () => null).run('claude', { prompt: 'review', cwd: dir, resultPath, secrets: {}, timeoutMs: 200 });
+
+      expect(ran).toMatchObject({ started: true, exitCode: 0, output: { ok: true } });
+      expect(ran).not.toHaveProperty('stoppedBy');
+      expect(ran.failure).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('the idle limit of a prompt\'s tool exec\'d on a step runtime', () => {
   it('counts from when the runtime accepts the tool, so a setup longer than the limit leaves the tool its whole limit', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-idle-'));
