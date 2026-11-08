@@ -6,7 +6,7 @@ import {
   type RuntimeFailure, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
-import { registerAgent, type Registration } from '@teamai/runtime-kit/outer';
+import { registerThrough, type Registration } from '@teamai/runtime-kit/outer';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -476,18 +476,38 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
   /** Makes sure the prompt's agent exists, then waits for it to end, and settles the prompt. */
   async function follow(live: Daemon, op: OpId, record: AgentPrompt, following: Following): Promise<void> {
     const through = throughOf(journal.place(record.handle));
+
+    if (!through) {
+      await followAgent(live, op, record, following, undefined);
+
+      return;
+    }
+
     // Registered before Paseo can start the agent's wrapper, and again by each runtime that follows the prompt.
-    const sandboxed = through && { through, registration: registerAgent({ socket: through.socket, agent: record.create.agentId }) };
+    const registered = await registerThrough({ outer: through.outer, agent: record.create.agentId });
+    const sent = journal.prompt(op);
+
+    // With no registration the sandbox serves no wrapper of this agent, so a prompt not sent yet never is; one sent
+    // before is followed still, since its tool was granted already.
+    if (!registered.ok && !(sent?.kind === 'agent' && sent.sent)) {
+      following.landed();
+      settle(op, { op, state: 'failed', failure: { code: 'isolation_unproven', message: `teamai could not register the ${record.tool} agent on the attempt's sandbox (${registered.why}), so it started no agent there. Run the step again; if the sandbox runtime stopped, resume the run.` } }, following);
+
+      return;
+    }
 
     try {
-      await followAgent(live, op, record, following, sandboxed);
+      await followAgent(live, op, record, following, { through, registration: registered.ok ? registered : undefined });
     } finally {
-      sandboxed?.registration.close();
+      if (registered.ok) registered.close();
     }
   }
 
-  /** `follow`, with what the place runs through and the agent's registration there, when it runs through a sandbox. */
-  async function followAgent(live: Daemon, op: OpId, record: AgentPrompt, following: Following, sandboxed: { through: Through; registration: Registration } | undefined): Promise<void> {
+  /**
+   * `follow`, with what the place runs through and the agent's registration there, when it runs through a sandbox: none
+   * only for a prompt already sent, whose registration a restarted sandbox runtime could not take.
+   */
+  async function followAgent(live: Daemon, op: OpId, record: AgentPrompt, following: Following, sandboxed: { through: Through; registration: Registration | undefined } | undefined): Promise<void> {
     const through = sandboxed?.through;
     const { create } = record;
     const { stopped } = following;
@@ -544,7 +564,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     // handled below.
     const current = journal.prompt(op);
 
-    if (sandboxed && !(current?.kind === 'agent' && current.sent)) {
+    if (sandboxed?.registration && !(current?.kind === 'agent' && current.sent)) {
       const markSent = (): void => {
         const latest = journal.prompt(op);
 

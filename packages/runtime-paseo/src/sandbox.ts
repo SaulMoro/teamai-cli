@@ -1,5 +1,5 @@
 import { CANCEL_FAILED, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
-import { outerHandleOf, type Registration } from '@teamai/runtime-kit/outer';
+import { socketOf, type Registration } from '@teamai/runtime-kit/outer';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import type { Daemon, Target } from './daemon/connect.js';
 import type { AgentPrompt, Place } from './journal.js';
@@ -38,10 +38,12 @@ const START_POLL_MS = 250;
  */
 export async function openThrough(state: ProcessState, live: Daemon, request: Extract<RuntimeRequest, { type: 'open' }> & { outer: string }, target: Target): Promise<Through | RuntimeFailure> {
   const { op, outer, view } = request;
-  const outerHandle = outerHandleOf(outer);
   const cannot = (why: string): RuntimeFailure => ({ code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run ${target.name} through the sandbox on the Paseo daemon at ${live.url}: ${why}. Then run the step again.` });
 
-  if (!outerHandle) return cannot('the outer runtime\'s handle names no attempt socket; run the step through the sandbox runtime');
+  // Seatbelt and vercel answer a plain handle: they serve no attempt socket, so no wrapper could be granted there.
+  if (socketOf(outer) === undefined) {
+    return { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, podman, sbx or bwrap.' };
+  }
 
   if (target.tool === 'opencode') return cannot('Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step\'s agent from another; run OpenCode steps through the sandbox on another runtime');
   const id = `teamai-sandbox-${target.name}`;
@@ -62,7 +64,7 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
     if ('cannot' in wrapper) return cannot(wrapper.cannot);
     const home = view?.toolHome[homeVariableOf(target.tool)];
 
-    return { socket: outerHandle.socket, provider: wrapper.provider, ...(home !== undefined && { home }) };
+    return { outer, provider: wrapper.provider, ...(home !== undefined && { home }) };
   } finally {
     release();
   }
