@@ -49,12 +49,12 @@ const connects = (at) => new Promise((resolve) => { const socket = net.connect(a
     try {
       if (op === 'kill') { process.kill(Number(args[0]), args[1]); out[name] = 'ok'; }
       else if (op === 'connect') out[name] = await connects(args[0]);
-      else if (op === 'ps') out[name] = execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' }).includes(args[0]) ? 'ok' : 'unseen';
+      else if (op === 'ps') out[name] = execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' }).includes(args.join('')) ? 'ok' : 'unseen';
       else if (op === 'rename') { fs.renameSync(args[0], args[1]); out[name] = 'ok'; }
       else if (op === 'write') { fs.mkdirSync(path.dirname(args[0]), { recursive: true }); fs.writeFileSync(args[0], 'planted'); out[name] = 'ok'; }
       else if (op === 'remove') { fs.rmSync(args[0], { recursive: true }); out[name] = 'ok'; }
       else if (op === 'read') { fs.readFileSync(args[0]); out[name] = 'ok'; }
-      else if (op === 'list') { fs.readdirSync(args[0]); out[name] = 'ok'; }
+      else if (op === 'list') out[name] = fs.readdirSync(args[0]).includes(args[1]) ? 'ok' : 'unseen';
       else if (op === 'env') out[name] = process.env[args[0]] === undefined ? 'unset' : 'ok';
       else if (op === 'run') { execFileSync(args[0], args.slice(1), { stdio: 'ignore' }); out[name] = 'ok'; }
     } catch (error) { out[name] = error.code ?? String(error.status ?? error.message); }
@@ -157,13 +157,15 @@ for (const native of NATIVE) {
       fs.writeFileSync(path.join(host.dir, 'member-tmp-file'), 'tmp');
 
       const output = await tries(connection, at, [
-        ['readHome', 'read', path.join(home, 'secret')], ['listHome', 'list', home], ['readOther', 'read', path.join(other, 'file')],
+        ['readHome', 'read', path.join(home, 'secret')], ['listHome', 'list', home, 'secret'], ['readOther', 'read', path.join(other, 'file')],
         ['readTmp', 'read', path.join(host.dir, 'member-tmp-file')], ['writeOutside', 'write', path.join(short, 'outside.txt')],
-        ['writeWorktree', 'write', path.join(at.worktree, 'made.txt')], ['writeResult', 'write', path.join(at.result, 'out.json')], ['readGit', 'list', at.git],
+        ['writeWorktree', 'write', path.join(at.worktree, 'made.txt')], ['writeResult', 'write', path.join(at.result, 'out.json')], ['readGit', 'list', at.git, 'HEAD'],
       ]);
 
-      expect(reached(output)).toEqual({ readHome: false, listHome: false, readOther: false, readTmp: false, writeOutside: false, writeWorktree: true, writeResult: true, readGit: true });
+      // A write outside the place fails on seatbelt, and lands in bwrap's own /tmp: either way, never on this machine.
+      expect({ ...reached(output), writeOutside: undefined }).toEqual({ readHome: false, listHome: false, readOther: false, readTmp: false, writeOutside: undefined, writeWorktree: true, writeResult: true, readGit: true });
       expect(fs.existsSync(path.join(short, 'outside.txt'))).toBe(false);
+      expect(fs.readFileSync(path.join(at.worktree, 'made.txt'), 'utf8')).toBe('planted');
       await close(connection);
     });
 
@@ -183,7 +185,7 @@ for (const native of NATIVE) {
 
       try {
         const output = await tries(connection, at, [
-          ['signal', 'kill', String(sleeper.pid), 'SIGCONT'], ['probe', 'kill', String(sleeper.pid), 0], ['list', 'ps', `sleep ${marker}`],
+          ['signal', 'kill', String(sleeper.pid), 'SIGCONT'], ['probe', 'kill', String(sleeper.pid), 0], ['list', 'ps', 'sleep 6', marker.slice(1)],
           ['outside', 'connect', path.join(short, 'o', 's.sock')], ['inside', 'connect', path.join(at.worktree, 's.sock')],
         ]);
 

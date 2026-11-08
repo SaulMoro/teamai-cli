@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { onPath, type NativeSandbox, type Sandboxed } from './native.js';
+import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
 
 // ─── bwrap: Linux namespaces, through bubblewrap ───
 //
@@ -8,7 +8,8 @@ import { onPath, type NativeSandbox, type Sandboxed } from './native.js';
 //
 //    bwrap --die-with-parent --new-session --unshare-all --share-net
 //          --ro-bind-try /usr /usr … /etc /etc  --proc /proc --dev /dev --tmpfs /tmp
-//          --bind <path> <path> …               the place, and the step's own home and temp directory
+//          --bind <path> <path> …               the place, the step's own home and temp directory, and each folder
+//                                               between a git path and the place that holds it, so it stays put
 //          --ro-bind <path> <path> …            the view's git paths, this machine's PATH directories and install roots
 //          --chdir <cwd> -- <argv>
 //
@@ -25,9 +26,23 @@ const OPTIONS = ['--die-with-parent', '--new-session', '--unshare-all', '--share
 
 const NOT_INSTALLED = 'bwrap is not installed here, or not on PATH. Install bubblewrap (`sudo apt install bubblewrap`, or `sudo dnf install bubblewrap`), and start again. On macOS, use provider: seatbelt';
 
+/**
+ * Each folder between a read-only path and the writable path that holds it, bound onto itself: a mount point cannot be
+ * renamed or removed, so no step moves a git path aside by moving a folder above it (sandcastle's `anchorArgs`).
+ */
+function anchorsOf(writable: string[], readable: string[]): string[] {
+  const anchors = new Set<string>();
+
+  for (const at of readable) {
+    for (let dir = path.dirname(at); writable.some((root) => dir !== root && isWithin(dir, root)); dir = path.dirname(dir)) anchors.add(dir);
+  }
+
+  return [...anchors];
+}
+
 /** bwrap's arguments for `sandboxed`, the command last. */
 export function argsOf({ argv, cwd, writable, readable }: Pick<Sandboxed, 'argv' | 'cwd' | 'writable' | 'readable'>): string[] {
-  const binds = [...writable.map((at) => ({ at, flag: '--bind' })), ...readable.map((at) => ({ at, flag: '--ro-bind-try' }))]
+  const binds = [...[...writable, ...anchorsOf(writable, readable)].map((at) => ({ at, flag: '--bind' })), ...readable.map((at) => ({ at, flag: '--ro-bind-try' }))]
     .sort((left, right) => left.at.split(path.sep).length - right.at.split(path.sep).length);
 
   return [

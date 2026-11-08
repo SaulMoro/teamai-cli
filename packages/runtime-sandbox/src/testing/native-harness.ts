@@ -113,6 +113,7 @@ export function placeIn(root: string): Place {
   const at = { worktree: path.join(root, 'worktree'), git: path.join(root, 'repo.git'), result: path.join(root, 'attempts', ATTEMPT, 'out'), runDir: path.join(root, 'runs', RUN, 'scratch'), toolHome: path.join(root, 'attempts', ATTEMPT, 'tool-home', 'claude'), dotGit: path.join(root, 'worktree', '.git') };
   fs.mkdirSync(at.worktree, { recursive: true });
   fs.mkdirSync(at.git, { recursive: true });
+  fs.writeFileSync(path.join(at.git, 'HEAD'), 'ref: refs/heads/main\n');
   fs.writeFileSync(at.dotGit, `gitdir: ${at.git}\n`);
 
   return at;
