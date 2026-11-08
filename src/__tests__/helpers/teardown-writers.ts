@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, beforeEach } from 'vitest';
 import { trackDetachedProcesses } from './detached-processes.js';
+import { stopLeftChildren } from './left-children.js';
 import { leftSkillRunners, RUNNER_EXIT_MS, stopLeftSkillRunners } from './skill-runners.js';
 
 // A recursive removal fails with ENOTEMPTY when something keeps writing into
@@ -27,13 +28,16 @@ process.env.NODE_OPTIONS = withTracker(process.env.NODE_OPTIONS);
 createRequire(import.meta.url)(tracker.preload);
 // A test that hands a child an environment of its own, NODE_OPTIONS included,
 // would otherwise start it untracked.
+// Each child the running test starts is recorded too, so one it leaves running
+// fails it, below.
+let testChildren: Map<number, string> | undefined;
 for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork'] as const) {
   const start = childProcess[name];
-  const tracked = (...args: unknown[]): unknown => Reflect.apply(start, childProcess, args.map(withTrackedEnv));
+  const tracked = (...args: unknown[]): unknown => recordChild(Reflect.apply(start, childProcess, args.map(withTrackedEnv)), args);
   // promisify(execFile) and promisify(exec) resolve to { stdout, stderr } only through their own promisified form.
   const promised: unknown = Reflect.get(start, promisify.custom);
   if (typeof promised === 'function') {
-    Object.assign(tracked, { [promisify.custom]: (...args: unknown[]): unknown => Reflect.apply(promised, childProcess, args.map(withTrackedEnv)) });
+    Object.assign(tracked, { [promisify.custom]: (...args: unknown[]): unknown => recordChild(Reflect.apply(promised, childProcess, args.map(withTrackedEnv)), args) });
   }
   Object.assign(childProcess, { [name]: tracked });
 }
@@ -101,9 +105,44 @@ syncBuiltinESMExports();
 // Every config loads this setup file, so each test that leaves a runner fails,
 // in whichever file. It runs after the file's own afterEach hooks, even one
 // that threw, and stops the runners still left.
-beforeEach(({ onTestFinished }) => {
+beforeEach(({ onTestFinished, task }) => {
   onTestFinished(() => failOnLeftRunners(stopLeftSkillRunners(tracker.running)), RUNNER_EXIT_MS + 10_000);
+  // A child the test left running, as a CLI a timed-out test never saw end, is
+  // stopped with what it started, and the test fails naming it. Concurrent
+  // tests share the record, so neither is checked.
+  if (task.concurrent) return;
+  const children = new Map<number, string>();
+  testChildren = children;
+  onTestFinished(async () => {
+    if (testChildren === children) testChildren = undefined;
+    const left = await stopLeftChildren(() => [...children].filter(([pid]) => isRunning(pid)).map(([pid, command]) => ({ pid, command })));
+    if (left.length > 0) throw new Error(`Processes the test started outlived it and were stopped, with the processes under them:\n${left.join('\n')}\nWait for each process a test starts to end, or stop it, before the test ends.`);
+  }, 10_000);
 });
+
+/** `started`, recorded as a child of the running test when it is a process that is not detached: the tracker joins those. */
+function recordChild(started: unknown, args: readonly unknown[]): unknown {
+  const children = testChildren;
+  const child = started instanceof childProcess.ChildProcess ? started : started instanceof Promise && 'child' in started && started.child instanceof childProcess.ChildProcess ? started.child : undefined;
+  if (children === undefined || child?.pid === undefined || args.some(isDetached)) return started;
+  const { pid } = child;
+  children.set(pid, child.spawnargs.join(' '));
+  child.once('exit', () => children.delete(pid));
+  return started;
+}
+
+function isDetached(arg: unknown): boolean {
+  return typeof arg === 'object' && arg !== null && 'detached' in arg && arg.detached === true;
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function failOnLeftRunners(left: readonly number[]): void {
   const all = [...stoppedRunners.splice(0), ...left];

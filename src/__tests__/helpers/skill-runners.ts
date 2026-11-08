@@ -52,7 +52,7 @@ export function leftSkillRunners(left: readonly number[]): string {
   return `Skill runners outlived the test and were stopped: ${left.join(', ')}. Report or cancel every attempt the test offers before it ends.`;
 }
 
-interface ProcessRow { pid: number; ppid: number; pgid: number; zombie: boolean; command: string }
+export interface ProcessRow { pid: number; ppid: number; pgid: number; zombie: boolean; command: string }
 
 /**
  * Each of `pids` that is a live skill runner, so a pid the system gave to another process since is never signalled;
@@ -99,12 +99,13 @@ function workingDirectories(pids: readonly number[]): Map<number, string> {
 }
 
 /** Whether `pid` is `ancestor` or one of its descendants, by `parents`, each process's parent. */
-function descends(parents: ReadonlyMap<number, number>, pid: number, ancestor: number): boolean {
+export function descends(parents: ReadonlyMap<number, number>, pid: number, ancestor: number): boolean {
   for (let at: number | undefined = pid; at !== undefined && at > 1; at = parents.get(at)) if (at === ancestor) return true;
   return false;
 }
 
-function processTable(): ProcessRow[] {
+/** Every process on this machine, from one `ps` snapshot. */
+export function processTable(): ProcessRow[] {
   const listed = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,stat=,command='], { encoding: 'utf8' }).stdout ?? '';
   return listed.split('\n').flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
