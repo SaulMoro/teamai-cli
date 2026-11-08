@@ -1383,6 +1383,17 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   })),
   {
+    name: 'a resume of a run whose skill state is kept here, which the claim did not replace, goes on with the options the run started with',
+    rows: ['S1'],
+    run: async () => {
+      const made = await harness({ approved: APPROVED });
+      const { run } = await turnOf(await made.call({ kind: 'start', name: 'approved', answers: { confirmed: false, hitl: 'auto-approve' }, inputs: undefined }));
+      expect(await turnOf(await made.call({ kind: 'resume', run, claim: 'lacking', confirmed: false, answers: {} }))).toMatchObject({ run });
+      expect(JSON.parse(fs.readFileSync(skillStatePath(made.config, run), 'utf8'))).toMatchObject({ options: { hitl: 'auto-approve' } });
+      return made.rows;
+    },
+  },
+  {
     name: 'an unattended takeover of a run a person attends gives its kept options no person: the optional gate is auto-approved',
     rows: ['R26'],
     run: async () => {
