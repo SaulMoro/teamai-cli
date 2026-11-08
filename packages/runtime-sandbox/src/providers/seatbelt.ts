@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
+import { SYSTEM_BIN } from './system-bin.js';
 
 // ─── seatbelt: macOS's own sandbox, through sandbox-exec ───
 //
@@ -26,7 +27,10 @@ import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.j
 //  can change the profile. A step here is at `isolation: worktree`: it has no PID namespace and keeps this Mac's network.
 //
 
-const NOT_MACOS = 'seatbelt runs only on macOS 14 or later, and this machine has no sw_vers. On Linux, use provider: bwrap; anywhere, provider: sbx or docker';
+const SANDBOX_EXEC = path.join(SYSTEM_BIN, 'sandbox-exec');
+const SW_VERS = path.join(SYSTEM_BIN, 'sw_vers');
+
+const NOT_MACOS = `seatbelt runs only on macOS 14 or later, and this machine has no ${SW_VERS}. On Linux, use provider: bwrap; anywhere, provider: sbx or docker`;
 
 /** What `file` printed on stdout, or why it could not run. */
 function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ ok: true; stdout: string } | { ok: false; message: string }> {
@@ -172,26 +176,23 @@ export const seatbelt: NativeSandbox = {
   isUnattended: false,
 
   async preflight(env) {
-    const swVers = onPath('sw_vers', env.PATH);
-
-    if (swVers === undefined) return { ok: false, message: NOT_MACOS };
-    const version = await run(swVers, ['-productVersion'], env);
+    if (onPath(SW_VERS, undefined) === undefined) return { ok: false, message: NOT_MACOS };
+    const version = await run(SW_VERS, ['-productVersion'], env);
 
     if (!version.ok) return { ok: false, message: `sw_vers could not tell this Mac's version (${version.message}). ${NOT_MACOS}` };
     const major = Number(version.stdout.trim().split('.')[0]);
 
     if (!(major >= 14)) return { ok: false, message: `seatbelt needs macOS 14 or later, and this Mac runs ${version.stdout.trim()}. Update macOS, or use provider: sbx or docker` };
-    const sandboxExec = onPath('sandbox-exec', env.PATH);
 
-    if (sandboxExec === undefined) return { ok: false, message: 'sandbox-exec, which macOS ships in /usr/bin, is not on PATH. Put /usr/bin on PATH, and start again' };
-    const probe = await run(sandboxExec, ['-p', '(version 1)(allow default)', 'true'], env);
+    if (onPath(SANDBOX_EXEC, undefined) === undefined) return { ok: false, message: `${SANDBOX_EXEC}, which macOS ships, is missing. Use provider: sbx or docker` };
+    const probe = await run(SANDBOX_EXEC, ['-p', '(version 1)(allow default)', 'true'], env);
 
-    return probe.ok ? { ok: true } : { ok: false, message: `sandbox-exec could not start a sandbox (${probe.message}). Run \`sandbox-exec -p '(version 1)(allow default)' true\` to see why, and start again` };
+    return probe.ok ? { ok: true } : { ok: false, message: `${SANDBOX_EXEC} could not start a sandbox (${probe.message}). Run \`${SANDBOX_EXEC} -p '(version 1)(allow default)' true\` to see why, and start again` };
   },
 
   wrap(sandboxed) {
     const { profile, params } = profileOf(sandboxed);
 
-    return { command: 'sandbox-exec', args: ['-p', profile, ...params.flatMap((param) => ['-D', param]), ...sandboxed.argv] };
+    return { command: SANDBOX_EXEC, args: ['-p', profile, ...params.flatMap((param) => ['-D', param]), ...sandboxed.argv] };
   },
 };
