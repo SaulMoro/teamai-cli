@@ -340,6 +340,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       return { ok: true };
     },
 
+    name: (key) => dirOf(handleOf(key)),
     display: (key) => ({ label: `${handleOf(key)} (${provider})` }),
 
     removal: (place) => `remove ${dirOf(handleOf(place))} once nothing of it runs`,

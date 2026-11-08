@@ -393,6 +393,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
       return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
     },
 
+    name: handleOf,
     display: (key) => ({ label: `${handleOf(key)} (${engine})`, fields: { container: handleOf(key), image } }),
 
     removal: (place) => (place.confined

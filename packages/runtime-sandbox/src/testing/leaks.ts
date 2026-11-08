@@ -21,8 +21,8 @@ export interface Scope {
   containers?: () => string[];
   /** The fake Vercel's state directory, when the test runs it. */
   vercelState?: string;
-  /** What the test planted itself, or what the runtime leaves by its contract and the test asserts it does, by name. */
-  kept?: readonly string[];
+  /** What the test planted itself, by name: what a runtime leaves on purpose it says in `kept`. */
+  planted?: readonly string[];
 }
 
 /** An attempt's state directory, as a provider names it: `teamai-<run>-<attempt>`, after an owner id on sbx. */
@@ -34,19 +34,19 @@ function attemptDirsUnder(dir: string): string[] {
 }
 
 /** What the test left of sandboxes, as `<kind> <name>`: containers, attempts' state directories, hosted sandboxes. */
-function sandboxesLeft({ dir, containers, vercelState, kept = [] }: Scope): string[] {
+function sandboxesLeft({ dir, containers, vercelState, planted = [] }: Scope): string[] {
   const sandboxes = vercelState === undefined ? undefined : path.join(vercelState, 'sandboxes');
 
   return [
-    ...(containers?.() ?? []).filter((name) => !kept.includes(name)).map((name) => `container ${name}`),
-    ...(fs.existsSync(dir) ? attemptDirsUnder(dir).filter((at) => !kept.includes(path.basename(at))).map((at) => `attempt ${at}`) : []),
+    ...(containers?.() ?? []).filter((name) => !planted.includes(name)).map((name) => `container ${name}`),
+    ...(fs.existsSync(dir) ? attemptDirsUnder(dir).filter((at) => !planted.includes(path.basename(at))).map((at) => `attempt ${at}`) : []),
     ...(sandboxes !== undefined && fs.existsSync(sandboxes) ? fs.readdirSync(sandboxes).map((name) => `vercel ${name}`) : []),
   ];
 }
 
 /**
  * Fails the test, naming each thing it left, when it left anything: a runtime still running, a process naming its
- * directory, or a sandbox, but what a runtime said it keeps and what the test kept.
+ * directory, or a sandbox, but what a runtime said it keeps and what the test planted.
  */
 export function expectNothingLeft(scope: Scope): Promise<void> {
   return expectNothingLeftBy({ dir: scope.dir, connections: (scope.connections ?? []).map(({ runtime }) => runtime), left: () => sandboxesLeft(scope) });
