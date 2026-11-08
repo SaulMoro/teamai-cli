@@ -1005,6 +1005,17 @@ describe('a prompt attempt in a container', () => {
     expect(engine.calls()).toEqual([]);
   });
 
+  // Whether a run could start here is known only once the image is pulled and a container started, which a check may not do.
+  it('refuses check mode, running the engine never and keeping nothing of the instances it names', async () => {
+    const connection = start();
+
+    expect(await init(connection, { provider: 'docker', image: IMAGE }, 'check', undefined, [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }])).toEqual({
+      type: 'init', ok: false, error: { code: 'check_unsupported', message: expect.stringContaining('cannot tell whether a run could start without starting a sandbox') },
+    });
+    expect(engine.calls()).toEqual([]);
+    expect(fs.readdirSync(path.join(dir, 'home'), { recursive: true }).filter((entry) => String(entry).endsWith('instances.json'))).toEqual([]);
+  });
+
   it("stops and removes a dead runtime's exec in recover mode, running the engine only for the stop and the removal", async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });

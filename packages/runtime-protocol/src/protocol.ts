@@ -69,8 +69,12 @@ export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
  * `recover`: only to cancel, reattach, collect and close the handles teamai recorded, which teamai opens it in to stop
  * them, so that a provider that is down, stalls or signed it out cannot hold the stop: it runs no sign-in or tool check,
  * gets no credentials, offers nothing and answers from its own journal.
+ * `check`: only to say whether a run could start now, as describe does from an app's session; teamai opens nothing
+ * after it. The runtime signs in nothing, writes nothing, here or in its app, launches nothing and answers within the
+ * init deadline: `ok` with what it can tell it offers without that, else why a run could not start. A runtime that
+ * cannot tell without writing refuses the mode, as one that predates it does, and teamai then offers no start on it.
  */
-export const RUNTIME_MODES = ['attended', 'unattended', 'recover'] as const;
+export const RUNTIME_MODES = ['attended', 'unattended', 'recover', 'check'] as const;
 
 export type RuntimeMode = (typeof RUNTIME_MODES)[number];
 
@@ -350,12 +354,6 @@ const InitRequestSchema = z.object({
   instances: z.array(InitInstanceSchema).optional(),
   /** The run's checkout, an absolute path: teamai starts the runtime there too. */
   checkout: z.string().min(1).optional(),
-  /**
-   * Set when teamai only asks whether a run could start now, as describe does from an app's session, and opens nothing
-   * after: the runtime signs in nothing and writes nothing, here or in its app, and answers as `mode` would, else fails
-   * naming what is missing. An older teamai never sends it.
-   */
-  checkOnly: z.literal(true).optional(),
 });
 
 export const OpenRequestSchema = z.object({

@@ -47,8 +47,8 @@ import type { T3Command } from './t3-command.js';
 
 type RuntimeMode = (typeof RUNTIME_MODES)[number];
 
-/** A mode the runtime runs steps in. In `recover` it only stops and closes what its journal holds. */
-type WorkMode = Exclude<RuntimeMode, 'recover'>;
+/** A mode the runtime runs steps in. In `recover` it only stops and closes what its journal holds; `check` runs nothing. */
+type WorkMode = Exclude<RuntimeMode, 'recover' | 'check'>;
 
 /** The option names an effort maps to in T3's model options, by provider. */
 const EFFORT_OPTIONS = new Set(['effort', 'reasoningEffort', 'reasoning_effort', 'variant']);
@@ -878,6 +878,12 @@ export function serve(options: ServeOptions): Promise<void> {
     if (request.mode === 'recover') {
       recovering = {};
       write({ type: 'init', ok: true, can: {} });
+
+      return;
+    }
+
+    if (request.mode === 'check') {
+      write({ type: 'init', ok: false, error: { code: 'check_unsupported', message: 'This T3 runtime does not answer a check yet.' } });
 
       return;
     }

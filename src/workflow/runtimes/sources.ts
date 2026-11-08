@@ -354,9 +354,10 @@ function badOption(driver: ResolvedDriver, use: string, key: string, message: st
  * `stop` only stops and closes attempts, which bring no credential, so a cancel works in a shell without them. A runtime
  * opened to stop is opened in `recover` mode, which runs no sign-in or tool check and answers only for the handles it
  * recorded, so a provider that is down or stalls cannot hold the stop; only one that refuses that mode is opened for new
- * work instead. `check` only asks whether a run could start on it now: each runtime gets `init` as for an `unattended`
- * run, marked `checkOnly`, and nothing more, a credential variable left unset fails it as it would the run, and a team
- * runtime no one accepted here is not asked about.
+ * work instead. `check` only asks whether a run could start on it now: each runtime gets `init` in `check` mode and
+ * nothing more, so it signs in nothing, writes nothing and launches nothing; one that refuses the mode, as an older one
+ * does, fails the check. A credential variable left unset fails it as it would the run, and a team runtime no one
+ * accepted here is not asked about.
  */
 export type DriverPurpose = 'run' | 'stop' | 'check';
 
@@ -474,7 +475,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const credentials = { env: [...split.credentials.map((credential) => credential.name), ...Object.keys(found)], logins: split.engine.logins };
 
   const ready = await runtime.init({
-    options: split.runtime, mode: purpose === 'check' ? 'unattended' : mode, credentials, instances: await runnableInstances(), checkout, ...(purpose === 'check' && { checkOnly: true as const }),
+    options: split.runtime, mode: purpose === 'check' ? 'check' : mode, credentials, instances: await runnableInstances(), checkout,
   });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
@@ -621,8 +622,8 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
 
 /**
  * Whether a run could start now, from `checkout`, on the definition `--driver <name>` names in `config`, the member's
- * own first, or why not: each of its runtimes opens as for an unattended run, so none asks for a sign-in, and is closed
- * at once.
+ * own first, or why not: each of its runtimes gets `init` in `check` mode, so none signs in, writes or launches
+ * anything, and is closed at once.
  */
 export async function checkDriver(config: LocalConfig, name: string, checkout: string): Promise<{ ok: true } | { ok: false; failure: WorkflowFailure }> {
   const opened = await openDriver(config, name, { personal: true, mode: 'attended', canAsk: false, purpose: 'check', checkout });

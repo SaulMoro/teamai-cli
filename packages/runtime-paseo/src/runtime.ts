@@ -654,6 +654,12 @@ export function serve({ input, write: emit, note, journal, startedFrom }: Servin
       return;
     }
 
+    if (request.mode === 'check') {
+      write({ type: 'init', ok: false, error: { code: 'check_unsupported', message: 'This Paseo runtime does not answer a check yet.' } });
+
+      return;
+    }
+
     if ('code' in address) {
       write({ type: 'init', ok: false, error: address });
 

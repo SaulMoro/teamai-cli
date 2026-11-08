@@ -33,8 +33,8 @@ describe('a workflow started from an app\'s agent session', () => {
     fs.writeFileSync(path.join(repo, '.teamai', 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\n${body}`);
   };
 
-  const inits = (): Array<{ mode: string; checkOnly?: true }> => (fs.existsSync(path.join(state, 'inits.jsonl'))
-    ? fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { mode: string; checkOnly?: true })
+  const inits = (): Array<{ mode: string }> => (fs.existsSync(path.join(state, 'inits.jsonl'))
+    ? fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { mode: string })
     : []);
 
   /** The operations the toy was sent after `init`, such as an `open`, which is where a runtime creates what it lacks. */
@@ -106,7 +106,7 @@ steps:
     if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it('offers the start on the app\'s driver in the background once a run could start on it, checked as for an unattended run', async () => {
+  it('offers the start on the app\'s driver in the background once a run could start on it, checked in check mode', async () => {
     writeT3();
 
     const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, thread);
@@ -114,7 +114,18 @@ steps:
     expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: {
       kind: 'background', start: 'teamai workflow start review --driver t3', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
     } } } });
-    expect(inits()).toEqual([expect.objectContaining({ mode: 'unattended', checkOnly: true })]);
+    expect(inits()).toEqual([expect.objectContaining({ mode: 'check' })]);
+    expect(operations()).toEqual([]);
+  });
+
+  // An older runtime ignores a field it does not know, but refuses a mode it does not know: the check fails closed.
+  it('answers as outside the app when the app\'s runtime refuses check mode, as one older than it does', async () => {
+    writeT3({ check: false });
+
+    const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, thread);
+
+    expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start review --driver skill' } } } });
+    expect(inits()).toEqual([expect.objectContaining({ mode: 'check' })]);
     expect(operations()).toEqual([]);
   });
 

@@ -51,6 +51,12 @@ interface Ready {
 /** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
 const NOT_OFFERED: HostRoute = { ok: false, refusal: 'This sandbox runtime offered no sandbox, so it opens none.' };
 
+/** The answer to a `check` init, which asks only whether a run could start now, signing in, writing and launching nothing. */
+const CHECK_UNSUPPORTED: RuntimeFailure = {
+  code: 'check_unsupported',
+  message: 'The sandbox runtime cannot tell whether a run could start without starting a sandbox, which a check may not do, so teamai offers no start on it from here.',
+};
+
 /** How often an exec another runtime process runs is looked at, to answer its outcome. */
 const FOLLOW_MS = 100;
 
@@ -1046,7 +1052,8 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   /**
    * `credentials`: the names the definition gives this runtime; an older teamai sends none, and every judge is offered.
    * In `recover` mode teamai only stops and closes what the journal holds: nothing is checked or offered, and the
-   * provider is reached only when a cancel or a close needs it.
+   * provider is reached only when a cancel or a close needs it. `check` mode is refused: what a provider offers is
+   * known only once its image is pulled and a sandbox started, which a check may not do.
    */
   const init = async ({ options, credentials, mode, instances = [] }: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     const parsed = parseOptions(options);
@@ -1054,6 +1061,13 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     if (!parsed.ok) {
       ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: false, error: parsed.failure });
+
+      return;
+    }
+
+    if (mode === 'check') {
+      ready = { provider: unreachable(CHECK_UNSUPPORTED), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
+      write({ type: 'init', ok: false, error: CHECK_UNSUPPORTED });
 
       return;
     }
