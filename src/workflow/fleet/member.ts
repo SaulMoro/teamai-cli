@@ -24,7 +24,7 @@ import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
 import { runLocalDriver, type DriverRuntimes } from '../drivers/local/local-driver.js';
 import { cancelRun } from '../run-controls.js';
-import { knownSecrets, resolveWorkflowEnv } from '../../env-resolution.js';
+import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-resolution.js';
 import { runCopyBranch } from '../workspace.js';
 import { notWhole } from '../whole-workflow.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -33,12 +33,12 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowStep } from '../types.js';
-import { lackedLabels, mergeRequirements, type TurnLimits } from '../requirements.js';
+import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
+import { envScopeOf, lackedLabels, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { runPromptStep, type StagedLease } from '../steps/prompt.js';
 import { driverIdentity } from '../../driver-identity.js';
-import { withRunningCli } from '../../env-exec.js';
+import { stepEnvironment, withRunningCli } from '../../env-exec.js';
 import { resolveRunMode } from '../../launch-context.js';
 import { archiveSessions, openSessionArchive } from '../../session-flow/archive.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
@@ -147,7 +147,7 @@ async function requiredLabels(config: LocalConfig, offer: Offered): Promise<stri
   if ('refused' in found) return [];
   const defined = definedStep(found.definitions, offer.lease.step);
 
-  return defined.kind === 'step' ? defined.labels : [];
+  return defined.kind === 'step' ? defined.requires.labels ?? [] : [];
 }
 
 /**
@@ -309,6 +309,10 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   const runsHere = place[trusted.kind];
 
   if (runsHere === undefined) return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": its driver runs no ${trusted.kind} step. ${retryCommand(run, lease.step)} offers it again.` });
+  // A whole workflow's nested run scopes each of its steps' env itself, as the local driver does.
+  const ready = trusted.kind === 'workflow' ? trusted : await scopedStep(config, trusted);
+
+  if (ready.kind === 'failed') return finish({ exitCode: 1, stderr: ready.failure.message, failure: ready.failure });
 
   const fetched = await git(root, ['fetch', '--quiet', 'origin', ref]);
 
@@ -424,13 +428,13 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   };
 
   try {
-    const command = trusted.kind === 'workflow'
-      ? workflowRun(config, { claim, trusted, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner })
-      : trusted.kind === 'prompt'
-      ? promptRun(config, { lock, claim, trusted, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
+    const command = ready.kind === 'workflow'
+      ? workflowRun(config, { claim, trusted: ready, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner })
+      : ready.kind === 'prompt'
+      ? promptRun(config, { lock, claim, trusted: ready, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(place.command?.kind === 'runtime'
-        ? runtimeCommand(config, { run, attempt, place: place.command, work, command: trusted.command, env: trusted.env })
-        : startGroupedCommand({ command: trusted.command, cwd: work, env: { ...process.env, ...trusted.env }, detached: process.platform !== 'win32', group: dir }));
+        ? runtimeCommand(config, { run, attempt, place: place.command, work, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env }, unset: ready.scoped.scope?.withhold ?? [] })
+        : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env }, detached: process.platform !== 'win32', group: dir }));
 
     stopCommand = command.stop;
 
@@ -501,7 +505,7 @@ function commandRun(command: GroupedCommand): StepRun {
  * It ends as the member's report says: success or failure, the output, the tool and its usage.
  */
 function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, root, secrets }: {
-  lock: RunLock; claim: Held; trusted: Extract<Trusted, { kind: 'prompt' }>; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
+  lock: RunLock; claim: Held; trusted: Extract<Trusted, { kind: 'prompt' }> & { scoped: ScopedEnv }; place: NonNullable<MemberPlace['prompt']>; work: string; root: string; secrets: Record<string, string>;
 }): StepRun {
   const { run, attempt } = claim;
   const { step } = trusted;
@@ -510,11 +514,11 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
 
   const exit = (async (): Promise<FleetResult> => {
     await fs.mkdir(path.dirname(attemptResultPath(config, run, attempt)), { recursive: true });
-    const teamEnv = await resolveWorkflowEnv(config);
+    const { scope, env: processEnv, teamEnv } = trusted.scoped;
 
     // The lease the engine would have sent this member, from its own copy of the step: the record names only its values.
     const lease: StagedLease = {
-      attempt, revision: 0, step: claim.lease.step, prompt: trusted.prompt, env: trusted.env, cwd: work, processEnv: withRunningCli(process.env),
+      attempt, revision: 0, step: claim.lease.step, prompt: trusted.prompt, env: trusted.env, cwd: work, processEnv, ...(scope && { envScope: scope }),
       ...(step.agent !== undefined && { agent: step.agent }),
       ...(step.tool !== undefined && { tool: step.tool }),
       ...(step.permissions === 'unattended' && { permissions: 'unattended' as const }),
@@ -660,7 +664,7 @@ async function archiveSession(config: LocalConfig, { run, root, session }: { run
  * bring the place's work back into `work`, close it. The runtime gets the step's env alone, never this process's. A
  * failure of the runtime ends it as a failed command whose stderr says why, so the member writes it as the step's end.
  */
-function runtimeCommand(config: LocalConfig, { run, attempt, place, work, command, env }: { run: RunId; attempt: AttemptId; place: RuntimePlace; work: string; command: string; env: Record<string, string> }): GroupedCommand {
+function runtimeCommand(config: LocalConfig, { run, attempt, place, work, command, env, unset }: { run: RunId; attempt: AttemptId; place: RuntimePlace; work: string; command: string; env: Record<string, string>; unset: readonly string[] }): GroupedCommand {
   const running = attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver });
   let output = '';
   let stderr = '';
@@ -685,7 +689,7 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
     }
 
     // A command runs no tool, so it gets none of the runtime's credentials.
-    const end = await running.exec({ argv: shellArgv(command), env, unset: [], credentials: {}, cwd: work }, {
+    const end = await running.exec({ argv: shellArgv(command), env, unset: [...unset], credentials: {}, cwd: work }, {
       onOutput: (stream, data) => {
         output += data;
 
@@ -728,10 +732,37 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
   };
 }
 
+/** What the env of a step's processes is scoped from: its `requires` in effect, and the `requires.env` keys of the whole run. */
+type StepScope = { requires: InEffect; runEnvKeys: readonly string[] };
+
+/**
+ * The env a step's processes run with, as the local driver scopes a lease: the keys its `requires.env` names, from the
+ * member's team store, and none of the team's other keys or, under a strict sandbox, the forge tokens. The team env it
+ * read, or the failure of a required key with no value here.
+ */
+async function scopedStep<T extends Exclude<Trusted, { kind: 'workflow' }>>(config: LocalConfig, trusted: T): Promise<(T & { scoped: ScopedEnv }) | { kind: 'failed'; failure: WorkflowFailure }> {
+  const { requires, runEnvKeys } = trusted.scope;
+  const teamEnv = await resolveWorkflowEnv(config);
+  const scope = envScopeOf(requires.env ?? [], { ...(requires.floor && { floor: requires.floor }), guarded: [...teamEnv.facts.declared, ...runEnvKeys] });
+
+  if (scope.provide.length === 0 && scope.withhold.length === 0) return { ...trusted, scoped: { env: withRunningCli(process.env), teamEnv } };
+  const built = await stepEnvironment(teamEnv, scope);
+
+  return built.ok ? { ...trusted, scoped: { scope, env: built.env, teamEnv } } : { kind: 'failed', failure: built.failure };
+}
+
+/** The env of a step's processes here, the scope it was built from when the step has one, and the team env it read. */
+type ScopedEnv = { scope?: EnvScope; env: NodeJS.ProcessEnv; teamEnv: WorkflowEnv };
+
+/** The keys `scoped` provides, with their values, which a step runtime sets over its own environment. */
+function providedEnv({ scope, env }: ScopedEnv): Record<string, string> {
+  return Object.fromEntries((scope?.provide ?? []).flatMap((key) => (env[key] === undefined ? [] : [[key, env[key]]])));
+}
+
 /** What a member runs for a claim, as its own copy of the team's workflow defines it: a command, or a prompt step. */
 type Trusted =
-  | { kind: 'command'; command: string; env: Record<string, string> }
-  | { kind: 'prompt'; step: WorkflowStep; prompt: string; model?: string; defaultModel?: string; env: Record<string, string>; limits?: TurnLimits }
+  | { kind: 'command'; command: string; env: Record<string, string>; scope: StepScope }
+  | { kind: 'prompt'; step: WorkflowStep; prompt: string; model?: string; defaultModel?: string; env: Record<string, string>; limits?: TurnLimits; scope: StepScope }
   | { kind: 'workflow'; child: WorkflowDefinition; inputs: JsonValue; isReadOnly: boolean };
 
 /**
@@ -781,7 +812,8 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
     }
   }
 
-  const { step, defaultModel } = defined;
+  const { step, defaultModel, requires } = defined;
+  const scope: StepScope = { requires, runEnvKeys: [...requiredEnvKeys([found.definitions.definition, ...Object.values(found.definitions.workflows)])] };
   const rendered = leaseEnv(step, values, run);
 
   if ('error' in rendered) return { refused: `workflow "${definition.name}" ${rendered.error}.` };
@@ -812,7 +844,7 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
 
     if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
 
-    return { kind: 'command', command: step.command, env: rendered.env };
+    return { kind: 'command', command: step.command, env: rendered.env, scope };
   }
 
   if (step.prompt === undefined || step.answer !== undefined) return { refused: `workflow "${definition.name}" has no prompt step at ${lease.step}.` };
@@ -823,7 +855,7 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
   if (texts.prompt !== lease.prompt) return { refused: `the offer's prompt differs from what workflow "${definition.name}" renders from the offer's values.` };
 
   return {
-    kind: 'prompt', step, prompt: texts.prompt, env: rendered.env,
+    kind: 'prompt', step, prompt: texts.prompt, env: rendered.env, scope,
     ...(texts.model !== undefined && texts.model !== '' && { model: texts.model }),
     // A model that rendered empty asks for the tool's default, so the defaults' model does not stand in for it.
     ...(defaultModel !== undefined && texts.model !== '' && { defaultModel }),
@@ -837,7 +869,7 @@ async function trustedLease(config: LocalConfig, claim: Held): Promise<Trusted |
  * `by` that runs it and the step `from` that wrote it.
  */
 function definedStep({ definition, workflows }: Definitions, stepPath: string):
-  | { kind: 'step'; step: WorkflowStep; defaultModel?: string; labels: string[] } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
+  | { kind: 'step'; step: WorkflowStep; defaultModel?: string; requires: InEffect } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
   const segments = parseStepPath(stepPath);
   let steps = definition.finally?.some((step) => step.id === segments[0]?.id) ? definition.finally : definition.steps;
   // The `defaults.model` in effect, a nested workflow's over the one it runs in, as the engine's scope keeps it.
@@ -850,7 +882,7 @@ function definedStep({ definition, workflows }: Definitions, stepPath: string):
 
     if (!step) return { kind: 'none' };
 
-    if (index === segments.length - 1) return { kind: 'step', step, labels: mergeRequirements(requires, step.requires).labels ?? [], ...(defaultModel !== undefined && { defaultModel }) };
+    if (index === segments.length - 1) return { kind: 'step', step, requires: mergeRequirements(requires, step.requires), ...(defaultModel !== undefined && { defaultModel }) };
     const runs = stepWorkflow(step);
 
     if (runs?.kind === 'from') return { kind: 'admitted', by: step.id, from: runs.step };
