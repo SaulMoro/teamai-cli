@@ -43,6 +43,23 @@ describe('extractReply', () => {
     expect(extractReply('```json\n{"verdict":"pass"}\n```\nFor reference, the input was:\n```json\n{"diff":"retries 3"}\n```', Verdict)).toEqual({ verdict: 'pass' });
   });
 
+  it('skips an empty list or object in the prose, such as a checkbox', () => {
+    expect(extractReply('{"color":"blue"}\n- [ ] check the shade', JsonValueSchema)).toEqual({ color: 'blue' });
+  });
+
+  it('reads the item of a list the schema accepts when the whole list fails it', () => {
+    const Module = z.object({ domain: z.string() });
+
+    expect(extractReply('[{"domain":"widgets"}]', Module)).toEqual({ domain: 'widgets' });
+  });
+
+  it('reads a long reply with an unmatched quote in bounded time', () => {
+    const started = performance.now();
+
+    expect(extractReply(`${'{ "a '.repeat(40_000)} {"ok": true}`, JsonValueSchema)).toEqual({ ok: true });
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
   it('checks the value against the schema it is given', () => {
     const Verdict = z.object({ verdict: z.enum(['pass', 'fail']) });
 
