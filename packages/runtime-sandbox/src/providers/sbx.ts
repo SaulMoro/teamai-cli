@@ -40,7 +40,7 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
  * The agent template sbx ships for each tool teamai launches, when it ships one. With no `agent`, an attempt starts
  * from its own tool's, and a command step's from the bare `shell` template, which holds no agent.
  */
-const TEMPLATE_OF = { claude: 'claude', codex: 'codex', codebuddy: undefined } satisfies Record<(typeof LAUNCHABLE)[number], string | undefined>;
+const TEMPLATE_OF = { claude: 'claude', codex: 'codex', codebuddy: undefined, opencode: 'opencode' } satisfies Record<(typeof LAUNCHABLE)[number], string | undefined>;
 
 /** The tools sbx ships a template for, which a sandbox with no `agent` offers. */
 const TEMPLATED = LAUNCHABLE.filter((tool) => TEMPLATE_OF[tool] !== undefined);
