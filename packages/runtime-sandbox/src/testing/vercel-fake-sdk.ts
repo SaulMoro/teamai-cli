@@ -142,7 +142,8 @@ export class Sandbox {
 
   static async create(params: { name?: string; persistent?: boolean; timeout?: number; runtime?: string; source?: z.infer<typeof SourceSchema>; tags?: Record<string, string>; token?: string; teamId?: string; projectId?: string }): Promise<Sandbox> {
     const name = params.name ?? `sbx_${crypto.randomBytes(6).toString('hex')}`;
-    log('create', { name, persistent: params.persistent, timeout: params.timeout, runtime: params.runtime, source: params.source, tags: params.tags, auth: ['token', 'teamId', 'projectId'].filter((key) => key in params) });
+    // The SDK signs in with VERCEL_OIDC_TOKEN from its own process's environment when no token is passed.
+    log('create', { name, persistent: params.persistent, timeout: params.timeout, runtime: params.runtime, source: params.source, tags: params.tags, auth: ['token', 'teamId', 'projectId'].filter((key) => key in params), oidc: process.env.VERCEL_OIDC_TOKEN !== undefined });
 
     if (fs.existsSync(sandboxDir(name))) throw Object.assign(new Error(`A sandbox named ${name} exists`), { response: { status: 409 } });
 

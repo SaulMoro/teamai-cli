@@ -114,7 +114,7 @@ function authOf(providerAuth: VercelOptions['provider_auth'], env: NodeJS.Proces
   if (token) {
     const lacking = (['VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'] as const).filter((name) => !values[name]);
 
-    return { ok: false, message: `VERCEL_TOKEN is set, but not ${lacking.join(' and ')}, which a token signs in with. Set ${lacking.length === 1 ? 'it' : 'them'} (Vercel's team and project settings show both ids), or name where to read ${lacking.length === 1 ? 'it' : 'them'} in the definition's provider_auth, and start again` };
+    return { ok: false, message: `VERCEL_TOKEN is set, but not ${lacking.join(' and ')}, which a token signs in with. Set the missing ids (Vercel's team and project settings show both), or name where to read them in the definition's provider_auth, and start again` };
   }
 
   return { ok: false, message: NO_SIGN_IN };

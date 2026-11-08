@@ -145,6 +145,20 @@ describe('vercel: init', () => {
     expect(reply).toMatchObject({ ok: true });
   });
 
+  it('signs in with an OIDC token alone, which it leaves to the SDK and never gives the step', async () => {
+    fs.writeFileSync(path.join(dir, 'oidc'), 'vercel-oidc-value\n');
+    const connection = start({});
+    expect(await init(connection, { provider: 'vercel', provider_auth: { VERCEL_OIDC_TOKEN: `file:${path.join(dir, 'oidc')}` } })).toMatchObject({ ok: true });
+    const at = preparedPlace();
+    await openPlace(connection, at, { tool: 'claude' });
+
+    expect(calls().find((call) => call.call === 'create')).toMatchObject({ auth: [], oidc: true });
+    const { output } = await exec(connection, { argv: ['/bin/sh', '-c', 'env | cut -d= -f1'], cwd: at.worktree });
+
+    expect(output.split('\n').filter((name) => name.startsWith('VERCEL_'))).toEqual([]);
+    expect(JSON.stringify(calls())).not.toContain('vercel-oidc-value');
+  });
+
   it('refuses provider auth it does not know, a value that is not env: or file:, and a lifetime Vercel does not take', async () => {
     expect(await init(start(), { provider: 'vercel', provider_auth: { VERCEL_TOKN: 'env:VERCEL_TOKEN' } })).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'provider_auth.VERCEL_TOKN' } });
     expect(await init(start(), { provider: 'vercel', provider_auth: { VERCEL_TOKEN: 'abc' } })).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'provider_auth.VERCEL_TOKEN' } });
