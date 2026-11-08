@@ -14,7 +14,8 @@ import { onPath, type NativeSandbox, type Sandboxed } from './native.js';
 //
 //  Every path keeps its host path, binds made shallowest first so a deeper one wins. The member's home and other
 //  repositories are not bound, so they do not exist inside. No value goes into the argv: the step's environment is the
-//  process's own, which bwrap passes on. The step dies with the runtime process that started it (--die-with-parent).
+//  process's own, which bwrap passes on. The step dies with the runtime process that started it: through the watch pipe
+//  native.ts launches every exec with, and --die-with-parent.
 //
 
 /** The system directories every process needs, read only: whichever of them this distribution has. */
