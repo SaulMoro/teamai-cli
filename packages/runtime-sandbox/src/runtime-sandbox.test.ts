@@ -396,6 +396,27 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.event === 'alive')).toMatchObject({ ops: [{ op: ran.end.op, state: 'exited', code: 0, stdout }] });
   });
 
+  it('answers a resent exec and a reattach with its stdout marked as cut, once the journal masked a credential at its end', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const key = `secret-${'k'.repeat(93)}`;
+    const op = newOp();
+    const request = { argv: [process.execPath, '-e', 'process.stdout.write("x".repeat(100000) + process.env.API_KEY)'], credentials: { API_KEY: key }, cwd: at.worktree };
+    await exec(connection, request, op);
+    const before = connection.messages.length;
+    const resent = await exec(connection, request, op);
+
+    expect(connection.messages.indexOf(resent.end)).toBeGreaterThanOrEqual(before);
+    expect(resent.end).toMatchObject({ event: 'exited', code: 0 });
+    expect(String(resent.end.stdout).slice(0, STDOUT_CUT.length)).toBe(STDOUT_CUT);
+    expect(String(resent.end.stdout)).not.toContain(key);
+    connection.send({ type: 'reattach', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'alive')).toMatchObject({ ops: [{ op, state: 'exited', stdout: resent.end.stdout }] });
+  });
+
   it("refuses a step whose base URL points at this machine itself on Docker on Linux, before it creates the container, naming the variable and never its value", async () => {
     const connection = start({ FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS' });
     await init(connection, { provider: 'docker', image: IMAGE });
