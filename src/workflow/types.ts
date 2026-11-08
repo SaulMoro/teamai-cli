@@ -472,6 +472,12 @@ export interface RunState {
   status: RunStatus;
   /** Identity of the latest driver that called next, retained so resume can recover its workspace. */
   driver?: DriverIdentity;
+  /**
+   * Whether the latest driver that called next has a runtime that runs a `workflow:` step whole (`can.workflow`, the
+   * fleet's). While it is not false, reconcile leaves a step that could go whole unexpanded for `next` to lease whole;
+   * once it is false, such a step starts at reconcile as every other workflow step does. Local run state only.
+   */
+  takesWhole?: boolean;
   /** The end this run reached, set when it settles. */
   end?: string;
   /** Set while the run's `finally` steps run, from when its steps end until it settles. Its status stays `running`. */

@@ -1160,9 +1160,10 @@ function advanceInstance(
 
   if ('unreadable' in child) return child;
 
-  // A workflow a runtime can run whole waits unstarted for `next`, which leases it whole or starts it for its asker. One
-  // whose inputs do not fit starts here, and fails as any workflow step does, at the same point of the run.
-  if ('runs' in wholeFit(definition, workflowRunBy(run, definition, scope.prefix), mergeRequirements(scope.requires, definition.requires)) && !('code' in childInputs(scope, states, state, definition, child))) {
+  // A workflow a runtime of the run's driver can run whole waits unstarted for `next`, which leases it whole or starts it
+  // for its asker. One whose inputs do not fit starts here, and fails as any workflow step does, at the same point of
+  // the run; so does every one once the driver has no such runtime, so a gate inside it is asked as soon as it is reached.
+  if (run.takesWhole !== false && 'runs' in wholeFit(definition, workflowRunBy(run, definition, scope.prefix), mergeRequirements(scope.requires, definition.requires)) && !('code' in childInputs(scope, states, state, definition, child))) {
     return { ready: [{ lease: state, definition, rendered: {} }] };
   }
 
@@ -2315,6 +2316,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   // Every reconcile of this call, a delivery's too, first restarts the clocks of the leases the driver lists queued.
   const settle: Settle = (run, now) => {
     restartQueued(run, driver, unstarted, now);
+    run.takesWhole = options.can?.workflow === true || options.alone?.offers.some((offer) => offer.can.workflow === true) === true;
 
     return reconcileRun(run, now);
   };

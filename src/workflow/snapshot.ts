@@ -268,7 +268,7 @@ type FieldRules<T> = { readonly [K in KeysOfUnion<T>]-?: 'publish' | 'drop' | 'r
 type Rewrites<T, R> = { readonly [K in keyof R as R[K] extends 'rewrite' ? K : never]: (value: T) => Partial<Record<string, JsonValue>> };
 
 const RUN_RULES = {
-  schemaVersion: 'publish', id: 'rewrite', name: 'publish', alias: 'publish', revision: 'publish', status: 'publish', driver: 'drop',
+  schemaVersion: 'publish', id: 'rewrite', name: 'publish', alias: 'publish', revision: 'publish', status: 'publish', driver: 'drop', takesWhole: 'drop',
   end: 'publish', failure: 'rewrite', finalizing: 'rewrite', timeout: 'publish', inputs: 'publish', sourceHash: 'publish', teamRevision: 'publish', teamPin: 'publish', runMode: 'publish', origin: 'publish',
   startedBy: 'publish', awaits: 'publish', definition: 'rewrite', workflows: 'rewrite', admitted: 'drop', steps: 'rewrite', settledAttempts: 'rewrite', settledCount: 'rewrite',
   endRecordQueued: 'drop', cancelledAttempts: 'rewrite', archive: 'rewrite', round: 'publish', base: 'publish',
