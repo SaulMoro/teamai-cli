@@ -843,8 +843,10 @@ export async function leaseRefusal(config: LocalConfig, runId: string, { throttl
       const snapshot = origin.value;
 
       if (snapshot !== 'absent' && snapshot.createdAt === local.createdAt && snapshot.owner.id === owner.id && snapshot.offered === undefined
-        && snapshot.status === 'running' && local.publication.pending === undefined && Date.now() - (writtenAt(snapshot.write) ?? 0) >= RENEW_AFTER_MS) {
-        // A lost race leaves the checkout showing the write that won, which answers below.
+        && snapshot.status === 'running' && Date.now() - (writtenAt(snapshot.write) ?? 0) >= RENEW_AFTER_MS) {
+        // It lands only over the write it read, so a publish write still pending here, which may land yet, is never
+        // overwritten; one that never landed must not stop the renewal. A lost race leaves the checkout showing the write
+        // that won, which answers below.
         await replaceSnapshot(config, runId, snapshot.write, { ...snapshot, write: writeId() }, `[teamai] Drive workflow run ${runId}`);
       }
     }
