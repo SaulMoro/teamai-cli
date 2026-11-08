@@ -22,7 +22,7 @@ import { PublishedRuns, type Taker } from '../workflow-published-runs.js';
 import type { WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';
 import { worktreePath } from '../workflow/worktree.js';
 import { resolveWorkflowEnv } from '../env-resolution.js';
-import { archiveOnDefaultBranch, BUILD, dirs, git, holdBasePin, Member, onGitHub, originFile, originRef, pull, runStep, SHIP, start, startIn, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
+import { archiveOnDefaultBranch, BUILD, dirs, git, holdBasePin, Member, onGitHub, originFile, originRef, pull, runStep, SHIP, start, startIn, takeBack, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -339,6 +339,7 @@ steps:
     const session = await claudeSession(alice.checkout, 'Found two problems.');
     await reviewed(alice, runId, session);
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout, sessions: resumableSessions })).toMatchObject({ ok: true });
+    await takeBack(alice, runId);
     await reviewed(alice, runId, 'copy-1', { tool: 'claude', id: session });
     await forget(alice.checkout, session);
 

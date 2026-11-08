@@ -15,7 +15,7 @@ import type { StepPass, StepState } from '../workflow/step-state.js';
 import { readRun, updateRun } from '../workflow/store.js';
 import type { RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
-import { BUILD, dirs, editRun, git, originFile, originRef, receiveHook, reportsHead, runStep, settle, SHIP, start, startIn, team, work } from './helpers/workflow-handoff-fixture.js';
+import { BUILD, dirs, editRun, git, originFile, originRef, receiveHook, reportsHead, runStep, settle, SHIP, start, startIn, takeBack, team, work } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -635,6 +635,7 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     await runStep(alice, runId);
     receiveHook(acme.origin, 'exit 1');
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: false, error: { code: 'reports_failed' } });
@@ -665,6 +666,7 @@ describe('workflow handoff through teamai-reports', () => {
     receiveHook(acme.origin, 'exit 1');
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: false, error: { code: 'reports_failed' } });
     receiveHook(acme.origin, 'exit 0');
+    await takeBack(alice, runId);
     await runStep(alice, runId);
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true, value: { publication: 'published', stateRevision: 2 } });
     const published = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
