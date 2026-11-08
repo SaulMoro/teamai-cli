@@ -733,7 +733,7 @@ $ teamai workflow resume r6aa0e2c0927ff266 --claim
 {"error":{"code":"owner_active","owner":{"id":"4c514375…","user":"alice"},"wroteAt":"2026-11-08T09:12:44.120Z","message":"Run r6aa0e2c0927ff266 is owned by alice (install 4c514375…), whose teamai wrote it to teamai-reports 7 minutes ago, so a driver there may be running one of its steps now, and taking it over would run that step twice. To hand it over, alice stops the driver on that machine and runs teamai workflow publish r6aa0e2c0927ff266, which offers it; or it can be taken over once nothing is written for 53 more minutes. If alice has stopped it, take it over now: teamai workflow resume r6aa0e2c0927ff266 --claim --confirmed"}}
 ```
 
-alice 停止之后，`--claim --confirmed` 即可接管。无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）无论是否带 `--confirmed` 都会被拒绝。留给运行器接手的运行，或已经结束的运行，不询问直接接管。
+alice 停止之后，`--claim --confirmed` 即可接管。从 agent 会话发出时，这个 `--confirmed` 只回答接管：`invoke: ask` 工作流的运行随后返回 `confirm_needed`，本人同意后，再用同一条带 `--confirmed` 的命令继续它。无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）无论是否带 `--confirmed` 都会被拒绝。留给运行器接手的运行，或已经结束的运行，不询问直接接管。
 
 要在编程会话中继续这个运行，由 agent 执行 `teamai workflow resume <run> --driver skill`，加 `--claim` 则从所有者那里接管。它以同样的方式认领运行，然后在会话的运行模式下用 skill 驱动运行它，选项与 skill 启动相同：`--parallel`、`--hitl` 或 `--auto-approve`，以及 `--no-judge`。不带这些选项时，一次只运行一个步骤，agent 在回答可选关卡前会先问你。在无人值守的运行中，它像 `--auto-approve` 那样回答可选关卡；运行到只有人能处理的步骤时，它[把运行交给人](#运行需要人参与时)，会话随之停止。`invoke: ask` 的工作流会在认领之前被拒绝（`unattended_denied`）。无人值守的运行中会拒绝 `--hitl person`（`invalid_arguments`）：没有人会回答。它的第一个回合在工作流有 prompt 步骤或由会话评审时提出宿主问题，并重新派发另一台机器持有租约的步骤。必须用本地驱动运行的工作流会以 `teamai workflow resume <run>` 交还给你。接管运行由你决定，所以 agent 执行这两条命令前都会先问你。
 

@@ -71,7 +71,7 @@ describe('workflow handoff through teamai-reports', () => {
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     // Bob claimed it a moment ago and may drive it, so taking it back needs the person's yes.
-    expect(await claimRun(alice.config, runId, { checkout: alice.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    expect(await claimRun(alice.config, runId, { checkout: alice.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'took_over' } });
     await runStep(alice, runId);
     await runStep(alice, runId);
     await settle(alice, runId);
@@ -143,7 +143,7 @@ describe('workflow handoff through teamai-reports', () => {
     const next = await leaseNext(alice.config, runId, alice.driver);
     if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
     const lease = next.data.lease as { attempt: string; revision: number };
-    expect(await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    expect(await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'took_over' } });
     expect(await runStep(bob, runId)).toBe('two');
     await settle(bob, runId);
     const record = originFile(acme.origin, `workflows/runs/${runId}.json`);

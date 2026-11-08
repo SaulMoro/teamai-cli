@@ -642,7 +642,7 @@ describe('workflow handoff through teamai-reports', () => {
     receiveHook(acme.origin, 'exit 0');
     // Alice took the run back a moment ago and may drive it, so the claim needs the person's yes.
     const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' });
-    expect(claimed).toMatchObject({ ok: true, value: { ownership: 'claimed', stateRevision: 2 } });
+    expect(claimed).toMatchObject({ ok: true, value: { ownership: 'took_over', stateRevision: 2 } });
     const claim = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
 
     expect(await updateReports(alice.config, async (worktree) => {
