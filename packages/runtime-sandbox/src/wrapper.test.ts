@@ -509,6 +509,27 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     }
   });
 
+  it('goes on serving when a wrapper hangs up before it reads a grant larger than the socket holds', async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    // A credential past what a unix socket buffers, so the grant's write is still going when the wrapper hangs up.
+    const handle = await openFor(connection, at, { credentials: { CLAUDE_CODE_OAUTH_TOKEN: `sk-ant-oat01-${'x'.repeat(64 * 1024)}` } });
+    await register(handle, null);
+    const asking = net.connect(socketOf(handle));
+    asking.on('error', () => {});
+    asking.pause();
+    await new Promise<void>((resolve) => asking.once('connect', resolve));
+    asking.write(`${JSON.stringify({ ask: { tool: 'claude', agent: null, cwd: at.worktree } })}\n`);
+    // The grant comes after the sandbox's probe for the tool; the wrapper hangs up while it is written.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    asking.destroy();
+
+    const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+
+    expect(ran.code).toBe(0);
+  });
+
   it("serves its socket at 0600 in a 0700 directory, and removes it at close, though a client sits on it saying nothing", async () => {
     const connection = start();
     await init(connection);

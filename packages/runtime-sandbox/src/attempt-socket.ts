@@ -163,7 +163,11 @@ export async function listen(socketPath: string, answer: Answering): Promise<{ o
       // A wrapper connected for a registration that ended says nothing to the next one of its agent.
       if (agent !== undefined && ![...registrations.values()].includes(agent)) granted.delete(agent);
     });
-    readline.createInterface({ input: client }).on('line', (line) => {
+    const lines = readline.createInterface({ input: client });
+    // readline re-emits the connection's errors, such as a write to a wrapper that hung up, and throws them when nothing
+    // listens: this process, and every exec it runs, would end with it.
+    lines.on('error', () => client.destroy());
+    lines.on('line', (line) => {
       void (async () => {
         let parsed: z.ZodSafeParseResult<SocketRequest>;
 
