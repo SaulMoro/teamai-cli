@@ -445,6 +445,20 @@ function toolGap(tool: string | undefined, can: Pick<DriverCan, 'tools'>): Missi
 }
 
 /**
+ * The env scope of a process that requires `keys` under `floor`: it gets each, but what a strict sandbox strips, and is
+ * kept from `guarded` (the team's declared keys and the run's `requires.env` keys) and the strip list, but what it gets.
+ * The one reading the owner's negotiation and a fleet member share.
+ */
+export function envScopeOf(keys: readonly string[], { floor = {}, guarded }: { floor?: Floor; guarded: readonly string[] }): EnvScope {
+  // A strict sandbox's strip list wins over every requires.env, so no step under it is handed a credential.
+  const stripped: readonly string[] = floor.isolation === 'sandbox' ? SANDBOX_WITHHELD_ENV : [];
+  const provide = keys.filter((key) => sameEnvName(stripped, key) === undefined);
+  const withhold = [...new Set([...guarded, ...stripped])].filter((key) => sameEnvName(provide, key) === undefined).sort();
+
+  return { provide, withhold };
+}
+
+/**
  * Decides whether this driver may take the step, and on what terms. Pure: the engine calls it at both places it hands
  * out a lease. In order: an `env:` key that shadows a team secret or a required key fails; what the member's policy refuses
  * holds; every strict capability the driver lacks holds; a required key with no value here fails, for a driver that
@@ -453,18 +467,15 @@ function toolGap(tool: string | undefined, can: Pick<DriverCan, 'tools'>): Missi
 export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFacts): Negotiation {
   const { floor = {}, ...requires } = offer.requires;
   const sealed = floor.isolation === 'sandbox';
-  // A strict sandbox's strip list wins over every requires.env, so no step under it is handed a credential.
-  const stripped: readonly string[] = sealed ? SANDBOX_WITHHELD_ENV : [];
-  const guarded = [...env.declared, ...offer.runEnvKeys, ...stripped];
+  const guarded = [...env.declared, ...offer.runEnvKeys];
   const shadowed = offer.envKeys.filter((key) => sameEnvName([...env.secrets, ...offer.runEnvKeys], key) !== undefined);
 
   if (shadowed.length > 0) {
     return { kind: 'fail', failure: { code: 'env_conflict', message: `Step "${offer.step}" sets env ${shadowed.join(', ')}, which a team secret or a requires.env of the run names. Rename the step's variable, or remove it from env:.` } };
   }
 
-  const allowed = (keys: readonly string[]): string[] => keys.filter((key) => sameEnvName(stripped, key) === undefined);
-  const required = allowed(requires.env ?? []);
-  const setupKeys = allowed(offer.setup?.requires?.env ?? []);
+  const { provide: required, withhold } = envScopeOf(requires.env ?? [], { floor, guarded });
+  const { provide: setupKeys, withhold: setupWithhold } = envScopeOf(offer.setup?.requires?.env ?? [], { floor, guarded });
   const covers = envCovers(can.env, offer.executor);
   const policy: Missing[] = [];
 
@@ -511,7 +522,6 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const asked = requires.isolation;
 
   if (asked !== undefined && asked !== 'none' && rank(asked) > rank(provided)) unenforced.push({ requirement: 'isolation', asked, provided });
-  const withhold = [...new Set(guarded)].filter((key) => sameEnvName(required, key) === undefined).sort();
 
   if (!covers.step && withhold.length > 0) unenforced.push({ requirement: 'withhold', keys: withhold });
 
@@ -521,8 +531,6 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const limits = offer.endTurn && can.end_turn ? { limits: offer.endTurn } : {};
   const envScope = covers.step && (required.length > 0 || withhold.length > 0) ? { envScope: { provide: required, withhold } } : {};
   const maxTurns = offer.maxTurns !== undefined && can.max_turns && !limits.limits ? { maxTurns: offer.maxTurns } : {};
-  const setupWithhold = [...new Set(guarded)].filter((key) => sameEnvName(setupKeys, key) === undefined).sort();
-
   const setup: Pick<Terms, 'setup'> = {};
 
   if (offer.setup) {

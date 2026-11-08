@@ -1631,6 +1631,32 @@ steps:
     command: echo rendered
 `;
 
+/** A step under a strict sandbox that requires a team env key, and writes what of it and of a forge token its process sees. */
+const SCOPED_COMMAND = 'printf "%s|%s" "${DEPLOY_URL:-}" "${GH_TOKEN:-}" > env.txt';
+const SCOPED = `schemaVersion: v1alpha1
+name: slow
+description: Deploys in a sandbox.
+steps:
+  - id: work
+    workspace: new
+    requires: { env: [DEPLOY_URL], isolation: sandbox, strict: true }
+    command: ${SCOPED_COMMAND}
+`;
+
+/** As SCOPED, a prompt step. */
+const SCOPED_PROMPT = `schemaVersion: v1alpha1
+name: slow
+description: Reviews in a sandbox.
+steps:
+  - id: work
+    workspace: new
+    requires: { env: [DEPLOY_URL], isolation: sandbox, strict: true }
+    tool: claude
+    prompt: Review the work.
+    output:
+      ok: boolean
+`;
+
 /** The fleet runtimes a scenario opened, which teardown disposes. */
 const fleetRuntimes: StepRuntime[] = [];
 
@@ -1649,11 +1675,11 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, inputs, isWhole = false }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; inputs?: Record<string, string>; isWhole?: boolean } = {}) {
-  const acme = team({ slow: workflow, ...workflows });
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean } = {}) {
+  const acme = team({ slow: workflow, ...workflows }, files);
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isWhole && { workflow: true }) } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
@@ -1724,6 +1750,50 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
 
     expect(await take({ command: { kind: 'here' } })).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
     expect(await ended).toMatchObject({ kind: 'exited', code: 0 });
+  }, 60_000);
+
+  it('runs the step\'s command with the env its lease scopes: a required key from the member\'s team store, and no forge token under a strict sandbox', async () => {
+    vi.stubEnv('GH_TOKEN', 'member-token');
+    const owner = await ownerOf({ workflow: SCOPED, command: SCOPED_COMMAND, files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, isSandbox: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toMatchObject({ kind: 'exited', code: 0 });
+    expect(fs.readFileSync(path.join(place, 'env.txt'), 'utf8')).toBe('https://deploy.example|');
+  }, 60_000);
+
+  it('runs a prompt step\'s tool with the env its lease scopes, as it does a command', async () => {
+    vi.stubEnv('GH_TOKEN', 'member-token');
+    const owner = await ownerOf({ workflow: SCOPED_PROMPT, tools: ['claude'], files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, isSandbox: true });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const seen = path.join(bin, 'env.txt');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}', before: `fs.writeFileSync(${JSON.stringify(seen)}, (process.env.DEPLOY_URL ?? '') + '|' + (process.env.GH_TOKEN ?? ''));` });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const { prompt } = await owner.open();
+
+    try {
+      const ended = prompt(newOpId());
+      await owner.record();
+      await readableReportsWorktree(owner.bob.config);
+
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { prompt: { kind: 'here' } } });
+
+      expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+      expect(await ended).toMatchObject({ kind: 'finished' });
+      expect(fs.readFileSync(seen, 'utf8')).toBe('https://deploy.example|');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
   }, 60_000);
 
   it('leases a whole workflow step to a runtime that runs whole workflows, and starts it for any other, leasing its first step', async () => {
