@@ -3,14 +3,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
+import { claudeFake } from '@teamai/tool-claude/testing';
+import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun } from '../workflow/store.js';
 import { dirs, projectAiTool, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
 
+const agents: FakeAgent[] = [];
+
 afterEach(() => {
+  const left = agents.splice(0).flatMap((agent) => agent.stopLeft());
+
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  expect(left, 'fake agents left running').toEqual([]);
 });
+
+/** Claude in `bin` as its recorded call prints it, keeping its sessions under `home`. */
+function claudeIn(bin: string, home: string, options: { answer?: string; answers?: Array<{ when: string; answer: string }> }): FakeAgent {
+  vi.stubEnv('HOME', home);
+  const agent = fakeAgent(claudeFake, { bin, ...options });
+  agents.push(agent);
+
+  return agent;
+}
+
+const COLOR_JSON = `schemaVersion: v1alpha1
+name: build
+description: Ask for a color.
+steps:
+  - id: ask
+    answer: Name one color.
+    output: { color: string }
+outputs: { color: steps.ask.outputs.color }
+`;
 
 const Invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), cwd: z.string() });
 
@@ -109,6 +135,36 @@ outputs: { color: steps.ask.outputs.color }
 
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { color: 'blue' } } } });
     expect(claude().stdin).toBe('Name one color.\n\nReply with only a JSON value, with no other text: a value that matches this JSON Schema: `{"type":"object","properties":{"color":{"type":"string"}},"required":["color"]}`');
+  });
+
+  it('asks once more in the same session when the reply holds no JSON, and reports the value it then gives', async () => {
+    const { config, workspace, runId, bin } = await answering(COLOR_JSON);
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'I would say blue.', answers: [{ when: 'Retries remaining', answer: '{"color":"blue"}' }] });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { color: 'blue' } } } });
+    const [first, second] = claude.calls();
+    expect(first?.args).toEqual(['-p', '--output-format', 'json']);
+    expect(second?.args).toEqual(['-p', '--output-format', 'json', '--resume', expect.any(String)]);
+    expect(second?.prompt).toContain('I would say blue.');
+  });
+
+  it('asks again when the reply holds JSON that is not the step\'s output', async () => {
+    const { config, workspace, runId, bin } = await answering(COLOR_JSON);
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: '{"colour":"blue"}', answers: [{ when: 'Retries remaining', answer: '{"color":"blue"}' }] });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { color: 'blue' } } } });
+    expect(claude.calls()).toHaveLength(2);
+  });
+
+  it('fails invalid_output with the last reply once asking again gave no value either', async () => {
+    const { config, workspace, runId, bin } = await answering(COLOR_JSON);
+    const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'Blue, I think.' });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(claude.calls()).toHaveLength(2);
+    expect(await readRun(config, z.string().parse(runId))).toMatchObject({
+      steps: [{ id: 'ask', status: 'failed', failure: { code: 'invalid_output', message: expect.stringContaining('Blue, I think.') } }],
+    });
   });
 
   it('reads the JSON a reply fences after a line of prose', async () => {
