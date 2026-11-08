@@ -173,7 +173,7 @@ export async function archiveSessions<T extends ArchiveSessionRef>(
 
   for (const chain of chains) {
     const unreadable: string[] = [];
-    let newest: { ref: T; session: Session; meta: SessionSyncMeta; evidence?: ArchivedEvidence } | undefined;
+    let newest: { ref: T } & ArchivedRead | undefined;
 
     for (const ref of chain) {
       const found = await AgentSession.find(ref, { scrub, toolRootsFor: () => toolRoots });
@@ -215,26 +215,29 @@ export async function archiveSessions<T extends ArchiveSessionRef>(
   return delivered.status === 'archived' ? { status: 'archived', archived, skipped } : { status: 'failed', message: delivered.message };
 }
 
-/** A session read to be archived, scrubbed, with the evidence its step left. */
-type ArchivedRead = { session: Session; meta: SessionSyncMeta; evidence?: ArchivedEvidence };
+/**
+ * A session read to be archived, scrubbed, with the evidence its step left: `none` when its step left none, or none
+ * that could be masked, so the archive drops what an earlier step of it left.
+ */
+type ArchivedRead = { session: Session; meta: SessionSyncMeta; evidence?: ArchivedEvidence | 'none' };
 
 /**
  * The evidence `ref`'s step left in its `out/` directory, scrubbed as the session is (the team's `secrets`, this
  * machine's paths as seen from `cwd`). Evidence that cannot be read or masked is left out, and the session is
- * archived without it, saying why: no text of it leaves unmasked.
+ * archived without any, saying why: no text of it leaves unmasked.
  */
-async function evidenceOf(ref: ArchiveSessionRef, { cwd, secrets }: { cwd: string; secrets: Record<string, string> }): Promise<{ evidence?: ArchivedEvidence }> {
+async function evidenceOf(ref: ArchiveSessionRef, { cwd, secrets }: { cwd: string; secrets: Record<string, string> }): Promise<Pick<ArchivedRead, 'evidence'>> {
   if (ref.evidenceDir === undefined) return {};
 
   try {
     // The result file is teamai's own: the run records the outputs it holds.
     const evidence = await SessionEvidence.collect(ref.evidenceDir, textScrubber(cwd, { secrets, localPaths: await publishedPathRoots(cwd) }), { leaveOut: [ATTEMPT_RESULT_FILE] });
 
-    return evidence ? { evidence } : {};
+    return { evidence: evidence ?? 'none' };
   } catch (error) {
-    log.warn(`The evidence in ${ref.evidenceDir} of the ${ref.platform} session ${ref.sessionId} was left out of the team session archive, which keeps the session without it: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`The evidence in ${ref.evidenceDir} of the ${ref.platform} session ${ref.sessionId} was left out of the team session archive, which keeps the session without any evidence: ${error instanceof Error ? error.message : String(error)}`);
 
-    return {};
+    return { evidence: 'none' };
   }
 }
 

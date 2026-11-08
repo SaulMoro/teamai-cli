@@ -33,7 +33,7 @@ import * as cliPaths from '../utils/cli-path.js';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { projectRun } from '../workflow/snapshot.js';
 import { runPasses } from '../workflow/loop.js';
-import { attemptsDir, readRun, readRuns, RunIdSchema } from '../workflow/store.js';
+import { attemptsDir, readRun, readRuns, RunIdSchema, updateRun } from '../workflow/store.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 import { runShortcut, workflowResume, workflowStart } from '../workflow-commands.js';
 
@@ -449,6 +449,35 @@ describe('teamai score --drain', () => {
       { kind: 'listed', path: 'screen.png', type: 'image/png', size: 4 },
     ] });
     expect(JSON.parse(text).files).toHaveLength(2);
+  });
+
+  it('archives with a session that a loop ran again the evidence its latest pass left, not an earlier one', async () => {
+    const { origin, config } = await team({ 'workflows/review.yaml': WORKFLOW.replace('    scorers: [quality]\n', '') });
+    claudeSession(STEP_SESSION, 'Reviewed it.');
+    const runId = await settledRun(config, 'unattended', { tool: 'claude', session: STEP_SESSION });
+    const earlier = 'a0000e1d0';
+    await updateRun(config, runId, {}, async (run) => {
+      if (run === 'missing') return { value: undefined };
+      const [pass] = runPasses(run);
+      if (!pass) return { value: undefined };
+
+      return { value: undefined, write: { ...run, archive: [{ ...pass, attempt: earlier, end: '2000-01-01T00:00:00.000Z' }] } };
+    });
+    const run = await readRun(config, runId);
+    if (run === 'missing' || run === 'corrupt') throw new Error(`run ${runId} is ${run}`);
+    const latest = runPasses(run).find((pass) => pass.attempt !== earlier)?.attempt;
+    const outOf = (attempt: string): string => path.join(attemptsDir(config, RunIdSchema.parse(runId)), attempt, 'out');
+    fs.mkdirSync(outOf(earlier), { recursive: true });
+    fs.writeFileSync(path.join(outOf(earlier), 'earlier.log'), 'the first round\n');
+    fs.mkdirSync(outOf(String(latest)), { recursive: true });
+    fs.writeFileSync(path.join(outOf(String(latest)), 'latest.log'), 'the second round\n');
+    vi.stubEnv('CI', 'true');
+
+    const drained = await drain();
+
+    expect(drained.code, drained.lines.join('\n')).toBe(0);
+    const file = onReports(origin, 'sessions').find((name) => name.endsWith('.evidence.json'));
+    expect(JSON.parse(readOnReports(origin, String(file))).files.map((each: { path: string }) => each.path)).toEqual(['latest.log']);
   });
 
   it('says the step sessions of one run it cannot find here in one line, whichever sessions they are', async () => {

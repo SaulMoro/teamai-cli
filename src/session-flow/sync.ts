@@ -695,9 +695,10 @@ export class SyncManager {
   /**
    * Save through the archive lock, including deduplication and index repair. `pathsRewritten` says the caller rewrote
    * this machine's paths (`--scrub`): a session pushed before under a title that spelled one then moves to its new name.
-   * `evidence`, already masked, is kept beside the session and replaces what it had; without it, what it had stays.
+   * `evidence`, already masked, is kept beside the session and replaces what it had; `none` drops what it had, and
+   * without it, what it had stays.
    */
-  async saveSession(session: Session, meta: SessionSyncMeta, opts: { pathsRewritten?: boolean; evidence?: ArchivedEvidence } = {}): Promise<ArchiveWriteResult<string>> {
+  async saveSession(session: Session, meta: SessionSyncMeta, opts: { pathsRewritten?: boolean; evidence?: ArchivedEvidence | 'none' } = {}): Promise<ArchiveWriteResult<string>> {
     const archivedCwdValue = await archivedCwd(meta.origin.cwd);
 
     const archivedMeta: SessionSyncMeta = {
@@ -1138,7 +1139,7 @@ export class SyncManager {
    * @param meta Sync metadata
    * @returns Path of the written jsonl file (relative to repoRoot)
    */
-  private saveSessionLocked(session: Session, meta: SessionSyncMeta, spellsLocalPath: (title: string) => boolean, evidence: ArchivedEvidence | undefined): string {
+  private saveSessionLocked(session: Session, meta: SessionSyncMeta, spellsLocalPath: (title: string) => boolean, evidence: ArchivedEvidence | 'none' | undefined): string {
     const repoId = meta.origin.repoIdentity;
     const author = meta.origin.author;
     this.moveRepoDirToCurrentName(repoId);
@@ -1158,9 +1159,14 @@ export class SyncManager {
     const paths = this.sessionPaths(repoId, author, sessionName);
     const retiredPaths = retired ? this.sessionPaths(repoId, author, retired) : undefined;
 
-    // Evidence the session keeps: the new one, else what it had under its retired name; a rename carries it along.
-    const keptEvidence = evidence ? `${JSON.stringify(evidence, null, 2)}\n` : retiredPaths && fs.existsSync(retiredPaths.evidence) ? fs.readFileSync(retiredPaths.evidence, 'utf-8') : undefined;
-    const evidenceFiles = [...(keptEvidence !== undefined ? [paths.evidence] : []), ...(retiredPaths && fs.existsSync(retiredPaths.evidence) ? [retiredPaths.evidence] : [])];
+    // Evidence the session keeps: the new one, none when its latest step left none, else what it had under its retired
+    // name; a rename carries it along.
+    const keptEvidence = evidence === 'none' ? undefined
+      : evidence ? `${JSON.stringify(evidence, null, 2)}\n`
+        : retiredPaths && fs.existsSync(retiredPaths.evidence) ? fs.readFileSync(retiredPaths.evidence, 'utf-8') : undefined;
+
+    const droppedEvidence = evidence === 'none' && fs.existsSync(paths.evidence);
+    const evidenceFiles = [...(keptEvidence !== undefined || droppedEvidence ? [paths.evidence] : []), ...(retiredPaths && fs.existsSync(retiredPaths.evidence) ? [retiredPaths.evidence] : [])];
 
     for (const file of [paths.jsonl, paths.meta, retiredPaths?.jsonl, retiredPaths?.meta, ...evidenceFiles]) if (file) this.guardWrite(file);
 
@@ -1174,8 +1180,8 @@ export class SyncManager {
     const files = [
       { file: paths.jsonl, content: session.messages.map((m) => JSON.stringify(messageToDict(m))).join('\n') + '\n' },
       { file: paths.meta, content: JSON.stringify(meta, null, 2) },
-      ...(keptEvidence !== undefined ? [{ file: paths.evidence, content: keptEvidence }] : []),
-      // A retired pair has no content: it is backed up like a replaced file, then dropped on commit.
+      ...(keptEvidence !== undefined ? [{ file: paths.evidence, content: keptEvidence }] : droppedEvidence ? [{ file: paths.evidence }] : []),
+      // A retired pair, and dropped evidence, have no content: each is backed up like a replaced file, then dropped on commit.
       ...(retiredPaths ? [{ file: retiredPaths.jsonl }, { file: retiredPaths.meta }, ...(fs.existsSync(retiredPaths.evidence) ? [{ file: retiredPaths.evidence }] : [])] : []),
     ].map((file: { file: string; content?: string }) => ({ ...file, temp: `${file.file}.${token}.tmp`, backup: `${file.file}.${token}.bak`, backedUp: false, installed: false }));
 

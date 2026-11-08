@@ -35,7 +35,8 @@ const EvidenceFileSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('listed'), path: EvidencePathSchema, type: z.string(), size: z.number().int().nonnegative(), sha256: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
 ]);
 
-export const ArchivedEvidenceSchema = z.object({ version: z.literal(1), files: z.array(EvidenceFileSchema) }).strict();
+/** `leftOut` counts the files past the first 100, which the archive does not keep. */
+export const ArchivedEvidenceSchema = z.object({ version: z.literal(1), files: z.array(EvidenceFileSchema), leftOut: z.number().int().positive().optional() }).strict();
 
 export type ArchivedEvidence = z.infer<typeof ArchivedEvidenceSchema>;
 
@@ -55,6 +56,9 @@ async function regularFiles(dir: string, under = ''): Promise<string[]> {
 
   return found;
 }
+
+/** The most files of one step the archive keeps, the first by path: past them, it only counts them. */
+const FILES_MAX = 100;
 
 /** The most of one text file the archive keeps, in bytes of its masked text. */
 const FILE_MAX_BYTES = 1024 * 1024;
@@ -122,7 +126,7 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
   const files: EvidenceFile[] = [];
   let left = STEP_MAX_BYTES;
 
-  for (const name of names) {
+  for (const name of names.slice(0, FILES_MAX)) {
     const file = path.join(dir, ...name.split('/'));
     const extension = path.extname(name).toLowerCase();
     const textType = TEXT_TYPES.get(extension);
@@ -141,7 +145,7 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
   }
 
   // What leaves for the archive parses as what the archive reads back, or nothing leaves.
-  return ArchivedEvidenceSchema.parse({ version: 1, files });
+  return ArchivedEvidenceSchema.parse({ version: 1, files, ...(names.length > FILES_MAX && { leftOut: names.length - FILES_MAX }) });
 }
 
 export const SessionEvidence = { collect } as const;
