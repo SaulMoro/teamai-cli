@@ -23,15 +23,17 @@ const ATTEMPTS_DIR = 'workflows/attempts';
 
 const OwnerSchema = z.object({ id: z.string().min(1), user: z.string() });
 
+const LeaseBase = { step: z.string().min(1), env: z.record(z.string(), z.string()) };
+
 /**
  * What a member runs, as the owner rendered it: never an argv, a credential value or a path of the owner's machine.
- * `env` is the step's rendered `env`.
+ * `env` is the step's rendered `env`. A prompt runs on the member's own tool: the step's `tool` when it names one, else
+ * the one the member set; `output` is the step's declared output.
  */
-const FleetLeaseSchema = z.object({
-  step: z.string().min(1),
-  command: z.string().min(1),
-  env: z.record(z.string(), z.string()),
-});
+const FleetLeaseSchema = z.union([
+  z.object({ ...LeaseBase, command: z.string().min(1) }).strict(),
+  z.object({ ...LeaseBase, prompt: z.string().min(1), tool: z.string().min(1).optional(), output: JsonValueSchema.optional() }).strict(),
+]);
 
 export type FleetLease = z.infer<typeof FleetLeaseSchema>;
 

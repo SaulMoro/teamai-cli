@@ -1657,7 +1657,7 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 它输出 `{"data":{"ran":{"run":…,"attempt":…,"step":…,"exit_code":…}}}`，没有领取时输出 `{"data":{"idle":{"offered":N}}}`。两位成员同时领取同一个尝试时只有一位能拿到，另一位会去试下一个。
 
-哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 目前只接命令步骤。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
+哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤；当 `can.tools` 列出提示步骤所用的工具时，也接提示步骤：成员用自己安装的该工具、以自己的登录运行提示。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
 你不必一直在线。驱动发出尝试后就可以停掉，之后运行 `teamai workflow resume <run>`：它读取尝试的记录，成员完成时取回产出，没完成就继续等。尝试在外期间，不依赖它的步骤照常在本机运行。
 
