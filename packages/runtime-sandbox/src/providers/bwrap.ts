@@ -8,7 +8,7 @@ import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.j
 //
 //  Each exec runs in a new user, PID, IPC and UTS namespace on an empty root that holds only what is bound into it:
 //
-//    bwrap --die-with-parent --new-session --unshare-all --share-net
+//    bwrap --die-with-parent [--new-session] --unshare-all --share-net
 //          --ro-bind-try /usr /usr … /etc /etc  --proc /proc --dev /dev --tmpfs /tmp
 //          --bind <path> <path> …               the place, the step's own home and temp directory, and each folder
 //                                               between a git path and the place that holds it, so it stays put
@@ -20,11 +20,16 @@ import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.j
 //  process's own, which bwrap passes on. The step dies with the runtime process that started it: through the watch pipe
 //  native.ts launches every exec with, and --die-with-parent.
 //
+//  --new-session keeps a step from typing into a terminal it was started on (TIOCSTI). An exec starts detached, on no
+//  terminal, and goes without it: bwrap's init calls setsid before it binds its life to bwrap's, so an exec's watcher,
+//  which kills the exec's process group, would miss a step killed in its first milliseconds, and that step would run on.
+//  A tool an app's runtime starts through teamai's wrapper may be on a terminal, and keeps it.
+//
 
 /** The system directories every process needs, read only: whichever of them this distribution has. */
 const SYSTEM = ['/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/etc'];
 
-const OPTIONS = ['--die-with-parent', '--new-session', '--unshare-all', '--share-net'];
+const OPTIONS = ['--die-with-parent', '--unshare-all', '--share-net'];
 
 /** The command that installs bubblewrap, by the os-release IDs of the distributions that use it (sandcastle's). */
 const INSTALL = [
@@ -67,12 +72,13 @@ function anchorsOf({ writable, gitPaths }: { writable: string[]; gitPaths: strin
 }
 
 /** bwrap's arguments for `sandboxed`, the command last. */
-export function argsOf({ argv, cwd, writable, readable, gitPaths }: Pick<Sandboxed, 'argv' | 'cwd' | 'writable' | 'readable' | 'gitPaths'>): string[] {
+export function argsOf({ argv, cwd, writable, readable, gitPaths, isDetached }: Pick<Sandboxed, 'argv' | 'cwd' | 'writable' | 'readable' | 'gitPaths' | 'isDetached'>): string[] {
   const binds = [...[...writable, ...anchorsOf({ writable, gitPaths })].map((at) => ({ at, flag: '--bind' })), ...readable.map((at) => ({ at, flag: '--ro-bind-try' }))]
     .sort((left, right) => left.at.split(path.sep).length - right.at.split(path.sep).length);
 
   return [
     ...OPTIONS,
+    ...(isDetached ? [] : ['--new-session']),
     ...SYSTEM.flatMap((at) => ['--ro-bind-try', at, at]),
     '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
     ...binds.flatMap(({ at, flag }) => [flag, at, at]),
@@ -90,9 +96,9 @@ export const bwrap: NativeSandbox = {
 
     if (executable === undefined) return { ok: false, message: notInstalled() };
 
-    // The options every exec takes, on the host's root: what AppArmor or a kernel without user namespaces refuses.
+    // The options every sandbox takes, on the host's root: what AppArmor or a kernel without user namespaces refuses.
     const refused = await new Promise<string | undefined>((resolve) => {
-      execFile(executable, [...OPTIONS, '--ro-bind', '/', '/', 'true'], { env, timeout: 10_000 }, (error, _stdout, stderr) => {
+      execFile(executable, [...OPTIONS, '--new-session', '--ro-bind', '/', '/', 'true'], { env, timeout: 10_000 }, (error, _stdout, stderr) => {
         resolve(error ? String(stderr).trim().split('\n').at(-1) || error.message : undefined);
       });
     });

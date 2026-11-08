@@ -132,7 +132,9 @@ describe('bwrap: a step', () => {
     const real = (file: string): string => fs.realpathSync(file);
 
     expect(command).toEqual(['claude', '-p', 'Review it.']);
-    expect(options).toEqual(expect.arrayContaining(['--unshare-all', '--share-net', '--die-with-parent', '--new-session']));
+    expect(options).toEqual(expect.arrayContaining(['--unshare-all', '--share-net', '--die-with-parent']));
+    // A step started on no terminal needs no session of its own, and its group's kill reaches bwrap's init however early.
+    expect(options).not.toContain('--new-session');
     expect(binds).toEqual(expect.arrayContaining([['--bind', real(at.worktree)], ['--bind', real(at.result)], ['--bind', real(at.toolHome)], ['--bind', real(at.runDir)], ['--ro-bind-try', real(at.git)], ['--ro-bind-try', real(host.tools)]]));
     expect(binds.map(([, bound]) => bound)).not.toContain(real(host.home));
     // A deeper bind comes after the one it sits in, so it wins.
@@ -230,6 +232,8 @@ describe('bwrap: the outer of an app runtime', () => {
     expect(JSON.parse(ran.stdout)).toEqual({ args: ['-p'], token: true, app: false, home: at.toolHome });
     expect(lastSandbox().command).toEqual(['claude', '-p']);
     expect(lastSandbox().binds).toContainEqual(['--bind', fs.realpathSync(at.worktree)]);
+    // The app may start the tool on a terminal, which the tool then cannot type into.
+    expect(lastSandbox().options).toContain('--new-session');
     expect(host.calls().flat().join(' ')).not.toContain('sk-ant-oat01-bwrap-test');
   });
 });
