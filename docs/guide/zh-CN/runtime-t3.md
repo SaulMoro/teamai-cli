@@ -240,7 +240,7 @@ T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都�
 
 ## 通过沙箱运行
 
-`use: t3, through: sandbox` 的条目照上文在 T3 Code 中运行每个步骤的线程，而线程的工具在这次尝试的沙箱里运行。条目的写法和沙箱做的事见 [通过应用运行](runtime-sandbox.md#通过应用运行teamai-sandbox-tool)。沙箱的提供方必须提供这次尝试的套接字：`docker`、`podman`、`sbx` 或 `bwrap`。
+`use: t3, through: sandbox` 的条目照上文在 T3 Code 中运行每个步骤的线程，而线程的工具在这次尝试的沙箱里运行。条目的写法和沙箱做的事见 [通过应用运行](runtime-sandbox.md#通过应用运行teamai-sandbox-tool)。沙箱的提供方必须提供这次尝试的套接字：`docker`、`podman`、`sbx` 或 `bwrap`。目前只有 Claude 能这样运行；通过沙箱的 Codex 步骤会在打开时失败。
 
 每个步骤开始前，运行时在这个套接字上登记步骤的工具，T3 启动 teamai 的包装程序 `teamai-sandbox-<tool>` 代替工具本身。第一次时，teamai 会添加运行这个包装程序的 T3 提供方实例，和为团队工具添加实例一样：
 

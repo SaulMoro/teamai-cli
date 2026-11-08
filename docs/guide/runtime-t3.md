@@ -240,7 +240,7 @@ When the instance that runs a team tool has another home than teamai gives the t
 
 ## Through a sandbox
 
-An entry `use: t3, through: sandbox` runs each step's thread in T3 Code as above, and the thread's tool in the attempt's sandbox. [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool) shows the definition and what the sandbox does. The sandbox's provider must serve the attempt's socket: `docker`, `podman`, `sbx` or `bwrap`.
+An entry `use: t3, through: sandbox` runs each step's thread in T3 Code as above, and the thread's tool in the attempt's sandbox. [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool) shows the definition and what the sandbox does. The sandbox's provider must serve the attempt's socket: `docker`, `podman`, `sbx` or `bwrap`. Only Claude runs this way for now; a Codex step through a sandbox fails at open.
 
 For each step, the runtime registers the step's tool on that socket, and T3 starts teamai's wrapper `teamai-sandbox-<tool>` in place of the tool. The first time, teamai adds the T3 provider instance that runs the wrapper, as it adds one for a team tool:
 
