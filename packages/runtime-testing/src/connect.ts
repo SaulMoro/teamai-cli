@@ -32,7 +32,8 @@ export function connectRuntime({ executable, env, cwd }: { executable: string; e
   let stderr = '';
   child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
 
-  readline.createInterface({ input: child.stdout }).on('line', (text) => {
+  // A failed read says so with the runtime's stderr, which a wait that times out names.
+  readline.createInterface({ input: child.stdout }).on('error', (error) => { stderr += `\nreading its output failed: ${error.message}`; }).on('line', (text) => {
     const line = LineSchema.parse(JSON.parse(text));
     lines.push(line);
     pending.push(line);

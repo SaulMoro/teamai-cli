@@ -41,11 +41,12 @@ export interface ServeRuntime {
 
 /**
  * Calls `onLine` with each line `input` carries, such as a socket a runtime reads: the one line reader of a runtime
- * package, so none reads its process input around `serveRuntime`. Resolves once `input` ends.
+ * package, so none reads its process input around `serveRuntime`. Resolves once `input` ends, and rejects with its
+ * error when it fails.
  */
 export function eachLine(input: NodeJS.ReadableStream, onLine: (text: string) => void): Promise<void> {
-  return new Promise((resolve) => {
-    readline.createInterface({ input }).on('line', onLine).on('close', () => resolve());
+  return new Promise((resolve, reject) => {
+    readline.createInterface({ input }).on('line', onLine).on('close', () => resolve()).on('error', reject);
   });
 }
 

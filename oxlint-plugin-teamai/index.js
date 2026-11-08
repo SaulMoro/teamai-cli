@@ -25,6 +25,7 @@ import toolRegistry from './rules/tool-registry.js';
 import mockSource from './rules/mock-source.js';
 import untrustedFinishGit from './rules/untrusted-finish-git.js';
 import gitExitCode from './rules/git-exit-code.js';
+import readlineError from './rules/readline-error.js';
 import spawnCommand from './rules/spawn-command.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
@@ -61,6 +62,7 @@ export default definePlugin({
     'mock-source': mockSource,
     'untrusted-finish-git': untrustedFinishGit,
     'git-exit-code': gitExitCode,
+    'readline-error': readlineError,
     'spawn-command': spawnCommand,
     ...antiSlopRules,
   },

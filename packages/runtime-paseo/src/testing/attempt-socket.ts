@@ -56,7 +56,7 @@ export async function serveAttemptSocket({ grants = true, holdUntil }: { grants?
   const server = net.createServer((client) => {
     client.on('error', () => {});
     client.on('close', () => registrations.delete(client));
-    readline.createInterface({ input: client }).on('line', (text) => {
+    readline.createInterface({ input: client }).on('error', () => client.destroy()).on('line', (text) => {
       const line = LineSchema.parse(JSON.parse(text));
       lines.push(line);
 

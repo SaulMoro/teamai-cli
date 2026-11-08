@@ -1229,6 +1229,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     const lines = readline.createInterface({ input: toy.stdout });
     const replies: string[] = [];
     lines.on('line', (line) => replies.push(line));
+    lines.on('error', (error) => replies.push(`error: ${error.message}`));
     const exec = newOpId();
     toy.stdin.write(`${JSON.stringify({ type: 'init', protocol: 1, mode: 'unattended', options: { state } })}\n`);
     toy.stdin.write(`${JSON.stringify({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } })}\n`);
@@ -1250,7 +1251,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     const state = path.join(dir, 'state');
     const toy = spawn(process.execPath, [TOY_RUNTIME], { stdio: ['pipe', 'pipe', 'ignore'] });
     const lines: string[] = [];
-    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); });
+    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); }).on('error', (error) => { lines.push(`error: ${error.message}`); });
     const write = (request: object): void => { toy.stdin.write(`${JSON.stringify(request)}\n`); };
     const op = newOpId();
     write({ type: 'init', protocol: 1, mode: 'unattended', options: { state } });
@@ -1278,7 +1279,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     const state = path.join(dir, 'state');
     const toy = spawn(process.execPath, [TOY_RUNTIME], { stdio: ['pipe', 'pipe', 'ignore'] });
     const lines: string[] = [];
-    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); });
+    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); }).on('error', (error) => { lines.push(`error: ${error.message}`); });
     const write = (request: object): void => { toy.stdin.write(`${JSON.stringify(request)}\n`); };
     const op = newOpId();
     write({ type: 'init', protocol: 1, mode: 'unattended', options: { state } });
@@ -1314,7 +1315,7 @@ describe('the toy runtime once teamai stops reading it', () => {
   it('fails init for a protocol version it does not speak, naming the key', async () => {
     const toy = spawn(process.execPath, [TOY_RUNTIME], { stdio: ['pipe', 'pipe', 'ignore'] });
     const lines: string[] = [];
-    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); });
+    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); }).on('error', (error) => { lines.push(`error: ${error.message}`); });
     toy.stdin.write(`${JSON.stringify({ type: 'init', protocol: 99, mode: 'unattended', options: { state: path.join(dir, 'state') } })}\n`);
 
     try {

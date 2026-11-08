@@ -333,7 +333,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       started.on('close', (code, signal) => die(signal ? `it was killed by ${signal}` : `it exited with status ${code ?? 1}`));
       stdin.on('error', () => {});
       stderr.setEncoding('utf8').on('data', (data: string) => { stderrTail = `${stderrTail}${data}`.slice(-4000); });
-      readline.createInterface({ input: stdout }).on('line', receive);
+      readline.createInterface({ input: stdout }).on('line', receive).on('error', (error) => die(`its output could not be read (${error.message})`));
 
       return new Promise<Initialized>((resolve) => {
         const settle = (reply: Initialized): void => {

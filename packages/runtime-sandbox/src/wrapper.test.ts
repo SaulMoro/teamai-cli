@@ -124,7 +124,7 @@ async function register(handle: string, agent: string | null): Promise<{ answers
   await new Promise<void>((resolve, reject) => socket.once('connect', resolve).once('error', reject));
   const answers: Message[] = [];
   let wake: (() => void) | undefined;
-  readline.createInterface({ input: socket }).on('line', (line) => {
+  readline.createInterface({ input: socket }).on('error', () => socket.destroy()).on('line', (line) => {
     answers.push(z.record(z.string(), z.json()).parse(JSON.parse(line)));
     wake?.();
   });
