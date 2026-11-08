@@ -57,13 +57,9 @@ if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai)) {
   process.stderr.write(`teamai-sandbox${wrapper === undefined ? '' : `-${wrapper.name}`} (sandbox_unavailable): it does not run on Windows. ${NOT_ON_WINDOWS} Run the app and teamai inside WSL2, or give the app the plain tool.\n`);
   // No exit: on Windows a write to a pipe is asynchronous, and the message must reach the app.
   process.exitCode = 2;
-} else if (wrapper === undefined && !isStartedByTeamai) {
-  process.stderr.write('teamai-runtime-sandbox serves runtime protocol 1 only when teamai starts it, with TEAMAI_RUNTIME_PROTOCOL=1, so it reads nothing. Run it as the runtime of a workflow driver, not by itself.\n');
-  process.exitCode = 2;
 } else if (wrapper === undefined) {
-  // Nothing this runtime starts serves runtime protocol 1.
-  delete process.env[RUNTIME_PROTOCOL_ENV];
-  serve({
+  // An exec still running when teamai closes stdin keeps the process alive, and records its end: no exit here.
+  process.exitCode = await serve({
     input: process.stdin,
     write: (message: RuntimeMessage) => {
       if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);

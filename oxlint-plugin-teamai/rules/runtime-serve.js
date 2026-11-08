@@ -16,8 +16,6 @@ const ENDS = new Set(['exited', 'finished', 'cancelled', 'failed']);
 const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
   // Until Paseo adopts serveRuntime and the ledger.
   'packages/runtime-paseo/src/runtime.ts',
-  // Until the sandbox adopts them.
-  'packages/runtime-sandbox/src/runtime.ts',
 ]));
 
 /**
