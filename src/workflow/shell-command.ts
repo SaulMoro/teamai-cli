@@ -14,6 +14,9 @@ export type CommandExit =
 /** The last characters of a command's output it keeps. */
 const OUTPUT_KEPT = 800;
 
+/** The exit code a shell gives a command it stopped on SIGINT, which a step stopped before its end reports. */
+export const STOPPED_EXIT_CODE = 130;
+
 /** The longest delay `setTimeout` honours. */
 export const MAX_TIMER_DELAY = 2 ** 31 - 1;
 

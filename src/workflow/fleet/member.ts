@@ -15,7 +15,7 @@ import { attemptRun } from '../runtimes/attempt.js';
 import { stopLeftAttempt } from '../runtimes/cancelled.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '../runtimes/step-runtime.js';
-import { shellArgv } from '../shell-command.js';
+import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, listMemberRecords, listOffers, readAttemptRecord, recordProgress, type Cancelling, type Claimed, type FleetError, type FleetResult } from './record.js';
@@ -340,7 +340,7 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
 
     switch (end.kind) {
       case 'exited': return { exitCode: end.code, stdout: end.stdout, stderr, output: output || end.stdout };
-      case 'cancelled': return { exitCode: 130, stdout: '', stderr, output };
+      case 'cancelled': return { exitCode: STOPPED_EXIT_CODE, stdout: '', stderr, output };
       case 'failed':
       case 'lost': return failed(end.failure.message);
       case 'interrupted':
