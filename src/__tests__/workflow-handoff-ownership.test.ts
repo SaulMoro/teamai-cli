@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { leaseNext } from '../workflow/engine.js';
+import { leaseNext, startRun } from '../workflow/engine.js';
 import { claimOffered, publishRun, resumeRun } from '../workflow/handoff.js';
 import { managedReport, resumeRefusal } from '../workflow/protocol.js';
+import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun, RunIdSchema } from '../workflow/store.js';
 import { BUILD, dirs, git, type Member, originFile, start, team } from './helpers/workflow-handoff-fixture.js';
 import { sharedTeam, skillHarness } from './helpers/skill-harness.js';
@@ -11,6 +12,8 @@ import { AttemptIdSchema, type AttemptId, type RunId } from '../workflow/store.j
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  _setDriverPollMs(2000);
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -196,6 +199,47 @@ async function aliceDispatched(): Promise<{ made: Awaited<ReturnType<typeof skil
   const written = (): string => JSON.parse(execFileSync('git', ['--git-dir', install.config.repo.remote, 'show', `teamai-reports:workflows/runs/${run}/state.json`], { encoding: 'utf8' })).write;
   return { made, run, attempt: dispatched, written, bob: () => shared.install('bob') };
 }
+
+describe('the local driver keeps a run it drives', () => {
+  it('writes the run again while one step runs past the renewal age, though it leases nothing meanwhile', async () => {
+    const hold = `schemaVersion: v1alpha1
+name: hold
+description: One step that runs until released.
+steps:
+  - id: wait
+    command: node -e "const fs = require('fs'); fs.writeFileSync(process.env.HOLD_AT + '.held', ''); const t = setInterval(() => { if (fs.existsSync(process.env.HOLD_AT + '.go')) clearInterval(t); }, 20)"
+`;
+    const { acme, alice } = await pair({ hold });
+    const started = await startRun(alice.config, 'hold', {}, { secrets: {} });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    expect(await publishRun(alice.config, runId, { checkout: alice.checkout, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(alice.config, runId, { claim: false, checkout: alice.checkout })).toMatchObject({ ok: true });
+    const at = `${alice.checkout}/../hold`;
+    vi.stubEnv('HOLD_AT', at);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    _setDriverPollMs(20);
+    const driven = runLocalDriver(alice.config, runId, alice.checkout);
+    const until = async (done: () => boolean): Promise<void> => {
+      for (let tries = 0; tries < 500 && !done(); tries += 1) await new Promise((resolve) => { setTimeout(resolve, 20); });
+    };
+    let before = '';
+    let after = '';
+    try {
+      await until(() => fs.existsSync(`${at}.held`));
+      before = published(acme, runId).write;
+      vi.setSystemTime(Date.now() + 21 * MINUTE);
+      await until(() => published(acme, runId).write !== before);
+      after = published(acme, runId).write;
+    } finally {
+      // The step ends, and so does the driver, whatever the test saw.
+      fs.writeFileSync(`${at}.go`, '');
+    }
+
+    expect(await driven).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(after).not.toBe(before);
+  });
+});
 
 describe('the skill driver keeps a run it drives', () => {
   it('writes the run again while its child works a prompt step past the renewal age, though the session calls nothing', async () => {
