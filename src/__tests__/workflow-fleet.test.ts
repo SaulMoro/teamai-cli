@@ -8,6 +8,7 @@ import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt } from '../workflow/fleet/member.js';
+import { fleetCommand } from '../workflow/fleet/owner.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
@@ -379,6 +380,39 @@ describe('cancelling an attempt through its record', () => {
     await readableReportsWorktree(alice.config);
     expect(await lastGoneWork(alice.config, { run, step: 'work', owner: await installOwner(alice.config) })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
   }, 60_000);
+
+  it('goes on from the work a member pushed before a cancel it never answered', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const progressed = await recordProgress(bob.config, claimed.value, 'e'.repeat(40));
+    if (!progressed.ok) throw new Error(progressed.error.message);
+
+    expect(await cancelAttempt(alice.config, progressed.value)).toMatchObject({ ok: true, value: { state: 'cancelling' } });
+    await readableReportsWorktree(alice.config);
+    expect(await lastGoneWork(alice.config, { run, step: 'work', owner: await installOwner(alice.config) })).toEqual({ attempt: ATTEMPT, pushed: 'e'.repeat(40) });
+  });
+});
+
+describe('the owner\'s driver', () => {
+  const waitOn = (alice: Member, run: ReturnType<typeof RunIdSchema.parse>) => fleetCommand({
+    config: alice.config, run, attempt: ATTEMPT, pool: 'default', staleAfterMs: 60_000, lease: { step: 'work', command: 'echo begun > begun.txt; sleep 60', env: {} },
+    root: alice.checkout, dir: alice.checkout, secrets: {},
+  });
+
+  it('leaves the attempt out for a later resume when it stops', async () => {
+    const { alice, run } = await offerSlow(60_000);
+
+    expect(await waitOn(alice, run).stop()).toMatchObject({ code: 'runtime_interrupted' });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'offered' });
+  });
+
+  it('withdraws the attempt when the run cancels the step', async () => {
+    const { alice, run } = await offerSlow(60_000);
+
+    expect(await waitOn(alice, run).cancel?.()).toMatchObject({ exitCode: 130 });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'withdrawn' });
+  });
 });
 
 describe('a restarted member', () => {
@@ -437,6 +471,17 @@ describe('a member\'s own checkout', () => {
 
     expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
     expect(fs.readFileSync(path.join(bob.checkout, '.git', 'config'), 'utf8')).not.toContain('planted');
+  });
+
+  it('gives the step the origin its checkout names, as the checkout would', async () => {
+    const { alice, bob, run } = await offerSlow(60_000, { definition: PLANT.replace('git config teamai.planted yes && echo planted > planted.txt', 'git remote get-url origin > origin.txt'), command: 'git remote get-url origin > origin.txt' });
+
+    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {} });
+
+    const finished = await recordOf(alice, run);
+    const to = finished?.state === 'finished' ? finished.result.to : undefined;
+    git(alice.checkout, 'fetch', '-q', 'origin', `refs/heads/teamai/attempts/${run}/${ATTEMPT}`);
+    expect(git(alice.checkout, 'show', `${to ?? 'missing'}:origin.txt`)).toBe(git(bob.checkout, 'remote', 'get-url', 'origin'));
   });
 });
 

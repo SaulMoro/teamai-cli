@@ -123,9 +123,6 @@ export type Claimed = Extract<FleetRecord, { state: 'claimed' }>;
 
 export type Cancelling = Extract<FleetRecord, { state: 'cancelling' }>;
 
-/** A record no write replaces: whatever its member does later changes nothing. */
-export type Settled = Extract<FleetRecord, { state: 'finished' | 'expired' | 'withdrawn' | 'cancelled' }>;
-
 export type FleetError =
   | { code: 'state_moved'; message: string }
   | { code: 'reports_unreachable' | 'reports_failed' | 'fleet_unpublishable' | 'fleet_record_unreadable'; message: string };
@@ -382,26 +379,38 @@ export async function listOffers(config: LocalConfig, { pool, repository }: { po
   return offers.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }
 
-/** When the claim of `record`, expired or cancelled, stopped counting. */
-function goneAt(record: Extract<FleetRecord, { state: 'expired' | 'cancelled' }>): string {
-  return record.state === 'expired' ? record.expiredAt : record.cancelledAt;
+type Gone = Extract<FleetRecord, { state: 'expired' | 'cancelling' | 'cancelled' }>;
+
+/** When the claim of `record`, expired, cancelled or asked to stop, stopped counting. */
+function goneAt(record: Gone): string {
+  switch (record.state) {
+    case 'expired': return record.expiredAt;
+    case 'cancelling': return record.cancelAt;
+    case 'cancelled': return record.cancelledAt;
+    default: {
+      const unhandled: never = record;
+
+      return unhandled;
+    }
+  }
 }
 
 /**
  * The last attempt of step `step` of run `run` whose claim the owner gave up or cancelled after its member pushed work,
- * as this machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step goes on from that work.
+ * as this machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step goes on from that work. A
+ * cancel its member never answered counts with the work it pushed before: a member that answers later changes nothing.
  */
 export async function lastGoneWork(config: LocalConfig, { run, step, owner }: { run: RunId; step: string; owner: HandoffOwner }): Promise<{ attempt: AttemptId; pushed: string } | undefined> {
   const dir = path.join(getReportsDir(config), ATTEMPTS_DIR, run);
   const files = await fs.readdir(dir).catch(() => []);
-  let last: Extract<FleetRecord, { state: 'expired' | 'cancelled' }> | undefined;
+  let last: Gone | undefined;
 
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     const text = await fs.readFile(path.join(dir, file), 'utf8').catch(() => '');
     const parsed = parseRecord(text, run, file.slice(0, -'.json'.length));
 
-    if (!parsed.ok || (parsed.value.state !== 'expired' && parsed.value.state !== 'cancelled')) continue;
+    if (!parsed.ok || (parsed.value.state !== 'expired' && parsed.value.state !== 'cancelling' && parsed.value.state !== 'cancelled')) continue;
     const gone = parsed.value;
 
     // Only an attempt this install offered: anyone who can write teamai-reports can write a record.

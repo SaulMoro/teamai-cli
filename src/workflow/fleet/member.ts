@@ -78,11 +78,14 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
 
       if (record.state !== 'claimed' && record.state !== 'cancelling') return undefined;
       const ref = attemptRef(record.run, record.attempt);
-      const fetched = await git(root, ['fetch', '--quiet', 'origin', ref]);
+      // Only this member pushes to the attempt's ref, so its tip is the last work it saved. Another member process in this
+      // checkout may fetch meanwhile, so the tip comes from origin's listing, never from FETCH_HEAD.
+      const listed = await git(root, ['ls-remote', '--quiet', 'origin', ref]);
+      const saved = listed.stdout.split('\t')[0]?.trim() ?? '';
+      const fetched = listed.code === 0 && saved !== '' ? await git(root, ['fetch', '--quiet', 'origin', ref]) : listed;
+      const isFetched = fetched.code === 0 && (await git(root, ['cat-file', '-e', `${saved}^{commit}`])).code === 0;
 
-      if (fetched.code !== 0) return { error: { code: 'fetch_failed', message: `The member could not fetch ${ref}, where the claim it holds keeps its work: ${fetched.stderr.trim()}` } };
-      // Only this member pushes to the attempt's ref, so its tip is the last work it saved.
-      const saved = (await git(root, ['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).stdout.trim();
+      if (!isFetched) return { error: { code: 'fetch_failed', message: `The member could not fetch ${ref}, where the claim it holds keeps its work: ${fetched.stderr.trim() || 'origin does not hold it'}` } };
 
       if (record.state === 'cancelling') return answered(config, record, saved);
       log.info(`Finishing attempt ${record.attempt} of run ${record.run}, which this member claimed and left: step "${record.lease.step}" runs again from the work it pushed.`);
@@ -154,7 +157,10 @@ async function runClaim(config: LocalConfig, { claim, root, secrets, member, fro
   // the step started.
   await fs.rm(work, { recursive: true, force: true });
   const cloned = await git(root, ['clone', '--quiet', '--shared', '--no-checkout', root, work]);
-  const added = cloned.code === 0 ? await git(work, ['checkout', '--quiet', '--detach', from]) : cloned;
+  // The clone's origin is the checkout; the step sees the origin the checkout names, as it would there.
+  const originUrl = [...memberConfig].find((entry) => entry.startsWith('remote.origin.url\n'))?.slice('remote.origin.url\n'.length);
+  const named = cloned.code === 0 && originUrl !== undefined ? await git(work, ['remote', 'set-url', 'origin', originUrl]) : cloned;
+  const added = named.code === 0 ? await git(work, ['checkout', '--quiet', '--detach', from]) : named;
 
   if (added.code !== 0) return finish({ exitCode: 1, stderr: `The member could not check out ${from}: ${added.stderr.trim()}` });
   // Each save is a commit on the one before, so the ref only moves forward.
@@ -262,16 +268,24 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
   if (!found.ok) return { refused: found.error.message };
   const defined = definedStep(found.value, lease.step);
 
-  if (defined.kind === 'admitted') {
-    return {
-      refused: `in workflow "${definition.name}", step "${defined.by}" runs the workflow step "${defined.from}" wrote, which no workflow of the team defines, so a member cannot check what it runs.`,
-      next: `Route the steps of that workflow to a runtime besides the fleet.`,
-    };
+  switch (defined.kind) {
+    case 'step': break;
+    case 'admitted':
+      return {
+        refused: `in workflow "${definition.name}", step "${defined.by}" runs the workflow step "${defined.from}" wrote, which no workflow of the team defines, so a member cannot check what it runs.`,
+        next: `Route the steps of that workflow to a runtime besides the fleet.`,
+      };
+    case 'none': return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
+    default: {
+      const unhandled: never = defined;
+
+      return unhandled;
+    }
   }
 
-  const step = defined.kind === 'step' ? defined.step : undefined;
+  const { step } = defined;
 
-  if (step?.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
+  if (step.command === undefined) return { refused: `workflow "${definition.name}" has no command step at ${lease.step}.` };
 
   if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
   const rendered = leaseEnv(step, values, run);
