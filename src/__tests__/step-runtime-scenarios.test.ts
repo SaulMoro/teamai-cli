@@ -699,8 +699,10 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const handle = await opened(first);
     const request = promptRequest(handle);
     let accepted = false;
-    void first.prompt(request, { onAccepted: () => { accepted = true; } });
-    expect(await until(() => accepted)).toBe(true);
+    let shown = false;
+    void first.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
+    // A runtime that shows its agent has journaled that agent by then, so the restart reattaches to it.
+    expect(await until(() => accepted && (subject.display === undefined || shown))).toBe(true);
     await first.dispose();
     const second = await start(agent);
 
