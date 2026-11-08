@@ -1279,7 +1279,7 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
 
     if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';
 
-    return { error: `the checkout this copy was made from named no origin before the run's first step, so teamai does not push to the one the copy names now. Push ${branch} yourself, or start the run again` };
+    return { error: `teamai kept no origin of the checkout this copy was made from before the run's first step (it named none, or an older teamai started the run), so teamai does not push to the one the copy names now. Push ${branch} yourself, or start the run again` };
   }
 
   if (commits.length === 0 && !await branchNeedsPush(dir, branch, runGit)) return 'unchanged';
