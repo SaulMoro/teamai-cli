@@ -218,6 +218,17 @@ describe('#1083 workflow run records', () => {
     expect(buildEndRecord(failed, driver, 'tester').failure).toEqual({ code });
   });
 
+  // A step runtime's own refusal reaches the step as it is, so the record keeps it as it keeps the engine's codes.
+  it.each(['runtime_not_found', 'runtime_not_accepted', 'runtime_protocol', 'runtime_gone', 'runtime_exited', 'credential_missing', 'bad_option', 'exec_failed'])(
+    'publishes the step runtime failure %s', (code) => {
+      const failed = runState({
+        status: 'failed',
+        steps: [{ id: 'one', status: 'failed', outcome: 'failed', attempt: 'a1', settledAt: 2, failure: { code, message: 'private detail' } }],
+      });
+      expect(buildEndRecord(failed, driver, 'tester').failure).toEqual({ code });
+    },
+  );
+
   it('publishes the first failure teamai can name, under a top-level step whose own code it cannot', () => {
     const run = runState({
       status: 'failed',
