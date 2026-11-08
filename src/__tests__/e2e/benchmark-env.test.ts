@@ -182,7 +182,8 @@ describe('git in the clone once the tool ran there', () => {
     const agentGit = (args: string[]) => execFileSync('git', args, { cwd: lease.cwd, env: fixture.env });
     agentGit(['config', 'core.hooksPath', hooks]);
     agentGit(['config', 'core.fsmonitor', recorder(fixture, 'fsmonitor')]);
-    agentGit(['config', 'filter.agent.clean', 'env > "$FIXTURE_ROOT/filter.env"; cat']);
+    // git runs no filter the copy's config names, so this one is the member's own.
+    execFileSync('git', ['config', '--global', 'filter.agent.clean', 'env > "$FIXTURE_ROOT/filter.env"; cat'], { env: fixture.env });
     fs.writeFileSync(path.join(lease.cwd, '.gitattributes'), 'answer.js filter=agent\n');
     fs.writeFileSync(path.join(lease.cwd, 'answer.js'), 'module.exports = 42;\n');
 
