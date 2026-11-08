@@ -23,9 +23,9 @@ import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive }
 import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type RunId } from './workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId } from './workflow/store.js';
 import { commandExitMessage, inProcessClient, isRefusal, resumeRefusal, startAsCli, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun } from './workflow/protocol.js';
-import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
+import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext, whileNoDriverHere } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
 import { durationMs } from './workflow/parse.js';
 import { findRunConfig } from './workflow/run-location.js';
@@ -1197,9 +1197,9 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
     return;
   }
 
-  // Held while the run is published: a driver of it running here answers driver_running, since a runner could take the
-  // offered run and run its step a second time, and no driver of it starts here until the offer is up.
-  const taken = await takeRunLock(loaded.config, run.data, () => publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined }), { waitMs: 0 });
+  // A driver of the run running a step here answers driver_running, since a runner could take the offered run and run
+  // that step a second time; and no driver of it starts here until the offer is up.
+  const taken = await whileNoDriverHere(loaded.config, run.data, () => publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined }));
 
   if (taken.kind === 'busy') {
     writeEnvelope({ error: taken.error }, secrets);

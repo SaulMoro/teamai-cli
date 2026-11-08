@@ -28,7 +28,7 @@ import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store
 import { benchmarkRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
-import { skillHarness } from './helpers/skill-harness.js';
+import { skillHarness, untilStopped } from './helpers/skill-harness.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 
 const dirs: string[] = [];
@@ -829,6 +829,42 @@ describe('workflow publish and resume --claim', () => {
 
     expect(await capture(() => workflowPublish('r0123456789abcdef'))).toMatchObject({ error: { code: 'run_not_found' } });
     expect(process.exitCode).toBe(1);
+  });
+
+  it('refuses to publish a run while a skill driver\'s runner of it runs a step here, or was spawned a moment ago and has not started yet', async () => {
+    const held = `schemaVersion: v1alpha1
+name: held
+description: One command that runs until stopped.
+steps:
+  - id: wait
+    command: node wait.js
+`;
+    const stops: string[] = [];
+    const made = await skillHarness({ held }, { runners: (runners) => ({ ...runners, command: () => untilStopped(() => { stops.push('wait'); }) }) });
+    dirs.push(made.root);
+    const started = await made.call({ kind: 'start', name: 'held', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const { run } = started.data.turn;
+    await made.call({ kind: 'next', run, wait: true });
+    state.config = made.config;
+    vi.spyOn(process, 'cwd').mockReturnValue(made.work);
+
+    expect(await capture(() => workflowPublish(run))).toMatchObject({ error: { code: 'driver_running', message: expect.stringContaining('"wait"') } });
+    expect(stops).toEqual([]);
+
+    // A runner that has not taken its lock yet runs the step all the same, once it starts.
+    const late = await skillHarness({ held }, { runners: (runners) => ({ ...runners, spawn: async () => {} }) });
+    dirs.push(late.root);
+    const spawned = await late.call({ kind: 'start', name: 'held', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in spawned) || !('turn' in spawned.data)) throw new Error(JSON.stringify(spawned));
+    const spawnedRun = spawned.data.turn.run;
+    state.config = late.config;
+    vi.spyOn(process, 'cwd').mockReturnValue(late.work);
+    expect(await capture(() => workflowPublish(spawnedRun))).toMatchObject({ error: { code: 'driver_running' } });
+
+    // One spawned longer ago than a runner takes to start is gone, and its step runs nowhere.
+    late.advance(60_000);
+    expect(await capture(() => workflowPublish(spawnedRun))).not.toMatchObject({ error: { code: 'driver_running' } });
   });
 
   it('resume --claim answers with the claim refusal and runs nothing', async () => {
