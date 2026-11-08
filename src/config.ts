@@ -387,15 +387,16 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
 
   const settings: RawMapping = {};
 
-  for (const key of ['max_parallel', 'auto_approve', 'sandbox', 'labels'] as const) {
-    const value = memberSettingAt(workflow, key, MemberWorkflowSettingsSchema.shape[key], configPath);
+  // Every key is read through its schema unless it is read entry by entry below, so a key added to the schema works
+  // here without a change. A key the schema keeps as written (`retention`, `driver`, `idle_timeout`) is warned about
+  // by the code that reads it, and the next level decides.
+  for (const [key, schema] of Object.entries(MemberWorkflowSettingsSchema.shape)) {
+    if (key === 'tools' || key === 'drivers' || key === 'allow') continue;
+    const value = memberSettingAt(workflow, key, schema, configPath);
 
     if (value !== undefined) settings[key] = value;
   }
 
-  // Kept as written: resolveRetention and driveByDefault skip a wrong value with a warning, and the next level decides;
-  // an answer or prompt step fails on a wrong idle_timeout, naming it.
-  for (const key of ['retention', 'driver', 'idle_timeout'] as const) if (Object.prototype.hasOwnProperty.call(workflow, key)) settings[key] = workflow[key];
   const tools = OptionalMappingSchema.parse(workflow.tools);
 
   if (tools) {
