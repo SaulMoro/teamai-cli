@@ -17,7 +17,7 @@ export interface BoundedTail {
   text(): string;
 }
 
-/** A tail of at most `max` code units: the oldest chunks go first, and of one chunk longer than that, its end. */
+/** A tail of the last `max` code units: the oldest chunks go first, and of the oldest it still holds part of, its end. */
 export function boundedTail(max = TAIL_CHARS): BoundedTail {
   const chunks: string[] = [];
   let length = 0;
@@ -28,7 +28,18 @@ export function boundedTail(max = TAIL_CHARS): BoundedTail {
       chunks.push(kept);
       length += kept.length;
 
-      while (length > max && chunks.length > 1) length -= chunks.shift()?.length ?? 0;
+      while (length > max) {
+        const over = length - max;
+        const [oldest = ''] = chunks;
+
+        if (oldest.length <= over) {
+          chunks.shift();
+          length -= oldest.length;
+        } else {
+          chunks[0] = oldest.slice(over);
+          length -= over;
+        }
+      }
     },
     text() {
       const joined = chunks.join('');

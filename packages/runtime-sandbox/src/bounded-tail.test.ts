@@ -48,6 +48,10 @@ describe('boundedTail', () => {
     expect(text.codePointAt(0)).toBe(0x1f600);
   });
 
+  it('keeps its whole budget, cutting the oldest chunk it still holds part of', () => {
+    expect(tailOf(['aaaaaaaa', 'bbbb'], 10)).toBe('aaaaaabbbb');
+  });
+
   it('keeps the last 64 Ki characters by default', () => {
     expect(tailOf(['y'.repeat(100_000)])).toHaveLength(64 * 1024);
   });
