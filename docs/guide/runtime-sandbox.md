@@ -523,7 +523,7 @@ wrapper            runs it         stdin, stdout, exit status and signals passed
 ```
 
 - The step's credentials and the attempt's tool home reach the tool by name (`-e NAME`). Their values stay in the runtime's memory and in that one `docker exec`'s environment: never in an argv, never on disk, and nothing of the app's own environment reaches the tool.
-- Only the agent the app's runtime registered is served. A helper agent of the app in the same worktree (titles, commit messages) is refused, and so is any wrapper started before the step registered.
+- Only the agent the app's runtime registered is served, while the connection it registered on stays open. A helper agent of the app in the same worktree (titles, commit messages) is refused, and so is any wrapper started before the step registered or after that connection closed.
 - Outside an attempt the wrapper runs nothing and exits 2, except `--version` and Paseo's `codex app-server` model listing (no agent, under a Paseo daemon), which run the host's tool:
 
 ```text
