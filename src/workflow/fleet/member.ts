@@ -141,13 +141,13 @@ function declaredLabels(config: LocalConfig, at: NonNullable<MemberPlace[keyof M
  * What keeps this member from the step `offer` leases where `at` would run it, as its own copy of the team's workflows
  * defines the step, never as the record says: a label not declared there, env its policy does not allow, or for a prompt
  * step, a tool its setup does not have. A whole workflow is judged step by step on the steps the one fit rule
- * (`wholeFit`) gives, as the owner's negotiation judged them. Undefined when nothing does, also when the member finds no
- * definition: claiming the attempt refuses it then.
+ * (`wholeFit`) gives, as the owner's negotiation judged them, or the run's definitions, which this member does not find
+ * (another member's copy may hold them). Undefined when nothing does.
  */
 async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<MemberPlace[keyof MemberPlace]>): Promise<string | undefined> {
   const found = await teamDefinitions(config, offer);
 
-  if ('refused' in found) return undefined;
+  if ('refused' in found) return `it finds no definition of the run here: ${found.refused.replace(/\.$/, '')}`;
   const defined = definedStep(found.definitions, offer.lease.step);
 
   if (defined.kind !== 'step') return undefined;

@@ -21,6 +21,7 @@ import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import os from 'node:os';
 import { openSessionArchive } from '../session-flow/archive.js';
+import { log } from '../utils/logger.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -213,17 +214,27 @@ describe('fleet attempts on teamai-reports', () => {
   });
 
   it('leaves an offer for another member while this machine already drives its run', async () => {
-    const acme = team();
+    const acme = team({ mark: MARK });
     const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
-    const offered = await offer(alice);
+    const started = await startRun(alice.config, 'mark', { mark: 'made.txt' }, { secrets: {} });
+    if (!('data' in started)) throw new Error(started.error.message);
+    const run = RunIdSchema.parse(String(started.data.run));
+    const state = await readRun(alice.config, run);
+    if (state === 'missing' || state === 'corrupt') throw new Error(`run ${run} is ${state}`);
+    const offered = await offerAttempt(alice.config, {
+      run, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(alice.config), start: git(alice.checkout, 'rev-parse', 'HEAD'), staleAfterMs: 60_000, secrets: {},
+      lease: { kind: 'command', step: 'write', command: 'echo written > "$MARK"', env: { MARK: 'made.txt' } },
+      definition: { name: state.name, sourceHash: state.sourceHash, definitionHash: definitionHash(state.definition, state.workflows), teamRevision: state.teamRevision, origin: state.origin },
+      values: { inputs: { mark: 'made.txt' } },
+    });
     if (!offered.ok) throw new Error(offered.error.message);
     await readableReportsWorktree(bob.config);
     const member = await installOwner(bob.config);
 
-    const taken = await takeRunLock(bob.config, RUN, async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member, secrets: {}, place: HERE }), { waitMs: 0 });
+    const taken = await takeRunLock(bob.config, run, async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member, secrets: {}, place: HERE }), { waitMs: 0 });
 
     expect(taken).toMatchObject({ kind: 'held', value: { data: { idle: { offered: 1 } } } });
-    expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered' } });
+    expect(await readAttemptRecord(alice.config, run, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered' } });
   });
 
   it('reads no record whose start is a name git would resolve rather than a commit id', async () => {
@@ -297,7 +308,7 @@ async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1
   const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place });
   const record = await readAttemptRecord(alice.config, run, ATTEMPT);
 
-  return { taken, record: record.ok && record.value !== 'absent' ? record.value : undefined, alice };
+  return { taken, record: record.ok && record.value !== 'absent' ? record.value : undefined, alice, bob };
 }
 
 /** A prompt step whose prompt reads an input: the member renders it from the input's value, with its own copy of the step. */
@@ -468,17 +479,18 @@ describe('a member taking an attempt', () => {
     expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*command.*teamai pull/s);
   });
 
-  it('refuses an offer whose definition hash is not the one of the team\'s workflow, and runs nothing', async () => {
+  it('leaves an offer whose definition hash is not the one of the team\'s workflow for another member, and runs nothing', async () => {
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
     const { taken, record } = await takeForged((forged) => { forged.definition.definitionHash = 'f'.repeat(64); });
 
-    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
-    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
-    expect(record?.state === 'finished' && record.result.to).toBeFalsy();
-    expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*teamai pull/s);
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(record).toMatchObject({ state: 'offered' });
+    expect(infos).toHaveBeenCalledWith(expect.stringMatching(/^Left attempt .* for another member: it finds no definition of the run here: Run .* runs workflow "mark"/s));
   });
-  it('refuses an offer whose workflow comes from a team commit only a branch besides the default one holds, and runs nothing', async () => {
+  it('leaves an offer whose workflow comes from a team commit only a branch besides the default one holds, and runs nothing', async () => {
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
     // Anyone who can write the record can push such a branch, teamai-reports among them.
-    const { taken, record } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'echo forged > forged.txt' }; }, async ({ alice: { config } }) => {
+    const { taken, record, bob } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'echo forged > forged.txt' }; }, async ({ alice: { config } }) => {
       const clone = config.repo.localPath;
       git(clone, 'checkout', '-q', '-b', 'side');
       fs.writeFileSync(path.join(clone, 'workflows', 'mark.yaml'), MARK.replace('echo written > "$MARK"', 'echo forged > forged.txt'));
@@ -487,9 +499,10 @@ describe('a member taking an attempt', () => {
       await syncScorersThenWorkflows(config);
     });
 
-    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
-    expect(record?.state === 'finished' && record.result.to).toBeFalsy();
-    expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*teamai pull/s);
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(record).toMatchObject({ state: 'offered' });
+    expect(fs.existsSync(path.join(bob.checkout, 'forged.txt'))).toBe(false);
+    expect(infos).toHaveBeenCalledWith(expect.stringMatching(/^Left attempt .* for another member: it finds no definition of the run here: .*Merge it to the default branch/s));
   });
   it('pushes the work to every push URL its checkout names for origin, as git push origin does', async () => {
     const mirrors: string[] = [];
