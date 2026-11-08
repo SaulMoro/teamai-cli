@@ -5,6 +5,16 @@ import { describe, expect, it } from 'vitest';
 import { agentIdOf } from './conversation.js';
 import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, agentsOf, delay, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
 
+describe('the agent id a prompt gets', () => {
+  it('is a version 4 UUID that its op alone decides, so a runtime started again finds the same agent', () => {
+    const [first, again, other] = ['op-0000000b', 'op-0000000b', 'op-0000000c'].map((op) => agentIdOf(OpIdSchema.parse(op)));
+
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(again).toBe(first);
+    expect(other).not.toBe(first);
+  });
+});
+
 describe('teamai-runtime-paseo', () => {
   useRuntimeSuite();
 
