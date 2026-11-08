@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
@@ -101,13 +101,28 @@ const BASE = String.raw`(version 1)
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
 (deny network-outbound (remote unix-socket))`;
 
-/** This Mac's developer directory, as `xcode-select` points to it, or none. */
-function developerDir(): string[] {
+/**
+ * What this Mac's developer tools read: the directory `xcode-select` points to (in Xcode, the whole app, whose
+ * `SharedFrameworks` its tools load), and the member's xcrun cache, read only. Without the cache each `/usr/bin/git`
+ * runs xcodebuild to find itself, four seconds a call; with it, xcrun still prints that it cannot write the cache.
+ */
+function developerPaths(): string[] {
+  const paths: string[] = [];
+
   try {
-    return [fs.realpathSync(XCODE_SELECT_LINK)];
+    const developer = fs.realpathSync(XCODE_SELECT_LINK);
+    paths.push(developer.endsWith('.app/Contents/Developer') ? path.dirname(path.dirname(developer)) : developer);
   } catch {
-    return [];
+    // No developer tools.
   }
+
+  try {
+    paths.push(path.join(fs.realpathSync(execFileSync(path.join(SYSTEM_BIN, 'getconf'), ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8', timeout: 5_000 }).trim()), 'xcrun_db'));
+  } catch {
+    // Not macOS, or no temp directory of the member's.
+  }
+
+  return paths;
 }
 
 /** A profile's text, and the `-D` parameters (`NAME=<path>`) it reads its paths from. */
@@ -151,7 +166,7 @@ export function profileOf({ writable, readable, memberHome }: Pick<Sandboxed, 'w
 
   // A read-only path inside a writable one (the worktree's .git) stays read-only, and the folders holding it stay put.
   const locked = readable.filter((at) => writable.some((place) => isWithin(at, place)));
-  const readRoots = [...new Set([...SYSTEM, ...developerDir(), ...readable])];
+  const readRoots = [...new Set([...SYSTEM, ...developerPaths(), ...readable])];
 
   const lines = [
     BASE,
