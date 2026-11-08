@@ -315,6 +315,8 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
   const running = attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver });
   let output = '';
   let stderr = '';
+  // A stop while the place opens finds no exec to cancel, so the exec is not sent.
+  let isStopRequested = false;
   const failed = (message: string): CommandExit => ({ exitCode: 1, stdout: '', stderr: `${stderr}${message} (step runtime "${place.use}")`, output });
 
   const exit = (async (): Promise<CommandExit> => {
@@ -324,6 +326,14 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
     const opened = await running.open({ worktree: work, readonly: [path.join(work, '.git')], result, runDir, toolHome: {} });
 
     if (!opened.ok) return failed(opened.failure.message);
+
+    if (isStopRequested) {
+      const unclosed = await running.close();
+
+      if (unclosed) log.warn(unclosed.message);
+
+      return { exitCode: STOPPED_EXIT_CODE, stdout: '', stderr, output };
+    }
 
     // A command runs no tool, so it gets none of the runtime's credentials.
     const end = await running.exec({ argv: shellArgv(command), env, unset: [], credentials: {}, cwd: work }, {
@@ -361,6 +371,7 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
   return {
     exit,
     stop: () => {
+      isStopRequested = true;
       stopping ??= running.cancel().then(() => exit);
 
       return stopping;

@@ -418,6 +418,41 @@ describe('cancelling an attempt through its record', () => {
     expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
   }, 60_000);
 
+  it('runs nothing on the member\'s step runtime when the cancel comes while its place there opens', async () => {
+    const { alice, bob, run } = await offerSlow(3_000);
+    let execs = 0;
+    let open = (): void => {};
+    const opening = new Promise<void>((resolve) => { open = resolve; });
+    const local = localStepRuntime({ exec: true });
+    const runtime: StepRuntime = {
+      ...local,
+      open: async (request, onAccepted) => {
+        await opening;
+
+        return local.open(request, onAccepted);
+      },
+      exec: async (request, events) => {
+        execs += 1;
+
+        return local.exec(request, events);
+      },
+    };
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+    const claimed = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' ? record : undefined;
+    });
+
+    expect(await cancelAttempt(alice.config, claimed)).toMatchObject({ ok: true, value: { state: 'cancelling' } });
+    // The member reads the cancel within a beat, a second at this stale_after, and stops the step while its place opens.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    open();
+
+    expect(await taking).toEqual({ data: { cancelled: { run, attempt: ATTEMPT, step: 'work' } } });
+    expect(execs).toBe(0);
+  }, 60_000);
+
   it('goes on from the work a member pushed before a cancel it never answered', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000);
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
