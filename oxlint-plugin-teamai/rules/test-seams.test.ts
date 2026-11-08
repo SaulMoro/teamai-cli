@@ -23,10 +23,10 @@ rule.invalid('rejects a test in a folder reaching a module above it', `import { 
   expect(output).toContain('reaches src/launch.ts');
 }, { filename: 'packages/runtime-x/src/daemon/connect.test.ts', files: pkg });
 
-rule.valid('leaves a listed test reaching past a seam alone while it still does', `import { sessionSince } from './sessions.js';`, {
-  filename: 'packages/runtime-t3/src/runtime-t3.test.ts', files: { 'packages/runtime-t3/package.json': JSON.stringify({ name: '@teamai/runtime-t3', private: true }) },
+rule.valid('leaves a listed test reaching past a seam alone while it still does', `import { platforms } from './sessions.js';`, {
+  filename: 'packages/tool-claude/src/project-dir.test.ts', files: { 'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }) },
 });
 
 rule.invalid('fails a listed test once it no longer reaches past that seam', `export const nothing = 1;`, (output) => {
-  expect(output).toContain('packages/runtime-t3/src/runtime-t3.test.ts -> packages/runtime-t3/src/sessions.ts is no longer imported');
-}, { filename: 'packages/runtime-t3/src/runtime-t3.test.ts', files: { 'packages/runtime-t3/package.json': JSON.stringify({ name: '@teamai/runtime-t3', private: true }) } });
+  expect(output).toContain('packages/tool-claude/src/project-dir.test.ts -> packages/tool-claude/src/sessions.ts is no longer imported');
+}, { filename: 'packages/tool-claude/src/project-dir.test.ts', files: { 'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }) } });
