@@ -90,6 +90,14 @@ describe('workflow: { from }', () => {
     expect(run.admitted?.plan?.hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('leases the steps of the workflow a run admitted one at a time, never whole, to a driver that runs whole workflows', async () => {
+    const config = testConfig();
+    const runId = await startPlanned(config);
+    await settle(config, runId, 'plan', { definition: { definition: GENERATED }, plan: { trials: ['hello'] } });
+
+    expect(await leaseNext(config, runId, driver, { can: { workspace: ['read-only'], workflow: true } })).toMatchObject({ data: { lease: { step: 'trials.hello' } } });
+  });
+
   it('admits a bundle whose producer reuses one object in two steps', async () => {
     const config = testConfig();
     const runId = await startPlanned(config);
