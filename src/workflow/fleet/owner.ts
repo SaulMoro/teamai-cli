@@ -155,19 +155,32 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
     case 'cancelled':
     case 'withdrawn':
       return { op, state: 'cancelled' };
-    case 'finished': {
-      if ('command' in record.lease) return { op, state: 'exited', code: record.result.exitCode, stdout: record.result.outputs === undefined ? '' : JSON.stringify(record.result.outputs) };
-
-      if ('workflow' in record.lease) return { op, state: 'exited', code: record.result.exitCode, stdout: JSON.stringify(wholeEnd(record.result)) };
-      const ended = promptEnded(record.result, record.attempt);
-
-      return ended.kind === 'finished' ? { op, state: 'finished', session: ended.session, result: ended.result, ...(ended.usage && { usage: ended.usage }) } : { op, state: 'failed', failure: ended.failure };
-    }
+    case 'finished':
+      return finishedState(op, record);
 
     case 'expired':
       return { op, state: 'failed', failure: { code: 'fleet_member_gone', message: `The fleet member ${record.member.user} that took step "${record.lease.step}" stopped writing progress, so the attempt was given up.` } };
     default: {
       const unhandled: never = record;
+
+      return unhandled;
+    }
+  }
+}
+
+/** What a finished record says of the exec that offered it: a command or a whole workflow exited, a prompt finished or failed. */
+function finishedState(op: OpId, { lease, result, attempt }: Extract<FleetRecord, { state: 'finished' }>): OpState {
+  switch (lease.kind) {
+    case 'command': return { op, state: 'exited', code: result.exitCode, stdout: result.outputs === undefined ? '' : JSON.stringify(result.outputs) };
+    case 'workflow': return { op, state: 'exited', code: result.exitCode, stdout: JSON.stringify(wholeEnd(result)) };
+    case 'prompt': {
+      const ended = promptEnded(result, attempt);
+
+      return ended.kind === 'finished' ? { op, state: 'finished', session: ended.session, result: ended.result, ...(ended.usage && { usage: ended.usage }) } : { op, state: 'failed', failure: ended.failure };
+    }
+
+    default: {
+      const unhandled: never = lease;
 
       return unhandled;
     }
@@ -254,7 +267,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
     if (!settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The fleet runtime was not initialized.' } };
     const cancel = new AbortController();
     const end = offerAndWait({ config, ...place, ...settings, lease, dir, secrets: masks, op, ask }, { cancel: cancel.signal, leave: disposing.signal });
-    waits.set(op, { place, cancel, end, isWhole: 'workflow' in lease });
+    waits.set(op, { place, cancel, end, isWhole: lease.kind === 'workflow' });
     onAccepted();
 
     try {
@@ -309,9 +322,9 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       const leased = await leasedStep(config, place);
 
       if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
-      const isWhole = 'workflow' in leased;
+      const isWhole = leased.kind === 'workflow';
 
-      if (isWhole !== (kind === 'workflow') || 'prompt' in leased) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no ${kind === 'workflow' ? 'whole workflow' : 'command step'}.` } };
+      if (leased.kind !== kind) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no ${kind === 'workflow' ? 'whole workflow' : 'command step'}.` } };
 
       return ended(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op, ask: events.ask }, accepted), events, isWhole);
     },
@@ -335,7 +348,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
 
       if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
 
-      if (!('prompt' in leased)) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no prompt step.` } };
+      if (leased.kind !== 'prompt') return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no prompt step.` } };
 
       return promptEnd(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op }, accepted), place.attempt);
     },
@@ -426,20 +439,20 @@ async function leasedStep(config: LocalConfig, { run, attempt }: FleetPlace): Pr
     if (child === undefined || !isWorkflowFile(child)) return { error: `Run ${run} step "${step.id}" runs a workflow this run did not keep.`, isFatal: true };
     const inputs = leaseInputs(leased.step, child, values.values, run);
 
-    return 'error' in inputs ? { error: `Step "${step.id}" ${inputs.error}`, isFatal: true } : { step: step.id, workflow: true, inputs: inputs.inputs, env: {} };
+    return 'error' in inputs ? { error: `Step "${step.id}" ${inputs.error}`, isFatal: true } : { kind: 'workflow', step: step.id, inputs: inputs.inputs, env: {} };
   }
 
   const env = leaseEnv(leased.step, values.values, run);
 
   if ('error' in env) return { error: env.error, isFatal: true };
 
-  if (leased.step.command !== undefined) return { step: step.id, command: leased.step.command, env: env.env };
+  if (leased.step.command !== undefined) return { kind: 'command', step: step.id, command: leased.step.command, env: env.env };
   const texts = leasePrompt(leased.step, values.values, run);
 
   if ('error' in texts) return { error: texts.error, isFatal: true };
   const { limits } = step.lease;
 
-  return { step: step.id, prompt: texts.prompt, env: env.env, ...(limits !== undefined && { limits }) };
+  return { kind: 'prompt', step: step.id, prompt: texts.prompt, env: env.env, ...(limits !== undefined && { limits }) };
 }
 
 /** The id of the exec that offered the attempt at `place` from this install, recorded with its pool. */

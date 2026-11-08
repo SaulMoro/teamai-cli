@@ -552,7 +552,7 @@ describe('the fleet', () => {
     const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
     await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
-    expect(records(run)).toEqual([expect.objectContaining({ state: 'offered', lease: { step: 'pair', workflow: true, inputs: { mark: 'made.txt' }, env: {} } })]);
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'offered', lease: { kind: 'workflow', step: 'pair', inputs: { mark: 'made.txt' }, env: {} } })]);
 
     const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
     expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 0 } } });

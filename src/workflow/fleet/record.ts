@@ -45,12 +45,14 @@ const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be 
  * limits its turn ends at, which the member keeps on the tool it picks.
  */
 const CommandLeaseSchema = z.strictObject({
+  kind: z.literal('command'),
   step: z.string().min(1),
   command: z.string().min(1),
   env: z.record(z.string(), z.string()),
 });
 
 const PromptLeaseSchema = z.strictObject({
+  kind: z.literal('prompt'),
   step: z.string().min(1),
   prompt: z.string(),
   env: z.record(z.string(), z.string()),
@@ -63,21 +65,29 @@ const PromptLeaseSchema = z.strictObject({
  * own: the record names none of its steps.
  */
 const WorkflowLeaseSchema = z.strictObject({
+  kind: z.literal('workflow'),
   step: z.string().min(1),
-  workflow: z.literal(true),
   inputs: JsonValueSchema,
   env: z.record(z.string(), z.string()),
 });
 
-const FleetLeaseSchema = z.union([CommandLeaseSchema, PromptLeaseSchema, WorkflowLeaseSchema]);
+/** What a member runs, told apart by `kind`: a command step, a prompt step, or a `workflow:` step whole. */
+const FleetLeaseSchema = z.discriminatedUnion('kind', [CommandLeaseSchema, PromptLeaseSchema, WorkflowLeaseSchema]);
 
 export type FleetLease = z.infer<typeof FleetLeaseSchema>;
 
 /** The text of `lease` a member runs, with the field that holds it: its command, or its prompt; none for a whole workflow. */
 function leaseText(lease: FleetLease): { field: 'command' | 'prompt'; text: string } | undefined {
-  if ('command' in lease) return { field: 'command', text: lease.command };
+  switch (lease.kind) {
+    case 'command': return { field: 'command', text: lease.command };
+    case 'prompt': return { field: 'prompt', text: lease.prompt };
+    case 'workflow': return undefined;
+    default: {
+      const unhandled: never = lease;
 
-  return 'prompt' in lease ? { field: 'prompt', text: lease.prompt } : undefined;
+      return unhandled;
+    }
+  }
 }
 
 /**

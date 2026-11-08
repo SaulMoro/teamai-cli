@@ -1966,7 +1966,7 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
     const { exec } = await owner.open(place);
     const ended = exec(newOpId(), 'workflow');
-    expect(await owner.record()).toMatchObject({ state: 'offered', lease: { step: 'work', workflow: true, inputs: { mark: 'made.txt' } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered', lease: { kind: 'workflow', step: 'work', inputs: { mark: 'made.txt' } } });
     await readableReportsWorktree(owner.bob.config);
 
     const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
