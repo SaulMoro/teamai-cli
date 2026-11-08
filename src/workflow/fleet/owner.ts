@@ -17,10 +17,12 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { durationMs } from '../parse.js';
 import { leaseContext } from '../engine.js';
-import { attemptRef, cancelAttempt, expireClaim, fleetFailure, lastGoneWork, leaseEnv, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
+import { attemptRef, cancelAttempt, expireClaim, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
-import type { WorkflowFailure } from '../types.js';
+import { isWorkflowFile, workflowRunBy, type WorkflowFailure } from '../types.js';
+import type { WholeEnd } from '../whole-workflow.js';
+import { isJsonObject } from '../../types.js';
 import { copyGit } from '../place/place.js';
 import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
@@ -153,6 +155,8 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
       return { op, state: 'cancelled' };
     case 'finished': {
       if ('command' in record.lease) return { op, state: 'exited', code: record.result.exitCode, stdout: record.result.outputs === undefined ? '' : JSON.stringify(record.result.outputs) };
+
+      if ('workflow' in record.lease) return { op, state: 'exited', code: record.result.exitCode, stdout: JSON.stringify(wholeEnd(record.result)) };
       const ended = promptEnded(record.result, record.attempt);
 
       return ended.kind === 'finished' ? { op, state: 'finished', session: ended.session, result: ended.result, ...(ended.usage && { usage: ended.usage }) } : { op, state: 'failed', failure: ended.failure };
@@ -166,6 +170,16 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
       return unhandled;
     }
   }
+}
+
+/** How a whole workflow a member finished ended, as the fleet's exec answers it on stdout. */
+function wholeEnd(result: FleetResult): WholeEnd {
+  const outputs = result.outputs !== undefined && isJsonObject(result.outputs) ? result.outputs : undefined;
+
+  return {
+    outcome: result.exitCode === 0 && result.failure === undefined ? 'succeeded' : 'failed',
+    ...(result.end !== undefined && { end: result.end }), ...(outputs !== undefined && { outputs }), ...(result.failure && { failure: result.failure }),
+  };
 }
 
 /**
@@ -191,17 +205,20 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
   const local = localStepRuntime();
   const disposing = new AbortController();
   // The wait of each exec this teamai sent, by its id, so a repeated id reconnects to it and a cancel reaches it.
-  const waits = new Map<OpId, { place: FleetPlace; cancel: AbortController; end: Promise<Waited> }>();
+  const waits = new Map<OpId, { place: FleetPlace; cancel: AbortController; end: Promise<Waited>; isWhole: boolean }>();
   // The exec of each place a restarted teamai read, so a cancel of it with no wait here reaches its record.
   const seen = new Map<OpId, FleetPlace>();
   let settings: { pool: string; staleAfterMs: number; root: string } | undefined;
 
-  const ended = (waited: Waited, events: ExecEvents): ExecEnd => {
+  // A whole workflow's exec answers how its nested run ended on stdout (`WholeEndSchema`).
+  const ended = (waited: Waited, events: ExecEvents, isWhole = false): ExecEnd => {
     switch (waited.kind) {
       case 'finished': {
         const { result } = waited;
 
         if (result.stderr !== '') events.onOutput?.('stderr', result.stderr);
+
+        if (isWhole) return { kind: 'exited', code: result.exitCode, stdout: JSON.stringify(wholeEnd(result)) };
 
         return { kind: 'exited', code: result.exitCode, stdout: result.outputs === undefined ? '' : JSON.stringify(result.outputs) };
       }
@@ -235,7 +252,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
     if (!settings) return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The fleet runtime was not initialized.' } };
     const cancel = new AbortController();
     const end = offerAndWait({ config, ...place, ...settings, lease, dir, secrets: masks, op }, { cancel: cancel.signal, leave: disposing.signal });
-    waits.set(op, { place, cancel, end });
+    waits.set(op, { place, cancel, end, isWhole: 'workflow' in lease });
     onAccepted();
 
     try {
@@ -258,8 +275,9 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       settings = { pool, staleAfterMs, root: checkout ?? process.cwd() };
 
       // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
-      // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has.
-      return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES], ...(labels && { labels }) }, launchesAgents: true };
+      // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has. A
+      // member drives a whole workflow's steps itself, so the fleet takes a workflow step whole when its steps fit.
+      return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES], workflow: true, ...(labels && { labels }) }, launchesAgents: true };
     },
 
     async open(request, onAccepted) {
@@ -280,18 +298,19 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       if (live) {
         accepted();
 
-        return ended(await live.end, events);
+        return ended(await live.end, events, live.isWhole);
       }
 
-      // Setup, or any exec besides the step's command, runs in the place on this host.
-      if (kind !== 'command') return local.exec({ ...request, handle: localHandle(place) }, events, kind);
+      // Setup, or any exec besides the step's command or a whole workflow, runs in the place on this host.
+      if (kind !== 'command' && kind !== 'workflow') return local.exec({ ...request, handle: localHandle(place) }, events, kind);
       const leased = await leasedStep(config, place);
 
       if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
+      const isWhole = 'workflow' in leased;
 
-      if (!('command' in leased)) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no command step.` } };
+      if (isWhole !== (kind === 'workflow') || 'prompt' in leased) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${place.attempt} of run ${place.run} leases no ${kind === 'workflow' ? 'whole workflow' : 'command step'}.` } };
 
-      return ended(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op }, accepted), events);
+      return ended(await offerLease({ place, lease: leased, dir: request.cwd, op: request.op }, accepted), events, isWhole);
     },
 
     // The member picks the tool, model and login and renders the prompt itself: what the request names of them is this
@@ -390,13 +409,23 @@ async function leasedStep(config: LocalConfig, { run, attempt }: FleetPlace): Pr
   const step = state.steps.find((item) => item.status === 'leased' && item.lease.attempt === attempt);
   const leased = step?.status === 'leased' ? leaseContext(state, step.id) : undefined;
 
-  if (!step || step.status !== 'leased' || !leased || (leased.step.command === undefined && (leased.step.prompt === undefined || leased.step.answer !== undefined))) {
-    return { error: `Attempt ${attempt} of run ${run} leases no command or prompt step.`, isFatal: false };
+  if (!step || step.status !== 'leased' || !leased || (leased.step.command === undefined && leased.step.workflow === undefined && (leased.step.prompt === undefined || leased.step.answer !== undefined))) {
+    return { error: `Attempt ${attempt} of run ${run} leases no command, prompt or workflow step.`, isFatal: false };
   }
 
   const values = leaseValues(leased.step, leased.context);
 
   if ('error' in values) return { error: values.error, isFatal: true };
+
+  if (leased.step.workflow !== undefined) {
+    const child = workflowRunBy(state, leased.step, '');
+
+    if (child === undefined || !isWorkflowFile(child)) return { error: `Run ${run} step "${step.id}" runs a workflow this run did not keep.`, isFatal: true };
+    const inputs = leaseInputs(leased.step, child, values.values, run);
+
+    return 'error' in inputs ? { error: `Step "${step.id}" ${inputs.error}`, isFatal: true } : { step: step.id, workflow: true, inputs: inputs.inputs, env: {} };
+  }
+
   const env = leaseEnv(leased.step, values.values, run);
 
   if ('error' in env) return { error: env.error, isFatal: true };

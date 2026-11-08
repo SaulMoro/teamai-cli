@@ -98,8 +98,8 @@ export interface StartedCommand {
  * A command step on the attempt's runtime, as the loop stages and stops one: open, one exec of the shell, collect.
  * A runtime failure, or an exec a restart found running and stopped, ends it with a failure instead of an exit.
  */
-export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; env: Record<string, string>; unset: string[]; setUp: SetUp }): StartedCommand {
-  const { run, command, env, unset, setUp } = input;
+export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; kind?: 'command' | 'workflow'; env: Record<string, string>; unset: string[]; setUp: SetUp }): StartedCommand {
+  const { run, command, kind = 'command', env, unset, setUp } = input;
   // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent. Setup gets
   // the stop as its signal, so a stop before it runs sends nothing and one while it runs ends it stopped.
   let isStopRequested = false;
@@ -125,7 +125,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
         if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
       },
-    }, 'command');
+    }, kind);
 
     const uncollected = await run.collect();
 
@@ -161,6 +161,13 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
   };
 
   return { exit, stop: halt('stop'), cancel: halt('cancel') };
+}
+
+/** A command that never starts and ends with `failure`. */
+export function failedCommand(failure: WorkflowFailure): StartedCommand {
+  const exit = Promise.resolve(failure);
+
+  return { exit, stop: async () => exit };
 }
 
 /**

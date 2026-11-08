@@ -47,7 +47,7 @@ import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCrea
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
   CAN_KEYS, LimitSchema, ReportedUnenforcedSchema, heldFor, isPinnedToHost, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
-  type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
+  type Allow, type DriverCan, type EnvFacts, type Executor, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { TeamPin } from './team-pin.js';
@@ -73,7 +73,8 @@ import type {
   WorkflowFailure,
   WorkflowStep,
 } from './types.js';
-import { hasAction, onlyPersonAnswers, stepWorkflow } from './types.js';
+import { hasAction, onlyPersonAnswers, stepWorkflow, workflowRunBy } from './types.js';
+import { notWhole } from './whole-workflow.js';
 import { Writes } from './writes.js';
 import { describeWorkflow } from './describe.js';
 import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
@@ -106,6 +107,8 @@ export interface ReportInput {
   /** What the tool stated the attempt cost, in its own unit. Never estimated. */
   cost?: z.infer<typeof CostSchema>;
   failure?: WorkflowFailure;
+  /** Process-only: the end a workflow step leased whole reached where it ran. */
+  end?: string;
   /** The branch this attempt committed, when it ran in a workspace. */
   changes?: { branch: string; base: string; from: string; to: string; commits: string[] };
   /** As `next`'s `queued`: the driver's other open leases it holds but has not started, whose own timeout counts from this report. */
@@ -530,6 +533,8 @@ function leaseData(
   };
 
   if (definition.command !== undefined) wire.command = definition.command;
+
+  if (definition.workflow !== undefined) wire.workflow = true;
 
   if (rendered.env) wire.env = rendered.env;
 
@@ -1006,34 +1011,40 @@ type Settled =
   | { unreadable: string };
 
 /**
+ * The inputs workflow `child` starts with when step `state` runs it: its `with` rendered in the step's own workflow,
+ * over the defaults the workflow declares, and checked against its inputs. Or why it cannot start.
+ */
+function childInputs(scope: Scope, states: StepState[], state: StepState, step: WorkflowStep, child: Scope): { inputs: Scope['inputs'] } | WorkflowFailure {
+  // An inline workflow takes no `with`: it already reads the enclosing inputs.
+  if (!('name' in child.definition)) return { inputs: undefined };
+  const rendered = renderStrings(step.with ?? {}, contextOf(scope, states, state));
+
+  if (!rendered.ok) return withTemplateFailure(state, rendered.error);
+  const given = withInputDefaults(child.definition, rendered.value);
+  const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, given ?? rendered.value);
+
+  if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
+  const unfit = itemLimitMismatch(child.definition.steps, given);
+
+  if (unfit) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${unfit}` };
+
+  // inputsMismatch has checked that the rendered value is an object.
+  return { inputs: child.definition.inputs && given ? given : undefined };
+}
+
+/**
  * Starts the workflow a step runs with the values its `with` renders to in the step's own workflow.
  * Its steps join the run right after the step, which is `running` until they settle.
  */
 function startWorkflowStep(
   run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep, child: Scope, now: string,
 ): WorkflowFailure | undefined {
-  // An inline workflow takes no `with`: it already reads the enclosing inputs.
-  let inputs: Scope['inputs'];
+  const given = childInputs(scope, states, state, step, child);
 
-  if ('name' in child.definition) {
-    const rendered = renderStrings(step.with ?? {}, contextOf(scope, states, state));
+  if ('code' in given) return given;
+  const { inputs } = given;
 
-    if (!rendered.ok) return withTemplateFailure(state, rendered.error);
-    const given = withInputDefaults(child.definition, rendered.value);
-    const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, given ?? rendered.value);
-
-    if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
-    const unfit = itemLimitMismatch(child.definition.steps, given);
-
-    if (unfit) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${unfit}` };
-
-    // inputsMismatch has checked that the rendered value is an object.
-    if (child.definition.inputs && given) {
-      inputs = given;
-      child.inputs = inputs;
-    }
-  }
-
+  if (inputs) child.inputs = inputs;
   start(state, inputs, startLimits(run, state, step, now));
 
   const steps = child.definition.steps.map((childStepDef): StepState => {
@@ -1148,6 +1159,13 @@ function advanceInstance(
   const child = childOrUnreadable(run, scope, states, state, definition);
 
   if ('unreadable' in child) return child;
+
+  // A workflow a runtime can run whole waits unstarted for `next`, which leases it whole or starts it for its asker. One
+  // whose inputs do not fit starts here, and fails as any workflow step does, at the same point of the run.
+  if (notWhole(definition, workflowRunBy(run, definition, scope.prefix)) === undefined && !('code' in childInputs(scope, states, state, definition, child))) {
+    return { ready: [{ lease: state, definition, rendered: {} }] };
+  }
+
   const failure = startWorkflowStep(run, scope, states, state, definition, child, now);
 
   if (failure) failStep(state, failure, run.revision);
@@ -1248,7 +1266,12 @@ function settleItems(
 
       if (advanced && 'unreadable' in advanced) return advanced;
 
-      if (advanced && 'ready' in advanced) ready.push(...advanced.ready);
+      if (advanced && 'ready' in advanced) {
+        ready.push(...advanced.ready);
+
+        // A workflow item left unstarted for a runtime that runs it whole holds its slot, as it would have once started.
+        if (item.status === 'pending' && definition.workflow !== undefined) started += 1;
+      }
 
       if (advanced) continue;
       changed = true;
@@ -1714,10 +1737,11 @@ function offerTerms(
   }
 
   const endTurn = turnLimits(run, scope, step);
+  const executor: Executor = step.workflow !== undefined ? 'workflow' : step.command !== undefined ? 'command' : 'prompt';
 
   const negotiation = negotiate({
     step: id,
-    executor: step.command !== undefined ? 'command' : 'prompt',
+    executor,
     requires: mergeRequirements(scope.requires, step.requires),
     interactive: step.interactive === true,
     hasContract: plan?.contract !== undefined,
@@ -1734,7 +1758,7 @@ function offerTerms(
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
     pinned: isPinnedToHost({
-      executor: step.command !== undefined ? 'command' : 'prompt',
+      executor,
       answer: step.answer !== undefined,
       inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined,
       publishes: plan?.contract !== undefined && isPublishContract(plan.contract),
@@ -1743,7 +1767,48 @@ function offerTerms(
     ...role,
   }, context.can, context.allow, context.facts);
 
+  const whole = executor === 'workflow' && negotiation.kind !== 'fail' ? wholeNegotiation(run, id, { scope, step }, plan, context) : undefined;
+
+  if (whole?.kind === 'fail') return whole;
+  const missing = [...negotiation.kind === 'hold' ? negotiation.missing : [], ...whole?.kind === 'hold' ? whole.missing.filter((key) => negotiation.kind !== 'hold' || !negotiation.missing.includes(key)) : []];
+  const [first, ...rest] = missing;
+
+  if (first !== undefined) return { kind: 'hold', missing: [first, ...rest] };
+
   return negotiation.kind === 'grant' ? { kind: 'grant', terms: { ...negotiation.terms, ...role } } : negotiation;
+}
+
+/**
+ * What a driver offering `context.can` is held for, or fails, on the steps of the workflow step `id` runs, leased whole:
+ * each step as `negotiate` would judge its own lease in the step's copy, the gaps of all of them together.
+ */
+function wholeNegotiation(
+  run: RunState, id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
+): Exclude<Negotiation, { kind: 'grant' }> | undefined {
+  const state = run.steps.find((item) => item.id === id);
+  const child = state && childScope(run, scope, statesIn(run, scope), state, step);
+
+  if (!child) return { kind: 'fail', failure: { code: 'run_unreadable', message: `Run ${run.id} step "${id}" runs workflow ${JSON.stringify(step.workflow)}, which the run did not keep` } };
+  const missing = new Set<Missing>();
+
+  for (const inner of child.definition.steps) {
+    const innerExecutor = inner.command !== undefined ? 'command' : 'prompt';
+
+    const judged = negotiate({
+      step: `${child.prefix}${inner.id}`, executor: innerExecutor, requires: mergeRequirements(child.requires, inner.requires), interactive: false,
+      hasContract: plan?.contract !== undefined, envKeys: Object.keys(inner.env ?? {}), runEnvKeys: context.runEnvKeys,
+      budgeted: inner.prompt !== undefined && child.budgeted, maxTurns: inner.maxTurns, tool: promptTool(inner, context.toolFor),
+      unattended: inner.permissions === 'unattended', clone: false, prepare: context.prepare, pinned: false, answer: false,
+    }, context.can, context.allow, context.facts);
+
+    if (judged.kind === 'fail') return judged;
+
+    if (judged.kind === 'hold') judged.missing.forEach((key) => missing.add(key));
+  }
+
+  const [first, ...rest] = missing;
+
+  return first === undefined ? undefined : { kind: 'hold', missing: [first, ...rest] };
 }
 
 /**
@@ -2403,6 +2468,20 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           const located = locateStep(run, state.id);
 
           if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${state.id}"`) };
+
+          // A workflow this asker cannot run whole starts now, and its first step is offered on the next pass.
+          if (definition.workflow !== undefined && can.workflow !== true) {
+            const states = statesIn(run, located.scope);
+            const child = childOrUnreadable(run, located.scope, states, state, definition);
+
+            if ('unreadable' in child) return { save: false, envelope: error('run_unreadable', child.unreadable) };
+            const failure = startWorkflowStep(run, located.scope, states, state, definition, child, now);
+
+            if (failure) failStep(state, failure, run.revision);
+            settledOne = true;
+            break;
+          }
+
           const spending = definition.prompt === undefined ? undefined : allowanceInUse(run, located.scope);
 
           if (spending !== undefined) {
@@ -2488,7 +2567,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             break;
           }
 
-          if (terms.kind === 'hold' && options.alone) {
+          // A whole workflow another runtime of the driver cannot run whole starts on that one's ask instead.
+          if (terms.kind === 'hold' && options.alone && definition.workflow === undefined) {
             const tool = promptTool(definition, context.toolFor);
 
             const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, labels: mergeRequirements(located.scope.requires, definition.requires).labels ?? [], missing: terms.missing, missingOn });
@@ -2681,7 +2761,7 @@ const REPORT_FIELD_SOURCES = {
   attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
   tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
   failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload', limit: 'payload',
-  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url',
+  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url', end: 'process',
 } as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
 
 /** The top-level payload fields `parseReport` reads. */
@@ -3456,6 +3536,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       confined: report.confined,
       progress: report.progress,
       installId: install.id,
+      end: defined?.workflow !== undefined ? report.end : undefined,
     };
 
     if (outcome !== 'released') continueSession(run, report);
