@@ -156,6 +156,14 @@ outputs: { color: steps.ask.outputs.color }
     expect(claude.calls()).toHaveLength(2);
   });
 
+  it('fails a reply that lists several values the output takes rather than picking one of them', async () => {
+    const { config, workspace, runId, bin } = await answering(COLOR_JSON);
+    claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'Either works: [{"color":"red"},{"color":"blue"}]' });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, z.string().parse(runId))).toMatchObject({ steps: [{ id: 'ask', status: 'failed', failure: { code: 'invalid_output' } }] });
+  });
+
   it('fails invalid_output with the last reply once asking again gave no value either', async () => {
     const { config, workspace, runId, bin } = await answering(COLOR_JSON);
     const claude = claudeIn(bin, path.join(path.dirname(bin), 'home'), { answer: 'Blue, I think.' });

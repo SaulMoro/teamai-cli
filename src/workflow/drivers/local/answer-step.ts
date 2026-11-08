@@ -26,9 +26,12 @@ function promptOf(prompt: string, output: OutputSchema | undefined): string {
   return takesText(output) ? prompt : `${prompt}\n\nReply with only a JSON value, with no other text: ${expectedOutput(output)}`;
 }
 
-/** The values the step's output takes, so a reply holding some other JSON is asked for again. */
+/**
+ * The values the step's output takes, so a reply holding some other JSON is asked for again. A list where the output
+ * takes none is kept whole, for the step's output check to refuse: its items are choices, not the answer.
+ */
 function replySchema(output: OutputSchema | undefined): z.ZodType<JsonValue> {
-  return output === undefined ? JsonValueSchema : JsonValueSchema.refine((value) => outputMismatch(output, value) === null);
+  return output === undefined ? JsonValueSchema : JsonValueSchema.refine((value) => (Array.isArray(value) && output.type !== 'array') || outputMismatch(output, value) === null);
 }
 
 const FAILURE_OF = {
@@ -82,11 +85,11 @@ export async function runAnswerStep({ config, prompt, output, cwd, expiresAt, si
     }
 
     // A reply that holds no value the output takes is asked for once more, in the same session, within the timeout.
-    const { text, tool, tokens, reply } = await caller.callForReply(promptOf(prompt, output), replySchema(output), { ...options, retries: 1 });
+    const { text, tool, tokens, reply, asked } = await caller.callForReply(promptOf(prompt, output), replySchema(output), { ...options, retries: 1 });
     const ran: AnswerReport = { outcome: 'success', tool, durationMs: Math.round(performance.now() - started), ...(tokens && { tokens }) };
 
     if (reply === undefined) {
-      return { ...ran, ...failed({ code: 'invalid_output', message: `${tool} replied with no JSON value this step's output takes, even when asked again: ${text.trim().slice(0, 200)}` }) };
+      return { ...ran, ...failed({ code: 'invalid_output', message: `${tool} replied with no JSON value this step's output takes${asked > 1 ? ', even when asked again' : ''}: ${text.trim().slice(0, 200)}` }) };
     }
 
     return { ...ran, outputs: reply };
