@@ -4,11 +4,11 @@
  * is `fleet`; Bob takes its command step with `workflow resume --next --pool`, runs it on his own machine and pushes
  * its work to the attempt's ref. Alice need not stay up: a later `workflow resume` collects what Bob wrote.
  */
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { CLAUDE_SESSIONS, CLI, fakeTool } from '../helpers/step-runtime-e2e.js';
 
@@ -103,12 +103,21 @@ function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env):
 
 const originGit = (...args: string[]): string => git(sandbox, ['--git-dir', origin, ...args]);
 
-/** Runs the CLI as `member`; `started` gets its pid. A call still running after `limitMs` is stopped, so its output shows where it waited. */
+/** The process group each CLI call leads, which teardown stops whether or not the call is still running. */
+const groups = new Set<number>();
+
+/**
+ * Runs the CLI as `member`; `started` gets its pid. A call still running after `limitMs` is stopped, so its output shows
+ * where it waited. It leads a process group of its own, so teardown reaches what it started without reaching this test.
+ */
 function teamai(member: string, args: string[], started?: (pid: number) => void, limitMs = 90_000): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: workOf(member), env: envOf(member), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: workOf(member), env: envOf(member), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
 
-    if (child.pid !== undefined) started?.(child.pid);
+    if (child.pid !== undefined) {
+      groups.add(child.pid);
+      started?.(child.pid);
+    }
     let stdout = '';
     let stderr = '';
     const limit = setTimeout(() => {
@@ -159,6 +168,78 @@ async function waitOn(check: () => boolean, ms: number, pid: () => number, runni
   }
 
   expect.fail(said(await running));
+}
+
+/** The processes, by pid, whose working directory is inside `dir`: what a member or the command of its step left running. */
+function processesIn(dir: string): number[] {
+  const inside = (cwd: string): boolean => cwd === dir || cwd.startsWith(`${dir}${path.sep}`);
+
+  if (process.platform === 'linux') {
+    return fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name)).flatMap((name) => {
+      try {
+        return inside(fs.readlinkSync(`/proc/${name}/cwd`)) ? [Number(name)] : [];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  // lsof exits 1 when it could not read some process, and still lists the others.
+  const listed = spawnSync('lsof', ['-a', '-d', 'cwd', '-u', String(os.userInfo().uid), '-F', 'pn'], { encoding: 'utf8' }).stdout ?? '';
+  const found: number[] = [];
+  let pid = 0;
+
+  for (const line of listed.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1));
+    else if (line.startsWith('n') && inside(line.slice(1))) found.push(pid);
+  }
+
+  return found;
+}
+
+/**
+ * Stops each member's whole process group: those of the CLI calls, and those a member recorded for the command of a step,
+ * which leads one of its own and outlives a member that was killed. Only a group with a process still in the sandbox is
+ * signalled, so a pid reused since is left alone.
+ */
+async function stopMembers(): Promise<void> {
+  const recorded = (dir: string): number[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const at = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) return recorded(at);
+
+    return /^group-\d+\.json$/.test(entry.name) ? [(JSON.parse(fs.readFileSync(at, 'utf8')) as { pid: number }).pid] : [];
+  });
+  const live = new Set(processesIn(sandbox).map((pid) => Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim())));
+
+  for (const group of [...groups, ...recorded(sandbox)]) {
+    if (!live.has(group)) continue;
+
+    try {
+      process.kill(-group, 'SIGKILL');
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+
+  groups.clear();
+  await until(() => processesIn(sandbox).every((pid) => pid === process.pid), 5_000);
+}
+
+/** Fails the test that left a process running in the sandbox, once it stopped them so they do not outlive the suite. */
+async function expectNothingLeft(): Promise<void> {
+  const left = processesIn(sandbox).filter((pid) => pid !== process.pid);
+  const commands = left.map((pid) => spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim());
+
+  for (const pid of left) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+
+  expect(commands, 'processes still running in the sandbox after the test').toEqual([]);
 }
 
 /** The runs with an attempt record on origin. */
@@ -235,6 +316,11 @@ describe('the fleet', () => {
     const config = path.join(dataHomeOf('alice'), 'config.yaml');
     fs.writeFileSync(config, `${fs.readFileSync(config, 'utf8')}workflows:\n  max_parallel: 4\n`);
   }, 180_000);
+
+  afterEach(async () => {
+    await stopMembers();
+    await expectNothingLeft();
+  });
 
   afterAll(() => {
     if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
