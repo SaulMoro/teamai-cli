@@ -18,8 +18,10 @@ export interface ToolReport {
   reachedMaxTurns?: boolean;
   /** Whether stdout ended before the tool's final result, so it holds only what the tool said as it started. */
   unfinished?: boolean;
-  /** What the tool said went wrong, when its final result is an error: Claude's `result` text with `is_error`, Codex's last `error`. */
+  /** What the tool said went wrong, when its final result is an error: Claude's `result` text with `is_error`, Codex's and OpenCode's last `error`. */
   error?: string;
+  /** Whether the kind of `error` says the tool stopped on a usage limit: OpenCode's `provider.rate-limit`, `provider.quota` and `provider.<plan>-limit`. */
+  isUsageLimit?: true;
 }
 
 /** A count a tool printed, or nothing when the field holds something else. */
@@ -411,6 +413,37 @@ function codexStdout(stdout: string): ToolReport | null {
   return error === undefined ? report : { ...report, error };
 }
 
+/**
+ * The error event `opencode run --format json` prints, on stdout: `error` is a kind and a message in 2.x
+ * (`{"type":"provider.rate-limit","message":…}`), and a name with `data.message` in 1.x.
+ */
+const OpenCodeError = z.object({
+  type: z.literal('error'),
+  error: z.union([
+    z.string().transform((message) => ({ message, kind: undefined })),
+    z.object({ type: z.string(), message: z.string() }).transform(({ type, message }) => ({ message, kind: type })),
+    z.object({ data: z.object({ message: z.string() }) }).transform(({ data }) => ({ message: data.message, kind: undefined })),
+  ]),
+});
+
+/** The kinds of an OpenCode error that say it stopped on a usage limit: the provider's rate limit, a quota, or a plan's limit. */
+const OPENCODE_LIMIT = /^provider\.(?:rate-limit|quota|[a-z]+(?:-[a-z]+)*-limit)$/;
+
+/** What `opencode run --format json` reports: its metadata, and the last error it printed, such as a spent usage limit. */
+function opencodeStdout(stdout: string): ToolReport | null {
+  const report = readToolMetadata(stdout);
+
+  const error = jsonRecords(stdout).flatMap((record) => {
+    const parsed = OpenCodeError.safeParse(record);
+
+    return parsed.success ? [parsed.data.error] : [];
+  }).at(-1);
+
+  if (error === undefined) return report;
+
+  return { ...report, error: error.message, ...(error.kind !== undefined && OPENCODE_LIMIT.test(error.kind) && { isUsageLimit: true as const }) };
+}
+
 /** What stdout of a tool on this adapter reports. CodeBuddy prints Claude's result record. */
 export function toolStdout(adapter: string, stdout: string): ToolReport | null {
   if (adapter === 'claude' || adapter === 'codebuddy') return claudeStdout(stdout);
@@ -418,6 +451,8 @@ export function toolStdout(adapter: string, stdout: string): ToolReport | null {
   if (adapter === 'codex') return codexStdout(stdout);
 
   if (adapter === 'agy') return agyStdout(stdout);
+
+  if (adapter === 'opencode') return opencodeStdout(stdout);
 
   return readToolMetadata(stdout);
 }
