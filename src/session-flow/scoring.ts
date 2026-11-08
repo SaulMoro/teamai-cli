@@ -14,6 +14,7 @@ import { SessionCaptures } from './captures.js';
 import { safeText, sessionArchives } from './session-cmd-shared.js';
 import { scrubSession } from './scrub.js';
 import { getRepoIdentity, SyncManager, type SessionSyncMeta } from './sync.js';
+import type { ArchivedEvidence } from './session-evidence.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 
 type Failure = Extract<WorkflowEnvelope, { error: unknown }>;
@@ -89,6 +90,8 @@ export interface NamedSession {
   pushedBy?: string;
   /** What a pushed session ran as, as its archive records it. */
   agent?: AgentObservation;
+  /** The evidence a pushed session's step left, as the archive keeps it beside the session. */
+  evidence?: ArchivedEvidence;
 }
 
 /** The session of a tool on this machine that `--session`, or the agent session variable, names. */
@@ -161,6 +164,14 @@ export async function pushedSession(config: LocalConfig, { name, author }: TeamS
     const pushed: NamedSession = { platform: session.platform, found: { session: scrubSession(session).session }, config, pushedBy: entry.author };
 
     if (meta.agent) pushed.agent = meta.agent;
+
+    try {
+      const evidence = archive.loadEvidence(repoIdentity, name, entry.author);
+
+      if (evidence) pushed.evidence = evidence;
+    } catch (e) {
+      return failure('evidence_unreadable', `The evidence pushed with session ${name} could not be read, so it is not judged without it: ${e instanceof Error ? e.message : String(e)}. Push the session again from the machine that ran it.`);
+    }
 
     return pushed;
   }
