@@ -17,8 +17,8 @@ const URL = 'https://github.com/acme/business.git';
 const flow = (name: string, steps: string): string => `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\nsteps:\n${steps}`;
 
 /**
- * `remote` goes to the fleet; `here`, a prompt step, which the fleet does not take and which needs nothing of `remote`,
- * runs on Alice's `local` while the fleet holds `remote`.
+ * `remote` goes to the fleet; `here`, a prompt step on a tool the fleet's pool does not list (`can.tools: []`), which
+ * needs nothing of `remote`, runs on Alice's `local` while the fleet holds `remote`.
  */
 const SPLIT = flow('split', `  - id: remote
     workspace: new
@@ -71,7 +71,7 @@ steps:
     command: node -e "require('fs').writeFileSync('part-' + process.env.PART + '.txt', process.env.PART)"
 `;
 
-const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1 } }, { use: 'local' }] };
+const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1, can: { tools: [] } } }, { use: 'local' }] };
 
 /** The default pool, two attempts out at once. */
 const FAN_FLEET = { schemaVersion: 'v1alpha1', name: 'fan-fleet', runtimes: [{ use: 'fleet', options: { max_parallel: 2 } }, { use: 'local' }] };
