@@ -1,54 +1,32 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { RuntimeMessageSchema, type RuntimeMessage, type RuntimeRequestSchema } from '@teamai/runtime-protocol';
+import { bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
+import { connectRuntime, type Connection } from '@teamai/runtime-testing/connect';
 import type { z } from 'zod';
-import { buildSync } from 'esbuild';
 
-const SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ROOT = path.join(SOURCE, '..', '..', '..');
+// ─── Test support: the runtime over its stdio, on a fake Paseo daemon ───
+//
+//  `bundleRuntime` builds the executable as the package ships it. `startRuntime` starts it as teamai does, with its
+//  journal under a home of the test's, and reads every line it writes as a protocol message.
+//
 
-/** What the bundle is built from besides the package: the workspace packages it imports, and the locked dependencies. */
-const BUNDLED = [path.join(ROOT, 'packages', 'runtime-protocol', 'src'), path.join(ROOT, 'packages', 'tool-core', 'src')];
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ENTRY = path.join(HERE, '..', 'main.ts');
+const ROOT = path.join(HERE, '..', '..', '..', '..');
 
-/** Every source file under `dir` but its tests, which the bundle's cache key covers. */
-function sources(dir: string): string[] {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.join(dir, entry.name);
-
-    return entry.isDirectory() ? sources(file) : entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [file] : [];
-  });
+/** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
+export async function bundleRuntime(dir: string): Promise<string> {
+  return bundleRuntimeAt({ entry: ENTRY, outfile: path.join(dir, 'teamai-runtime-paseo.mjs') });
 }
 
-/**
- * teamai-runtime-paseo bundled into one file with its dependencies, as it ships. One build per source revision is kept in
- * the temp directory, so every test file and worker reuses it.
- */
-export function bundledRuntime(): string {
-  const hash = createHash('sha256');
-
-  for (const file of [SOURCE, ...BUNDLED].flatMap(sources).sort()) hash.update(fs.readFileSync(file));
-  hash.update(fs.readFileSync(path.join(ROOT, 'package-lock.json')));
-  const file = path.join(os.tmpdir(), `teamai-paseo-runtime-${hash.digest('hex').slice(0, 16)}`, 'runtime.mjs');
-
-  if (fs.existsSync(file)) return file;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const building = `${file}.${process.pid}.tmp`;
-  buildSync({
-    entryPoints: [path.join(SOURCE, 'main.ts')], outfile: building, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
-  });
-  fs.renameSync(building, file);
-
-  return file;
-}
+/** How long a test waits for a line: past every stop the runtime confirms within its own 10 s. */
+const LINE_MS = 60_000;
 
 export interface Runtime {
-  child: ChildProcess;
+  /** The connection the shared leak check reads. */
+  connection: Connection;
+  child: Connection['child'];
   send(request: z.input<typeof RuntimeRequestSchema>): void;
   /** The next line that matches, waiting for it; every line is checked against the protocol on the way. */
   next(match: (message: RuntimeMessage) => boolean): Promise<RuntimeMessage>;
@@ -64,57 +42,46 @@ export interface Runtime {
 export const TEST_CLIENT = path.join(ROOT, 'node_modules', '@getpaseo', 'client');
 
 /**
- * Starts the runtime with its journal under `home`, as teamai spawns it, finding the test client through
- * `PASEO_CLIENT_PATH`; `env` sets or, with undefined, removes names over that.
+ * Starts the runtime at `executable` with its journal under `home`, as teamai spawns it, finding the test client
+ * through `PASEO_CLIENT_PATH`; `env` sets or, with undefined, removes names over that.
  */
-export function startRuntime(home: string, env: Record<string, string | undefined> = {}): Runtime {
+export function startRuntime(executable: string, home: string, env: Record<string, string | undefined> = {}): Runtime {
   // A test run inside a Paseo agent does not make every runtime it starts one started from that agent.
   const merged = { ...process.env, PASEO_AGENT_ID: undefined, HOME: home, PASEO_CLIENT_PATH: TEST_CLIENT, ...env };
   const given = Object.fromEntries(Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  // Its stderr reaches the test's own, through a pipe a test can close as teamai does when it stops reading.
-  const child = spawn(process.execPath, [bundledRuntime()], { env: given, stdio: ['pipe', 'pipe', 'pipe'] });
-  child.stderr?.on('data', (data: Buffer) => { process.stderr.write(data); });
-  const lines: RuntimeMessage[] = [];
-  const waiters: Array<() => void> = [];
+  const connection = connectRuntime({ executable, env: given });
+  const { child } = connection;
 
-  const exited = new Promise<void>((resolve) => child.once('exit', () => {
-    for (const wake of waiters.splice(0)) wake();
-    resolve();
-  }));
-
-  readline.createInterface({ input: child.stdout }).on('line', (line) => {
-    lines.push(RuntimeMessageSchema.parse(JSON.parse(line)));
-
-    for (const wake of waiters.splice(0)) wake();
+  const exited = new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve();
+    else child.once('exit', () => resolve());
   });
 
-  const taken = new Set<number>();
+  // Its stderr reaches the test's own.
+  child.stderr.on('data', (data: Buffer | string) => { process.stderr.write(data); });
+
+  const lines: RuntimeMessage[] = [];
+
+  const read = (): RuntimeMessage[] => {
+    for (const line of connection.lines.slice(lines.length)) lines.push(RuntimeMessageSchema.parse(line));
+
+    return lines;
+  };
 
   return {
+    connection,
     child,
-    lines,
-    send: (request) => child.stdin?.write(`${JSON.stringify(request)}\n`),
-    next(match) {
-      return new Promise((resolve, reject) => {
-        const look = (): void => {
-          const at = lines.findIndex((line, index) => !taken.has(index) && match(line));
-          const line = lines[at];
+    get lines() {
+      return read();
+    },
+    send: (request) => { child.stdin.write(`${JSON.stringify(request)}\n`); },
+    async next(match) {
+      read();
 
-          if (line) {
-            taken.add(at);
-            resolve(line);
-          } else if (child.exitCode !== null || child.signalCode !== null) {
-            reject(new Error(`the runtime exited before the line came; it wrote ${JSON.stringify(lines)}`));
-          } else {
-            waiters.push(look);
-          }
-        };
-
-        look();
-      });
+      return RuntimeMessageSchema.parse(await connection.next((line) => match(RuntimeMessageSchema.parse(line)), LINE_MS));
     },
     async stop() {
-      child.stdin?.end();
+      child.stdin.end();
       await exited;
     },
     async kill() {

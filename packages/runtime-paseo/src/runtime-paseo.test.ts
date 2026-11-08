@@ -4,17 +4,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { OpIdSchema, type InitInstance, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
 import { isCodexExecutable } from './daemon.js';
 import { agentIdOf } from './runtime.js';
 import { paseoApp } from './testing/asar.js';
 import { startFakeDaemon, type Behaviour } from './testing/fake-daemon.js';
-import { startRuntime, TEST_CLIENT, type Runtime } from './testing/harness.js';
+import { bundleRuntime, startRuntime, TEST_CLIENT, type Runtime } from './testing/harness.js';
 
 /**
  * teamai-runtime-paseo through its stdio entry, as teamai spawns it, against a fake Paseo daemon that speaks Paseo
  * 0.14.0's WebSocket protocol and checks every frame against Paseo's own schemas.
  */
+
+let bundleDir: string;
+let executable: string;
+
+beforeAll(async () => {
+  bundleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-paseo-bundle-'));
+  executable = await bundleRuntime(bundleDir);
+}, 60_000);
+
+afterAll(() => fs.rmSync(bundleDir, { recursive: true, force: true }));
 
 let dir: string;
 let worktree: string;
@@ -42,7 +53,7 @@ const stopped = (): unknown[] => {
 };
 
 const start = (env?: Record<string, string | undefined>): Runtime => {
-  const runtime = startRuntime(path.join(dir, 'home'), env);
+  const runtime = startRuntime(executable, path.join(dir, 'home'), env);
   runtimes.push(runtime);
 
   return runtime;
@@ -125,9 +136,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await Promise.all(runtimes.splice(0).map((runtime) => runtime.kill()));
+  const closed = runtimes.splice(0);
+  await Promise.all(closed.map((runtime) => runtime.kill()));
   await daemon.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+
+  try {
+    await expectNothingLeft({ dir, connections: closed.map(({ connection }) => connection) });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe('teamai-runtime-paseo', () => {
