@@ -18,8 +18,6 @@ import type { ProcessState } from './process-state.js';
 import { isPaseoTool, PASEO_TOOLS, providerAdds } from './providers.js';
 import { workspaces } from './workspace.js';
 
-export { agentIdOf } from './conversation.js';
-
 // ─── teamai-runtime-paseo ────────────────────────────────
 //
 //  A prompt-only step runtime: each prompt step becomes an agent of a Paseo daemon, in a Paseo workspace that adopts
