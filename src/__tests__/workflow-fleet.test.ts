@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { claimAttempt, expireClaim, finishAttempt, lastGoneWork, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
@@ -7,6 +8,7 @@ import { definitionHash } from '../workflow/snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt } from '../workflow/drivers/local/fleet-member.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
+import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
@@ -151,9 +153,10 @@ steps:
  * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
  * takes it. Answers what Bob's take answered, and the record Alice reads then.
  */
-async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void) {
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (alice: Member) => Promise<void>) {
   const acme = team({ mark: MARK });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+  await before?.(alice);
   const started = await startRun(alice.config, 'mark', { mark: 'made.txt' }, { secrets: {} });
   if (!('data' in started)) throw new Error(started.error.message);
   const run = RunIdSchema.parse(String(started.data.run));
@@ -202,6 +205,21 @@ describe('a member taking an attempt', () => {
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
+    expect(record?.state === 'finished' && record.result.to).toBeFalsy();
+    expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*teamai pull/s);
+  });
+  it('refuses an offer whose workflow comes from a team commit only a branch besides the default one holds, and runs nothing', async () => {
+    // Anyone who can write the record can push such a branch, teamai-reports among them.
+    const { taken, record } = await takeForged((forged) => { forged.lease.command = 'echo forged > forged.txt'; }, async ({ config }) => {
+      const clone = config.repo.localPath;
+      git(clone, 'checkout', '-q', '-b', 'side');
+      fs.writeFileSync(path.join(clone, 'workflows', 'mark.yaml'), MARK.replace('echo written > "$MARK"', 'echo forged > forged.txt'));
+      git(clone, 'commit', '-qam', 'side');
+      git(clone, 'push', '-q', 'origin', 'side');
+      await syncScorersThenWorkflows(config);
+    });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
     expect(record?.state === 'finished' && record.result.to).toBeFalsy();
     expect(record?.state === 'finished' ? record.result.stderr : '').toMatch(/step "write".*teamai pull/s);
   });

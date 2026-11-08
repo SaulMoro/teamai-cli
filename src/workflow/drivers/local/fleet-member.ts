@@ -8,7 +8,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { HandoffOwner } from '../../snapshot.js';
-import type { LocalConfig } from '../../../types.js';
+import { getBusinessRoot, isSelfMode, type LocalConfig } from '../../../types.js';
+import { getDefaultBranch } from '../../../utils/git.js';
 import { log } from '../../../utils/logger.js';
 import { startGroupedCommand } from '../../../tool-launch/process-stop.js';
 import { retryCommand } from '../../engine.js';
@@ -156,7 +157,14 @@ async function runClaim(config: LocalConfig, { claim, root, secrets }: { claim: 
  */
 async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ command: string; env: Record<string, string> } | { refused: string }> {
   const { run, lease, definition, values } = claim;
-  const found = await definitionsOf(config, { run, ...definition });
+  const { teamRevision, ...named } = definition;
+  // A team commit the member would not run itself names no definitions: without it, only its own copy can match.
+  const isTrusted = teamRevision !== undefined && await isMemberTeamCommit(config, teamRevision);
+  const found = await definitionsOf(config, { run, ...named, ...(isTrusted && { teamRevision }) });
+
+  if (!found.ok && teamRevision !== undefined && !isTrusted) {
+    return { refused: `workflow "${definition.name}" comes from team commit ${teamRevision}, which neither this member's team checkout nor the team's default branch holds, and this member's copy of it differs. Merge it to the default branch.` };
+  }
 
   if (!found.ok) return { refused: found.error.message };
   const step = definedStep(found.value, lease.step);
@@ -173,6 +181,20 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<{ comm
   if (differs.length > 0) return { refused: `the offer's env ${differs.join(', ')} differs from what workflow "${definition.name}" renders from the offer's values.` };
 
   return { command: step.command, env: rendered.env };
+}
+
+/**
+ * Whether team commit `revision` is one this member would run itself: what its team checkout has, or what the team's
+ * default branch on origin has. Any other branch of the team repo, teamai-reports among them, takes commits from whoever
+ * can push there, who can write an attempt's record too.
+ */
+async function isMemberTeamCommit(config: LocalConfig, revision: string): Promise<boolean> {
+  const root = isSelfMode(config) ? getBusinessRoot(config) : config.repo.localPath;
+
+  if ((await git(root, ['cat-file', '-e', `${revision}^{commit}`])).code !== 0) await git(root, ['fetch', '--quiet', 'origin']);
+  const reaches = async (tip: string): Promise<boolean> => (await git(root, ['merge-base', '--is-ancestor', revision, tip])).code === 0;
+
+  return await reaches('HEAD') || await reaches(`refs/remotes/origin/${await getDefaultBranch(root)}`);
 }
 
 /**
