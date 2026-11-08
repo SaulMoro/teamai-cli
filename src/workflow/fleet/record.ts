@@ -13,6 +13,8 @@ import { OpIdSchema, type OpId } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getReportsDir, type LocalConfig } from '../../types.js';
 import { gitRoot } from '../../utils/branch-worktree.js';
+import { log } from '../../utils/logger.js';
+import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
@@ -72,8 +74,17 @@ const FleetResultSchema = z.object({
 
 export type FleetResult = z.infer<typeof FleetResultSchema>;
 
+/** The format of the attempt records this teamai writes and reads. */
+const RECORD_VERSION = 1;
+
+/** What any teamai's record says of its format, whatever else it holds. */
+const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined) });
+
 const OfferedSchema = z.object({
-  version: z.literal(1),
+  /** The record's format. A teamai that reads a newer one refuses it, naming the teamai that wrote it (`teamai`). */
+  version: z.literal(RECORD_VERSION),
+  /** The version of the teamai that wrote the record. */
+  teamai: z.string().optional(),
   run: RunIdSchema,
   attempt: AttemptIdSchema,
   pool: z.string().min(1),
@@ -129,7 +140,7 @@ export type Cancelling = Extract<FleetRecord, { state: 'cancelling' }>;
 
 export type FleetError =
   | { code: 'state_moved'; message: string }
-  | { code: 'reports_unreachable' | 'reports_failed' | 'fleet_unpublishable' | 'fleet_record_unreadable'; message: string };
+  | { code: 'reports_unreachable' | 'reports_failed' | 'fleet_unpublishable' | 'fleet_record_unreadable' | 'fleet_record_newer'; message: string };
 
 type Written<T> = { ok: true; value: T } | { ok: false; error: FleetError };
 
@@ -256,7 +267,7 @@ export async function offerAttempt(config: LocalConfig, input: {
   definition: Offered['definition']; values: LeaseValues; secrets: Record<string, string>;
 }): Promise<Written<Offered>> {
   const { secrets, ...fields } = input;
-  const record: Offered = { version: 1, ...fields, write: randomUUID(), offeredAt: new Date().toISOString(), state: 'offered' };
+  const record: Offered = { version: RECORD_VERSION, teamai: getCurrentVersion(), ...fields, write: randomUUID(), offeredAt: new Date().toISOString(), state: 'offered' };
   const unfit = unpublishable(record, secrets);
 
   if (unfit) return { ok: false, error: unfit };
@@ -358,7 +369,17 @@ export async function readAttemptRecord(config: LocalConfig, run: RunId, attempt
 }
 
 function parseRecord(text: string, run: string, attempt: string): Written<FleetRecord> {
-  const parsed = FleetRecordSchema.safeParse(jsonOf(text));
+  const raw = jsonOf(text);
+  const format = RecordFormatSchema.safeParse(raw);
+
+  // A newer teamai's format may mean anything here: it is never read as this one's.
+  if (format.success && format.data.version > RECORD_VERSION) {
+    const by = format.data.teamai;
+
+    return { ok: false, error: { code: 'fleet_record_newer', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${by ?? 'newer than this one'}, in a format this teamai cannot read. Upgrade teamai${by === undefined ? '' : ` to ${by} or later`}.` } };
+  }
+
+  const parsed = FleetRecordSchema.safeParse(raw);
 
   if (!parsed.success || parsed.data.run !== run || parsed.data.attempt !== attempt) {
     return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports cannot be read.` } };
@@ -385,6 +406,7 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
       const parsed = parseRecord(text, name, file.slice(0, -'.json'.length));
 
       if (parsed.ok) records.push(parsed.value);
+      else if (parsed.error.code === 'fleet_record_newer') log.warn(`Skipped an attempt: ${parsed.error.message}`);
     }
   }
 
@@ -479,7 +501,7 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
 
     if ((held?.value.write) !== replaces) return { value: { ok: false, error: moved }, write: null };
     await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-    await fs.writeFile(path.join(worktree, rel), recordText(record), 'utf8');
+    await fs.writeFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }), 'utf8');
 
     return { value: { ok: true, value: undefined }, write: { files: [rel], message } };
   });

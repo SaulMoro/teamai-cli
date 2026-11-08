@@ -10,7 +10,7 @@ import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRu
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import type { StepRuntime } from '../workflow/runtimes/step-runtime.js';
-import { readableReportsWorktree } from '../utils/reports-branch.js';
+import { readableReportsWorktree, updateReports } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
 
@@ -42,6 +42,33 @@ describe('fleet attempts on teamai-reports', () => {
     expect(first).toMatchObject({ ok: true, value: { state: 'claimed', member: { user: 'bob' } } });
     expect(second).toMatchObject({ ok: false, error: { code: 'state_moved' } });
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'claimed', member: { user: 'bob' } } });
+  });
+
+  it('reads a record a newer teamai wrote in a format of its own as one to upgrade for, and offers it to no member here', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
+    await updateReports(alice.config, async (worktree) => {
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, version: 2, teamai: '9.1.0', shape: 'new' }));
+
+      return { value: undefined, write: { files: [rel], message: 'a newer record' } };
+    });
+    await readableReportsWorktree(bob.config);
+
+    expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toEqual({ ok: false, error: {
+      code: 'fleet_record_newer',
+      message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 9.1.0, in a format this teamai cannot read. Upgrade teamai to 9.1.0 or later.`,
+    } });
+    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
+  });
+
+  it('writes the teamai version that wrote a record into it', async () => {
+    const acme = team();
+    const offered = await offer(await acme.member('alice'));
+
+    expect(offered).toMatchObject({ ok: true, value: { version: 1, teamai: expect.stringMatching(/^\d+\.\d+\.\d+/) } });
   });
 
   it('lists only the offers of the pool and repository asked for, and no claimed one', async () => {
