@@ -138,7 +138,7 @@ for (const target of TARGETS) {
       expect(connections.flatMap((connection) => connection.invalid)).toEqual([]);
       // Every case closes what it opened: no container of the attempt, process or attempt's state is left.
       expect(target.containers(dir)).toEqual([]);
-      expectNothingLeft({ dir: home });
+      await expectNothingLeft({ dir: home, connections });
     });
 
     function start(extra: NodeJS.ProcessEnv = {}): Connection {

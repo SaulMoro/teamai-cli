@@ -65,9 +65,9 @@ afterEach(async () => {
   for (const socket of registered.splice(0)) socket.destroy();
   const connections = opened.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
-  const recovered = await closeLeftovers(connections);
-  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
-  expectNothingLeft({ dir, containers: engine.containers });
+  const { invalid, recovered } = await closeLeftovers(connections);
+  expect([...connections.flatMap((connection) => connection.invalid), ...invalid]).toEqual([]);
+  await expectNothingLeft({ connections: [...connections, ...recovered], dir, containers: engine.containers });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -1,11 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
-import { build, type Plugin } from 'esbuild';
+import { connectRuntime, type Connection as RuntimeConnection, type Line } from '@teamai/runtime-testing/connect';
+import { build, type BuildOptions, type Plugin } from 'esbuild';
 import { z } from 'zod';
 
 // ─── Test support: the runtime over its stdio, on a fake container engine ───
@@ -13,7 +12,7 @@ import { z } from 'zod';
 //  `bundleRuntime` builds the executable as the package ships it. `fakeEngine` lays out a `docker`, a `podman` and an
 //  `sbx` on a PATH of their own, backed by fake-engine.mjs, with images (and sbx agents) whose tools are scripts in a
 //  directory. `connect` starts
-//  the runtime and speaks protocol 1 to it as JSON lines.
+//  the runtime as teamai does and speaks protocol 1 to it as JSON lines (`@teamai/runtime-testing`).
 //
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -28,17 +27,23 @@ export const THIS_MACHINE_STAND_IN: Plugin = {
   },
 };
 
-/** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
-export async function bundleRuntime(dir: string): Promise<string> {
-  const outfile = path.join(dir, 'teamai-runtime-sandbox.mjs');
-
+/**
+ * Builds the runtime's executable into `outfile`, as `@teamai/runtime-testing/bundle` does, with what a test swaps in:
+ * `alias` replaces a package with a stand-in, and `plugins` a module of the runtime's own, which an alias cannot name.
+ */
+export async function bundleRuntimeWith({ outfile, alias, plugins }: { outfile: string } & Pick<BuildOptions, 'alias' | 'plugins'>): Promise<string> {
   await build({
     entryPoints: [ENTRY], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
-    plugins: [THIS_MACHINE_STAND_IN],
+    ...(alias && { alias }), ...(plugins && { plugins }),
     banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
   });
 
   return outfile;
+}
+
+/** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
+export function bundleRuntime(dir: string): Promise<string> {
+  return bundleRuntimeWith({ outfile: path.join(dir, 'teamai-runtime-sandbox.mjs'), plugins: [THIS_MACHINE_STAND_IN] });
 }
 
 export interface FakeEngine {
@@ -208,108 +213,67 @@ export function fakeEngine(dir: string): FakeEngine {
   };
 }
 
-const MessageSchema = z.record(z.string(), z.json());
-
 /** A line the runtime wrote, parsed. */
-export type Message = z.infer<typeof MessageSchema>;
+export type Message = Line;
 
 export interface Connection {
-  child: ChildProcessWithoutNullStreams;
+  /** The connection `@teamai/runtime-testing` keeps, which its leak check reads. */
+  runtime: RuntimeConnection;
+  child: RuntimeConnection['child'];
   /** The runtime's executable and the environment it was started with, so another process of it can follow. */
   executable: string;
   env: NodeJS.ProcessEnv;
   send(request: Message): void;
   /** Every request sent so far. */
   sent: Message[];
-  /** The next message, from the start of this connection, that `match` accepts. */
+  /** The next message, from the start of this connection, that `match` accepts and no earlier `next` took. */
   next(match: (message: Message) => boolean, ms?: number): Promise<Message>;
   /** Every message so far. */
   messages: Message[];
   /** Each line the runtime wrote that runtime protocol 1 does not allow, with why. */
-  invalid: string[];
+  readonly invalid: string[];
   stderr(): string;
-  /** Ends stdin and waits until the runtime exits. */
+  /** Ends stdin and waits until the runtime exits: it outlives its stdin while an exec it runs has not ended. */
   end(): Promise<void>;
 }
 
-/** Starts the runtime at `executable` with `env` as its whole environment, and speaks to it over its stdio. */
+/** The variables a test environment may leave unset, which a spawned process does not take. */
+const DefinedSchema = z.record(z.string(), z.string().optional()).transform((env) => Object.fromEntries(Object.entries(env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]]))));
+
+/** Starts the runtime at `executable` with `env` as its whole environment, as teamai starts one, and speaks to it over its stdio. */
 export function connect(executable: string, env: NodeJS.ProcessEnv): Connection {
-  const child = spawn(process.execPath, [executable], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-  const messages: Message[] = [];
+  const runtime = connectRuntime({ executable, env: DefinedSchema.parse(env) });
+  const { child } = runtime;
   const sent: Message[] = [];
-  const invalid: string[] = [];
-  const consumed = new Set<Message>();
-  let waiters: Array<() => void> = [];
-  let stderr = '';
-  let closed = false;
 
-  const exited = new Promise<void>((resolve) => child.on('close', () => {
-    closed = true;
-    resolve();
-
-    for (const wake of waiters) wake();
-  }));
-
-
-  child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data; });
-
-  readline.createInterface({ input: child.stdout }).on('line', (line) => {
-    const raw: unknown = JSON.parse(line);
-    const checked = RuntimeMessageSchema.safeParse(raw);
-
-    if (!checked.success) invalid.push(`${line}: ${checked.error.message}`);
-    messages.push(MessageSchema.parse(raw));
-
-    for (const wake of waiters) wake();
+  const closed = new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve();
+    else child.once('close', () => resolve());
   });
 
   return {
+    runtime,
     child,
     executable,
     env,
-    messages,
+    messages: runtime.lines,
     sent,
-    invalid,
-    stderr: () => stderr,
+    get invalid() {
+      return runtime.lines.flatMap((line) => {
+        const checked = RuntimeMessageSchema.safeParse(line);
+
+        return checked.success ? [] : [`${JSON.stringify(line)}: ${checked.error.message}`];
+      });
+    },
+    stderr: runtime.stderr,
     send: (request) => {
       sent.push(request);
-      child.stdin.write(`${JSON.stringify(request)}\n`);
+      runtime.send(request);
     },
-    next: (match, ms = 10_000) => new Promise((resolve, reject) => {
-      const look = (): boolean => {
-        const found = messages.find((message) => !consumed.has(message) && match(message));
-
-        if (!found && closed) {
-          reject(new Error(`the runtime exited; got ${JSON.stringify(messages)}; stderr: ${stderr}`));
-
-          return true;
-        }
-
-        if (!found) return false;
-        consumed.add(found);
-        resolve(found);
-
-        return true;
-      };
-
-      if (look()) return;
-
-      const timer = setTimeout(() => {
-        waiters = waiters.filter((waiter) => waiter !== wake);
-        reject(new Error(`no matching message in ${ms} ms; got ${JSON.stringify(messages)}; stderr: ${stderr}`));
-      }, ms);
-
-      const wake = (): void => {
-        if (!look()) return;
-        clearTimeout(timer);
-        waiters = waiters.filter((waiter) => waiter !== wake);
-      };
-
-      waiters.push(wake);
-    }),
+    next: (match, ms) => runtime.next(match, ms),
     end: async () => {
       child.stdin.end();
-      await exited;
+      await closed;
     },
   };
 }

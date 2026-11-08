@@ -42,11 +42,11 @@ afterEach(async () => {
   const connections = open.splice(0);
   await Promise.all(connections.map((connection) => connection.end()));
   engine.repair();
-  const recovered = await closeLeftovers(connections);
+  const { invalid, recovered } = await closeLeftovers(connections);
 
   // Every line the runtime wrote is one runtime protocol 1 allows.
-  expect([...connections.flatMap((connection) => connection.invalid), ...recovered]).toEqual([]);
-  expectNothingLeft({ dir, containers: engine.containers, kept: allowedLeft.splice(0) });
+  expect([...connections.flatMap((connection) => connection.invalid), ...invalid]).toEqual([]);
+  await expectNothingLeft({ connections: [...connections, ...recovered], dir, containers: engine.containers, kept: allowedLeft.splice(0) });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
