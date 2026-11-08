@@ -4,10 +4,10 @@
  */
 import { CallError, type CallErrorKind } from '../../../tool-launch/member-tools.js';
 import { createToolCaller, type CallOptions, type ToolCallerDeps } from '../../../tool-launch/call.js';
-import { extractReply } from '@teamai/tool-core/reply';
-import { JsonValueSchema, type LocalConfig } from '../../../types.js';
+import { JsonValueSchema, type JsonValue, type LocalConfig } from '../../../types.js';
 import type { ReportInput } from '../../engine.js';
-import { expectedOutput } from '../../output.js';
+import { expectedOutput, outputMismatch } from '../../output.js';
+import type { z } from 'zod';
 import type { OutputSchema, WorkflowFailure } from '../../types.js';
 
 export type AnswerReport = Pick<ReportInput, 'outcome' | 'outputs' | 'tool' | 'tokens' | 'durationMs' | 'message' | 'failure'>;
@@ -23,6 +23,11 @@ function takesText(output: OutputSchema | undefined): boolean {
 /** The prompt the tool answers: the step's, and for a JSON output, what the reply must be. */
 function promptOf(prompt: string, output: OutputSchema | undefined): string {
   return takesText(output) ? prompt : `${prompt}\n\nReply with only a JSON value, with no other text: ${expectedOutput(output)}`;
+}
+
+/** The values the step's output takes, so a reply holding some other JSON is asked for again. */
+function replySchema(output: OutputSchema | undefined): z.ZodType<JsonValue> {
+  return output === undefined ? JsonValueSchema : JsonValueSchema.refine((value) => outputMismatch(output, value) === null);
 }
 
 const FAILURE_OF = {
@@ -56,17 +61,18 @@ export async function runAnswerStep({ config, prompt, output, cwd, expiresAt, si
   const started = performance.now();
 
   try {
-    const { text, tool, tokens } = await caller.callTool(promptOf(prompt, output), options);
-    const durationMs = Math.round(performance.now() - started);
-    const ran: AnswerReport = { outcome: 'success', tool, durationMs };
+    if (takesText(output)) {
+      const { text, tool, tokens } = await caller.callTool(promptOf(prompt, output), options);
 
-    if (tokens) ran.tokens = tokens;
+      return { outcome: 'success', tool, durationMs: Math.round(performance.now() - started), ...(tokens && { tokens }), outputs: { text: text.trim() } };
+    }
 
-    if (takesText(output)) return { ...ran, outputs: { text: text.trim() } };
-    const reply = extractReply(text, JsonValueSchema);
+    // A reply that holds no value the output takes is asked for once more, in the same session, within the timeout.
+    const { text, tool, tokens, reply } = await caller.callForReply(promptOf(prompt, output), replySchema(output), { ...options, retries: 1 });
+    const ran: AnswerReport = { outcome: 'success', tool, durationMs: Math.round(performance.now() - started), ...(tokens && { tokens }) };
 
     if (reply === undefined) {
-      return { ...ran, ...failed({ code: 'invalid_output', message: `${tool} replied with no JSON value, which this step's output needs: ${text.trim().slice(0, 200)}` }) };
+      return { ...ran, ...failed({ code: 'invalid_output', message: `${tool} replied with no JSON value this step's output takes, even when asked again: ${text.trim().slice(0, 200)}` }) };
     }
 
     return { ...ran, outputs: reply };
