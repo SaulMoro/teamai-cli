@@ -9,7 +9,8 @@ vi.mock('@teamai/tool-core/log', () => ({
   setStderrOnly: vi.fn(() => false),
 }));
 
-import { loadLocalConfigForScope, refreshRoleAssignment, saveLocalConfigForScope } from '../config.js';
+import { loadLocalConfigForScope, loadMemberSettings, refreshRoleAssignment, saveLocalConfigForScope } from '../config.js';
+import type { MemberWorkflowSettingsSchema } from '../types.js';
 import { log } from '../utils/logger.js';
 
 function writeConfig(file: string, value: unknown): void {
@@ -77,6 +78,26 @@ describe('member settings overlay', () => {
     });
 
     expect(await loadLocalConfigForScope('project', projectRoot)).toMatchObject({ workflows: { labels: ['computer-use', 'gpu'] } });
+  });
+
+  it('reads every workflows key this machine sets, each through its schema', async () => {
+    // One valid value per key of the schema: a key added to it fails the type check here until it has one.
+    const valid: { [K in keyof typeof MemberWorkflowSettingsSchema.shape]-?: unknown } = {
+      tools: { default: 'codex' },
+      max_parallel: 3,
+      idle_timeout: '10m',
+      auto_approve: true,
+      sandbox: true,
+      allow: { network: false, env: ['CI'] },
+      labels: ['gpu'],
+      retention: '7d',
+      driver: 'local',
+      drivers: { sandboxed: { runtimes: { sandbox: { max_parallel: 2 } } } },
+    };
+
+    writeConfig(machineConfig, { workflows: valid });
+
+    expect((await loadMemberSettings(machineConfig)).workflows).toEqual(valid);
   });
 
   it('does not persist machine-only values when saving a workspace config', async () => {
