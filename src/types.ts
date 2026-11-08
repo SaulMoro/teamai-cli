@@ -3239,6 +3239,20 @@ const USER_SCOPE_ROOT_FIELDS = ['skills', 'rules', 'agents', 'hooks', 'claudemd'
 const warnedToolRoots = new Set<string>();
 
 /**
+ * Says, once per process, that `tool`'s recorded root `resolved`, outside the home directory, holds only its sessions
+ * for teamai: the sync keeps writing the tool's other files to its default root.
+ */
+export function warnSessionsOnlyToolRoot(tool: string, resolved: string, at: HomePaths = processHomePaths()): void {
+  const spec = RELOCATABLE_TOOLS[tool];
+  const key = `${tool}:${resolved}`;
+
+  if (!spec || warnedToolRoots.has(key)) return;
+  warnedToolRoots.add(key);
+  log.warn(`toolRoots.${tool} (${resolved}) is outside the home directory ${at.home}: teamai reads ${spec.label} sessions there, `
+    + `and keeps syncing ${spec.label} to ${at.path.join(at.home, ...spec.defaultRoot.split('/'))}, since every tool path is resolved relative to the home directory.`);
+}
+
+/**
  * A configured root as a HOME-relative segment, or null when it cannot be used.
  *
  * An unusable entry is warned about and dropped rather than thrown on: the rest
@@ -3260,6 +3274,13 @@ function toolRootSegment(tool: string, configured: string, at: HomePaths = proce
   }
 
   const resolved = at.path.resolve(expandHomeAt(configured, at));
+
+  if (isOutsideUserHome(resolved, at)) {
+    warnSessionsOnlyToolRoot(tool, resolved, at);
+
+    return null;
+  }
+
   const rejection = toolRootRejection(resolved, at);
 
   if (rejection) {

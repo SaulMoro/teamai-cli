@@ -176,9 +176,9 @@ import {
   recordedToolHomeDir,
   RELOCATABLE_TOOLS,
   resolveHookScope,
-  resolveToolRootDir,
   scopedToolPaths,
   toolRootRejection,
+  warnSessionsOnlyToolRoot,
   type TeamaiConfig,
   getTeamaiHomeDir,
   REPORTS_BRANCH,
@@ -286,8 +286,8 @@ function recordToolRoots(localConfig: LocalConfig): void {
     // Session lookups read a root anywhere; the sync addresses only roots in the home directory.
     if (rejection && recordedToolHomeDir(tool, { [tool]: root }) === root) {
       localConfig.toolRoots = { ...localConfig.toolRoots, [tool]: root };
-      log.warn(`Recorded ${envVar} (${root}): teamai reads ${label} sessions there, and keeps syncing ${label} to `
-        + `${resolveToolRootDir(tool, RELOCATABLE_TOOLS[tool].defaultRoot)}, because ${rejection}.`);
+      log.info(`Recorded ${envVar} as the ${label} root: ${root}`);
+      warnSessionsOnlyToolRoot(tool, root);
       continue;
     }
 

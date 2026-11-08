@@ -1611,8 +1611,8 @@ describe('init', () => {
 
       expect(await savedConfig()).toMatchObject({ toolRoots: { claude: '/opt/claude-config' } });
       const { log } = await import('../utils/logger.js');
-      expect(vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).join('\n'))
-        .toContain(`teamai reads Claude Code sessions there, and keeps syncing Claude Code to ${path.join(HOME, '.claude')}`);
+      const said = vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).filter((m) => m.includes('/opt/claude-config'));
+      expect(said).toEqual([expect.stringContaining(`teamai reads Claude Code sessions there, and keeps syncing Claude Code to ${path.join(HOME, '.claude')}`)]);
     });
 
     it('refuses a root nested deeper than the installed-tool check can look', async () => {
