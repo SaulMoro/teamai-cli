@@ -351,13 +351,15 @@ type WaitInput = {
  * for the member to answer. `leave`: this teamai stops, and the attempt stays out for a later `workflow resume <run>`.
  */
 async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: AbortSignal; leave: AbortSignal }): Promise<Waited> {
-  const { config, run, attempt, pool, staleAfterMs, step, command, env, root, dir, secrets, op } = input;
+  const { config, run, attempt, step, command, env, root, dir, secrets, op } = input;
   const failed = (failure: WorkflowFailure): Waited => ({ kind: 'failed', failure });
   const lease = { step, command, env };
   const ref = attemptRef(run, attempt);
   const earlier = await readAttemptRecord(config, run, attempt);
 
   if (!earlier.ok) return failed(fleetFailure(earlier.error));
+  // An attempt offered before waits on the pool and stale_after its offer named, whatever fleet entry reached it now.
+  const { pool, staleAfterMs } = earlier.value === 'absent' ? input : earlier.value;
 
   if (earlier.value === 'absent') {
     const repository = getRepoIdentity(root);
