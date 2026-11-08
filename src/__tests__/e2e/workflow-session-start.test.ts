@@ -104,6 +104,7 @@ steps:
     state = fs.mkdtempSync(path.join(sandbox, 'toy-state-'));
     fs.rmSync(definitionFile(), { force: true });
     fs.rmSync(definitionFile('paseo'), { force: true });
+    fs.rmSync(definitionFile('teamai-t3'), { force: true });
   });
 
   afterAll(() => {
@@ -194,6 +195,16 @@ steps:
     const stopped = envelope(started);
     const waiting = 'data' in stopped ? stopped.data.hitl_waiting as { run: string; resume: string } | undefined : undefined;
     expect(waiting?.resume, started.stderr).toBe(`teamai workflow resume ${waiting?.run ?? ''} --driver t3 --confirmed`);
+  });
+
+  it('names the driver in a relayed gate\'s resume as the person gave it, not by the definition it resolved to', async () => {
+    writeApp('teamai-t3');
+
+    const started = await runCLI(['workflow', 'start', 'shipit', '--driver', 't3'], repo, thread);
+
+    const stopped = envelope(started);
+    const waiting = 'data' in stopped ? stopped.data.hitl_waiting as { run: string; resume: string } | undefined : undefined;
+    expect(waiting?.resume, started.stderr).toBe(`teamai workflow resume ${waiting?.run ?? ''} --driver t3`);
   });
 
   it('offers the start on Paseo\'s driver in a Paseo agent, and relays the gates of the run it starts there', async () => {

@@ -36,7 +36,7 @@ export function definedDrive(opened: OpenedDriver | undefined, tools: Record<str
   const tool = opened?.driver.definition.tool;
   const drive: Pick<LocalDriverOptions, 'tools' | 'runtimes'> = { tools: tool === undefined ? tools : { default: tool, ...tools } };
 
-  if (opened) drive.runtimes = { driver: opened.driver.name, runtimes: opened.runtimes };
+  if (opened) drive.runtimes = { driver: opened.driver.name, asked: opened.asked, runtimes: opened.runtimes };
 
   return drive;
 }

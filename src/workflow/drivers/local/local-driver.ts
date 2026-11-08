@@ -232,6 +232,8 @@ export interface LocalDriverOptions {
 export interface DriverRuntimes {
   /** The definition's canonical name, recorded with each attempt. */
   driver: string;
+  /** The name the member gave it, such as `t3` for `teamai-t3`, which a command this driver prints names. */
+  asked: string;
   runtimes: OpenedDriver['runtimes'];
 }
 
@@ -255,8 +257,8 @@ interface SlotBase {
   found: readonly string[];
   /** The tools it cannot run now, with the runtime's reason. */
   unavailable?: Record<string, string>;
-  /** The runtime its prompts' tools run in, for an entry through another (`use: t3, through: sandbox`). */
-  through?: string;
+  /** Its prompts' tools run in another runtime (`use: t3, through: sandbox`). */
+  isThrough?: true;
 }
 
 /** A lease as this driver runs it: what the engine sent, and what staging it adds. A step staged after `expiresAt` does not start. */
@@ -582,7 +584,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv; through?: string } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv; isThrough?: true } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -800,8 +802,8 @@ async function promptReport(
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
     // Through another runtime, the app's tool runs in the outer's place, on a home of the attempt's, as an exec runtime's does.
-    const throughHome = onRuntime.through === undefined ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
-    const isThroughOuter = onRuntime.through !== undefined;
+    const throughHome = onRuntime.isThrough !== true ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
+    const isThroughOuter = onRuntime.isThrough === true;
     launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd, throughHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
@@ -1191,7 +1193,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
   const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
   const tools = [...found, ...pickedUnlooked];
-  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', runtimes: [{ kind: 'local', use: 'local', engine: { logins: [] } }] };
+  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'local', use: 'local', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
   const local = localStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
@@ -1212,7 +1214,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
-          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.through !== undefined && { through: entry.through }),
+          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }),
           can: {
             ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
             ...(unproven(entry.can) && { isolation: 'none' as const }),
@@ -1838,7 +1840,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.through !== undefined && { through: slot.through }) });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn, ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }) });
         })() });
       }
 
@@ -1850,7 +1852,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       if ('lease' in next.data && room()) continue;
 
-      if (relay && hitl && busy() === 0 && held.length === 0) return relayedGate(hitl, { driver: defined.driver, isConfirmed: isStarted && started.definition.invoke === 'ask' });
+      if (relay && hitl && busy() === 0 && held.length === 0) return relayedGate(hitl, { driver: defined.asked, isConfirmed: isStarted && started.definition.invoke === 'ask' });
 
       if (busy() === 0 && !question) {
         const wait = WaitReplySchema.parse(next.data.wait);
