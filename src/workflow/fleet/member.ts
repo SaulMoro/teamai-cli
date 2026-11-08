@@ -37,7 +37,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
-import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
@@ -881,8 +881,7 @@ async function archiveSession(config: LocalConfig, { run, attempt, root, session
 
   if (!platform) return;
   const holding = await attemptHoldingSession(config, run, session);
-  const evidenceDir = path.dirname(attemptResultPath(config, run, attempt));
-  const archived = await archiveSessions(config, [[{ platform, sessionId: session.id, evidenceDir, ...(holding && { storeDir: holding.storeDir }) }]], { run, checkout: root });
+  const archived = await archiveSessions(config, [[{ platform, sessionId: session.id, evidenceDir: attemptOutDir(config, run, attempt), ...(holding && { storeDir: holding.storeDir }) }]], { run, checkout: root });
 
   if (archived.status === 'failed') log.warn(`The ${session.tool} session ${session.id} of run ${run} did not reach the team session archive, so a later step that continues it starts a new session: ${archived.message}`);
 }

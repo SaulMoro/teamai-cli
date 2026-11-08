@@ -2999,8 +2999,8 @@ function isUnderUserHome(dir: string, at: HomePaths): boolean {
   return rel !== '' && !rel.startsWith('..') && !at.path.isAbsolute(rel);
 }
 
-/** True when `dir` resolves to somewhere neither the home directory nor inside it. */
-function isOutsideUserHome(dir: string, at: HomePaths): boolean {
+/** True when `dir` resolves to somewhere neither the home directory nor inside it: a tool root there holds only its sessions for teamai. */
+export function isOutsideUserHome(dir: string, at: HomePaths = processHomePaths()): boolean {
   const rel = at.path.relative(at.home, at.path.resolve(dir));
 
   return rel === '..' || rel.startsWith(`..${at.path.sep}`) || at.path.isAbsolute(rel);
@@ -3248,8 +3248,8 @@ export function warnSessionsOnlyToolRoot(tool: string, resolved: string, at: Hom
 
   if (!spec || warnedToolRoots.has(key)) return;
   warnedToolRoots.add(key);
-  log.warn(`toolRoots.${tool} (${resolved}) is outside the home directory ${at.home}: teamai reads ${spec.label} sessions there, `
-    + `and keeps syncing ${spec.label} to ${at.path.join(at.home, ...spec.defaultRoot.split('/'))}, since every tool path is resolved relative to the home directory.`);
+  const syncedTo = at.path.join(at.home, ...spec.defaultRoot.split('/'));
+  log.warn(`toolRoots.${tool} (${resolved}) is outside the home directory ${at.home}: teamai reads ${spec.label} sessions there, and keeps syncing ${spec.label} to ${syncedTo}, since every tool path is resolved relative to the home directory.`);
 }
 
 /**

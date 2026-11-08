@@ -31,7 +31,7 @@ import { redact } from '@teamai/shared/redact';
 import { AgentSession, sessionKey } from './agent-session.js';
 import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
-import type { ArchivedEvidence } from './session-evidence.js';
+import type { ArchivedEvidence, EvidenceFile } from './session-evidence.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 
 /** `value` with `mask` applied to each string in it, object keys included. */
@@ -152,7 +152,7 @@ export function firstPromptOnly(found: { session: Session }): PromptOnlyRead {
  * A file of the evidence the session's step left, as `evidence.json` lists it: a text file by its path in the evidence
  * directory, a listed one, whose content never left the machine that ran the step, by its path there.
  */
-export type StepEvidenceListing = { kind: 'text'; path: string; type: string; size: number; cut: boolean } | { kind: 'listed'; path: string; type: string; size: number; sha256: string };
+export type StepEvidenceListing = Omit<Extract<EvidenceFile, { kind: 'text' }>, 'text'> | Extract<EvidenceFile, { kind: 'listed' }>;
 
 /** A session as one read gives it to a judge. In memory only: its body is the session's redacted text. */
 export interface JudgedSession {
@@ -197,7 +197,9 @@ export function judgeSession({ platform, found, captures, mask, agent: archived,
 
   if (evidence) manifest.evidence = step.listing;
 
-  const framing = `## evidence.json\n\n${JSON.stringify(manifest)}\n\n## transcripts/session.md\n\n`.length;
+  const framing = `## evidence.json\n\n${JSON.stringify(manifest)}\n\n## transcripts/session.md\n\n`.length
+    + stepPromptSections(step.files).reduce((sum, section) => sum + `\n\n## ${section.title}\n\n`.length + section.body.length, 0);
+
   const agent = archived ?? SessionCaptures.agentOf(captures, SessionCaptures.reportedModelOf(session));
   const runMode = SessionCaptures.runModeOf(captures);
   const context: SessionLabelContext = { used: { skills: used }, prompt: mask(firstPrompt(session)) };
@@ -214,6 +216,16 @@ export function judgeSession({ platform, found, captures, mask, agent: archived,
     context,
     mask,
   };
+}
+
+/** The most of the prompt the text files of a step's evidence take, so the transcript keeps the rest. */
+const STEP_EVIDENCE_PROMPT_MAX_CHARS = 50_000;
+
+/** The text files of a step's evidence as the prompt carries them: each cut at its ends to an even share of the step's. */
+function stepPromptSections(files: JudgedSession['stepEvidence']): Array<{ title: string; body: string }> {
+  const share = Math.floor(STEP_EVIDENCE_PROMPT_MAX_CHARS / Math.max(1, files.length));
+
+  return files.map((file) => ({ title: file.path, body: keepEnds(file.text, share) }));
 }
 
 /**
@@ -254,7 +266,9 @@ function stepEvidenceOf(evidence: ArchivedEvidence | undefined, mask: (text: str
  */
 export async function writeSessionEvidence(dir: string, judged: JudgedSession, rubrics: Rubrics, files: Readonly<Record<string, string>> = {}): Promise<void> {
   const { body, manifest, mask, stepEvidence } = judged;
-  const pinned = [...Object.entries(files).map(([file, text]) => ({ title: file, body: mask(text) })), ...stepEvidence.map((file) => ({ title: file.path, body: file.text }))];
+  const asked = Object.entries(files).map(([file, text]) => ({ title: file, body: mask(text) }));
+  const pinned = [...asked, ...stepEvidence.map((file) => ({ title: file.path, body: file.text }))];
+  const prompted = [...asked, ...stepPromptSections(stepEvidence)];
 
   await writeEvidence(dir, async (tmp) => {
     await fs.mkdir(path.join(tmp, 'transcripts'));
@@ -269,7 +283,7 @@ export async function writeSessionEvidence(dir: string, judged: JudgedSession, r
     await fs.writeFile(path.join(tmp, 'prompt.md'), mask(rubricPrompt(rubrics)) + fencedEvidence([
       { title: 'evidence.json', body: JSON.stringify(manifest) },
       { title: 'transcripts/session.md', body },
-      ...pinned,
+      ...prompted,
     ], [['transcripts/session.md', ...pinned.map(({ title }) => title)].join(', '), 'evidence.json'].join(' and ')));
   });
 }

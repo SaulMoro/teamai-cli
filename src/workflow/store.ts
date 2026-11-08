@@ -109,6 +109,14 @@ export function placeRecordPath(config: LocalConfig, run: RunId, attempt: Attemp
   return path.join(attemptDir(config, run, attempt), 'place.json');
 }
 
+/**
+ * `attempts/<a>/out/`: what a step attempt leaves behind, read-write for its tool: the result file, and the evidence
+ * archived with its session.
+ */
+export function attemptOutDir(config: LocalConfig, run: RunId, attempt: AttemptId): string {
+  return path.join(attemptDir(config, run, attempt), 'out');
+}
+
 /** The name of an attempt's result file in its `out/` directory. */
 export const ATTEMPT_RESULT_FILE = 'result.json';
 
@@ -118,7 +126,7 @@ export const ATTEMPT_RESULT_FILE = 'result.json';
  * it holds the place record and the saved overlay.
  */
 export function attemptResultPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
-  return path.join(attemptDir(config, run, attempt), 'out', ATTEMPT_RESULT_FILE);
+  return path.join(attemptOutDir(config, run, attempt), ATTEMPT_RESULT_FILE);
 }
 
 /**
