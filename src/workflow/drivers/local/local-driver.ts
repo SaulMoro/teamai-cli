@@ -27,7 +27,7 @@ import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
 import { type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
-import { credentialSecrets, newOpId, retryCommand, type ExecAnswer, type ExecQuestion, type StepRuntime } from '../../runtimes/step-runtime.js';
+import { credentialSecrets, newOpId, resumeOrPublish, retryCommand, type ExecAnswer, type ExecQuestion, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, runPlaceSetup, sweepClones } from '../../place/place.js';
@@ -136,7 +136,7 @@ const HITL = 'hitl' satisfies Missing;
 const WaitReplySchema = z.object({
   delivering: z.array(z.unknown()).optional().catch(undefined),
   reason: z.string().optional().catch(undefined),
-  held: z.array(z.object({ step: z.string(), reason: z.string(), missing: z.array(z.string()), limited: z.string().optional().catch(undefined) })).optional().catch(undefined),
+  held: z.array(z.object({ step: z.string(), reason: z.string(), missing: z.array(z.string()), limitedTool: z.string().optional().catch(undefined) })).optional().catch(undefined),
 }).catch({});
 
 /** A step a runtime held back, as a wait names it. */
@@ -972,6 +972,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     ? undefined
     : lease.tool ?? toolForOn(slotOf.get(lease.attempt)?.can.default_tool)({ agent: lease.agent, tool: lease.tool }));
 
+  /** The tools held on `slot` now: a fleet member signs in with its own account, so it is held only within the cap. */
+  const limitedOn = (slot: RuntimeSlot | undefined): Record<string, string> => (slot?.use === 'fleet' ? limits.heldWithinCap(Date.now()) : limits.held(Date.now()));
+
   const releasedReport = (lease: StagedLease): ReportBody => ({ attempt: lease.attempt, revision: lease.revision, driver, outcome: 'released' });
 
   /**
@@ -1062,7 +1065,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
         running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, relay, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
-        limited: slot.use === 'fleet' ? limits.heldWithinCap(Date.now()) : limits.held(Date.now()),
+        limitedTools: limitedOn(slot),
       });
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
@@ -1192,7 +1195,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       for (const lease of held.filter((waiting) => {
         const tool = launchedTool(waiting);
 
-        return tool !== undefined && limits.held(Date.now())[tool] !== undefined;
+        return tool !== undefined && limitedOn(slotOf.get(waiting.attempt))[tool] !== undefined;
       })) {
         held.splice(held.indexOf(lease), 1);
         const failed = await report(releasedReport(lease), lease);
@@ -1409,42 +1412,40 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         }
 
         // Only usage limits hold the steps left: wait for the reset, ask the person who attends, or move on.
-        const limitHolds = (offered.heldByAll ?? wait.held ?? []).flatMap(({ step, limited }) => (limited === undefined ? [] : [{ step, limited }]));
-        const idle = limitHolds.length > 0 ? limits.whenIdle(Date.now(), [...new Set(limitHolds.map(({ limited }) => limited))], { attended: askPerson !== undefined }) : undefined;
+        const limitHolds = (offered.heldByAll ?? wait.held ?? []).flatMap(({ step, limitedTool }) => (limitedTool === undefined ? [] : [{ step, limitedTool }]));
+        const idle = limitHolds.length > 0 ? limits.whenIdle(Date.now(), [...new Set(limitHolds.map(({ limitedTool }) => limitedTool))], { attended: askPerson !== undefined }) : undefined;
+        const heldBy = (tool: string): string[] => [...new Set(limitHolds.flatMap(({ step, limitedTool }) => (limitedTool === tool ? [step] : [])))];
 
         // The run is offered on teamai-reports, as for a step only a person can take, with the steps `tool`'s limit holds.
-        const offerOnLimit = async (tool: string, said: (resume: string) => string, unofferedSaid: (reason: string) => string): Promise<WorkflowEnvelope> => {
-          const steps = [...new Set(limitHolds.flatMap(({ step, limited }) => (limited === tool ? [step] : [])))];
+        const offerOnLimit = async ({ tool, offeredSaid, unofferedSaid }: { tool: string; offeredSaid: (resume: string) => string; unofferedSaid: (reason: string) => string }): Promise<WorkflowEnvelope> => {
           const unoffered = await offerToPerson(config, runId, cwd);
 
           if (unoffered !== undefined) return { error: { code: 'usage_limited', message: unofferedSaid(unoffered) } };
           const resume = `teamai workflow resume ${runId} --claim`;
-          log.info(said(resume));
+          log.info(offeredSaid(resume));
 
-          return { data: { handoff: { run: runId, steps, resume } } };
+          return { data: { handoff: { run: runId, steps: heldBy(tool), resume } } };
         };
-
-        const hereOrElsewhere = `Continue it here once the limit resets: teamai workflow resume ${runId}, or publish it from here for another machine: teamai workflow publish ${runId}`;
 
         if (idle?.kind === 'ask' && askPerson) {
           const line = await askPerson(`${idle.reason}. Wait here until it resets, or offer run ${runId} to another machine on teamai-reports? [wait/offer] `, new AbortController().signal);
 
           if (line === undefined) {
-            return { error: { code: 'interrupted', message: `The question on the usage limit closed without an answer. Continue run ${runId} here once the limit resets: teamai workflow resume ${runId}, or publish it for another machine: teamai workflow publish ${runId}` } };
+            return { error: { code: 'interrupted', message: `The question on the usage limit closed without an answer. Once the limit resets, continue run ${runId} ${resumeOrPublish(runId)}` } };
           }
 
           const answer = line.trim().toLowerCase();
 
           if (answer === 'offer' || answer === 'o') {
-            return offerOnLimit(
-              idle.tool,
-              (resume) => `Run ${runId} is offered on teamai-reports, as you chose: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`,
-              (reason) => `Run ${runId} could not be offered on teamai-reports: ${reason}. ${hereOrElsewhere}`,
-            );
+            return offerOnLimit({
+              tool: idle.tool,
+              offeredSaid: (resume) => `Run ${runId} is offered on teamai-reports, as you chose: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`,
+              unofferedSaid: (reason) => `Run ${runId} could not be offered on teamai-reports: ${reason}. Once the limit resets, continue it ${resumeOrPublish(runId)}`,
+            });
           }
 
           // An empty line waits, as the question's first choice; anything else asks again.
-          if (answer === '' || answer === 'wait' || answer === 'w') limits.answered(idle.tool, 'wait');
+          if (answer === '' || answer === 'wait' || answer === 'w') limits.choseWait(idle.tool);
           continue;
         }
 
@@ -1460,13 +1461,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         // Past the wait, or for a reset after it, the run moves on: it is offered on teamai-reports, as for a person.
         if (idle?.kind === 'past_cap') {
-          const quoted = [...new Set(limitHolds.flatMap(({ step, limited }) => (limited === idle.tool ? [`"${step}"`] : [])))];
+          const quoted = heldBy(idle.tool).map((step) => `"${step}"`);
 
-          return offerOnLimit(
-            idle.tool,
-            (resume) => `${quoted.length > 1 ? `Steps ${quoted.join(', ')} wait` : `Step ${quoted.join(', ')} waits`}: ${idle.reason}. So run ${runId} is offered on teamai-reports: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`,
-            (reason) => `Run ${runId} waits: ${idle.reason}, and it could not be offered on teamai-reports: ${reason}. ${hereOrElsewhere}`,
-          );
+          return offerOnLimit({
+            tool: idle.tool,
+            offeredSaid: (resume) => `${quoted.length > 1 ? `Steps ${quoted.join(', ')} wait` : `Step ${quoted.join(', ')} waits`}: ${idle.reason}. So run ${runId} is offered on teamai-reports: another machine continues it with ${resume}. To continue it here once the limit resets: teamai workflow resume ${runId}`,
+            unofferedSaid: (reason) => `Run ${runId} waits: ${idle.reason}, and it could not be offered on teamai-reports: ${reason}. Once the limit resets, continue it ${resumeOrPublish(runId)}`,
+          });
         }
 
         // What the member can change comes first: a step the policy holds on one runtime is held on every runtime that

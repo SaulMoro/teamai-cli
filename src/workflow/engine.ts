@@ -2188,9 +2188,9 @@ export interface NextOptions {
   toolFor?: ToolFor;
   /**
    * Process-only: the tools, by the name a prompt step launches, whose usage limit holds now, each with why. A prompt
-   * step on one is held, never failed, and its hold names the tool (`limited`), so the driver waits for the reset.
+   * step on one is held, never failed, and its hold names the tool (`limitedTool`), so the driver waits for the reset.
    */
-  limited?: Readonly<Record<string, string>>;
+  limitedTools?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -2520,10 +2520,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           }
 
           const limitedTool = definition.prompt === undefined ? undefined : promptTool(definition, context.toolFor);
-          const limit = limitedTool === undefined ? undefined : options.limited?.[limitedTool];
+          const limit = limitedTool === undefined ? undefined : options.limitedTools?.[limitedTool];
 
           if (limitedTool !== undefined && limit !== undefined) {
-            held.push({ step: state.id, reason: `step "${state.id}" waits: ${limit}`, missing: [], limited: limitedTool });
+            held.push({ step: state.id, reason: `step "${state.id}" waits: ${limit}`, missing: [], limitedTool });
             continue;
           }
 

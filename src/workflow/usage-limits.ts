@@ -43,8 +43,8 @@ function wallMinutes({ year, month, day, hour, minute }: Wall): number {
   return Date.UTC(year, month - 1, day, hour, minute) / 60_000;
 }
 
-/** The hour of a 12- or 24-hour clock. */
-function hourOf(hour: string, meridiem: string | undefined): number {
+/** The hour of a 12-hour clock with its `meridiem`, or of a 24-hour one without. */
+function hourOf({ hour, meridiem }: { hour: string; meridiem: string | undefined }): number {
   const value = Number(hour) % 12;
 
   if (meridiem === undefined) return Number(hour);
@@ -103,7 +103,7 @@ function resetOf(text: string, { now, zone }: { now: number; zone: string }): nu
   const [, month, day, year, hour = '0', minute, meridiem, named] = at;
   const date = month !== undefined && day !== undefined ? { month: MONTHS.indexOf(month.toLowerCase()) + 1, day: Number(day), ...(year !== undefined && { year: Number(year) }) } : undefined;
 
-  return nextWall({ now, zone: named ?? zone, hour: hourOf(hour, meridiem), minute: minute === undefined ? 0 : Number(minute), ...(date && { date }) });
+  return nextWall({ now, zone: named ?? zone, hour: hourOf({ hour, meridiem }), minute: minute === undefined ? 0 : Number(minute), ...(date && { date }) });
 }
 
 /** The member's own time zone, which a tool's times without one are in. */
@@ -144,14 +144,14 @@ export interface UsageLimitBook {
    * Undefined when no limit of this drive holds any of them.
    */
   whenIdle(now: number, tools: readonly string[], options?: { attended?: boolean }): WhenIdle | undefined;
-  /** The person chose to wait for `tool`'s limit, past the cap. */
-  answered(tool: string, answer: 'wait'): void;
+  /** The person chose to wait for `tool`'s limit, past the cap, until a launch on it ends without the limit. */
+  choseWait(tool: string): void;
 }
 
 function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zone?: string } = {}): UsageLimitBook {
   const limits = new Map<string, Limit>();
 
-  const clock = (at: number, now: number): string => {
+  const clock = ({ at, now }: { at: number; now: number }): string => {
     const wall = wallAt(at, zone);
     const today = wallAt(now, zone);
 
@@ -164,14 +164,14 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
   };
 
   const reasonOf = (tool: string, limit: Limit, now: number): string => (limit.resetsAt === undefined
-    ? `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock(limit.tryAt, now)}`
-    : `${tool} hit its usage limit, which resets at ${clock(limit.resetsAt, now)}`);
+    ? `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`
+    : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}`);
 
   const capText = capMs % 3_600_000 === 0 ? `${capMs / 3_600_000} hour${capMs === 3_600_000 ? '' : 's'}` : `${Math.ceil(capMs / 60_000)} minutes`;
 
   const pastCapReason = (tool: string, limit: Limit, now: number): string => (limit.resetsAt === undefined
-    ? `${tool} hit its usage limit at ${clock(limit.since, now)} and gave no reset time, and it held for the ${capText} an unattended run waits for it`
-    : `${tool} hit its usage limit, which resets at ${clock(limit.resetsAt, now)}, past the ${capText} an unattended run waits for it`);
+    ? `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and gave no reset time, and it held for the ${capText} an unattended run waits for it`
+    : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}, past the ${capText} an unattended run waits for it`);
 
   const isPastCap = (limit: Limit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
 
@@ -186,7 +186,7 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
       const tries = resetsAt === undefined ? (earlier?.tries ?? -1) + 1 : 0;
       const tryAt = resetsAt ?? now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
 
-      limits.set(tool, { since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: false, ...(resetsAt !== undefined && { resetsAt }) });
+      limits.set(tool, { since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: earlier?.isWaitChosen ?? false, ...(resetsAt !== undefined && { resetsAt }) });
     },
     ran(tool, startedAt) {
       const limit = limits.get(tool);
@@ -224,7 +224,7 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
 
       return { kind: 'wait', tool: first.tool, until: first.limit.tryAt, reason: reasonOf(first.tool, first.limit, now) };
     },
-    answered(tool) {
+    choseWait(tool) {
       const limit = limits.get(tool);
 
       if (limit) limit.isWaitChosen = true;
