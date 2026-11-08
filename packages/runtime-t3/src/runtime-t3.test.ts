@@ -2488,11 +2488,12 @@ describe('teamai-runtime-t3', () => {
         const runtime = start();
         runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
         await runtime.next((line) => line['type'] === 'init');
-        const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
-        fs.chmodSync(places, 0o500);
+        // The place's operations are kept in a folder of its own.
+        const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', encodeURIComponent(first.handle));
+        fs.chmodSync(ops, 0o500);
         runtime.send({ type: 'cancel', op: 'op-00000076' });
         expect(await runtime.next((line) => line['op'] === 'op-00000076')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('EACCES') } });
-        fs.chmodSync(places, 0o700);
+        fs.chmodSync(ops, 0o700);
 
         runtime.send({ type: 'cancel', op: 'op-00000076' });
 
@@ -3051,12 +3052,12 @@ describe('teamai-runtime-t3', () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-0000007a'));
       await runtime.next((line) => line['op'] === 'op-0000007a' && line['event'] === 'display');
-      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
-      fs.chmodSync(places, 0o500);
+      const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', encodeURIComponent(handle));
+      fs.chmodSync(ops, 0o500);
       fs.writeFileSync(release, '');
 
       expect(await ended(runtime, 'op-0000007a')).toMatchObject({ op: 'op-0000007a', event: 'finished' });
-      fs.chmodSync(places, 0o700);
+      fs.chmodSync(ops, 0o700);
       expect(runtime.lines.find((line) => line['op'] === 'op-0000007a' && line['event'] === 'notice')).toEqual({
         op: 'op-0000007a', event: 'notice', message: expect.stringMatching(/^Runtime t3 could not record how op-0000007a ended \(.*EACCES.*\), so only this runtime process remembers that end, until the place closes\.$/),
       });

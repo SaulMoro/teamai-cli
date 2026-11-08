@@ -1,14 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { OpStateSchema, RuntimeHandleSchema } from '@teamai/runtime-protocol';
+import { OpStateSchema, RuntimeHandleSchema, type OpState } from '@teamai/runtime-protocol';
+import { recordStore } from '@teamai/runtime-kit/journal';
 import { z } from 'zod';
 import { STEP_MODES } from './t3.js';
 
 // ─── What the runtime keeps of each opened place, across its own restarts ───
 //
-//  One file per handle under the runtime's state directory, written whole through a rename, so a runtime killed
-//  mid-write leaves the previous record. teamai reattaches a handle after it restarts; the record says which T3
-//  thread each prompt launched, so the runtime reconnects to it instead of launching another.
+//  One record per handle under the runtime's state directory, and one per operation of it, each written whole through
+//  a rename, so a runtime killed mid-write leaves the previous record. teamai reattaches a handle after it restarts;
+//  the records say which T3 thread each prompt launched, so the runtime reconnects to it instead of launching another.
 //
 
 /** The T3 thread a prompt launched: what reconnecting to it, showing it and settling it need. */
@@ -61,30 +62,39 @@ const placeFields = {
   handle: RuntimeHandleSchema,
   run: z.string(),
   attempt: z.string(),
-  /** Each operation of the handle, as `reattach` reports it. */
-  ops: z.record(z.string(), OpStateSchema),
-  /** The thread of each prompt that launched one. */
-  threads: z.record(z.string(), ThreadSchema),
-  /** The launch of each prompt T3 has not answered yet. */
-  launches: z.record(z.string(), LaunchSchema),
 };
 
 /**
  * An attempt's folder in a T3 project, or a confined prompt's place, which has no view of the host. Its threads bind
  * the folder as a worktree of the project, or as the project's own folder (`root`): a checkout, a clone, or a worktree
  * T3 would otherwise run the project's setup script in. `settleScript`: the script T3 runs when one of them is settled.
+ * Strict, so a record that still holds its operations, as a place's record once did, is unreadable, not read without them.
  */
 const PlaceSchema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('worktree'), ...placeFields, projectId: z.string(), projectTitle: z.string(),
     binding: z.enum(['existing_worktree', 'root']).default('existing_worktree'), settleScript: z.string().optional(),
     /** The project whose T3 settings the step's threads follow: the checkout's, when the threads run on one teamai added. */
     settingsProjectId: z.string().optional(),
   }),
-  z.object({ kind: z.literal('confined'), ...placeFields }),
+  z.strictObject({ kind: z.literal('confined'), ...placeFields }),
 ]);
 
-export type PlaceRecord = z.infer<typeof PlaceSchema>;
+/**
+ * One operation of a place, in a record of its own: how it stands, as `reattach` reports it, the thread it launched,
+ * and its launch while T3 has not answered it. Two runtime processes that write different operations never lose each
+ * other's write.
+ */
+const ConversationSchema = z.object({ state: OpStateSchema, thread: ThreadSchema.optional(), launch: LaunchSchema.optional() });
+
+export type ConversationRecord = z.infer<typeof ConversationSchema>;
+
+/** A place with its operations: each one's state, the thread of each prompt that launched one, and each unanswered launch. */
+export type PlaceRecord = z.infer<typeof PlaceSchema> & {
+  ops: Record<string, OpState>;
+  threads: Record<string, ThreadRecord>;
+  launches: Record<string, LaunchRecord>;
+};
 
 /** A place's record: none once it was removed, or one that is there but cannot be read, which is not the same. */
 export type PlaceRead = { kind: 'found'; place: PlaceRecord } | { kind: 'missing' } | { kind: 'unreadable'; file: string; why: string };
@@ -96,44 +106,57 @@ export interface Journal {
    * none, a record that cannot be read may hold it, so the answer is unreadable then, not missing.
    */
   placeOf(op: string): PlaceRead;
-  write(place: PlaceRecord): void;
+  /** Writes the place's own record, and a record for each operation it holds. */
+  open(place: PlaceRecord): void;
+  /**
+   * Writes `op`'s record in the place `handle` as `change` makes it from the one there; `undefined` writes nothing. A
+   * record there that cannot be read is never written over: that throws.
+   */
+  update(handle: string, op: string, change: (conversation: ConversationRecord | undefined) => ConversationRecord | undefined): void;
   remove(handle: string): void;
   /** The file that holds the place's record, which the person deletes once they stopped what it may still run. */
   file(handle: string): string;
 }
 
+/**
+ * The places in `dir`, one `<handle>.json` each, with each place's operations in `<handle>/<op>.json` beside it, keyed by
+ * the operation apart from the place.
+ */
 export function journal(dir: string): Journal {
-  const file = (handle: string) => path.join(dir, `${encodeURIComponent(handle)}.json`);
+  const places = recordStore(dir, PlaceSchema);
+  const conversationsOf = (handle: string) => recordStore(path.join(dir, encodeURIComponent(handle)), ConversationSchema);
 
   const read = (handle: string): PlaceRead => {
-    const at = file(handle);
-    let text: string;
+    const own = places.read(handle);
 
-    try {
-      text = fs.readFileSync(at, 'utf8');
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { kind: 'missing' };
+    if (own.kind !== 'found') return own;
+    const conversations = conversationsOf(handle);
+    const place: PlaceRecord = { ...own.record, ops: {}, threads: {}, launches: {} };
 
-      return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
+    for (const op of conversations.keys()) {
+      const found = conversations.read(op);
+
+      if (found.kind === 'unreadable') return found;
+
+      if (found.kind === 'missing') continue;
+      const { state, thread, launch } = found.record;
+      place.ops[op] = state;
+
+      if (thread) place.threads[op] = thread;
+
+      if (launch) place.launches[op] = launch;
     }
 
-    try {
-      const parsed = PlaceSchema.safeParse(JSON.parse(text));
-
-      return parsed.success ? { kind: 'found', place: parsed.data } : { kind: 'unreadable', file: at, why: z.prettifyError(parsed.error) };
-    } catch (error) {
-      return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
-    }
+    return { kind: 'found', place };
   };
 
   return {
     read,
     placeOf(op) {
-      const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')) : [];
       let unreadable: PlaceRead = { kind: 'missing' };
 
-      for (const name of names) {
-        const found = read(decodeURIComponent(name.slice(0, -'.json'.length)));
+      for (const handle of places.keys()) {
+        const found = read(handle);
 
         if (found.kind === 'found' && found.place.ops[op] !== undefined) return found;
 
@@ -142,13 +165,26 @@ export function journal(dir: string): Journal {
 
       return unreadable;
     },
-    write(place) {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const temp = `${file(place.handle)}.${process.pid}.tmp`;
-      fs.writeFileSync(temp, JSON.stringify(place), { mode: 0o600 });
-      fs.renameSync(temp, file(place.handle));
+    open({ ops, threads, launches, ...own }) {
+      places.write(own.handle, own);
+      const conversations = conversationsOf(own.handle);
+
+      for (const [op, state] of Object.entries(ops)) conversations.write(op, { state, ...(threads[op] && { thread: threads[op] }), ...(launches[op] && { launch: launches[op] }) });
     },
-    remove: (handle) => fs.rmSync(file(handle), { force: true }),
-    file,
+    update(handle, op, change) {
+      const conversations = conversationsOf(handle);
+      const found = conversations.read(op);
+
+      if (found.kind === 'unreadable') throw new Error(`Runtime t3 cannot read its record of ${op}, ${found.file} (${found.why.replace(/\.$/, '')}), so it does not write over it.`);
+      const next = change(found.kind === 'found' ? found.record : undefined);
+
+      if (next !== undefined) conversations.write(op, next);
+    },
+    // The operations first: a place whose removal stopped halfway is still there, and a later close removes the rest.
+    remove(handle) {
+      fs.rmSync(path.join(dir, encodeURIComponent(handle)), { recursive: true, force: true });
+      places.remove(handle);
+    },
+    file: places.file,
   };
 }

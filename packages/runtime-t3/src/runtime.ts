@@ -14,7 +14,7 @@ import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstan
 import type { AddedProjects } from './added-projects.js';
 import type { SignInAccess } from './auth.js';
 import { parseOptions } from './options.js';
-import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
+import type { ConversationRecord, Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { CLOCK_SLACK_MS, DRIVER_NAMES, DRIVERS, driverOf, isDefaultToolHome, sessionSince, toolOf, type Driver, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde, type ServedInstances } from './tool-instances.js';
@@ -615,20 +615,33 @@ export function serve(options: ServeOptions): Promise<void> {
     return reached;
   };
 
-  /** `known` with the thread of `op` ended: the runtime saw it stop. */
-  const endedIn = (known: PlaceRecord, op: OpId): PlaceRecord => {
-    const thread = known.threads[op];
+  /** `conversation` with its thread ended: the runtime saw it stop. */
+  const endedIn = (conversation: ConversationRecord): ConversationRecord => {
+    const { thread } = conversation;
 
-    return thread && !thread.ended ? { ...known, threads: { ...known.threads, [op]: { ...thread, ended: {} } } } : known;
+    return thread && !thread.ended ? { ...conversation, thread: { ...thread, ended: {} } } : conversation;
+  };
+
+  /**
+   * Journals `change` to `op`'s record in the place `handle`, once the place's records can be read; in `opened`, written
+   * again first, when its record is missing.
+   */
+  const journalOp = ({ handle, op, opened }: { handle: string; op: string; opened?: PlaceRecord }, change: (conversation: ConversationRecord | undefined) => ConversationRecord | undefined): void => {
+    const known = journal.read(handle);
+
+    if (known.kind === 'unreadable' || (known.kind === 'missing' && !opened)) return;
+
+    if (known.kind === 'missing' && opened) journal.open(opened);
+    journal.update(handle, op, change);
   };
 
   /** Journals how an op ended, and, when the runtime saw it stop, that its thread ended, in one write. */
   const record = (handle: string, state: OpState, { threadEnded }: { threadEnded: boolean }): void => {
-    const now = place(handle);
+    journalOp({ handle, op: state.op }, (conversation) => {
+      const withOp: ConversationRecord = { ...conversation, state };
 
-    if (!now) return;
-    const withOp = { ...now, ops: { ...now.ops, [state.op]: state } };
-    journal.write(threadEnded ? endedIn(withOp, state.op) : withOp);
+      return threadEnded ? endedIn(withOp) : withOp;
+    });
   };
 
   /** What a request that needs a place answers when its record is there but cannot be read: it may hold live threads. */
@@ -1045,7 +1058,7 @@ export function serve(options: ServeOptions): Promise<void> {
     // A confined prompt's place: its thread runs in a scratch folder of its own, in no project.
     if (!view) {
       const confined: PlaceRecord = { kind: 'confined', handle, run: request.run, attempt: request.attempt, ops: {}, threads: {}, launches: {} };
-      journal.write(confined);
+      journal.open(confined);
       write({ op: request.op, event: 'ready', display: placeDisplay(confined, session.environment) });
 
       return;
@@ -1149,7 +1162,7 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    journal.write(opened);
+    journal.open(opened);
     write({ op: request.op, event: 'ready', display: placeDisplay(opened, s.environment) });
   };
 
@@ -1479,9 +1492,7 @@ export function serve(options: ServeOptions): Promise<void> {
     // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent. One it cannot
     // journal fails the request before the op runs here, as nothing was launched.
     if (!thread) {
-      const now = place(request.handle) ?? (released.has(request.handle) ? undefined : opened);
-
-      if (now) journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
+      journalOp({ handle: request.handle, op: request.op, ...(!released.has(request.handle) && { opened }) }, (conversation) => ({ ...conversation, state: { op: request.op, state: 'running' }, launch }));
     }
 
     const state: Running = { handle: request.handle, run: opened.run, title };
@@ -1498,13 +1509,8 @@ export function serve(options: ServeOptions): Promise<void> {
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = (threadId: string, copy: string | undefined, model: string | undefined): ThreadRecord => {
         const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }) };
-        const now = place(request.handle) ?? (released.has(request.handle) ? undefined : opened);
-
-        if (now) {
-          const { [request.op]: _answered, ...launches } = now.launches;
-          // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
-          journal.write({ ...now, ops: { ...now.ops, [request.op]: now.ops[request.op] ?? { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
-        }
+        // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
+        journalOp({ handle: request.handle, op: request.op, ...(!released.has(request.handle) && { opened }) }, (conversation) => ({ state: conversation?.state ?? { op: request.op, state: 'running' }, thread: launched }));
 
         state.thread = launched;
         write({ op: request.op, event: 'display', display: threadDisplay(launched, s.environment) });
@@ -1599,7 +1605,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const resolved: PlaceRecord = { ...base, launches, ...(thread && { threads: { ...base.threads, [op]: thread } }) };
 
-    if (now) journal.write(resolved);
+    if (now) journalOp({ handle: known.handle, op }, (conversation) => conversation && { state: conversation.state, ...((thread ?? conversation.thread) && { thread: thread ?? conversation.thread }) });
 
     return { ok: true, place: resolved };
   };
@@ -1757,9 +1763,7 @@ export function serve(options: ServeOptions): Promise<void> {
         }
       }
 
-      const now = place(handle);
-
-      if (now?.threads[op]) journal.write({ ...now, threads: { ...now.threads, [op]: { ...now.threads[op], ended: { settlement: outcome } } } });
+      journalOp({ handle, op }, (conversation) => conversation?.thread && { ...conversation, thread: { ...conversation.thread, ended: { settlement: outcome } } });
     }
   };
 
@@ -1884,9 +1888,7 @@ export function serve(options: ServeOptions): Promise<void> {
           const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false, deadline }) : await whyNotStopped(s.t3, thread.threadId, deadline);
 
           if (why !== undefined) return { thread, why };
-          const now = place(handle);
-
-          if (now) journal.write(endedIn(now, op));
+          journalOp({ handle, op }, (conversation) => conversation && endedIn(conversation));
 
           return undefined;
         }));
