@@ -17,7 +17,8 @@ export type RuntimeHandlers = { readonly [TType in RuntimeRequest['type']]: (req
 export interface ServeRuntime {
   /** The runtime's name as its messages give it, such as `t3` in "Runtime t3 could not start". */
   name: string;
-  input: NodeJS.ReadableStream;
+  /** Where requests come from: the process input, which only the kit reads, unless a test serves another stream. */
+  input?: NodeJS.ReadableStream;
   /**
    * The runtime process's environment. It serves only when teamai started it, which sets `RUNTIME_PROTOCOL_ENV`, and
    * then removes that variable, so no process it starts inherits it.
@@ -35,6 +36,16 @@ export interface ServeRuntime {
   stopped: string;
   /** A line that only helps to debug the runtime, such as a dropped line: stderr. */
   debug(line: string): void;
+}
+
+/**
+ * Calls `onLine` with each line `input` carries, such as a socket a runtime reads: the one line reader of a runtime
+ * package, so none reads its process input around `serveRuntime`. Resolves once `input` ends.
+ */
+export function eachLine(input: NodeJS.ReadableStream, onLine: (text: string) => void): Promise<void> {
+  return new Promise((resolve) => {
+    readline.createInterface({ input }).on('line', onLine).on('close', () => resolve());
+  });
 }
 
 /** What a line that is no protocol request may still name: the request it fails, which then gets its own failure. */
@@ -72,7 +83,7 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<v
  * 2 when teamai did not start it, which reads nothing then. Each request runs as it comes, without waiting for the
  * ones before it: a slow prompt never holds a cancel.
  */
-export function serveRuntime({ name, input, env, ledger, handlers, holds, stopped, debug }: ServeRuntime): Promise<number> {
+export function serveRuntime({ name, input = process.stdin, env, ledger, handlers, holds, stopped, debug }: ServeRuntime): Promise<number> {
   const { write } = ledger;
 
   if (env[RUNTIME_PROTOCOL_ENV] !== '1') {
@@ -138,39 +149,33 @@ export function serveRuntime({ name, input, env, ledger, handlers, holds, stoppe
     else write({ event: 'error', message });
   };
 
-  return new Promise((resolve) => {
-    const lines = readline.createInterface({ input });
+  // teamai is gone once the input ends: what still runs keeps going, and a later teamai reattaches to it.
+  return eachLine(input, (text) => {
+    let request: RuntimeRequest;
 
-    lines.on('line', (text) => {
-      let request: RuntimeRequest;
+    try {
+      request = RuntimeRequestSchema.parse(JSON.parse(text));
+    } catch (error) {
+      unreadable(text, error instanceof Error ? error.message : String(error));
 
+      return;
+    }
+
+    // The ends of its op written before it, which a repeated op is answered with again, are not this request's.
+    const endsBefore = 'op' in request ? ledger.endsOf(request.op) : 0;
+
+    void (async () => {
       try {
-        request = RuntimeRequestSchema.parse(JSON.parse(text));
+        await dispatch(handlers, request);
       } catch (error) {
-        unreadable(text, error instanceof Error ? error.message : String(error));
+        if ('op' in request && ledger.endsOf(request.op) !== endsBefore) {
+          debug(`Runtime ${name} ended ${request.op} and then failed on its ${request.type}, which ends it no further: ${error instanceof Error ? error.message : String(error)}`);
 
-        return;
-      }
-
-      // The ends of its op written before it, which a repeated op is answered with again, are not this request's.
-      const endsBefore = 'op' in request ? ledger.endsOf(request.op) : 0;
-
-      void (async () => {
-        try {
-          await dispatch(handlers, request);
-        } catch (error) {
-          if ('op' in request && ledger.endsOf(request.op) !== endsBefore) {
-            debug(`Runtime ${name} ended ${request.op} and then failed on its ${request.type}, which ends it no further: ${error instanceof Error ? error.message : String(error)}`);
-
-            return;
-          }
-
-          failRequest(request, error instanceof Error ? error.message : String(error));
+          return;
         }
-      })();
-    });
 
-    // teamai is gone: what still runs keeps going, and a later teamai reattaches to it.
-    lines.on('close', () => resolve(0));
-  });
+        failRequest(request, error instanceof Error ? error.message : String(error));
+      }
+    })();
+  }).then(() => 0);
 }

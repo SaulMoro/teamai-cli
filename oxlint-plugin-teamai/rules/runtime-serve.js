@@ -9,15 +9,24 @@ const PROTOCOL_PACKAGES = new Set(['runtime-protocol', 'runtime-kit', 'runtime-t
 /** The events that end an exec or a prompt, which only the runtime kit's ledger writes; an open's `ready` is counted all the same. */
 const ENDS = new Set(['exited', 'finished', 'cancelled', 'failed']);
 
+/** The modules that read lines: only the runtime kit reads a runtime's input, and a socket's lines go through its `eachLine`. */
+const LINE_READERS = new Set(['readline', 'node:readline', 'readline/promises', 'node:readline/promises']);
+
+/** The module whose `stdin` is the process input. */
+const PROCESS_MODULES = new Set(['process', 'node:process']);
+
 /**
- * Runtimes that still serve protocol 1 themselves, until each adopts the runtime kit. A new runtime starts on the kit;
- * this list only shrinks, and an entry that no longer serves the protocol itself fails until it is removed.
+ * Files that still read requests or write an op's end themselves, until each runtime adopts the runtime kit. A new
+ * runtime starts on the kit; this list only shrinks, and an entry that no longer does either fails until it is removed.
  */
 const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
   // Until Paseo adopts serveRuntime and the ledger.
   'packages/runtime-paseo/src/runtime.ts',
-  // Until the sandbox adopts them.
+  'packages/runtime-paseo/src/main.ts',
+  // Until the sandbox adopts them, and reads its attempt socket through the kit's eachLine.
   'packages/runtime-sandbox/src/runtime.ts',
+  'packages/runtime-sandbox/src/main.ts',
+  'packages/runtime-sandbox/src/attempt-socket.ts',
 ]));
 
 /**
@@ -46,21 +55,17 @@ function property(object, name) {
 }
 
 /**
- * Whether `node` is the process input: `process.stdin`, `stdin` from `node:process`, or a value named `input`, the name
- * the runtime kit gives it.
- * @param {ESTree.Node | undefined} node
+ * Whether `node` names the property `stdin`, written out or as a string.
+ * @param {ESTree.Node} node
  */
-function isProcessInput(node) {
-  if (node?.type === 'Identifier') return node.name === 'input' || node.name === 'stdin';
-
-  return node?.type === 'MemberExpression' && !node.computed && node.property.type === 'Identifier'
-    && (node.property.name === 'input' || (node.property.name === 'stdin' && node.object.type === 'Identifier' && node.object.name === 'process'));
+function isStdinKey(node) {
+  return (node.type === 'Identifier' && node.name === 'stdin') || stringLiteralValue(node) === 'stdin';
 }
 
 export default defineRule({
   meta: {
     type: 'problem',
-    docs: { description: 'Serve runtime protocol 1 only through the runtime kit: no runtime reads requests or writes an op\'s end itself.' },
+    docs: { description: 'Serve runtime protocol 1 only through the runtime kit: no runtime reads its input, imports a line reader, parses requests or writes an op\'s end itself.' },
   },
   create(context) {
     const source = runtimeSource(lintedPath(context));
@@ -76,22 +81,52 @@ export default defineRule({
       if (!isBaseline) context.report({ node, message });
     };
 
+    const readsLines = (/** @type {ESTree.Node} */ node) => report(node, 'Leave reading lines to the runtime kit: serveRuntime from @teamai/runtime-kit/serve reads requests, and eachLine from the same module reads a socket\'s lines. A runtime that imports a line reader can serve the protocol around the kit.');
+    const readsInput = (/** @type {ESTree.Node} */ node) => report(node, 'Leave the process input to serveRuntime from @teamai/runtime-kit/serve, which reads requests from it: a runtime that reads its input itself serves the protocol around the kit.');
+
     return {
+      /** @param {ESTree.ImportDeclaration} node */
+      ImportDeclaration(node) {
+        const from = String(node.source.value);
+
+        if (LINE_READERS.has(from)) readsLines(node);
+
+        if (PROCESS_MODULES.has(from)) {
+          for (const specifier of node.specifiers) {
+            if (specifier.type === 'ImportSpecifier' && isStdinKey(specifier.imported)) readsInput(specifier);
+          }
+        }
+      },
+      /** @param {ESTree.ImportExpression} node */
+      ImportExpression(node) {
+        const from = stringLiteralValue(node.source);
+
+        if (from !== undefined && LINE_READERS.has(from)) readsLines(node);
+      },
+      /** @param {ESTree.MemberExpression} node */
+      MemberExpression(node) {
+        if (node.object.type === 'Identifier' && node.object.name === 'process' && isStdinKey(node.property)) readsInput(node);
+      },
+      /** @param {ESTree.VariableDeclarator} node */
+      VariableDeclarator(node) {
+        if (node.id.type !== 'ObjectPattern' || node.init?.type !== 'Identifier' || node.init.name !== 'process') return;
+
+        for (const entry of node.id.properties) {
+          if (entry.type === 'Property' && isStdinKey(entry.key)) readsInput(entry);
+        }
+      },
       /** @param {ESTree.CallExpression} node */
       CallExpression(node) {
         const { callee } = node;
-        const name = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' ? callee.property.name : undefined;
-        const [options] = node.arguments;
+        const [first] = node.arguments;
 
-        if (name === 'createInterface' && options !== undefined) {
-          const input = options.type === 'ObjectExpression' ? property(options, 'input') : undefined;
+        if (callee.type === 'Identifier' && callee.name === 'require' && first !== undefined) {
+          const from = stringLiteralValue(first);
 
-          if ((input?.type === 'Property' && isProcessInput(input.value)) || isProcessInput(options)) {
-            report(node, 'Read requests with serveRuntime from @teamai/runtime-kit/serve, not a readline over the process input: the kit answers an unreadable line and a handler that threw as protocol 1 says, for every runtime alike.');
-          }
+          if (from !== undefined && LINE_READERS.has(from)) readsLines(node);
         }
 
-        if ((name === 'parse' || name === 'safeParse') && callee.type === 'MemberExpression' && callee.object.type === 'Identifier' && callee.object.name === 'RuntimeRequestSchema') {
+        if (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' && (callee.property.name === 'parse' || callee.property.name === 'safeParse') && callee.object.type === 'Identifier' && callee.object.name === 'RuntimeRequestSchema') {
           report(node, 'Leave parsing requests to serveRuntime from @teamai/runtime-kit/serve: a handler gets its request already parsed, by type.');
         }
       },
@@ -107,7 +142,7 @@ export default defineRule({
       /** @param {ESTree.Program} node */
       'Program:exit'(node) {
         if (isBaseline && !serves) {
-          context.report({ node, message: `${source.relative} no longer serves runtime protocol 1 itself: remove it from NOT_YET_ON_THE_KIT in oxlint-plugin-teamai/rules/runtime-serve.js.` });
+          context.report({ node, message: `${source.relative} no longer reads requests or writes an op's end itself: remove it from NOT_YET_ON_THE_KIT in oxlint-plugin-teamai/rules/runtime-serve.js.` });
         }
       },
     };

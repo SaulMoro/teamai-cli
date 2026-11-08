@@ -143,7 +143,6 @@ export interface Connected {
 }
 
 export interface ServeOptions {
-  input: NodeJS.ReadableStream;
   write(message: RuntimeMessage): void;
   journal: Journal;
   /**
@@ -164,8 +163,10 @@ export interface ServeOptions {
   t3UserHome: string;
   /** The member's home as teamai runs, which the tool homes teamai gives are under. */
   home: string;
-  /** The variables teamai started the runtime with, whose CLAUDE_CONFIG_DIR or CODEX_HOME moves a base tool's home. */
-  /** The process's environment; serving removes the variable teamai marks a runtime start with. */
+  /**
+   * The process's environment: its CLAUDE_CONFIG_DIR or CODEX_HOME moves a base tool's home, and serving removes the
+   * variable teamai marks a runtime start with.
+   */
   env: Record<string, string | undefined>;
   /** The lock file that keeps two runtimes on this machine from adding the same T3 provider instance. */
   settingsLock: string;
@@ -1955,7 +1956,6 @@ export function serve(options: ServeOptions): Promise<number> {
 
   return serveRuntime({
     name: 't3',
-    input: options.input,
     env: options.env,
     ledger,
     handlers: {
