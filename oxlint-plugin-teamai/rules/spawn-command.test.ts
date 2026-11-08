@@ -36,3 +36,11 @@ export const load = () => import('cross-spawn');
 rule.invalid('rejects requiring cross-spawn', `
 export const spawn = require('cross-spawn');
 `, undefined, { filename: 'src/codex-trust.ts' });
+
+rule.invalid('rejects re-exporting cross-spawn', `
+export { default as spawn } from 'cross-spawn';
+`);
+
+rule.invalid('rejects re-exporting all of cross-spawn', `
+export * from 'cross-spawn';
+`);

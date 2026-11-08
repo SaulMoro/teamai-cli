@@ -20,6 +20,12 @@ export default defineRule({
       ImportDeclaration(node) {
         if (node.source.value === 'cross-spawn') context.report({ node, message: MESSAGE });
       },
+      ExportNamedDeclaration(node) {
+        if (node.source?.value === 'cross-spawn') context.report({ node, message: MESSAGE });
+      },
+      ExportAllDeclaration(node) {
+        if (node.source.value === 'cross-spawn') context.report({ node, message: MESSAGE });
+      },
       ImportExpression(node) {
         if (stringLiteralValue(node.source) === 'cross-spawn') context.report({ node, message: MESSAGE });
       },
