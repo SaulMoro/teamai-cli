@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { leaseNext } from '../workflow/engine.js';
-import { claimAttempt, expireClaim, finishAttempt, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
+import { claimAttempt, expireClaim, finishAttempt, lastGoneWork, listOffers, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet.js';
 import { publishRun } from '../workflow/handoff.js';
 import { AttemptIdSchema, installOwner, RunIdSchema, takeRunLock } from '../workflow/store.js';
 import { takeFleetAttempt } from '../workflow/drivers/local/fleet-member.js';
@@ -16,10 +16,10 @@ const RUN = RunIdSchema.parse('r0123abcd');
 const ATTEMPT = AttemptIdSchema.parse('a0123abcd');
 const LEASE: { step: string; command: string; env: Record<string, string> } = { step: 'build', command: 'npm run build', env: { MODE: 'ci' } };
 
-async function offer(owner: Member, input: { secrets?: Record<string, string>; lease?: typeof LEASE } = {}) {
+async function offer(owner: Member, input: { secrets?: Record<string, string>; lease?: typeof LEASE; start?: string } = {}) {
   return offerAttempt(owner.config, {
     run: RUN, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(owner.config),
-    start: 'f'.repeat(40), staleAfterMs: 60_000, lease: input.lease ?? LEASE, secrets: input.secrets ?? {},
+    start: input.start ?? 'f'.repeat(40), staleAfterMs: 60_000, lease: input.lease ?? LEASE, secrets: input.secrets ?? {},
   });
 }
 
@@ -89,6 +89,28 @@ describe('fleet attempts on teamai-reports', () => {
 
     expect(taken).toMatchObject({ kind: 'held', value: { data: { idle: { offered: 1 } } } });
     expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: true, value: { state: 'offered' } });
+  });
+
+  it('goes on from no gone work of an attempt another install offered', async () => {
+    const acme = team();
+    const [alice, bob, carol] = [await acme.member('alice'), await acme.member('bob'), await acme.member('carol')];
+    const offered = await offer(carol);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const claimed = await claimAttempt(bob.config, offered.value, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    await recordProgress(bob.config, claimed.value, 'e'.repeat(40)).then(async (progressed) => progressed.ok && expireClaim(carol.config, progressed.value));
+    await readableReportsWorktree(alice.config);
+
+    expect(await lastGoneWork(alice.config, { run: RUN, step: 'build', owner: await installOwner(alice.config) })).toBeUndefined();
+    expect(await lastGoneWork(alice.config, { run: RUN, step: 'build', owner: await installOwner(carol.config) })).toEqual({ attempt: ATTEMPT, pushed: 'e'.repeat(40) });
+  });
+
+  it('reads no record whose start is a name git would resolve rather than a commit id', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    await offer(alice, { start: 'stash@{0}' });
+
+    expect(await readAttemptRecord(alice.config, RUN, ATTEMPT)).toMatchObject({ ok: false, error: { code: 'fleet_record_unreadable' } });
   });
 
   it('offers a command that names absolute paths, as shell commands do', async () => {

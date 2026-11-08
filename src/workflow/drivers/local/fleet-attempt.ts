@@ -111,7 +111,7 @@ async function goOnFromGoneWork({ config, run, root, dir, step }: { config: Loca
     return { code: 'reports_unreachable', message: `teamai-reports could not be read, so step "${step}" was not offered to the fleet: ${error instanceof Error ? error.message : String(error)}` };
   }
 
-  const earlier = await lastGoneWork(config, { run, step });
+  const earlier = await lastGoneWork(config, { run, step, owner: await installOwner(config) });
 
   if (earlier === undefined) return undefined;
   const ref = attemptRef(run, earlier.attempt);

@@ -23,6 +23,9 @@ const ATTEMPTS_DIR = 'workflows/attempts';
 
 const OwnerSchema = z.object({ id: z.string().min(1), user: z.string() });
 
+/** A full commit id, never a name git would resolve on the reading machine, such as a branch or `stash@{0}`, or read as an option. */
+const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be a full commit id');
+
 /**
  * What a member runs, as the owner rendered it: never an argv, a credential value or a path of the owner's machine.
  * `env` is the step's rendered `env`.
@@ -44,7 +47,7 @@ const FleetResultSchema = z.object({
   exitCode: z.number().int(),
   outputs: JsonValueSchema.optional(),
   stderr: z.string(),
-  to: z.string().optional(),
+  to: CommitSchema.optional(),
 });
 
 export type FleetResult = z.infer<typeof FleetResultSchema>;
@@ -61,7 +64,7 @@ const OfferedSchema = z.object({
   write: z.string().min(1),
   offeredAt: z.string(),
   /** The commit the attempt starts from, which the owner pushed to the attempt's ref. */
-  start: z.string().min(1),
+  start: CommitSchema,
   /** How long a claim may go without progress before the owner gives it up, in milliseconds. */
   staleAfterMs: z.number().int().positive(),
   lease: FleetLeaseSchema,
@@ -72,7 +75,7 @@ const OfferedSchema = z.object({
  * A member's claim: `progressAt`, when it last wrote that it still runs the attempt, and `pushed`, the last commit it
  * pushed to the attempt's ref, from which a retry starts once the claim went stale.
  */
-const ClaimedSchema = OfferedSchema.extend({ state: z.literal('claimed'), member: OwnerSchema, claimedAt: z.string(), progressAt: z.string(), pushed: z.string().min(1) });
+const ClaimedSchema = OfferedSchema.extend({ state: z.literal('claimed'), member: OwnerSchema, claimedAt: z.string(), progressAt: z.string(), pushed: CommitSchema });
 
 const FinishedSchema = ClaimedSchema.extend({ state: z.literal('finished'), finishedAt: z.string(), result: FleetResultSchema });
 
@@ -237,7 +240,7 @@ export async function listOffers(config: LocalConfig, { pool, repository }: { po
  * The last attempt of step `step` of run `run` whose claim the owner gave up after its member pushed work, as this
  * machine's copy of `teamai-reports` holds it: refresh it first. A retry of the step goes on from that work.
  */
-export async function lastGoneWork(config: LocalConfig, { run, step }: { run: RunId; step: string }): Promise<{ attempt: AttemptId; pushed: string } | undefined> {
+export async function lastGoneWork(config: LocalConfig, { run, step, owner }: { run: RunId; step: string; owner: HandoffOwner }): Promise<{ attempt: AttemptId; pushed: string } | undefined> {
   const dir = path.join(getReportsDir(config), ATTEMPTS_DIR, run);
   const files = await fs.readdir(dir).catch(() => []);
   let last: Extract<FleetRecord, { state: 'expired' }> | undefined;
@@ -247,7 +250,8 @@ export async function lastGoneWork(config: LocalConfig, { run, step }: { run: Ru
     const text = await fs.readFile(path.join(dir, file), 'utf8').catch(() => '');
     const parsed = parseRecord(text, run, file.slice(0, -'.json'.length));
 
-    if (!parsed.ok || parsed.value.state !== 'expired' || parsed.value.lease.step !== step || parsed.value.pushed === parsed.value.start) continue;
+    // Only an attempt this install offered: anyone who can write teamai-reports can write a record.
+    if (!parsed.ok || parsed.value.state !== 'expired' || parsed.value.owner.id !== owner.id || parsed.value.lease.step !== step || parsed.value.pushed === parsed.value.start) continue;
 
     if (last === undefined || parsed.value.expiredAt > last.expiredAt) last = parsed.value;
   }
