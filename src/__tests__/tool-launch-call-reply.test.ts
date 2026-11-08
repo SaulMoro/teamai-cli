@@ -110,3 +110,11 @@ describe('a call with an idle limit', () => {
     await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, idleTimeout: 1000 })).resolves.toMatchObject({ text: 'still here' });
   });
 });
+
+describe('a call with a timeout', () => {
+  it('keeps a tool under a timeout longer than a timer can wait, as under no timeout', async () => {
+    const { root, caller } = only(opencodeFake, { always: ['slow'], slowMs: 50, answer: 'still here' });
+
+    await expect(caller.callTool('Go.', { launchedBy: 'answer', cwd: root, timeout: 30 * 24 * 60 * 60 * 1000 })).resolves.toMatchObject({ text: 'still here' });
+  });
+});

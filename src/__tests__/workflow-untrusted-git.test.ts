@@ -208,6 +208,18 @@ describe('untrustedGit in a copy a step controlled', () => {
       expect(execFileSync('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/main'], { env: at.env, encoding: 'utf8' }).trim()).toBe(tip);
     }
   });
+
+  it('runs git under a step deadline further away than a timer can wait, as under none', async () => {
+    const at = repo();
+    const slow = path.join(at.root, 'slow');
+    fs.writeFileSync(slow, `#!/bin/sh\nsleep 0.3\ncat\necho slow >> ${JSON.stringify(at.mark)}\n`, { mode: 0o755 });
+    at.git(['config', '--file', String(at.env.GIT_CONFIG_GLOBAL), 'filter.x.clean', slow]);
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const added = await untrustedGit(at.env, expiresAt)(at.dir, ['add', 'f']);
+
+    expect({ code: added.code, ran: ran(at) }).toEqual({ code: 0, ran: 'slow\n' });
+  });
 });
 
 /** A bare repository beside `at`, its origin. */
