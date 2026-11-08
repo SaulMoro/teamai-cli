@@ -70,7 +70,7 @@ teamai workflow start paseo-review --driver paseo
 ```
 
 ```text
-ℹ Run r0769801107010602 started. If it stops before it ends, continue it with: teamai workflow resume r0769801107010602 --driver paseo
+ℹ Run r0769801107010602 started. If it stops before it ends, continue it here with: teamai workflow resume r0769801107010602 --driver paseo, or hand it to another machine with: teamai workflow publish r0769801107010602
 {"data":{"done":{"run":"r0769801107010602","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -147,7 +147,7 @@ steps:
 ```text
 $ command -v claude codex opencode
 $ teamai workflow start fix-add --driver paseo-only
-ℹ Run rd573bcff8eef4e10 started. If it stops before it ends, continue it with: teamai workflow resume rd573bcff8eef4e10
+ℹ Run rd573bcff8eef4e10 started. If it stops before it ends, continue it here with: teamai workflow resume rd573bcff8eef4e10, or hand it to another machine with: teamai workflow publish rd573bcff8eef4e10
 ℹ run:rd573bcff8eef4e10:fix:1: review-quality good (teamai-score run re02e01c9b0e36c69).
 {"data":{"done":{"run":"rd573bcff8eef4e10","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```

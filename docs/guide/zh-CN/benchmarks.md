@@ -593,7 +593,7 @@ jobs:
 
 ```console
 $ teamai benchmark run fix-auth --sandbox
-ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it with: teamai workflow resume r38302f8e6a18c377
+ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it here with: teamai workflow resume r38302f8e6a18c377, or hand it to another machine with: teamai workflow publish r38302f8e6a18c377
 ```
 
 `benchmark run` 先规划套件，所以无法运行的套件不会留下运行。然后它用套件的 `timeout` 启动工作流 `teamai-benchmark`，在 `--driver` 指定的驱动上运行；未指定则用 [`workflows.driver`](reference.md#成员设置) 指定的驱动，都未指定则由本地驱动在本机驱动它。

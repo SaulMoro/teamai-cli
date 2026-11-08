@@ -109,6 +109,11 @@ const FailedDoneSchema = z.object({ run: z.string(), outcome: z.literal('failed'
 
 const SucceededDoneSchema = z.object({ run: z.string(), outcome: z.literal('succeeded') });
 
+/** The two ways on for a run this process stops driving: resume it here, or publish it for another machine to take. */
+function hereOrElsewhere(runId: string): string {
+  return `here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}`;
+}
+
 /**
  * Says how to continue run `runId` if it is still open when this process stops driving it: once `end` finds it open,
  * or as a stop signal arrives. A signal no driver handles then ends teamai as it would have, once the line is out.
@@ -119,7 +124,7 @@ function resumeWhileOpen(config: LocalConfig, runId: string) {
   const say = (): void => {
     if (isSaid) return;
     isSaid = true;
-    log.info(`Run ${runId} is still open. Continue it with: teamai workflow resume ${runId}`);
+    log.info(`Run ${runId} is still open. Continue it ${hereOrElsewhere(runId)}`);
   };
 
   const onSignal = (signal: NodeJS.Signals): void => {
@@ -723,7 +728,7 @@ async function startDriven(input: {
   // A run with no teamai init is removed with its scope, so it cannot be continued.
   const isResumable = config.ephemeralConfig === undefined;
 
-  if (isResumable && !shortcut.isResumeSaidWhenOpen) log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}`);
+  if (isResumable && !shortcut.isResumeSaidWhenOpen) log.info(`Run ${runId} started. If it stops before it ends, continue it ${hereOrElsewhere(runId)}`);
   const whileOpen = isResumable && shortcut.isResumeSaidWhenOpen ? resumeWhileOpen(config, runId) : undefined;
   const drive = { ...definedDrive(opened, tools), toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox, progress: shortcut.progress };
   const driveHere = (): Promise<WorkflowEnvelope> => withPassScoring({ config, env }, RunIdSchema.parse(runId), drive, (scored) => driveRun(config, runId, opened ? { kind: 'opened', opened } : { kind: 'named', name: LOCAL_DRIVER }, { cwd: process.cwd(), options: scored }));

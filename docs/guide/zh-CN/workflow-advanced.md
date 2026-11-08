@@ -98,7 +98,7 @@ steps:
 
 ```text
 $ teamai workflow start summarize-modules --driver local --inputs '{"modules":["api","cli","web"]}'
-ℹ Run rb7a66009e227f202 started. If it stops before it ends, continue it with: teamai workflow resume rb7a66009e227f202
+ℹ Run rb7a66009e227f202 started. If it stops before it ends, continue it here with: teamai workflow resume rb7a66009e227f202, or hand it to another machine with: teamai workflow publish rb7a66009e227f202
 {"data":{"done":{"run":"rb7a66009e227f202","outcome":"succeeded","progress":[{"step":"report","lines":["[{\"item\":\"api\",\"outcome\":\"success\",\"outputs\":{\"text\":\"HTTP routes and handlers.\"}},{\"item\":\"cli\",\"outcome\":\"success\",\"outputs\":{\"text\":\"Command parsing and output.\"}},{\"item\":\"web\",\"outcome\":\"success\",\"outputs\":{\"text\":\"The dashboard pages.\"}}]"]}],"record":"published"},"cancelled":[]}}
 ```
 
@@ -212,7 +212,7 @@ steps:
 
 ```text
 $ teamai workflow start describe-modules --driver local --inputs '{"modules":["api","cli"],"concurrency":2}'
-ℹ Run r3112e07f9a6d93ad started. If it stops before it ends, continue it with: teamai workflow resume r3112e07f9a6d93ad
+ℹ Run r3112e07f9a6d93ad started. If it stops before it ends, continue it here with: teamai workflow resume r3112e07f9a6d93ad, or hand it to another machine with: teamai workflow publish r3112e07f9a6d93ad
 {"data":{"done":{"run":"r3112e07f9a6d93ad","outcome":"succeeded","progress":[{"step":"describe[0]","lines":["described api"]},{"step":"describe[1]","lines":["described cli"]}],"record":"published"},"cancelled":[]}}
 ```
 
@@ -1210,7 +1210,7 @@ steps:
 
 ```text
 $ teamai workflow start sign-release --driver local
-ℹ Run r55b0e3a6017968bf started. If it stops before it ends, continue it with: teamai workflow resume r55b0e3a6017968bf
+ℹ Run r55b0e3a6017968bf started. If it stops before it ends, continue it here with: teamai workflow resume r55b0e3a6017968bf, or hand it to another machine with: teamai workflow publish r55b0e3a6017968bf
 {"data":{"done":{"run":"r55b0e3a6017968bf","outcome":"failed","record":"published"},"cancelled":[]}}
 ✖ Step "sign" failed with missing_env: Step "sign" requires env SIGNING_KEY, which has no value on this machine. Set SIGNING_KEY in the environment, or declare it in the team repo with teamai env add SIGNING_KEY --secret and give it a value with teamai env set SIGNING_KEY, then retry the step.
 ℹ Retry it with teamai workflow retry r55b0e3a6017968bf sign, then continue the run with teamai workflow resume r55b0e3a6017968bf
@@ -1341,7 +1341,7 @@ teamai workflow resume <run>
 
 ```console
 $ teamai workflow start loop-plan-change --driver local --tools default=claude --auto-approve --sandbox --inputs '{"issue":42}'
-ℹ Run redf22a69e4ae6652 started. If it stops before it ends, continue it with: teamai workflow resume redf22a69e4ae6652
+ℹ Run redf22a69e4ae6652 started. If it stops before it ends, continue it here with: teamai workflow resume redf22a69e4ae6652, or hand it to another machine with: teamai workflow publish redf22a69e4ae6652
 ^C                                                   # 或者终端关闭了，或者 claude 用完了 token
 
 $ teamai workflow resume redf22a69e4ae6652           # 和启动时一样：claude、--auto-approve 和 --sandbox
