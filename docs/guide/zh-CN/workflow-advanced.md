@@ -1670,7 +1670,9 @@ teamai workflow resume --next                # 和以前一样只领取已发布
 
 `teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。
 
-成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的命令，再从已推送的产出继续完成它仍持有的尝试。
+成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>` 时，成员在自己驱动里第一个能运行命令的运行时上运行步骤（例如沙箱），只带步骤自己的 env；不带它，或驱动的第一个运行时是 `local` 时，就在本机运行。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。
+
+每条记录都写明写入它的 teamai 版本。teamai 遇到更新格式的记录时：作为成员会跳过这个尝试，作为所有者会让步骤以 `fleet_record_newer` 失败，并说明要升级到哪个版本。尝试在外时，你的驱动每秒读一次它的记录；记录没有变化时读得越来越少，最慢每 30 秒一次。
 
 有尝试在外的运行，`teamai workflow publish` 会拒绝（`fleet_attempts_out`）：认领会释放所有租约，而尝试的产出只会回到你机器上的位置。先用 `teamai workflow resume <run>` 等它完成，再发布。
 
