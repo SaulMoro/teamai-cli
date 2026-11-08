@@ -109,7 +109,8 @@ const ENTRIES = [
       'member.ts': ['src/workflow-commands.ts'],
       'record.ts': ['src/workflow/handoff.ts', 'src/workflow-commands.ts'],
     },
-    testEntries: ['record.ts', 'owner.ts', 'member.ts'],
+    // A member's gate questions are tested on their own: their race needs reads no fleet test can order.
+    testEntries: ['record.ts', 'owner.ts', 'member.ts', 'gate.ts'],
   },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },
   // A suite's checks, start and report change state, so only the commands reach them. Pull, push and their checks sync suites with the team's other definitions.

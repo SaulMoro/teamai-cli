@@ -41,7 +41,7 @@ import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';
 import { runAnswerStep } from './answer-step.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
-import { isWorkflowError, stepWorkflow } from '../../types.js';
+import { isWorkflowError, stepWorkflow, unattendedChoice } from '../../types.js';
 import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import { confinedOf } from '../../workspace.js';
 import { git, headCommit } from '../../worktree.js';
@@ -910,9 +910,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       return words.length > 0 ? { choice, note: words.join(' ') } : { choice };
     }
 
-    if (!gate.required && gate.kind === 'approve') return { choice: isAutoApproved ? 'yes' : 'no' };
+    // Without a person, as the engine answers a gate for a driver without HITL.
+    const choice = unattendedChoice(gate, { autoApprove: isAutoApproved });
 
-    if (!gate.required && isAutoApproved && gate.default !== undefined) return { choice: gate.default };
+    if (choice !== undefined) return { choice };
 
     return { refused: `Step "${gate.step}" of a workflow a fleet member runs needs a person's answer, and nobody answers where the run is driven. Retry the step, then resume the run from a terminal in an attended run (TEAMAI_MODE=attended, or neither TEAMAI_MODE nor CI set).` };
   };

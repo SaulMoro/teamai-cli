@@ -28,6 +28,7 @@ import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-re
 import { sameEnvName } from '../../resources/env-key.js';
 import { runCopyBranch } from '../workspace.js';
 import { wholeFit, type WholeRun } from '../whole-workflow.js';
+import { gateQuestions } from './gate.js';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
@@ -337,10 +338,9 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   const dir = attemptDir(config, run, attempt);
   const work = path.join(dir, 'work');
   let latest: HeldAttempt = claim;
-  // The gate the nested run of a whole workflow asks the owner: written with each progress until the answer comes.
-  let asking: { question: ExecQuestion; answer: (answer: ExecAnswer) => void } | undefined;
-  // The write of the last answer handed to the nested run.
-  let heard: string | undefined;
+  // The gates the nested run of a whole workflow asks the owner: the one asked is written with each progress until its
+  // answer comes.
+  const gates = gateQuestions();
 
   const finish = async (result: FleetResult): Promise<WorkflowEnvelope> => {
     const written = await finishAttempt(config, latest, result, secrets);
@@ -434,16 +434,10 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     }
 
     if (record?.state === 'answered') {
-      // An answer is handed once, and only to the question it answers: a read that raced another one may find it again
-      // after the member moved on, and leaves the member's later writes as they are.
-      if (record.write === heard) return;
+      // The owner's answer to a question of this member's, which only the owner writes over it, so the next progress
+      // goes over it. It is handed once, and only to the question it answers.
       latest = record;
-
-      if (asking === undefined || !isDeepStrictEqual(asking.question, record.question)) return;
-      const waiting = asking;
-      asking = undefined;
-      heard = record.write;
-      waiting.answer(record.answer);
+      gates.take(record);
 
       return;
     }
@@ -462,40 +456,38 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
 
   // Writes progress naming `pushed`, with the question the member asks while it waits for the owner's answer.
   const progress = async (pushed: string): Promise<void> => {
-    const progressed = await recordProgress(config, latest, pushed, asking && { question: asking.question, secrets });
+    const question = gates.asking;
+    const progressed = await recordProgress(config, latest, pushed, question && { question, secrets });
 
     if (progressed.ok) latest = progressed.value;
     else if (progressed.error.code === 'state_moved') await moved(progressed.error);
-    else if (progressed.error.code === 'fleet_unpublishable' && asking !== undefined) {
-      // A question the record cannot carry reaches nobody: the gate fails with why, and progress goes on without it.
-      const waiting = asking;
-      asking = undefined;
-      waiting.answer({ refused: progressed.error.message });
-    }
+    // A question the record cannot carry reaches nobody: the gate fails with why, and progress goes on without it.
+    else if (progressed.error.code === 'fleet_unpublishable' && question !== undefined) gates.refuse(progressed.error.message);
+  };
+
+  // One read or write of the record at a time: the beat's, or the question's. Each waits for the one before.
+  const inTurn = async (task: () => Promise<void>): Promise<void> => {
+    await beating;
+    beating = task().finally(() => {
+      beating = undefined;
+    });
+    await beating;
   };
 
   // The question goes out at once, after any beat still writing, and is read for its answer every ANSWER_READ_MS.
   const askOwner = async (question: ExecQuestion, signal: AbortSignal): Promise<ExecAnswer> => {
-    const answer = new Promise<ExecAnswer>((resolve) => {
-      asking = { question, answer: resolve };
-    });
-
-    await beating;
-    beating = progress(latest.pushed).finally(() => {
-      beating = undefined;
-    });
-    await beating;
+    const answer = gates.ask(question);
+    await inTurn(async () => progress(latest.pushed));
 
     for (;;) {
-      const given = await Promise.race([answer, sleep(ANSWER_READ_MS, undefined, { signal }).then(() => undefined, () => 'closed' as const)]);
-
-      if (given === 'closed') return { refused: 'The question closed before the owner answered it.' };
+      const given = await Promise.race([answer, sleep(ANSWER_READ_MS, undefined, { signal }).then(() => undefined, () => undefined)]);
 
       if (given !== undefined) return given;
 
-      if (gone !== undefined || cancelling !== undefined) return { refused: 'The owner stopped the attempt before it answered.' };
-
-      if (beating === undefined) await readRecord();
+      // A question that ends unanswered is no longer written with the claim's progress.
+      if (signal.aborted) gates.refuse('The question closed before the owner answered it.');
+      else if (gone !== undefined || cancelling !== undefined) gates.refuse('The owner stopped the attempt before it answered.');
+      else if (beating === undefined) await inTurn(readRecord);
     }
   };
 
