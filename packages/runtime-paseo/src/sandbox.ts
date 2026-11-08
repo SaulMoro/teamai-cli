@@ -39,7 +39,7 @@ const START_POLL_MS = 250;
 export async function openThrough(state: ProcessState, live: Daemon, request: Extract<RuntimeRequest, { type: 'open' }> & { outer: string }, target: Target): Promise<Through | RuntimeFailure> {
   const { op, outer, view } = request;
   const outerHandle = outerHandleOf(outer);
-  const cannot = (why: string): RuntimeFailure => ({ code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run ${target.name} through the sandbox on the Paseo daemon at ${live.url}: ${why}.` });
+  const cannot = (why: string): RuntimeFailure => ({ code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run ${target.name} through the sandbox on the Paseo daemon at ${live.url}: ${why}. Then run the step again.` });
 
   if (!outerHandle) return cannot('the outer runtime\'s handle names no attempt socket; run the step through the sandbox runtime');
 
@@ -50,7 +50,7 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
   try {
     release = await state.journal.holdProviders(live.url);
   } catch (error) {
-    return cannot(`it could not hold the daemon's providers in ${state.journal.root} (${error instanceof Error ? error.message : String(error)}); make that directory writable, then run the step again`);
+    return cannot(`it could not hold the daemon's providers in ${state.journal.root} (${error instanceof Error ? error.message : String(error)}); make that directory writable`);
   }
 
   try {
@@ -59,7 +59,7 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
 
     if (wrapper.added && found !== null) state.write({ event: 'notice', op, message: addedNotice(live.url, { id, entry: { extends: target.tool, label: id, command: [found] } }, target.name) });
 
-    if ('cannot' in wrapper) return cannot(`${wrapper.cannot}, then run the step again`);
+    if ('cannot' in wrapper) return cannot(wrapper.cannot);
     const home = view?.toolHome[homeVariableOf(target.tool)];
 
     return { socket: outerHandle.socket, provider: wrapper.provider, ...(home !== undefined && { home }) };
@@ -124,10 +124,18 @@ export async function handOver(live: Daemon, { record, provider, registration, s
     }
   }
 
-  await live.remove(agentId).catch(() => {});
+  const removal = await (async (): Promise<string> => {
+    try {
+      await live.remove(agentId);
+
+      return 'removed the agent';
+    } catch (error) {
+      return `could not remove the agent (${error instanceof Error ? error.message : String(error)}); remove it in the Paseo app`;
+    }
+  })();
 
   return {
     code: 'isolation_unproven',
-    message: `The ${record.tool} agent ${agentId} started on Paseo provider ${provider}, but its wrapper did not connect to the attempt's sandbox (${outcome}), so teamai removed the agent and never sent it the prompt. Check that the provider runs teamai-sandbox-${record.tool}, and read why it stopped in the Paseo daemon's log, then run the step again.`,
+    message: `The ${record.tool} agent ${agentId} started on Paseo provider ${provider}, but its wrapper did not connect to the attempt's sandbox (${outcome}), so teamai never sent it the prompt, and ${removal}. Check that the provider runs teamai-sandbox-${record.tool}, and that the daemon starts it with the HOME teamai runs with, where it finds the attempt; the Paseo daemon's log says why it stopped. Then run the step again.`,
   };
 }

@@ -477,16 +477,18 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
   async function follow(live: Daemon, op: OpId, record: AgentPrompt, following: Following): Promise<void> {
     const through = throughOf(journal.place(record.handle));
     // Registered before Paseo can start the agent's wrapper, and again by each runtime that follows the prompt.
-    const registration = through && registerAgent(through.socket, record.create.agentId);
+    const sandboxed = through && { through, registration: registerAgent({ socket: through.socket, agent: record.create.agentId }) };
 
     try {
-      await followAgent(live, op, record, following, { through, registration });
+      await followAgent(live, op, record, following, sandboxed);
     } finally {
-      registration?.close();
+      sandboxed?.registration.close();
     }
   }
 
-  async function followAgent(live: Daemon, op: OpId, record: AgentPrompt, following: Following, { through, registration }: { through: Through | undefined; registration: Registration | undefined }): Promise<void> {
+  /** `follow`, with what the place runs through and the agent's registration there, when it runs through a sandbox. */
+  async function followAgent(live: Daemon, op: OpId, record: AgentPrompt, following: Following, sandboxed: { through: Through; registration: Registration } | undefined): Promise<void> {
+    const through = sandboxed?.through;
     const { create } = record;
     const { stopped } = following;
 
@@ -498,7 +500,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       if (!(await live.agent(create.agentId))) {
         // Journaled before it is sent, and kept until Paseo shows the agent: a create that failed may still start it.
         dispatch(op, 'unconfirmed');
-        creation = await live.create(record.cwd, create, { idle: through !== undefined });
+        creation = await live.create(record.cwd, create, { isIdle: sandboxed !== undefined });
       }
 
       // Only a create never sent, by this process or an earlier one, proves no agent started.
@@ -542,14 +544,14 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     // handled below.
     const current = journal.prompt(op);
 
-    if (through && registration && !(current?.kind === 'agent' && current.sent)) {
+    if (sandboxed && !(current?.kind === 'agent' && current.sent)) {
       const markSent = (): void => {
         const latest = journal.prompt(op);
 
         if (latest?.kind === 'agent') journal.savePrompt(op, { ...latest, sent: true });
       };
 
-      const handed = await handOver(live, { record, provider: through.provider, registration, stopped, markSent });
+      const handed = await handOver(live, { record, provider: sandboxed.through.provider, registration: sandboxed.registration, stopped, markSent });
 
       if (handed !== 'sent' && handed !== 'stopped') {
         settle(op, { op, state: 'failed', failure: handed }, following);

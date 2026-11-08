@@ -8,7 +8,7 @@ import type { ProviderToAdd } from './providers.js';
 // ─── What one runtime process holds between requests ───
 //
 //  The daemon init connected to, what it offered, and the prompts, opens and stops in flight in this process. The
-//  parts of the runtime (conversation.ts, workspace.ts, judge.ts, providers.ts) read and change it; runtime.ts makes it,
+//  parts of the runtime (conversation.ts, workspace.ts, judge.ts, providers.ts, sandbox.ts) read and change it; runtime.ts makes it,
 //  and init fills what it offered.
 //
 

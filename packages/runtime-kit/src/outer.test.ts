@@ -52,7 +52,7 @@ describe('the outer runtime a place runs through', () => {
 
   it('registers the agent, and resolves once the sandbox says that agent\'s wrapper connected, not another\'s', async () => {
     const { socket, lines } = await socketAnswering(() => [JSON.stringify({ connected: { agent: 'helper' } }), JSON.stringify({ connected: { agent: 'step' } })]);
-    const registration = registerAgent(socket, 'step');
+    const registration = registerAgent({ socket, agent: 'step' });
 
     expect(await registration.connected).toEqual({ ok: true });
     expect(lines.map((line) => JSON.parse(line))).toEqual([{ register: { agent: 'step' } }]);
@@ -62,7 +62,7 @@ describe('the outer runtime a place runs through', () => {
   it('says why when the socket closes before the wrapper connects', async () => {
     const { socket } = await socketAnswering(() => []);
     server?.on('connection', (client) => client.destroy());
-    const registration = registerAgent(socket, 'step');
+    const registration = registerAgent({ socket, agent: 'step' });
 
     expect(await registration.connected).toMatchObject({ ok: false, why: expect.stringContaining(socket) });
   });
@@ -70,7 +70,7 @@ describe('the outer runtime a place runs through', () => {
   it('never registers on a socket whose directory others may open, since whoever made it would say what ran', async () => {
     const { socket, lines } = await socketAnswering(() => [JSON.stringify({ connected: { agent: 'step' } })]);
     fs.chmodSync(path.dirname(socket), 0o755);
-    const registration = registerAgent(socket, 'step');
+    const registration = registerAgent({ socket, agent: 'step' });
 
     expect(await registration.connected).toMatchObject({ ok: false, why: expect.stringContaining('0700') });
     expect(lines).toEqual([]);

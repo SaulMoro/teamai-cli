@@ -39,8 +39,8 @@ import { workspaces } from './workspace.js';
 //              reported best-effort: nothing stops a read outside the directory
 //
 //  This module serves the requests; offer.ts says what init offers, conversation.ts runs a prompt's agent, workspace.ts
-//  an attempt's place, judge.ts a confined prompt, providers.ts Paseo's providers, and daemon/ the connection, over the
-//  state of process-state.ts.
+//  an attempt's place, judge.ts a confined prompt, providers.ts Paseo's providers, sandbox.ts a place that runs through a
+//  sandbox, and daemon/ the connection, over the state of process-state.ts.
 //
 
 export interface Serving {
