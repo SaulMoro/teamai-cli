@@ -56,7 +56,7 @@ function notInstalled(): string {
  * Each folder between a read-only path and the writable path that holds it, bound onto itself: a mount point cannot be
  * renamed or removed, so no step moves a git path aside by moving a folder above it (sandcastle's `anchorArgs`).
  */
-function anchorsOf(writable: string[], readable: string[]): string[] {
+function anchorsOf({ writable, readable }: { writable: string[]; readable: string[] }): string[] {
   const anchors = new Set<string>();
 
   for (const at of readable) {
@@ -68,7 +68,7 @@ function anchorsOf(writable: string[], readable: string[]): string[] {
 
 /** bwrap's arguments for `sandboxed`, the command last. */
 export function argsOf({ argv, cwd, writable, readable }: Pick<Sandboxed, 'argv' | 'cwd' | 'writable' | 'readable'>): string[] {
-  const binds = [...[...writable, ...anchorsOf(writable, readable)].map((at) => ({ at, flag: '--bind' })), ...readable.map((at) => ({ at, flag: '--ro-bind-try' }))]
+  const binds = [...[...writable, ...anchorsOf({ writable, readable })].map((at) => ({ at, flag: '--bind' })), ...readable.map((at) => ({ at, flag: '--ro-bind-try' }))]
     .sort((left, right) => left.at.split(path.sep).length - right.at.split(path.sep).length);
 
   return [

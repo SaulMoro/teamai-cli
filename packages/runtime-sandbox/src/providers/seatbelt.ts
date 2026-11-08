@@ -135,7 +135,7 @@ export interface SeatbeltProfile {
  * The folders a step may not rename or remove: each writable root, and each folder between a read-only path inside a
  * writable root and that root, so a git file cannot be moved aside and planted again (sandcastle's `anchoredDirs`).
  */
-function anchoredOf(writable: string[], locked: string[]): string[] {
+function anchoredOf({ writable, locked }: { writable: string[]; locked: string[] }): string[] {
   const anchored = new Set(writable);
 
   for (const at of locked) {
@@ -177,7 +177,7 @@ export function profileOf({ writable, readable, memberHome }: Pick<Sandboxed, 'w
     `(deny file-read* file-write* network-outbound process-exec ${filters('literal', 'ENGINE', ENGINE_SOCKETS)} ${filters('subpath', 'ENGINE', ENGINE_HOME.map((name) => path.join(memberHome, name)))})`,
     '(deny mach-lookup (xpc-service-name-prefix ""))',
     ...(locked.length > 0 ? [`(deny file-write* ${filters('subpath', 'LOCKED', locked)})`] : []),
-    ...anchoredOf(writable, locked).map((at) => `(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal ${param('ANCHOR', at)})))`),
+    ...anchoredOf({ writable, locked }).map((at) => `(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal ${param('ANCHOR', at)})))`),
     // Writes through a read-only descriptor (F_MAKECOMPRESSED, F_TRANSFEREXTENTS).
     '(deny system-fcntl (fcntl-command 80 110))',
   ];
