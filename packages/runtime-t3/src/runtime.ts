@@ -1,15 +1,14 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
-  CANCEL_FAILED, fitReason, OpIdSchema, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type RUNTIME_MODES,
+  CANCEL_FAILED, fitReason, PromptResultSchema, type RUNTIME_MODES,
   type ConfinedKept, type ConfinedPrompt, type InitInstance, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
+import { serveRuntime } from '@teamai/runtime-kit/serve';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { findOnPath } from '@teamai/tool-core/lookpath';
-import { z } from 'zod';
 import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstance } from './add-instance.js';
 import type { AddedProjects } from './added-projects.js';
 import type { SignInAccess } from './auth.js';
@@ -238,9 +237,6 @@ function workOf(request: PromptRequest, opened: PlaceRecord): Work | undefined {
 
   return request.confined ? { kind: 'judge', confined: request.confined } : undefined;
 }
-
-/** What a line that is no protocol request may still name: the request it fails, which then gets its own failure. */
-const NamedSchema = z.object({ type: z.string().optional(), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional() });
 
 const execFileAsync = promisify(execFile);
 
@@ -1958,22 +1954,20 @@ export function serve(options: ServeOptions): Promise<void> {
     journal.remove(handle);
   };
 
-  const handleRequest = async (request: RuntimeRequest): Promise<void> => {
-    switch (request.type) {
-      case 'init':
-        return init(request);
-      case 'open':
-        return track(handleFor(request), open(request));
-      case 'exec':
+  return serveRuntime({
+    name: 't3',
+    input: options.input,
+    write,
+    handlers: {
+      init,
+      open: (request) => track(handleFor(request), open(request)),
+      exec: async (request) => {
         write({ op: request.op, event: 'accepted' });
         fail(request.op, { code: 'exec_unsupported', message: 'Runtime t3 runs prompt steps as T3 Code threads and runs no command (can.exec: false).' });
-
-        return;
-      case 'prompt':
-        return prompt(request);
-      case 'cancel':
-        return cancel(request.op);
-      case 'collect': {
+      },
+      prompt,
+      cancel: (request) => cancel(request.op),
+      collect: async (request) => {
         const read = journal.read(request.handle);
 
         if (read.kind === 'unreadable') {
@@ -1985,11 +1979,8 @@ export function serve(options: ServeOptions): Promise<void> {
         // In recover mode nothing is settled before close, which connects only when it needs T3.
         if (session) await settleEnded(request.handle, session);
         write({ event: 'collected', handle: request.handle });
-
-        return;
-      }
-
-      case 'reattach': {
+      },
+      reattach: async (request) => {
         // The journal alone answers: only a place it no longer holds is gone, whether or not T3 Code can be reached. One
         // whose record cannot be read may hold live threads, so the reattach fails, saying why.
         const read = journal.read(request.handle);
@@ -2011,87 +2002,12 @@ export function serve(options: ServeOptions): Promise<void> {
         const latest = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt)[0];
         const display = session && (latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment));
         write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops).map(({ op }) => unkept.get(op) ?? known.ops[op]), ...(display && { display }) });
-
-        return;
-      }
-
-      case 'close':
-        return close(request.handle, { release: request.release === true });
-      default: {
-        const unhandled: never = request;
-
-        return unhandled;
-      }
-    }
-  };
-
-  /**
-   * Answers a request that threw with a failure of its own: teamai fails every request it waits on when a line names
-   * none. A cancel that threw did not confirm a stop.
-   */
-  const failRequest = (request: RuntimeRequest, why: string): void => {
-    switch (request.type) {
-      case 'init':
-        return write({ type: 'init', ok: false, error: { code: 'runtime_error', message: `Runtime t3 could not start: ${why}` } });
-      case 'open':
-      case 'exec':
-      case 'prompt':
-        return fail(request.op, { code: 'runtime_error', message: `Runtime t3 could not carry out ${request.type} of ${request.op}: ${why}` });
-      case 'cancel':
-        return fail(request.op, { code: CANCEL_FAILED, message: `Runtime t3 could not carry out the cancel of ${request.op}, so its T3 thread may still run: ${why.replace(/\.$/, '')}. Run teamai workflow cancel again.` });
-      case 'reattach':
-      case 'collect':
-      case 'close':
-        return write({ event: 'failed', handle: request.handle, failure: { code: 'runtime_error', message: `Runtime t3 could not carry out ${request.type} of ${request.handle}: ${why}` } });
-      default: {
-        const unhandled: never = request;
-
-        return unhandled;
-      }
-    }
-  };
-
-  return new Promise((resolve) => {
-    const lines = readline.createInterface({ input: options.input });
-
-    lines.on('line', (text) => {
-      let request: RuntimeRequest;
-
-      try {
-        request = RuntimeRequestSchema.parse(JSON.parse(text));
-      } catch (error) {
-        const message = `Not a protocol ${RUNTIME_PROTOCOL} request: ${error instanceof Error ? error.message : String(error)}`;
-        let named: z.infer<typeof NamedSchema> = {};
-
-        try {
-          named = NamedSchema.catch({}).parse(JSON.parse(text));
-        } catch {
-          // Not JSON: it names nothing.
-        }
-
-        // teamai fails every request it waits on for an error line, so one is written only for a line that names none. An
-        // op this process saw, or one a record holds or may hold, already has its outcome or gets it from what runs it.
-        if (named.op !== undefined && (handleOf.has(named.op) || running.has(named.op) || cancelledEarly.has(named.op) || cancelledUnread.has(named.op) || journal.placeOf(named.op).kind !== 'missing')) {
-          process.stderr.write(`Dropped a line that names ${named.op}, which runtime t3 already runs or answered: ${message}\n`);
-        } else if (named.op !== undefined) fail(named.op, { code: named.type === 'cancel' ? CANCEL_FAILED : 'runtime_protocol', message });
-        else if (named.handle !== undefined) write({ event: 'failed', handle: named.handle, failure: { code: 'runtime_protocol', message } });
-        else if (named.type === 'init') write({ type: 'init', ok: false, error: { code: 'runtime_protocol', message } });
-        else write({ event: 'error', message });
-
-        return;
-      }
-
-      void (async () => {
-        try {
-          await handleRequest(request);
-        } catch (error) {
-          failRequest(request, error instanceof Error ? error.message : String(error));
-        }
-      })();
-    });
-
-    // teamai is gone: a step still running keeps its thread in T3, which a later teamai reattaches, so this process
-    // follows it no further.
-    lines.on('close', () => resolve());
+      },
+      close: (request) => close(request.handle, { release: request.release === true }),
+    },
+    // An op this process saw, or one a record holds or may hold, already has its outcome or gets it from what runs it.
+    holds: (op) => handleOf.has(op) || running.has(op) || cancelledEarly.has(op) || cancelledUnread.has(op) || journal.placeOf(op).kind !== 'missing',
+    stopped: 'its T3 thread',
+    debug: (line) => process.stderr.write(`${line}\n`),
   });
 }

@@ -1,0 +1,9 @@
+{
+  "name": "@teamai/runtime-kit",
+  "private": true,
+  "type": "module",
+  "description": "What every step runtime process runs of runtime protocol 1: the request loop and each operation's one end; bundled into each runtime's executable, never imported by teamai-cli.",
+  "exports": {
+    "./serve": "./src/serve.ts"
+  }
+}
