@@ -1165,16 +1165,28 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const unproven = (can: DriverCan): boolean => (can.fullAccess?.length ?? 0) > 0 && can.isolation !== 'sandbox';
 
   // A fleet step's place is prepared here, so the fleet offers the workspaces this machine does.
-  const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
-    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] }
-    : entry.kind === 'fleet' ? { kind: 'fleet', use: 'fleet', pool: entry.pool, staleAfterMs: entry.staleAfterMs, runtime: local, can: { ...entry.can, workspace: localReady.can.workspace }, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] } : {
-      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
-      ...(entry.unavailable && { unavailable: entry.unavailable }),
-      can: {
-        ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
-        ...(unproven(entry.can) && { isolation: 'none' as const }),
-      },
-    });
+  const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => {
+    switch (entry.kind) {
+      case 'local':
+        return { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
+      case 'fleet':
+        return { kind: 'fleet', use: 'fleet', pool: entry.pool, staleAfterMs: entry.staleAfterMs, runtime: local, can: { ...entry.can, workspace: localReady.can.workspace }, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
+      case 'external':
+        return {
+          kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
+          ...(entry.unavailable && { unavailable: entry.unavailable }),
+          can: {
+            ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
+            ...(unproven(entry.can) && { isolation: 'none' as const }),
+          },
+        };
+      default: {
+        const unhandled: never = entry;
+
+        return unhandled;
+      }
+    }
+  };
 
   for (const entry of defined.runtimes) {
     if (entry.kind === 'external' && unproven(entry.can)) {
