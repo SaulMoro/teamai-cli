@@ -67,8 +67,13 @@ const SIGTERM_GRACE_MS = 2_000;
  * before the sandbox starts, outside it, so no SIGKILL of the runtime, however early, leaves the step running (after
  * sandcastle's `bwrapProcess.ts` watcher and `sandboxes/seatbelt.ts` watchdog). A process the step starts in a session
  * of its own (`setsid`) leaves the group, and outlives it.
+ *
+ * One kill of a group misses a child macOS forks meanwhile, which then outlives it, so the watcher kills the group until
+ * none of it is left, from a group of its own (`set -m`) so it outlives its own kills; for at most five seconds. A shell
+ * with no job control here (dash) keeps it in the group, killed with the first kill, as bwrap's pid namespace makes
+ * enough.
  */
-const LAUNCH = '{ read -r _ || :; kill -9 0; } <&3 >/dev/null 2>&1 &\nexec 3<&-\nexec "$@"';
+const LAUNCH = 'set -m 2>/dev/null\n{ read -r _ || :; n=0; while kill -9 -$$ 2>/dev/null && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; } <&3 >/dev/null 2>&1 &\nset +m 2>/dev/null\nexec 3<&-\nexec "$@"';
 
 /** The executable `name` as `pathVariable` finds it, or undefined. */
 export function onPath(name: string, pathVariable: string | undefined): string | undefined {

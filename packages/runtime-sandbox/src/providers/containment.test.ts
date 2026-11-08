@@ -70,6 +70,15 @@ spawn('sleep', [process.argv[2]], { stdio: 'ignore' });
 spawn('sleep', [process.argv[2]], { stdio: 'inherit' });
 console.log('started');`;
 
+/**
+ * Keeps starting `sleep <seconds>` from eight shells, each killing the one it started: a step forking all the time, whose
+ * child forked as its group is killed outlives that kill, never killed after.
+ */
+const FORKS = `
+const { spawn } = require('node:child_process');
+spawn('/bin/sh', ['-c', 'for shell in 1 2 3 4 5 6 7 8; do while :; do sleep "$1" & kill $!; done & done; wait', 'sh', process.argv[2]], { stdio: 'ignore' });
+console.log('started');`;
+
 /** A server on the Unix socket `at` that greets each client, closed by the returned function. */
 async function listenOn(at: string): Promise<() => Promise<void>> {
   fs.mkdirSync(path.dirname(at), { recursive: true });
@@ -106,6 +115,7 @@ for (const native of NATIVE) {
       host = nativeHost(tempDir());
       host.tool('tries', TRIES);
       host.tool('sleeps', SLEEPS);
+      host.tool('forks', FORKS);
       short = fs.realpathSync(fs.mkdtempSync('/tmp/tsc-'));
     });
 
@@ -256,21 +266,29 @@ for (const native of NATIVE) {
     });
 
     describe('after a SIGKILL of the runtime', () => {
-      /** Kills the runtime once `isStarted` holds, and returns the step's processes still alive a few seconds later. */
-      async function survivorsOfKill(isStarted: (marker: string) => boolean): Promise<string[]> {
+      /** Kills the runtime once `isStarted` holds for `tool`'s step, and returns its processes still alive a few seconds later. */
+      async function survivorsOfKill(isStarted: (marker: string) => boolean, tool = 'sleeps'): Promise<string[]> {
         const { connection, at } = await opened();
         // Unique to this run, so no other process's command line holds it.
         const marker = `765.${process.pid}${Date.now() % 1000}`;
-        connection.send({ type: 'exec', op: newOp(), handle: HANDLE, argv: ['sleeps', marker], env: {}, unset: [], credentials: {}, cwd: at.worktree });
-        await vi.waitFor(() => { expect(isStarted(marker)).toBe(true); }, { timeout: 10_000, interval: 20 });
-        connection.child.kill('SIGKILL');
-        await connection.end();
-        await vi.waitFor(() => { expect(processesWith(`sleep ${marker}`)).toEqual([]); }, { timeout: 5_000, interval: 100 }).catch(() => undefined);
-        const left = processesWith(marker);
+        connection.send({ type: 'exec', op: newOp(), handle: HANDLE, argv: [tool, marker], env: {}, unset: [], credentials: {}, cwd: at.worktree });
 
-        for (const line of left) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0] ?? '']);
+        try {
+          await vi.waitFor(() => { expect(isStarted(marker)).toBe(true); }, { timeout: 10_000, interval: 20 });
+          connection.child.kill('SIGKILL');
+          await connection.end();
+          await vi.waitFor(() => { expect(processesWith(marker)).toEqual([]); }, { timeout: 5_000, interval: 100 }).catch(() => undefined);
 
-        return left;
+          return processesWith(marker);
+        } finally {
+          // Whatever is left, a step that still forks included, until nothing names the marker.
+          await vi.waitFor(() => {
+            const left = processesWith(marker);
+
+            for (const line of left) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0] ?? '']);
+            expect(left).toEqual([]);
+          }, { timeout: 5_000, interval: 100 });
+        }
       }
 
       it("leaves none of the step's processes running", async () => {
@@ -279,6 +297,10 @@ for (const native of NATIVE) {
 
       it("leaves none of the step's processes running while the exec is still starting", async () => {
         expect(await survivorsOfKill((marker) => processesWith(marker).length > 0)).toEqual([]);
+      }, 30_000);
+
+      it("leaves none of the step's processes running while the step starts more of them", async () => {
+        expect(await survivorsOfKill((marker) => processesWith(`sh ${marker}`).length >= 8, 'forks')).toEqual([]);
       }, 30_000);
     });
   });
