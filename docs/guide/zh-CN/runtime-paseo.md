@@ -470,10 +470,10 @@ paseo permit allow 7c483fce --all
 ✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode auto, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
-智能体因工具的用量上限，或模型 API 返回的速率限制而停止时，步骤以 `usage_limited` 失败，消息带上工具的原话（包括重置时间），以及上限解除后重新运行该步骤的命令：
+智能体因工具的用量上限，或模型 API 返回的速率限制而停止时，步骤停下，消息带上工具的原话（包括重置时间）。步骤不会失败：额度重置前 teamai 不再用这个工具启动步骤，重置后再运行该步骤：
 
 ```text
-✖ Step "fix" failed with usage_limited: The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r3ad62eacc3c191eb fix
+⚠ Step "fix" stopped: The claude agent hit its usage limit in Paseo: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.
 ```
 
 ## 交互式步骤

@@ -2043,23 +2043,22 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 
 无法完成的提示以 `failed` 结束。希望步骤原样记录的原因，用 `model_unavailable`、`tool_unavailable`、`agent_unavailable`、`tool_failed` 或 `usage_limited`；其他代码 teamai 都记录为 `runtime_failed`，并在消息中带上你的代码和消息。收到 `cancel` 后，它以 `cancelled` 结束。`reattach` 把结束的提示报告为 `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`，仍在运行的报告为 `running`；用同一个 `op` 再次发送 `prompt` 会重新连上它的智能体，不会再启动一个。步骤的 `timeout` 由 teamai 自己用 `cancel` 执行。`budget` 在提示结束后按 `usage` 检查。玩具运行时的 `agent` 选项就是这样运行的。
 
-`open` 会写明 attempt 的提示运行的 `tool`，这样你可以为它准备位置，例如那个智能体的沙箱；命令步骤的 `open` 没有它。工具用完使用额度时，用 `usage_limited` 结束提示，写明工具，知道重置时间时也写上。不要写运行或步骤：teamai 会补上重试它的命令：
+`open` 会写明 attempt 的提示运行的 `tool`，这样你可以为它准备位置，例如那个智能体的沙箱；命令步骤的 `open` 没有它。工具用完使用额度时，用 `usage_limited` 结束提示，写明工具，知道重置时间时也写上。不要写运行或步骤：
 
 ```text
 ← {"op":"op-83bf2a9d01e4","event":"failed","failure":{"code":"usage_limited","message":"claude hit its usage limit, which resets at 14:00."}}
 ```
 
-```text
-✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
-```
+teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude、Codex 或 OpenCode 自己的错误中识别额度上限，并保留原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算一次。
 
-teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude 或 Codex 自己的错误里识别额度用完，并保留其原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算作额度用完：
+本地驱动不会让这样的步骤失败。它交还该步骤，在额度重置前不再在驱动的任何运行时上用这个工具启动步骤；重置后再运行该步骤。用其他工具的步骤照常运行，有自己 home 的实例有自己的额度。剩下的步骤只被额度挡住时，驱动等待重置，无人值守时最多等 6 小时。超过这个时间，或重置在它之后，驱动的 fleet 条目可以接手该步骤；否则运行会在 teamai-reports 上交出，就像只有人能处理的步骤那样。在终端里，驱动会改为询问：
 
 ```text
-✖ Step "review" failed with usage_limited: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r7a1… review
+⚠ Step "review" stopped: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.
+claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here until it resets, or offer run r7a1… to another machine on teamai-reports? [wait/offer]
 ```
 
-守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，末尾同样带上重试命令。受限提示（例如评审的提示）也一样。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
+守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，消息末尾带上重试该步骤的命令：`Then run: teamai workflow retry <run> <step>`。受限提示（例如评审的提示）也一样。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
 
 ```text
 ℹ Stopped attempt a3f0… of run r7a1… on step runtime "sandbox" and closed its place. Then run: teamai workflow retry r7a1… review

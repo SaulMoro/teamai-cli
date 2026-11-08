@@ -2049,23 +2049,22 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 
 A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavailable`, `agent_unavailable`, `tool_failed` or `usage_limited` for what the step should record as is; teamai records any other code as `runtime_failed`, with your code and message in its message. After `cancel`, it ends `cancelled`. `reattach` reports a finished prompt as `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`, and one still running as `running`; a repeated `prompt` with the same `op` reconnects to its agent and starts no other. teamai keeps the step's `timeout` itself, with `cancel`. It checks a `budget` against `usage` once the prompt ends. The toy runtime's `agent` option runs it this way.
 
-`open` names the `tool` the attempt's prompt runs, so you can make the place for it, such as a sandbox of that agent; a command step's `open` has none. When the tool hit its usage limit, end the prompt `usage_limited`, naming the tool and the reset time when you know it. Never name the run or the step: teamai adds the command that retries it:
+`open` names the `tool` the attempt's prompt runs, so you can make the place for it, such as a sandbox of that agent; a command step's `open` has none. When the tool hit its usage limit, end the prompt `usage_limited`, naming the tool and the reset time when you know it. Never name the run or the step:
 
 ```text
 ← {"op":"op-83bf2a9d01e4","event":"failed","failure":{"code":"usage_limited","message":"claude hit its usage limit, which resets at 14:00."}}
 ```
 
-```text
-✖ Step "review" failed with usage_limited: claude hit its usage limit, which resets at 14:00. Then run: teamai workflow retry r7a1… review
-```
+A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's, Codex's or OpenCode's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too.
 
-A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's or Codex's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too:
+The local driver does not fail such a step. It hands the step back, and launches nothing more on that tool, on any runtime of the driver, until the limit resets; then it runs the step again. Steps on other tools go on, and an instance with a home of its own has a limit of its own. Once only the limit holds the steps left, the driver waits for the reset, at most 6 hours when nobody attends. Past that, or for a reset after it, a fleet entry of the driver may take the step; otherwise the run is offered on teamai-reports, as for a step only a person can take. At a terminal, the driver asks instead:
 
 ```text
-✖ Step "review" failed with usage_limited: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). Then run: teamai workflow retry r7a1… review
+⚠ Step "review" stopped: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.
+claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here until it resets, or offer run r7a1… to another machine on teamai-reports? [wait/offer]
 ```
 
-A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed` with the same retry command at the end. So does a confined prompt, such as a judge's. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
+A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed`, ending its message with the command that retries the step: `Then run: teamai workflow retry <run> <step>`. So does a confined prompt, such as a judge's. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
 
 ```text
 ℹ Stopped attempt a3f0… of run r7a1… on step runtime "sandbox" and closed its place. Then run: teamai workflow retry r7a1… review
