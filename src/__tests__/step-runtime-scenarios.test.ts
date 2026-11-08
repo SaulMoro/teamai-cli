@@ -33,7 +33,8 @@ interface Subject {
   /** The directories the runtime keeps its records of `state` in, when it keeps any. */
   journal?(state: string): string[];
   /**
-   * How the runtime still answers an op whose end it cannot journal, where that is not its true end: the scenario then
+   * How the runtime still answers an op whose end it cannot journal (`<kind> <failure code>`), where that is not its true
+   * end: the scenario then checks that answer, as the record of a gap the runtime's owner closes by removing this.
    * fails, as the record of a gap the runtime's owner closes.
    */
   unjournaledEnd?: string;
@@ -319,7 +320,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
 
   // A runtime answers the true end of an op whose end it cannot journal, since teamai keeps that end as soon as it reads
   // it, and remembers it for reattach until the place closes.
-  (subject.journal === undefined ? it.skip : subject.unjournaledEnd === undefined ? it : it.fails)('answers the true end of an exec whose end it cannot journal, says so, and reports it on reattach until close', async () => {
+  it.runIf(subject.journal !== undefined)(subject.unjournaledEnd === undefined ? 'answers the true end of an exec whose end it cannot journal, says so, and reports it on reattach until close' : `still answers an exec whose end it cannot journal with ${subject.unjournaledEnd}, not its true end`, async () => {
     const warned = vi.spyOn(log, 'warn');
     const runtime = await start();
     const opened = await runtime.open(openRequest(), async () => {});
@@ -334,7 +335,15 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
       for (const root of journal) setDirModes(root, 0o500);
       fs.writeFileSync(path.join(worktree, 'release'), '');
 
-      expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: 'started\ndone\n' });
+      const end = await ended;
+
+      if (subject.unjournaledEnd !== undefined) {
+        expect(end.kind === 'failed' ? `failed ${end.failure.code}` : end.kind).toBe(subject.unjournaledEnd);
+
+        return;
+      }
+
+      expect(end).toEqual({ kind: 'exited', code: 0, stdout: 'started\ndone\n' });
       expect(warned).toHaveBeenCalledWith(expect.stringContaining(`operation ${request.op}`));
       expect(await runtime.reattach(opened.handle)).toEqual(alive([{ op: request.op, state: 'exited', code: 0, stdout: 'started\ndone\n' }]));
     } finally {
@@ -433,7 +442,7 @@ interface PromptSubject {
   failure?(failure: RuntimeFailure): RuntimeFailure;
   /** The directories the runtime keeps its records of `state` in. */
   journal(state: string): string[];
-  /** How the runtime still answers a prompt whose end it cannot journal, where that is not its true end. */
+  /** How the runtime still answers a prompt whose end it cannot journal (`<kind> <failure code>`), where that is not its true end. */
   unjournaledEnd?: string;
 }
 
@@ -618,7 +627,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
   });
 
-  (subject.unjournaledEnd === undefined ? it : it.fails)('answers the true end of a prompt whose end it cannot journal, says so, and reports it on reattach until close', async () => {
+  it(subject.unjournaledEnd === undefined ? 'answers the true end of a prompt whose end it cannot journal, says so, and reports it on reattach until close' : `still answers a prompt whose end it cannot journal with ${subject.unjournaledEnd}, not its true end`, async () => {
     const warned = vi.spyOn(log, 'warn');
     const release = path.join(dir, 'release');
     const runtime = await start({ release, output: { verdict: 'approve' } });
@@ -633,7 +642,15 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
       for (const root of journal) setDirModes(root, 0o500);
       fs.writeFileSync(release, '');
 
-      expect(await ended).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
+      const end = await ended;
+
+      if (subject.unjournaledEnd !== undefined) {
+        expect(end.kind === 'failed' ? `failed ${end.failure.code}` : end.kind).toBe(subject.unjournaledEnd);
+
+        return;
+      }
+
+      expect(end).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
       expect(warned).toHaveBeenCalledWith(expect.stringContaining(`operation ${request.op}`));
       expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive', ops: [{ op: request.op, state: 'finished', result: { output: { verdict: 'approve' } } }] });
     } finally {

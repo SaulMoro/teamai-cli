@@ -12,12 +12,12 @@ import { lintedPath, scopedFiles } from '../utils.js';
  * no longer imports fails until it is removed.
  */
 const PAST_A_SEAM = new Set([
-  // The Paseo runtime's own test reads two helpers of its runtime module (P4 tests them through their own modules).
+  // The Paseo runtime's own test reads two helpers of its runtime module, until they have tests of their own.
   'packages/runtime-paseo/src/runtime-paseo.test.ts -> packages/runtime-paseo/src/runtime.ts',
   'packages/runtime-paseo/src/runtime-paseo.test.ts -> packages/runtime-paseo/src/daemon.ts',
-  // The T3 runtime's test reads how a step thread's session is found (T3 splits its test by module).
+  // The T3 runtime's test reads how a step thread's session is found, until its test is split by module.
   'packages/runtime-t3/src/runtime-t3.test.ts -> packages/runtime-t3/src/sessions.ts',
-  // The sandbox wrapper's test reads the provider's command runner (S3 splits the sandbox by module).
+  // The sandbox wrapper's test reads the provider's command runner, until the sandbox is split by module.
   'packages/runtime-sandbox/src/wrapper.test.ts -> packages/runtime-sandbox/src/providers/cli.ts',
   // Tool families whose tests are named apart from the module they test, or read their launch adapter.
   'packages/tool-agy/src/agy-session-adapter.test.ts -> packages/tool-agy/src/session-adapter.ts',

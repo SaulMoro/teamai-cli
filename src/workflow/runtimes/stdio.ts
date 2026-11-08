@@ -28,7 +28,7 @@ const OP_ENDS = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
  * carries is cut to protocol 1's bound and is the end of that; else that stdout, as it is. A runtime that predates the
  * marker cuts to the bound with none, so a stdout that long counts as cut too, less a half character it dropped.
  */
-function wholeStdout(streamed: string, exited: string): string {
+function wholeStdout({ streamed, exited }: { streamed: string; exited: string }): string {
   const isMarked = exited.startsWith(STDOUT_CUT);
   const end = isMarked ? exited.slice(STDOUT_CUT.length) : exited;
   const isCut = isMarked || end.length >= EXITED_STDOUT_CHARS - 1;
@@ -494,7 +494,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
               return;
             case 'exited':
               ops.delete(request.op);
-              resolve({ kind: 'exited', code: event.code, stdout: wholeStdout(streamed, event.stdout) });
+              resolve({ kind: 'exited', code: event.code, stdout: wholeStdout({ streamed, exited: event.stdout }) });
 
               return;
             case 'cancelled':

@@ -14,14 +14,15 @@ const ENDS = new Set(['exited', 'finished', 'cancelled', 'failed']);
  * this list only shrinks, and an entry that no longer serves the protocol itself fails until it is removed.
  */
 const NOT_YET_ON_THE_KIT = new Set(scopedFiles([
-  // Paseo adopts serveRuntime and the ledger in its own slices (P1, P2).
+  // Until Paseo adopts serveRuntime and the ledger.
   'packages/runtime-paseo/src/runtime.ts',
-  // The sandbox adopts them after its security wave (S1, S2).
+  // Until the sandbox adopts them.
   'packages/runtime-sandbox/src/runtime.ts',
 ]));
 
 /**
- * The linted file as `{ folder, rest, relative }` when it is a runtime package's production source, else undefined.
+ * The linted file's path from the repository root, as `{ relative }`, when it is a runtime package's production source,
+ * else undefined.
  * @param {string} file
  */
 function runtimeSource(file) {

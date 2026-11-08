@@ -303,7 +303,7 @@ export function credentialsForTool(credentials: Record<string, string>, found: r
 /** The values of the tools' sign-in variables set in `env`, by name, with those that go with a sign-in found. */
 function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
   const isSet = (name: string): boolean => (env[name] ?? '') !== '';
-  const names = Object.values(SIGN_INS).flatMap((variables) => (variables.variables.some(isSet) ? variablesOf(variables) : []));
+  const names = Object.values(SIGN_INS).flatMap((signIn) => (signIn.variables.some(isSet) ? variablesOf(signIn) : []));
 
   return Object.fromEntries(names.filter(isSet).sort().map((name) => [name, env[name] ?? '']));
 }
@@ -517,7 +517,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
     // A tool whose login the runtime's provider keeps signs in on that login, before the member's own route: the
     // credentials their config declares, then what their environment holds. The definition's own credential still goes.
-    const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, variables]) => (ownLogins.has(tool) ? variablesOf(variables) : [])));
+    const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, signIn]) => (ownLogins.has(tool) ? variablesOf(signIn) : [])));
     const notOwnLogin = (given: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(given).filter(([name]) => !ownLoginVariables.has(name)));
     const foundHere = notOwnLogin(found);
     const isMemberRoute = driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use]?.credentials !== undefined;
