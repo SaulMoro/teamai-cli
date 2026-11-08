@@ -82,6 +82,13 @@ describe('a registration on an outer runtime\'s attempt socket', () => {
     expect(await registered.connected).toEqual({ ok: false, why: expect.stringContaining('closed the registration') });
   });
 
+  it('registers nothing for an empty agent id, saying so rather than throwing', async () => {
+    const registered = await registerThrough({ outer: outerOf(path.join(dir, 'attempt.sock')), agent: '' });
+
+    expect(registered).toEqual({ ok: false, why: expect.stringContaining('agent') });
+    expect(lines).toEqual([]);
+  });
+
   it('never registers on a socket whose directory others may open, since whoever made it would say what ran', async () => {
     fs.chmodSync(dir, 0o755);
 

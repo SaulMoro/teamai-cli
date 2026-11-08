@@ -6,6 +6,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { OuterHandleSchema, registerLine, registerThrough, WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import type { InitInstance } from '@teamai/runtime-protocol';
 import { LAUNCHABLE } from './providers/cli.js';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
@@ -111,11 +112,9 @@ async function openFor(connection: Connection, at: Place, { tool = 'claude', var
   return String(accepted.handle);
 }
 
-const HandleSchema = z.object({ place: z.string(), socket: z.string() });
-
 /** The attempt socket's path, from the handle teamai passes to the inner runtime as `outer`. */
 function socketOf(handle: string): string {
-  return HandleSchema.parse(JSON.parse(handle)).socket;
+  return OuterHandleSchema.parse(JSON.parse(handle)).socket;
 }
 
 /** Registers `agent` on the attempt socket, as an inner runtime does: each answer it gets, and how it ends the connection. */
@@ -129,7 +128,7 @@ async function register(handle: string, agent: string | null): Promise<{ answers
     answers.push(z.record(z.string(), z.json()).parse(JSON.parse(line)));
     wake?.();
   });
-  socket.write(`${JSON.stringify({ register: { agent } })}\n`);
+  socket.write(registerLine(agent));
   let read = 0;
 
   return {
@@ -166,7 +165,7 @@ interface Ran {
 
 /** Runs `teamai-sandbox-<name>` (a link to the runtime's executable) as the member's app runs a tool's binary. */
 function wrapper(name: string, args: string[], { cwd, env = {}, stdin = '', signal }: { cwd: string; env?: NodeJS.ProcessEnv; stdin?: string; signal?: { once: string; send: NodeJS.Signals } }): Promise<Ran> {
-  const link = path.join(wrappers, `teamai-sandbox-${name}`);
+  const link = path.join(wrappers, `${WRAPPER_PREFIX}${name}`);
 
   if (!fs.existsSync(link)) fs.symlinkSync(executable, link);
 
@@ -214,9 +213,9 @@ describe('teamai-sandbox-<tool> as teamai-cli installs it', () => {
   it('is a bin of teamai-cli for each tool the sandbox launches, on the runtime\'s own executable', () => {
     const manifest = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'package.json');
     const bins = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(manifest, 'utf8'))).bin;
-    const wrappersOf = Object.fromEntries(Object.entries(bins).filter(([name]) => name.startsWith('teamai-sandbox-')));
+    const wrappersOf = Object.fromEntries(Object.entries(bins).filter(([name]) => name.startsWith(WRAPPER_PREFIX)));
 
-    expect(wrappersOf).toEqual(Object.fromEntries(LAUNCHABLE.map((tool) => [`teamai-sandbox-${tool}`, bins['teamai-runtime-sandbox']])));
+    expect(wrappersOf).toEqual(Object.fromEntries(LAUNCHABLE.map((tool) => [`${WRAPPER_PREFIX}${tool}`, bins['teamai-runtime-sandbox']])));
   });
 });
 
@@ -307,6 +306,25 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(execsIn()).toHaveLength(1);
     expect(execsIn()[0]).toEqual(expect.arrayContaining(['exec', '-i', '-w', path.join(at.worktree, 'src'), 'claude', '-p']));
     expect(containerOf(execsIn()[0] ?? [])).toBe(attemptContainer());
+  });
+
+  it("grants the tool of a step an inner runtime registers through the runtime kit, and tells that registration the wrapper connected", async () => {
+    const connection = start();
+    await init(connection);
+    const at = place();
+    const handle = await openFor(connection, at);
+    const registration = await registerThrough({ outer: handle, agent: null });
+
+    if (!registration.ok) throw new Error(registration.why);
+
+    try {
+      const ran = await wrapper('claude', ['-p'], { cwd: at.worktree, stdin: 'exit 0' });
+
+      expect(ran.code).toBe(0);
+      expect(await registration.connected).toEqual({ ok: true });
+    } finally {
+      registration.close();
+    }
   });
 
   it("runs OpenCode in the attempt's sandbox with no sign-in teamai gives, as its free models need none", async () => {

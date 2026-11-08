@@ -13,19 +13,36 @@ import { z } from 'zod';
 //
 //    inner  > {"register":{"agent":"<id>"|null}}    < {"connected":{"agent":"<id>"|null}}   once it granted the wrapper
 //
-//  A runtime registers again after its own reattach, since a restarted sandbox runtime does not remember the
-//  registration.
+//  The app runs teamai's wrapper, `WRAPPER_PREFIX` and the tool's name, in place of the tool. The sandbox grants it only
+//  while the registration's connection is open, so a runtime registers again after its own reattach.
 //
 
-/** An outer handle that names an attempt socket; the sandbox's carries its place too, which only the sandbox reads. */
-const OuterHandleSchema = z.object({ socket: z.string().min(1) });
+/** What the name of a wrapper an app runs in place of a tool starts with: `teamai-sandbox-<tool>`. */
+export const WRAPPER_PREFIX = 'teamai-sandbox-';
 
-const ConnectedSchema = z.object({ connected: z.object({ agent: z.string().min(1).nullable() }) });
+/** The outer handle of a sandbox place whose attempt socket serves the wrapper: the place, and the socket to register on. */
+export const OuterHandleSchema = z.object({ place: z.string().min(1), socket: z.string().min(1) });
+
+export type OuterHandle = z.infer<typeof OuterHandleSchema>;
+
+/** The agent a registration names, or null for an app's tool that has no agent id. */
+const AgentSchema = z.string().min(1).nullable();
+
+/** A registration, as the attempt socket parses it. */
+export const RegisterSchema = z.object({ register: z.object({ agent: AgentSchema }) });
+
+/** The attempt socket's word that the registered agent's wrapper connected. */
+export const ConnectedSchema = z.object({ connected: z.object({ agent: AgentSchema }) });
+
+/** The line that registers `agent`'s tool on an attempt socket, as `RegisterSchema` reads it. */
+export function registerLine(agent: string | null): string {
+  return `${JSON.stringify(RegisterSchema.parse({ register: { agent } }))}\n`;
+}
 
 /** The attempt socket `outer` names, or none when it is a plain handle, as one of a sandbox that serves no socket. */
 export function socketOf(outer: string): string | undefined {
   try {
-    const parsed = OuterHandleSchema.safeParse(JSON.parse(outer));
+    const parsed = OuterHandleSchema.pick({ socket: true }).safeParse(JSON.parse(outer));
 
     return parsed.success ? parsed.data.socket : undefined;
   } catch {
@@ -67,6 +84,9 @@ export function registerThrough({ outer, agent }: { outer: string; agent: string
   const socket = socketOf(outer);
 
   if (socket === undefined) return Promise.resolve({ ok: false, why: 'its handle names no attempt socket' });
+
+  // Checked before the connection, whose callback would throw it with nothing to catch it.
+  if (!RegisterSchema.safeParse({ register: { agent } }).success) return Promise.resolve({ ok: false, why: 'an agent id is a non-empty string, or null for a tool with none' });
   const unsafe = unsafeDirOf(socket);
 
   if (unsafe !== undefined) return Promise.resolve({ ok: false, why: unsafe });
@@ -97,7 +117,7 @@ export function registerThrough({ outer, agent }: { outer: string; agent: string
 
     client.once('connect', () => {
       client.unref();
-      client.write(`${JSON.stringify({ register: { agent } })}\n`);
+      client.write(registerLine(agent));
       resolve({ ok: true, close: () => { client.end(); }, connected });
     });
   });
