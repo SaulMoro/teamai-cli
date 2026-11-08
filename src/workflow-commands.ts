@@ -1511,6 +1511,11 @@ async function resumeDriven(loaded: Ready, runId: RunId, { tools, options, calle
     const resumed = await resumeRun(loaded.config, runId, { claim: options.claim === true, checkout: process.cwd(), takeover: takeoverFor(caller) });
 
     if (!resumed.ok) return { error: resumed.error };
+    // A --confirmed that answered the takeover answered no invoke: ask of the run, asked now that the run is this
+    // install's, so the same command with --confirmed answers it.
+    const invokeAsked = resumed.value?.ownership === 'took_over' ? await resumeRefusal(loaded.config, runId, { ...caller, confirmed: false }, { published: false }) : undefined;
+
+    if (invokeAsked) return { error: invokeAsked };
     const stored = await readRun(loaded.config, runId);
 
     if (stored === 'missing' || stored === 'corrupt') {

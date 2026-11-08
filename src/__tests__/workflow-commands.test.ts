@@ -22,13 +22,13 @@ vi.mock('../config.js', async (importOriginal) => {
 
 import { log, setStderrOnly } from '../utils/logger.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { startRun } from '../workflow/engine.js';
-import { publishRun } from '../workflow/handoff.js';
+import { leaseNext, startRun } from '../workflow/engine.js';
+import { publishRun, resumeRun } from '../workflow/handoff.js';
 import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
 import { benchmarkRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
-import { skillHarness, untilStopped } from './helpers/skill-harness.js';
+import { sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 
 const dirs: string[] = [];
@@ -933,6 +933,7 @@ steps:
     expect(await readRun(bob.config, runId)).toBe('missing');
     expect(git(root, '--git-dir', origin, 'rev-parse', 'teamai-reports')).toBe(published);
   });
+
 });
 
 describe('workflow resume follows the invoke of the run it continues', () => {
@@ -1007,6 +1008,29 @@ steps:
     expect(await capture(() => workflowResume(run, {}))).toMatchObject({ error: { code: 'confirm_needed' } });
     vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'session-a');
     expect(await capture(() => workflowResume(run, {}))).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  });
+
+  it('asks an agent session about the run\'s invoke: ask after the takeover its --confirmed answered, so one yes answers one question', async () => {
+    const shared = sharedTeam({ gated: workflow('gated', 'ask') });
+    const alice = await shared.install('alice');
+    const started = await startRun(alice.config, 'gated', {}, { secrets: {} });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true });
+    expect(await resumeRun(alice.config, runId, { claim: false, checkout: alice.checkout })).toMatchObject({ ok: true });
+    expect(await leaseNext(alice.config, runId, { kind: 'local', machine: 'alice', workspace: alice.checkout })).toMatchObject({ data: { lease: { step: 'one' } } });
+    const bob = await shared.install('bob');
+    state.config = bob.config;
+    vi.spyOn(process, 'cwd').mockReturnValue(bob.checkout);
+    vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'session-b');
+    vi.stubEnv('TEAMAI_MODE', 'attended');
+
+    expect(await capture(() => workflowResume(runId, { claim: true }))).toMatchObject({ error: { code: 'owner_active' } });
+    // The person agreed to the takeover: it lands, and the invoke question comes next.
+    expect(await capture(() => workflowResume(runId, { claim: true, confirmed: true }))).toMatchObject({ error: { code: 'confirm_needed' } });
+    expect(await readRun(bob.config, runId)).toMatchObject({ steps: [{ id: 'one', status: 'pending' }] });
+    // The person agreed to continue it as well.
+    expect(await capture(() => workflowResume(runId, { claim: true, confirmed: true }))).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
 
   it('checks a driver\'s next claim from an agent session as a resume, and names the resume that carries the person\'s yes, which a payload cannot', async () => {

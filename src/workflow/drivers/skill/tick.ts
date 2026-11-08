@@ -404,6 +404,19 @@ async function called(context: SkillContext, lock: RunLock, same: Literal, input
       needsTool: readied.kind === 'ready' && needsTool(readied.description, { tool: context.tool, judged: answers.judge !== false }),
     }));
 
+    // A --confirmed that answered the takeover answered no invoke: ask of the run (R22), asked now that the run is this
+    // install's, so the same call with --confirmed answers it.
+    const asked = readied.kind === 'ready' && readied.tookOverActive && confirmed
+      ? traced(context, invokeRow(await context.client.resumeRefusal(run, { caller: { evidence: context.evidence, confirmed: false, mode: context.mode }, published: false }), context.mode))
+      : undefined;
+
+    if (asked) {
+      // The takeover installed the published run over a skill.json kept here, which made it stale, as for R28.
+      if (state !== undefined) await removeSkillState(context.config, lock);
+
+      return { answer: { error: errorOf(asked.answer, { invocation: context.invocation, same, localTool, tool: input.resume?.tool }) } };
+    }
+
     if (taken && 'answer' in taken) {
       // R28 with a skill.json kept here comes after the resume installed the published run over it, which made it stale: the
       // resume its next names must ready the run anew, as R19 would have.

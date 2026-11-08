@@ -87,8 +87,11 @@ export interface PublishReceipt {
 
 export interface ClaimReceipt {
   run: string;
-  /** `claimed` when this machine installed the published state, `already_owned` when it kept its own. */
-  ownership: 'claimed' | 'already_owned';
+  /**
+   * `claimed` when this machine installed the published state, `took_over` when it did so from an owner that may still
+   * have driven the run, as the person confirmed, and `already_owned` when it kept its own.
+   */
+  ownership: 'claimed' | 'took_over' | 'already_owned';
   owner: HandoffOwner;
   stateRevision: number;
 }
@@ -809,7 +812,7 @@ export function offeredToPerson(runId: string, steps: readonly string[], resume:
 /** What a claim decided from the snapshot it read; `replaces` is the write a claim lands only over. */
 type ClaimVerdict =
   | { kind: 'owned'; snapshot: RunSnapshot }
-  | { kind: 'claimed'; snapshot: RunSnapshot; replaces: string; definitions: Definitions; handed: Handover };
+  | { kind: 'claimed'; snapshot: RunSnapshot; replaces: string; definitions: Definitions; handed: Handover; tookOverActive: boolean };
 
 export interface Definitions {
   definition: WorkflowDefinition;
@@ -1151,7 +1154,9 @@ async function acquire(
       // Origin took no claim this machine can prove, so nothing local changes; claiming again finds out.
       if (!landed.ok) return landed;
 
-      return install(config, runId, checkout, verdict.snapshot, verdict.definitions, verdict.handed, secrets);
+      const installed = await install(config, runId, checkout, verdict.snapshot, verdict.definitions, verdict.handed, secrets);
+
+      return installed.ok && verdict.tookOverActive ? ok({ ...installed.value, ownership: 'took_over' }) : installed;
     }
 
     default: {
@@ -1305,9 +1310,9 @@ async function decideClaim(
   if (take === 'own') return refused(notOwner(runId, origin));
 
   if (take === 'offered' && origin.offered === undefined) return refused(noLongerOffered(runId));
-  const active = take === 'any' && takeover !== 'confirmed' ? ownerActive(origin, takeover) : undefined;
+  const active = take === 'any' ? ownerActive(origin, takeover === 'unattended' ? 'unattended' : 'attended') : undefined;
 
-  if (active) return refused(active);
+  if (active && takeover !== 'confirmed') return refused(active);
   const definitions = await definitionsOf(config, origin);
 
   if (!definitions.ok) return definitions;
@@ -1325,7 +1330,7 @@ async function decideClaim(
   const repository = origin.repository !== undefined ? { repository: origin.repository } : {};
   const claimed: RunSnapshot = { ...header(runId, owner, new Date().toISOString(), origin.stateRevision + 1, snapshotBody(origin), repository), ...handed };
 
-  return ok({ kind: 'claimed', snapshot: claimed, replaces: origin.write, definitions: definitions.value, handed });
+  return ok({ kind: 'claimed', snapshot: claimed, replaces: origin.write, definitions: definitions.value, handed, tookOverActive: active !== undefined });
 }
 
 interface Handover {

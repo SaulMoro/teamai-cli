@@ -192,11 +192,11 @@ export type CarriedRunView =
 
 /**
  * What `resume` made of a run: ready to drive here, with `installed` true when the published state replaced this
- * machine's; not on this machine, when nothing was to be claimed; owned by `owner`, another install, since `since`; or
- * refused for `failure`.
+ * machine's and `tookOverActive` when that took the run over from an owner who may still drive it; not on this machine,
+ * when nothing was to be claimed; owned by `owner`, another install, since `since`; or refused for `failure`.
  */
 export type RunReadied =
-  | { kind: 'ready'; installed: boolean; description: WorkflowDescription; status: RunStatus; judging: Judging }
+  | { kind: 'ready'; installed: boolean; tookOverActive?: true; description: WorkflowDescription; status: RunStatus; judging: Judging }
   | { kind: 'not-here' }
   | { kind: 'not-owner'; owner: string; since: string }
   | { kind: 'failed'; failure: WorkflowFailure };
@@ -781,7 +781,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
         definition: run.definition, source: DefaultWorkflows.sourceOfRun(run), workflows: run.workflows ?? {}, ceiling, can, allow: config.workflows?.allow ?? {}, env: env.facts,
       });
 
-      return { kind: 'ready', installed: resumed.value?.ownership === 'claimed', description, settled: settledSteps(run), status: run.status, judging: await judgingOf(config, description, { tool, offers: can.confined ?? [] }, run) };
+      return { kind: 'ready', installed: resumed.value !== null && resumed.value.ownership !== 'already_owned', tookOverActive: resumed.value?.ownership === 'took_over' || undefined, description, settled: settledSteps(run), status: run.status, judging: await judgingOf(config, description, { tool, offers: can.confined ?? [] }, run) };
     },
     carried: async (runId, { published, claim, ceiling, can }) => {
       const carried = await carriedRun(config, runId, { published, claim });

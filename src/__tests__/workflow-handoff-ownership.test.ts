@@ -121,7 +121,7 @@ describe('taking over a run its owner drives', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const { alice, bob, runId } = await aliceDrives();
 
-    expect(await resumeRun(bob.config, runId, { claim: false, checkout: bob.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    expect(await resumeRun(bob.config, runId, { claim: false, checkout: bob.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'took_over' } });
     expect(leased(await leaseNext(bob.config, runId, bob.driver))).toBe('one');
 
     vi.setSystemTime(Date.now() + 2 * MINUTE);
@@ -286,7 +286,7 @@ describe('the skill driver keeps a run it drives', () => {
   it('stops checking the run once another install took it over, and leaves the run to it', async () => {
     const { made, run, attempt, bob } = await aliceDispatched();
     const taker = await bob();
-    expect(await resumeRun(taker.config, run, { claim: false, checkout: taker.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    expect(await resumeRun(taker.config, run, { claim: false, checkout: taker.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'took_over' } });
     expect(await made.context.runners.alive(run, attempt)).toBe(true);
 
     // A sleep wakes the runner, which then waits at the run lock until the next.
@@ -344,5 +344,19 @@ describe('a skill session that takes over a run its owner may still drive', () =
 
     expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: true, answers: {} })).toMatchObject({ error: { code: 'owner_active', next: null } });
     expect(owner()).toBe('alice');
+  });
+
+  it('asks about the run\'s invoke: ask after the takeover its --confirmed answered, so one yes answers one question', async () => {
+    const { made, run, owner } = await aliceDrivesForBobsSession('ask');
+    const confirmed = `teamai workflow resume ${run} --driver skill --claim --confirmed`;
+
+    expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: false, answers: {} })).toMatchObject({ error: { code: 'owner_active', next: confirmed } });
+
+    // The person agreed to the takeover: it lands, and the invoke question comes next.
+    expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: true, answers: {} })).toMatchObject({ error: { code: 'confirm_needed', next: confirmed } });
+    expect(owner()).toBe('bob');
+
+    // The person agreed to continue it as well.
+    expect(await made.call({ kind: 'resume', run, claim: 'any', confirmed: true, answers: {} })).toMatchObject({ data: { turn: { run } } });
   });
 });
