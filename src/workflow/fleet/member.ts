@@ -584,8 +584,9 @@ async function trustedLease(config: LocalConfig, claim: Claimed): Promise<Truste
 
   return {
     kind: 'prompt', step, prompt: texts.prompt, env: rendered.env,
-    ...(texts.model !== undefined && { model: texts.model }),
-    ...(defaultModel !== undefined && { defaultModel }),
+    ...(texts.model !== undefined && texts.model !== '' && { model: texts.model }),
+    // A model that rendered empty asks for the tool's default, so the defaults' model does not stand in for it.
+    ...(defaultModel !== undefined && texts.model !== '' && { defaultModel }),
     ...(lease.limits !== undefined && { limits: lease.limits }),
   };
 }
