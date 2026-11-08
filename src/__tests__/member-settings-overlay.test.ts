@@ -67,6 +67,18 @@ describe('member settings overlay', () => {
     });
   });
 
+  it('reads the labels this machine declares in workflows.labels', async () => {
+    writeConfig(machineConfig, { workflows: { labels: ['computer-use', 'gpu'] } });
+    writeConfig(projectConfig, {
+      repo: { localPath: path.join(home, 'team-repo'), remote: 'https://example.test/team.git' },
+      username: 'member',
+      scope: 'project',
+      projectRoot,
+    });
+
+    expect(await loadLocalConfigForScope('project', projectRoot)).toMatchObject({ workflows: { labels: ['computer-use', 'gpu'] } });
+  });
+
   it('does not persist machine-only values when saving a workspace config', async () => {
     writeConfig(machineConfig, {
       recallEnabled: false,
