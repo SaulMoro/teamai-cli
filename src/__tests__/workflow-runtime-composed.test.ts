@@ -143,6 +143,26 @@ describe('a toy through a toy, over stdio', () => {
     expect(await runtime.prompt(promptRequest(opened.handle), {})).toMatchObject({ kind: 'finished', session: { tool: 'claude', home: toolHome } });
   });
 
+  it('reports a prompt that finished while teamai was stopped in the attempt\'s tool home too, once a restarted teamai opens the place again', async () => {
+    const release = path.join(dir, 'release');
+    const agent = { agent: { output: { ok: true }, home: path.join(dir, 'app-claude'), release } };
+    const first = await start(agent);
+    const toolHome = path.join(dir, 'attempt-home');
+    const request = { ...openRequest(), view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: { CLAUDE_CONFIG_DIR: toolHome } } };
+    const opened = await first.open(request, async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+    const prompt = promptRequest(opened.handle);
+    void first.prompt(prompt, {});
+    await expect.poll(() => asked().some((call) => call.type === 'prompt')).toBe(true);
+    await first.dispose();
+    fs.writeFileSync(release, '');
+
+    const restarted = await start(agent);
+    expect(await restarted.open(request, async () => {})).toEqual(opened);
+
+    await expect.poll(async () => restarted.reattach(opened.handle)).toMatchObject({ kind: 'alive', ops: [{ op: prompt.op, state: 'finished', session: { tool: 'claude', home: toolHome } }] });
+  });
+
   it('cancels a prompt on the inner, then collects and closes the inner before the outer', async () => {
     const release = path.join(dir, 'release');
     const runtime = await start({ agent: { output: { ok: true }, release } });
