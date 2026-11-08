@@ -1,6 +1,6 @@
 import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import { z } from 'zod';
-import { isPaseoTool } from './daemon.js';
+import { isPaseoTool } from './providers.js';
 
 const OptionsSchema = z.object({
   /** The daemon's WebSocket address, for a daemon Paseo's own config on this machine does not name (`daemonUrl`). */

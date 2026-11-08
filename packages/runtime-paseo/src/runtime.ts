@@ -14,8 +14,10 @@ import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
 import { z } from 'zod';
-import { loadClient } from './client.js';
-import { CONFINED_MODES, CONFINED_OPTIONS, connect, daemonUrl, isPaseoTool, PASEO_TOOLS, paseoHome, type Creation, type Daemon, type Model, type PaseoTool, type ProviderToAdd, type Target } from './daemon.js';
+import { daemonUrl, paseoHome } from './daemon/address.js';
+import { loadClient } from './daemon/client.js';
+import { connect, type Creation, type Daemon, type Model, type Target } from './daemon/connect.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, isPaseoTool, PASEO_TOOLS, type PaseoTool, type ProviderToAdd } from './providers.js';
 import { parseOptions } from './options.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Journal, type Place, type PromptRecord } from './journal.js';
 

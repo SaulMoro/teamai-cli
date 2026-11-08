@@ -1,17 +1,17 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import spawn from 'cross-spawn';
-import { expandHome, getUserHome } from '@teamai/tool-core/home';
-import { findOnPath } from '@teamai/tool-core/lookpath';
+import { getUserHome } from '@teamai/tool-core/home';
 import { z } from 'zod';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
 import { RUN_DIR_ENV, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { paseoKeyOf, type AgentCreate } from '../journal.js';
+import { CustomProvidersSchema, homeDirOf, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
+import { isOnThisMachine } from './address.js';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
-import { paseoKeyOf, type AgentCreate } from './journal.js';
+import { claudeHomeIn, codexLoginStatus, isCodexExecutable, signInStep, type RunsIn, type SignIn } from './sign-in.js';
 
 // ─── The Paseo daemon ────────────────────────────────────
 //
@@ -23,26 +23,6 @@ import { paseoKeyOf, type AgentCreate } from './journal.js';
 /** What this runtime needs of the daemon: agent creates with caller-chosen ids that a repeated key answers. */
 const NEEDED_FEATURES = ['creationLifecycle', 'agentRequestReceipts'] as const;
 
-/**
- * The Paseo mode a tool answers a confined prompt in: one that reads without asking and asks before it edits or runs
- * anything, which ends the prompt. Each mode Paseo lists for Codex writes the workspace without asking, and Paseo
- * refuses any other, so Codex answers in `auto`, which asks before anything its sandbox does not allow, with its
- * sandbox set read-only (`CONFINED_OPTIONS`).
- */
-export const CONFINED_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'default', codex: 'auto', opencode: 'plan' };
-
-/** The launch options a confined prompt starts with: for Codex, a sandbox that writes nothing, over its mode's own. */
-export const CONFINED_OPTIONS: Readonly<Record<PaseoTool, { sandbox_mode: 'read-only' } | undefined>> = { claude: undefined, codex: { sandbox_mode: 'read-only' }, opencode: undefined };
-
-/** The tools this runtime runs as Paseo agents: Paseo's providers that are teamai tools of the same name. */
-export type PaseoTool = 'claude' | 'codex' | 'opencode';
-
-export function isPaseoTool(tool: string): tool is PaseoTool {
-  return Object.hasOwn(CONFINED_MODES, tool);
-}
-
-/** The tools this runtime runs, in the order it offers them. */
-export const PASEO_TOOLS: readonly PaseoTool[] = Object.keys(CONFINED_MODES).filter(isPaseoTool);
 
 /**
  * The Paseo mode a step's agent starts in: `unset`, so Paseo starts the tool as it does when it sets no default
@@ -122,20 +102,6 @@ async function answeredInTime<T>(asking: Promise<T>, later = ''): Promise<T> {
   }
 }
 
-/** The config directory `claude auth status` reports in Claude's diagnostic, when it reports an absolute one. */
-function claudeHomeIn(diagnostic: string): string | undefined {
-  const quoted = /"configDirectory":\s*("(?:[^"\\]|\\.)*")/.exec(diagnostic)?.[1];
-
-  if (quoted === undefined) return undefined;
-
-  try {
-    const home = z.string().safeParse(JSON.parse(quoted));
-
-    return home.success && path.isAbsolute(home.data) ? home.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** The names under `dir`, newest first by name, as Codex's dated session folders sort; none when it cannot be read. */
 const newestFirst = (dir: string): string[] => {
@@ -270,55 +236,6 @@ export interface ProviderHome {
   teamaiHome: string;
 }
 
-/** The variable that moves `tool`'s home, which a Paseo provider's env may set: OpenCode's is its data directory's. */
-function homeVariableOf(tool: PaseoTool): string {
-  switch (tool) {
-    case 'claude':
-      return 'CLAUDE_CONFIG_DIR';
-    case 'codex':
-      return 'CODEX_HOME';
-    case 'opencode':
-      return 'XDG_DATA_HOME';
-    default: {
-      const unhandled: never = tool;
-
-      return unhandled;
-    }
-  }
-}
-
-/**
- * The home teamai resolved for an instance and passed in `init.instances`: absolute, the member's value of its variable
- * when their environment sets it, else its directory under their home. The runtime takes it as given.
- */
-function instanceHomeOf(home: NonNullable<InitInstance['home']>): string {
-  return path.resolve(getUserHome(), home.dir);
-}
-
-/** `dir` as the member reads it: `~/…` under their home, else as it is. */
-function shownPath(dir: string): string {
-  const under = path.relative(getUserHome(), dir);
-
-  return under !== '' && !under.startsWith('..') && !path.isAbsolute(under) ? `~/${under}` : dir;
-}
-
-/** The directory under `$HOME` `tool`'s home is in when nothing moves it. */
-function homeDirOf(tool: PaseoTool): string {
-  switch (tool) {
-    case 'claude':
-      return '.claude';
-    case 'codex':
-      return '.codex';
-    case 'opencode':
-      return path.join('.local', 'share');
-    default: {
-      const unhandled: never = tool;
-
-      return unhandled;
-    }
-  }
-}
-
 /** A tool or instance the daemon cannot run, and why, before or after a provider is found for it. */
 type Unavailable = Pick<Target, 'name' | 'tool'> & { kind: 'unavailable'; reason: string };
 
@@ -340,289 +257,6 @@ export interface ToolChoices {
   providers: Readonly<Record<string, string>>;
   /** Only to answer a check, which runs nothing: a Codex Paseo resolves counts as one it runs, its sign-in unasked. */
   isCheck?: boolean;
-}
-
-/**
- * The custom providers of the daemon's `agents.providers`, as much of each as tells which tool it extends, what it runs,
- * and its env, of which only the home variables are kept: the rest may hold a secret.
- */
-const CustomProvidersSchema = z.record(z.string(), z.object({ extends: z.string().optional(), command: z.array(z.string()).optional(), env: z.record(z.string(), z.string()).optional() }));
-
-type CustomProviders = z.infer<typeof CustomProvidersSchema>;
-
-/**
- * `providers` with only the variables of each env that move a tool's home, the shipped tools' and `variables`: the rest
- * may hold a secret, and none is kept.
- */
-function keptOf(providers: CustomProviders, variables: readonly string[]): CustomProviders {
-  const kept = new Set([...PASEO_TOOLS.map(homeVariableOf), ...variables]);
-
-  return Object.fromEntries(Object.entries(providers).map(([id, entry]) => [id, {
-    ...entry, ...(entry.env && { env: Object.fromEntries(Object.entries(entry.env).filter(([name]) => kept.has(name))) }),
-  }]));
-}
-
-/** Whether a provider whose command starts with `executable` runs `command`: the same name, or an absolute path to it. */
-const runsCommand = (executable: string | undefined, command: string): boolean => executable !== undefined
-  && (executable === command || (path.isAbsolute(executable) && !path.isAbsolute(command) && path.basename(executable) === command));
-
-/** Why the custom provider the runtime's providers option names cannot run `tool`, or undefined when it extends it. */
-const namedProblem = (named: string, tool: PaseoTool, custom: CustomProviders): string | undefined => (custom[named]?.extends === tool
-  ? undefined
-  : `the runtime's providers option names ${named}, which the daemon's agents.providers does not hold as a provider that extends ${tool}`);
-
-/**
- * A Paseo custom provider teamai adds for a team instance no provider runs: `id`, the instance's name; `entry`, what
- * `agents.providers` holds of it, which extends the instance's tool, runs its command from teamai's PATH (none for an
- * instance with only a home of its own: the tool's own), and sets the tool's home only for an instance with a home of
- * its own.
- */
-export interface ProviderToAdd {
-  id: string;
-  entry: { extends: PaseoTool; label: string; command?: [string]; env?: Record<string, string> };
-}
-
-/** How Paseo names a custom provider: lowercase letters, digits and dashes, starting with a letter. */
-const PROVIDER_ID = /^[a-z][a-z0-9-]*$/;
-
-/** The provider that runs a team instance, why none can, or the one teamai adds for it. */
-type ProviderFound = { provider: string } | { cannot: string } | { add: ProviderToAdd };
-
-/**
- * The Paseo provider that runs team instance `instance` of `tool`: the one `named` gives, which must extend `tool` and
- * run the instance's command, else the one custom provider that does, and, for an instance with only a home of its own,
- * the one that runs the tool's own command with that home. With none, the one teamai adds, when it can: on a daemon on
- * this machine, under the instance's name, with its command found on teamai's PATH. Or why it cannot, with how to set one
- * up. `home` is the absolute home the instance sets with `variable`, when it has one of its own.
- */
-function providerOf(instance: InitInstance, tool: PaseoTool, { custom, named, home, variable, onThisMachine }: {
-  custom: CustomProviders; named: string | undefined; home: string | undefined; variable: string; onThisMachine: boolean;
-}): ProviderFound {
-  const { command, name } = instance;
-
-  if (named !== undefined) {
-    const problem = namedProblem(named, tool, custom);
-    const runs = custom[named]?.command?.[0];
-
-    if (problem !== undefined) return { cannot: problem };
-
-    return command === undefined || runsCommand(runs, command)
-      ? { provider: named }
-      : { cannot: `the runtime's providers option names ${named}, which runs ${runs ?? 'its tool\'s own command'} rather than its command ${command}; name a provider whose command is ${command}` };
-  }
-
-  // A provider with no command of its own runs the tool's.
-  const runsOwn = (entry: CustomProviders[string]): boolean => (command === undefined
-    ? (entry.command?.[0] === undefined || runsCommand(entry.command[0], tool)) && home !== undefined && entry.env?.[variable] === home
-    : runsCommand(entry.command?.[0], command));
-
-  if (command === undefined && home === undefined) {
-    return { cannot: `the team instance names neither a command nor a home for Paseo to run ${tool} with; add a Paseo provider on the daemon's host that extends ${tool}, then name it in the runtime's providers option` };
-  }
-
-  const shownHome = instance.home ? shownPath(instanceHomeOf(instance.home)) : '';
-  const subject = command === undefined ? `no Paseo provider runs ${tool} in its home ${shownHome}` : `no Paseo provider runs its command ${command}`;
-  const setUp = command === undefined ? `with env ${JSON.stringify({ [variable]: shownHome })}` : `with command ${JSON.stringify([command])}`;
-  const matches = Object.entries(custom).flatMap(([id, entry]) => (entry.extends === tool && runsOwn(entry) ? [id] : []));
-  const [only, second] = matches;
-
-  if (second !== undefined) {
-    return { cannot: `Paseo providers ${matches.slice(0, -1).join(', ')} and ${matches.at(-1) ?? ''} both run ${command === undefined ? `${tool} in its home ${shownHome}` : `its command ${command}`}; name the one to use in the runtime's providers option, such as providers: { ${name}: ${only ?? ''} }` };
-  }
-
-  if (only !== undefined) return { provider: only };
-
-  if (!onThisMachine) {
-    return { cannot: `${subject}, and teamai adds one only on a daemon on this machine; add one on the daemon's host that extends ${tool} ${setUp} (\`paseo daemon config set agents.providers …\`, then \`paseo daemon reload\`), or name one in the runtime's providers option` };
-  }
-
-  if (!PROVIDER_ID.test(name)) {
-    return { cannot: `${subject}, and teamai cannot add one named ${name}, since Paseo names a provider with lowercase letters, digits and dashes only, starting with a letter; add one on the daemon's host that extends ${tool} ${setUp}, and name it in the runtime's providers option` };
-  }
-
-  const taken = custom[name];
-
-  if (taken !== undefined) {
-    const runs = command === undefined ? `${tool} in ${taken.env?.[variable] ?? `${tool}'s own home`}` : taken.command?.[0] ?? `${tool}'s own command`;
-    const point = command === undefined ? `set ${variable} to ${shownHome} in its env` : `point that provider at ${command}`;
-
-    return { cannot: `${subject}, and the Paseo provider ${name} runs ${runs} instead, so teamai adds none under that name; ${point}, or name the provider to use in the runtime's providers option` };
-  }
-
-  const found = command === undefined ? undefined : findOnPath(command);
-
-  if (command !== undefined && found === null) {
-    return { cannot: `${subject}, and teamai adds one only for a command on its PATH; install ${command} there, or name a Paseo provider that runs it in the runtime's providers option` };
-  }
-
-  return {
-    add: {
-      id: name,
-      entry: { extends: tool, label: name, ...(found && { command: [found] }), ...(home !== undefined && { env: { [variable]: home } }) },
-    },
-  };
-}
-
-/**
- * What a tool's sign-in check found: why the daemon cannot run it, or that it can, with the tool home it keeps its
- * sessions in when Paseo reports it (Claude's `configDirectory`).
- */
-type SignIn = { canRun: false; problem: string } | { canRun: true; home?: string };
-
-
-/** How long `codex login status` may take, as Paseo gives `claude auth status` in Claude's diagnostic. */
-const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
-
-/**
- * The tool home a tool or team instance runs in on the daemon's host, when it is not the tool's own: the one its Paseo
- * provider's env sets, else a team instance's own. `shown` is how a sign-in step names it.
- */
-interface RunsIn {
-  variable: string;
-  dir: string;
-  shown: string;
-}
-
-/** How a person signs a tool in on the daemon's host, such as `codex login`: for a team instance, its own command in its own home. */
-function signInStep({ runsIn, command, login }: { runsIn: RunsIn | undefined; command: string; login: string }): string {
-  return `${runsIn ? `${runsIn.variable}=${runsIn.shown} ` : ''}${command} ${login}`;
-}
-
-/**
- * `<codex> login status`, killed whole when it does not answer in time: an npm `codex` is a shim that starts the native
- * binary, and killing the shim alone leaves that running. On POSIX it runs in a process group of its own; on Windows,
- * where cross-spawn runs a `.cmd` through cmd.exe, taskkill ends the tree under the process it started.
- */
-function codexLoginStatus(codex: string, env?: NodeJS.ProcessEnv): Promise<{ code: number; answer: string }> {
-  return new Promise((resolve, reject) => {
-    const isWindows = process.platform === 'win32';
-    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: !isWindows, windowsHide: true, ...(env && { env }) });
-    let answer = '';
-
-    const timer = setTimeout(() => {
-      try {
-        if (child.pid === undefined) child.kill('SIGKILL');
-        // A taskkill that cannot run leaves the process teamai started to be killed on its own, as on POSIX.
-        else if (isWindows) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) child.kill('SIGKILL'); });
-        else process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        child.kill('SIGKILL');
-      }
-
-      reject(new Error(`no answer in ${SIGN_IN_CHECK_TIMEOUT_MS} ms`));
-    }, SIGN_IN_CHECK_TIMEOUT_MS);
-
-    child.stdout?.setEncoding('utf8').on('data', (text: string) => { answer += text; });
-    child.stderr?.setEncoding('utf8').on('data', (text: string) => { answer += text; });
-    child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? 1, answer });
-    });
-  });
-}
-
-/**
- * Whether teamai may run the Codex the daemon resolves, as the member. It must be an absolute path, since a relative one
- * would resolve on teamai's PATH rather than the daemon's, to a file named `codex`, or on Windows to the binary
- * `codex.exe` or npm's `codex.cmd`, in any case; for a team instance, named as the command its provider runs.
- */
-export function isCodexExecutable(resolved: string, platform: NodeJS.Platform = process.platform, name = 'codex'): boolean {
-  if (platform === 'win32') {
-    const base = path.win32.basename(resolved).toLowerCase();
-
-    return path.win32.isAbsolute(resolved) && (base === `${name.toLowerCase()}.exe` || base === `${name.toLowerCase()}.cmd`);
-  }
-
-  return path.posix.isAbsolute(resolved) && path.posix.basename(resolved) === name;
-}
-
-/** The daemon's address when Paseo's config names none, as Paseo listens by default. */
-const DEFAULT_URL = 'ws://127.0.0.1:6767/ws';
-
-const PaseoConfigSchema = z.object({ daemon: z.object({ listen: z.string().min(1).optional() }).optional() });
-
-/** A path as Paseo expands it: `~` and `~/…` under the member's home, then resolved. */
-
-/**
- * The WebSocket address of a daemon that listens at `listen`, read as Paseo reads its own `daemon.listen`: a Unix socket
- * path (`/…`, `~/…` or `unix://…`), a port alone on 127.0.0.1, or `host:port`. A daemon that listens on every
- * interface is reached on 127.0.0.1. Or why this runtime cannot reach it.
- */
-function urlOfListen(listen: string): { url: string } | { cannot: string } {
-  const trimmed = listen.trim();
-
-  if (trimmed.startsWith('pipe://') || trimmed.startsWith('\\\\.\\pipe\\')) return { cannot: `it listens on the Windows named pipe ${trimmed}, which teamai-runtime-paseo cannot reach` };
-
-  if (trimmed.startsWith('unix://')) return { url: `ws+unix://${path.resolve(expandHome(trimmed.slice('unix://'.length)))}:/ws` };
-
-  if (trimmed.startsWith('/') || trimmed.startsWith('~')) return { url: `ws+unix://${path.resolve(expandHome(trimmed))}:/ws` };
-
-  if (/^\d+$/.test(trimmed)) return { url: `ws://127.0.0.1:${trimmed}/ws` };
-  const at = trimmed.lastIndexOf(':');
-  const port = trimmed.slice(at + 1);
-
-  if (at === -1 || !/^\d+$/.test(port)) return { cannot: `"${listen}" is neither a port, a host and port, nor a socket path` };
-  const host = trimmed.slice(0, at).replace(/^\[(.*)\]$/, '$1');
-  const reached = host === '' || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
-
-  return { url: `ws://${reached.includes(':') ? `[${reached}]` : reached}:${port}/ws` };
-}
-
-/** The member's Paseo home: `PASEO_HOME`, or `~/.paseo` as Paseo defaults it. */
-export const paseoHome = (env: NodeJS.ProcessEnv): string => path.resolve(expandHome(env.PASEO_HOME || '~/.paseo'));
-
-/**
- * The address of the daemon the member's Paseo runs: the one `daemon.listen` names in Paseo's own config,
- * `$PASEO_HOME/config.json` (`PASEO_HOME` defaults to `~/.paseo`), or Paseo's default address when that config names
- * none. A config that cannot be read fails, rather than send teamai's steps to another daemon.
- */
-export function daemonUrl(env: NodeJS.ProcessEnv): { url: string } | RuntimeFailure {
-  const file = path.join(paseoHome(env), 'config.json');
-
-  const cannot = (why: string): RuntimeFailure => ({
-    code: 'paseo_config',
-    message: `teamai-runtime-paseo could not read the Paseo daemon's address from ${file}: ${why}. Fix that file, or set the runtime's url option to the daemon's address.`,
-  });
-
-  let text: string;
-
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: DEFAULT_URL };
-
-    return cannot(error instanceof Error ? error.message : String(error));
-  }
-
-  let config: z.infer<typeof PaseoConfigSchema>;
-
-  try {
-    const parsed = PaseoConfigSchema.safeParse(JSON.parse(text));
-
-    if (!parsed.success) return cannot(`its daemon section is not what Paseo writes (${parsed.error.issues[0]?.message ?? 'unexpected shape'})`);
-    config = parsed.data;
-  } catch (error) {
-    return cannot(error instanceof Error ? error.message : String(error));
-  }
-
-  const listen = config.daemon?.listen;
-
-  if (listen === undefined) return { url: DEFAULT_URL };
-  const address = urlOfListen(listen);
-
-  return 'cannot' in address ? cannot(address.cannot) : address;
-}
-
-/** Whether `url` names a daemon on this machine: a Unix socket, or a loopback address, the only one whose host is surely this one. */
-function isOnThisMachine(url: string): boolean {
-  if (url.startsWith('ws+unix://')) return true;
-  const host = new URL(url).hostname.replace(/^\[(.*)\]$/, '$1');
-
-  return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 export interface Daemon {
