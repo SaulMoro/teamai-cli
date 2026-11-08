@@ -1925,6 +1925,13 @@ When you cannot stop an operation, end it `failed` with `cancel_failed` and a me
 ← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
 ```
 
+teamai opens your runtime in `check` mode when it only asks whether a run could start now, as describe does in an app's session. It sends nothing after that `init`. In that mode sign in to nothing, write nothing, here or in your provider, and start nothing. Answer `ok` with what you can tell you offer, or fail with why a run could not start. When you cannot tell without writing or starting something, fail the `init`. A runtime older than this mode refuses it too, and teamai then offers no start on your runtime:
+
+```text
+→ {"type":"init","protocol":1,"mode":"check","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"env":false}}
+```
+
 Answer every request, even one you cannot carry out. A `reattach`, `collect` or `close` you cannot answer, for example because your journal cannot be read or your provider cannot be reached, gets the failure reply for its handle. Never answer `gone` then: the place may still be there.
 
 ```text

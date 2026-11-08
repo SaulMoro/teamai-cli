@@ -1919,6 +1919,13 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 ← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
 ```
 
+当 teamai 只想知道现在能否启动运行时（例如 describe 在应用会话中所做的），它会以 `check` 模式打开你的运行时，在这个 `init` 之后不再发送任何请求。在这种模式下，不登录任何东西，不写任何东西（无论在本机还是在你的提供方），也不启动任何东西。用 `ok` 回答你能确定自己提供的内容，或者失败并说明为什么不能启动运行。如果不写入或启动某些东西就无法确定，就让 `init` 失败。早于这个模式的运行时同样会拒绝它，teamai 随后不会在你的运行时上提供启动：
+
+```text
+→ {"type":"init","protocol":1,"mode":"check","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"env":false}}
+```
+
 每个请求都要回答，包括你做不到的请求。无法回答的 `reattach`、`collect` 或 `close`（例如读不了自己的日志，或连不上提供方）要给出这个句柄的失败回复。这时不要回答 `gone`：位置可能还在。
 
 ```text

@@ -1075,7 +1075,7 @@ skill 驱动声明 `env: "commands"`（见[要求和限制](workflow-advanced.md
 
 ### 从 T3 线程或 Paseo agent 启动
 
-在 T3 Code 线程（设置了 `T3CODE_THREAD_ID`）或 Paseo agent（`PASEO_AGENT_ID`）中，describe 先检查现在能否在该应用的驱动（`t3` 或 `paseo`）上启动运行。它像无人值守的运行那样打开驱动的运行时，所以不会打开登录页面。能启动时，回复是 `ask.kind: background`，带 `teamai workflow start <name> --driver t3`。还有要问的内容时（`invoke: ask`、必需输入、可选关卡），回复是平常的问题，其中的启动命令使用该驱动。agent 在后台运行启动命令，并等待它结束。步骤显示在应用中。不能在那里启动时，describe 的回答与其他会话相同。
+在 T3 Code 线程（设置了 `T3CODE_THREAD_ID`）或 Paseo agent（`PASEO_AGENT_ID`）中，describe 先检查现在能否在该应用的驱动（`t3` 或 `paseo`）上启动运行。它以 `check` 模式询问驱动的运行时，所以没有运行时会登录、写入或启动任何东西。T3 根据保存的登录或 `t3` 命令回答，Paseo 列出其守护进程运行的工具，sandbox 运行时拒绝这次检查。能启动时，回复是 `ask.kind: background`，带 `teamai workflow start <name> --driver t3`。还有要问的内容时（`invoke: ask`、必需输入、可选关卡），回复是平常的问题，其中的启动命令使用该驱动。agent 在后台运行启动命令，并等待它结束。步骤显示在应用中。不能在那里启动时，describe 的回答与其他会话相同。
 
 后台运行没有终端，任何关卡都不会替你决定。只有 `--auto-approve` 或 `workflows.auto_approve` 会自动回答可选关卡。其他内容都不再运行后，启动以 `hitl_waiting` 结束。它给出步骤、轮次、消息和选项、关卡是否必需、`respond` 命令，以及 `resume --driver t3` 命令。agent 会问你。可选关卡由它用 `teamai workflow respond` 回答；必需关卡则把命令交给你，在应用的终端中运行。然后它在后台继续运行。从会话中用本地驱动的运行仍按原来的方式决定关卡。
 
