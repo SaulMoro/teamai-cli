@@ -2051,7 +2051,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 
 teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude、Codex 或 OpenCode 自己的错误中识别额度上限，并保留原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算一次。
 
-本地驱动不会让这样的步骤失败。它交还该步骤，在额度重置前不再在驱动的任何运行时上用这个工具启动步骤；重置后再运行该步骤。用其他工具的步骤照常运行，有自己 home 的实例有自己的额度。剩下的步骤只被额度挡住时，驱动等待重置，无人值守时最多等 6 小时。超过这个时间，或重置在它之后，驱动的 fleet 条目可以接手该步骤；否则运行会在 teamai-reports 上交出，就像只有人能处理的步骤那样。在终端里，驱动会改为询问：
+本地驱动不会让这样的步骤失败。它交还该步骤，在额度重置前不再在驱动的任何运行时上用这个工具启动步骤；重置后在同一个工作区里再运行该步骤，工具停止前在那里做的改动都还在。用其他工具的步骤照常运行，有自己 home 的实例有自己的额度。剩下的步骤只被额度挡住时，驱动等待重置，无人值守时最多等 6 小时。超过这个时间，或重置在它之后，驱动的 fleet 条目可以接手该步骤；否则运行会在 teamai-reports 上交出，就像只有人能处理的步骤那样。在终端里，驱动会改为询问：
 
 ```text
 ⚠ Step "review" stopped: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.

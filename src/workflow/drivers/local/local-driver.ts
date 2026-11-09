@@ -1000,7 +1000,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     limits.hit({ tool, message: said, now: Date.now() });
     log.warn(`Step "${lease.step}" stopped: ${said}. teamai launches no more steps on ${tool} until its limit resets, then runs the step again.`);
 
-    return { ...releasedReport(lease), ...(body.tokens && { tokens: body.tokens }) };
+    return { ...releasedReport(lease), launched: true, ...(body.tokens && { tokens: body.tokens }) };
   };
 
   // A runtime's credential values are masked like the team's secrets, whatever their names look like, each entry's own

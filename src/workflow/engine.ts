@@ -109,6 +109,11 @@ export interface ReportInput {
   failure?: WorkflowFailure;
   /** Process-only: the end a workflow step leased whole reached where it ran. */
   end?: string;
+  /**
+   * Process-only, with `released`: the attempt's tool started before the driver handed the lease back, as on a usage
+   * limit, so the attempt's place keeps what it did for the step's next attempt.
+   */
+  launched?: true;
   /** The branch this attempt committed, when it ran in a workspace. */
   changes?: { branch: string; base: string; from: string; to: string; commits: string[] };
   /** As `next`'s `queued`: the driver's other open leases it holds but has not started, whose own timeout counts from this report. */
@@ -2799,7 +2804,7 @@ const REPORT_FIELD_SOURCES = {
   attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
   tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
   failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload', limit: 'payload',
-  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url', end: 'process',
+  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url', end: 'process', launched: 'process',
 } as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
 
 /** The top-level payload fields `parseReport` reads. */

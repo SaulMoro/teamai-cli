@@ -97,6 +97,8 @@ const PlaceFields = {
   readOnly: z.literal(true).optional(),
   /** The paths, relative to the checkout, under which a command reader's change is kept. */
   writes: z.array(z.string()).optional(),
+  /** The attempt of the step whose `kept` place this one went on in: what that attempt's tool did is here. */
+  keptFrom: AttemptIdSchema.optional(),
 };
 
 const PlaceBase = { ...PlaceFields, place: PlaceRoleSchema };
@@ -126,8 +128,16 @@ const PlaceRecordSchema = z.discriminatedUnion('phase', [
   z.object({ ...PlaceBase, phase: z.literal('setting-up') }),
   z.object({ ...PlaceBase, phase: z.literal('ready') }),
   z.object({ ...PlaceBase, phase: z.literal('finished'), at: z.string(), finished: PlaceFinishedSchema }),
-  /** The step ended without a report to finish it: the copy is as it was found, and nothing was committed. */
+  /**
+   * The step ended without a report to finish it: the copy is as it was found, and nothing was committed. A place that
+   * was `kept` is recorded so once the step's next attempt goes on in it.
+   */
   z.object({ ...PlaceBase, phase: z.literal('abandoned'), at: z.string() }),
+  /**
+   * The attempt was released after its tool ran, as on a usage limit: the clone, team clone or data checkout at `dir`
+   * keeps what the tool did there, and the step's next attempt goes on in it rather than in a fresh one.
+   */
+  z.object({ ...PlaceFields, phase: z.literal('kept'), at: z.string(), place: z.discriminatedUnion('role', [CloneRoleSchema, TeamRoleSchema, DataRoleSchema]) }),
 ]);
 
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;

@@ -17,7 +17,7 @@ import { ConfinedLeaseSchema, LeaseIdSchema, LeaseWireSchema } from './lease-wir
 import { carriedRun, claimOffered, leaseRefusal, offerToPerson, reconcileTakenCopies, resumeRun, settledSteps, takeoverFor, takeoverRefusal, type Takeover } from './handoff.js';
 import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput, type SoleDriver } from './engine.js';
 import {
-  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparedCopyTeam, preparePlace, refuseDirtyAdoptedCommand, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
+  abandonPlace, adoptedPlaceOf, finishPlace, keepPlace, releaseUnlaunchedPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparedCopyTeam, preparePlace, refuseDirtyAdoptedCommand, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
   type PlacePrepared,
   type StepEnd,
 } from './place/place.js';
@@ -983,7 +983,9 @@ async function settleManaged(input: { config: LocalConfig; lock: RunLock; attemp
   if (report.changes || report.read) return { error: { code: 'invalid_report', message: 'Prepared workspace reports fill changes/read automatically; omit those fields' } };
 
   if (report.outcome === 'released') {
-    await abandonPlace({ config, lock, attempt });
+    // A lease handed back before its tool started leaves the place as prepare found it, unless an earlier attempt's work
+    // is there; one whose tool ran keeps its work.
+    await (report.launched === true ? keepPlace : releaseUnlaunchedPlace)({ config, lock, attempt });
 
     return reportAttempt(config, lock.run, report, secrets);
   }
