@@ -1374,7 +1374,10 @@ function descendantEdited(current: Record<string, string>, overlay: Record<strin
   return false;
 }
 
-/** Copies a file, directory, or symlink without rewriting the link or dropping its mode. */
+/**
+ * Copies a file, directory, or symlink without rewriting the link or dropping its mode. Anything else, such as a FIFO a
+ * step left in its copy, which git ignores too, is not copied: copying one would wait until a writer opens it.
+ */
 async function copyEntry(from: string, to: string): Promise<void> {
   const stats = await fs.lstat(from);
   // A nested agent path such as .github/copilot-instructions.md has no parent in a fresh copy.
@@ -1395,7 +1398,8 @@ async function copyEntry(from: string, to: string): Promise<void> {
     return;
   }
 
-  await fs.copyFile(from, to);
+  if (!stats.isFile()) return;
+  await fs.writeFile(to, await readRegularFile(from));
   await fs.chmod(to, stats.mode);
 }
 
