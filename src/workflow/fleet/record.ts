@@ -441,11 +441,15 @@ export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 
 
 /**
  * The inputs workflow `child` starts with when step `step` of run `run` runs it whole, rendered from `values` as its
- * owner's lease rendered them from the run. An inline workflow takes no `with`: it reads the inputs around it, which
- * `values` carries as its steps read them.
+ * owner's lease rendered them from the run. An inline workflow takes no `with`: it reads the inputs around it, of which
+ * it starts with what `step` and the steps of `step`'s own copy of it read, picked from `values` as the owner picked them.
  */
-export function leaseInputs(step: Pick<WorkflowStep, 'with'>, child: WorkflowDefinition | InlineWorkflow, values: LeaseValues, run: RunId): { inputs: JsonValue } | { error: string } {
-  if (!isWorkflowFile(child)) return { inputs: values.inputs ?? {} };
+export function leaseInputs(step: Pick<WorkflowStep, 'id' | 'prompt' | 'env' | 'with' | 'model' | 'workflow'>, child: WorkflowDefinition | InlineWorkflow, values: LeaseValues, run: RunId): { inputs: JsonValue } | { error: string } {
+  if (!isWorkflowFile(child)) {
+    const read = leaseValues(step, valuesContext(values, run));
+
+    return 'error' in read ? read : { inputs: read.values.inputs ?? {} };
+  }
 
   return wholeInputs(step, child, valuesContext(values, run));
 }

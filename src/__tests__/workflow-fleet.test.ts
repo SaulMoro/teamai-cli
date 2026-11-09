@@ -313,6 +313,23 @@ async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1
   return { taken, record: record.ok && record.value !== 'absent' ? record.value : undefined, alice, bob };
 }
 
+/** A step that runs a workflow written inline, whose one step reads the run's `mark` input and nothing else of it. */
+const INLINE_MARK = `schemaVersion: v1alpha1
+name: mark
+description: Writes a mark from a workflow written inline.
+inputs: { mark: string, note: string }
+steps:
+  - id: write
+    workspace: new
+    workflow:
+      steps:
+        - id: put
+          workspace: continue
+          env:
+            MARK: "{{ inputs.mark }}"
+          command: echo written > "$MARK"
+`;
+
 /** A prompt step whose prompt reads an input: the member renders it from the input's value, with its own copy of the step. */
 const PROMPTED = `schemaVersion: v1alpha1
 name: mark
@@ -371,6 +388,17 @@ describe('a member taking a prompt attempt', () => {
     }, useClaude, PROMPTED);
 
     expect(record).toMatchObject({ state: 'finished', result: { tool: 'claude', failure: { code: 'usage_limited', message: expect.stringContaining('claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)') } } });
+  });
+
+  // The member gives its nested run only what its own copy of the inline workflow reads of the run's inputs.
+  it('refuses an inline workflow step whose offer starts its nested run with inputs its own copy of the workflow does not read', async () => {
+    const { taken, record } = await takeForged((forged) => {
+      forged.lease = { kind: 'workflow', step: 'write', inputs: { mark: 'made.txt', note: 'planted' }, env: {} };
+      forged.values = { inputs: { mark: 'made.txt', note: 'planted' } };
+    }, undefined, INLINE_MARK, { ...HERE, workflow: { kind: 'here' } }, { note: 'planted' });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1, stderr: expect.stringContaining('the offer\'s inputs differ from what workflow "mark" renders from the offer\'s values for step "write"') } });
   });
 
   it('runs on the tool\'s own default model when the step\'s model renders empty, as the owner\'s driver would, not on the defaults\' model', async () => {
