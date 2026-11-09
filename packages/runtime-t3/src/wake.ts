@@ -8,8 +8,9 @@ import type { EnvironmentLink, Launch, Project, T3 } from './t3.js';
 //
 //  A wake launches a thread on another machine linked to this T3 Code: the first linked environment that answers and
 //  has a project of the run's repository. The thread's first message is teamai's command to take one attempt of the
-//  pool, then to end. The runtime launches it and forgets it: the person finds it in that machine's T3 Code, delegated
-//  from the thread the run started in, when it did, and stops it there.
+//  pool, then to end. The runtime launches it and forgets it: the person finds it in that machine's T3 Code, and stops
+//  it there. The launch names the thread the run started in, when it did, as `delegatedFrom`; T3 Code 0.1.8 takes it
+//  and records no parent for the woken thread.
 //
 
 /** What every woken member is told last, so its thread ends once its one attempt is done. */

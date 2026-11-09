@@ -374,7 +374,7 @@ teamai workflow cancel r70d31098c8884803
 2. 把另一台机器关联到这个 T3 Code。
 3. 在那台机器上，把仓库的一个检出添加为 T3 项目。T3 按 git remote 指向的仓库来匹配，所以只有本地 remote 的检出不算。那台机器需要装好 teamai 并设置好团队，和任何 fleet 成员一样。
 
-teamai 选择第一台有响应并且有该项目的关联机器。线程出现在那台机器的 T3 Code 中、该项目下，标题包含运行和池，例如 `teamai fleet r70d31098c8884803 · gpu`。如果你是从一个 T3 线程启动的运行，T3 会把新线程显示为由它委派。线程使用那里项目的默认模型，否则使用那台机器运行的第一个 Claude 或 Codex 实例，模式为 `runtime_mode`，否则为 Auto。它的第一条消息是 teamai 让它接手该池一个 attempt 的命令，最后一句告诉它完成那个 attempt 后就结束。运行的详情会链接这个线程。唤醒成员会消耗那台机器的账号。
+teamai 选择第一台有响应并且有该项目的关联机器。线程出现在那台机器的 T3 Code 中、该项目下，标题包含运行和池，例如 `teamai fleet r70d31098c8884803 · gpu`。线程使用那里项目的默认模型，否则使用那台机器运行的第一个 Claude 或 Codex 实例，模式为 `runtime_mode`，否则为 Auto。它的第一条消息是 teamai 让它接手该池一个 attempt 的命令，最后一句告诉它完成那个 attempt 后就结束。运行的详情会链接这个线程。唤醒成员会消耗那台机器的账号。
 
 T3 启动线程后，teamai 不再跟踪它。要停止被唤醒的成员，在那台机器的 T3 Code 中打开它的线程并点 Stop。`teamai workflow cancel <run>` 会撤回 attempt；还没接手的成员找不到可领取的工作，就会结束。
 
