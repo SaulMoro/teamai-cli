@@ -1728,7 +1728,7 @@ async function openLater(runtime: Connection, folder = worktree, { op, attempt }
 }
 
 /** The later step's prompt, which continues the conversation of `earlier`'s op in the place `earlier.handle`. */
-const turn = (at: { handle: string; result: string }, op: string, earlier: { handle: string; op: string }, lease: Line = {}) => prompt(at.handle, op, {
+const turn = (at: { handle: string; result: string }, op: string, earlier: { handle: string; op: string }, lease: Parameters<typeof prompt>[2] = {}) => prompt(at.handle, op, {
   step: 'fix', result: at.result, prompt: `Fix what the review found.\n\nWrite the workflow result as JSON to ${at.result}. Use this shape: {"output":{}}.`, continue: earlier, ...lease,
 });
 
@@ -1846,6 +1846,27 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 3, model: 'claude-opus-5-5' })]);
       expect(t3.calls().filter((call) => call.tool === 't3_thread_configure').map((call) => call.args['modelSelection'])).toEqual([
         { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' }, { instanceId: 'claudeAgent', model: 'claude-opus-5-5' },
+      ]);
+    });
+
+    // A step that names no model is launched on T3's default, which T3 applies and says back; the runtime names none.
+    it('sets the thread back to the model it was launched on for a third step that names none, after the second step set it to another', async () => {
+      t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-haiku-5-5' } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-000000b1', { model: undefined }));
+      expect(await ended(runtime, 'op-000000b1')).toMatchObject({ event: 'finished' });
+      expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('modelSelection');
+      const later = await openLater(runtime);
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }, { model: { name: 'claude-sonnet-5-5' } }));
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true });
+      const third = await openLater(runtime, worktree, { op: 'op-000000c1', attempt: 'a9b0c1d2' });
+
+      runtime.send(turn(third, 'op-000000b3', { handle, op: 'op-000000b1' }, { model: undefined }));
+
+      expect(await ended(runtime, 'op-000000b3')).toMatchObject({ event: 'finished', resumed: true });
+      expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 3, model: 'claude-haiku-5-5' })]);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_configure').map((call) => call.args['modelSelection'])).toEqual([
+        { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' }, { instanceId: 'claudeAgent', model: 'claude-haiku-5-5' },
       ]);
     });
 
