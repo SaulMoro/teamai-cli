@@ -484,12 +484,12 @@ In an attended run, a step with `interactive: true` runs as a Paseo agent you wo
 
 A prompt step with `session.from` or `session: continue` goes on in the earlier step's Paseo agent. teamai sends the step as a new turn of that agent, so it keeps what it read and said, and the run records the session as resumed. It does so when:
 
-- the agent is still in Paseo, not archived, and its turn has ended;
+- the agent is still in Paseo, not archived, and its turn has ended, with no other step's turn running in it;
 - the step works in the same Paseo workspace, such as a step with `workspace: continue` in the copy an enclosing step opened;
 - the step runs the same provider, model, effort and Paseo mode;
 - neither step runs through a sandbox.
 
-When the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory is, since an imported agent gets no `TEAMAI_RUN_DIR`.
+When the step cannot go on in that agent, or the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory is, since an imported agent gets no `TEAMAI_RUN_DIR`.
 
 Otherwise the step starts a new agent, and says why:
 
