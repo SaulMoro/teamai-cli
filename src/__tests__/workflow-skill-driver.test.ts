@@ -181,6 +181,26 @@ steps:
     prompt: Make the change you planned.
 `;
 
+// A chain: step three goes on in step two's conversation, which goes on in step one's.
+const CHAIN = `schemaVersion: v1alpha1
+name: chain
+description: Plan a change, make it, then test it, all in one conversation
+invoke: allow
+steps:
+  - id: plan
+    prompt: Plan the change.
+  - id: make
+    needs: [plan]
+    session:
+      from: plan
+    prompt: Make the change you planned.
+  - id: test
+    needs: [make]
+    session:
+      from: make
+    prompt: Test the change you made.
+`;
+
 // Setup passes only when it gets the run mode the start kept, and the command prints the one it gets.
 const MODE = `schemaVersion: v1alpha1
 name: mode
@@ -1543,6 +1563,20 @@ describe('a step that continues an earlier step\'s conversation, under the skill
     const state = await readRun(harness.config, run);
     if (typeof state !== 'object') throw new Error('run was not stored');
     expect(state.steps.find((step) => step.id === 'make')).not.toHaveProperty('resumed');
+  });
+
+  it('on h1, dispatches every later step of a chain to the child that worked its first step', async () => {
+    const harness = await skillHarness({ chain: CHAIN });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'chain', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const plan = await work(harness, run, await harness.call({ kind: 'choose', run, choice: 'h1' }), 'session-a');
+    const make = await work(harness, run, plan.next, 'session-a');
+    const test = await work(harness, run, make.next, 'session-a');
+
+    expect(make.dispatch.continue).toEqual({ title: plan.dispatch.title });
+    expect(test.dispatch.continue).toEqual({ title: plan.dispatch.title });
   });
 
   it('on h4, records the session that worked each step, and resumed for the later step the same session reports', async () => {

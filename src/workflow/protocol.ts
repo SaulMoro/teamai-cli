@@ -354,21 +354,31 @@ export function startAsCli(client: Pick<WorkflowClient, 'start'>, name: string, 
 }
 
 /**
- * The settled attempt of the earlier step whose conversation step `step` of run `run` goes on in (`session.from`), for
- * a driver whose report records no session of it, as the skill driver records none of a child's.
+ * The settled attempt of the step that started the conversation step `step` of run `run` goes on in: its `session.from`
+ * step, or, along a chain where C goes on from B and B from A, the first step A, as a lease's `continue` names it. For a
+ * driver whose report records no session of it, as the skill driver records none of a child's.
  */
 export async function continuedAttempt(config: LocalConfig, run: RunId, step: string): Promise<{ step: string; attempt: AttemptId } | undefined> {
   const state = await readRun(config, run);
 
   if (state === 'missing' || state === 'corrupt') return undefined;
-  const located = locateStep(state, step);
-  const from = located?.step.session && 'from' in located.step.session ? located.step.session.from : undefined;
+  let first: { step: string; attempt: AttemptId } | undefined;
+  const seen = new Set<string>();
 
-  if (!located || from === undefined) return undefined;
-  const earlier = state.steps.find((item) => item.id === `${located.scope.prefix}${from}`);
-  const attempt = AttemptIdSchema.safeParse(earlier && 'attempt' in earlier ? earlier.attempt : undefined);
+  for (let located = locateStep(state, step); located?.step.session && 'from' in located.step.session;) {
+    const id = `${located.scope.prefix}${located.step.session.from}`;
 
-  return earlier && attempt.success ? { step: earlier.id, attempt: attempt.data } : undefined;
+    if (seen.has(id)) break;
+    seen.add(id);
+    const earlier = state.steps.find((item) => item.id === id);
+    const attempt = AttemptIdSchema.safeParse(earlier && 'attempt' in earlier ? earlier.attempt : undefined);
+
+    if (!attempt.success) break;
+    first = { step: id, attempt: attempt.data };
+    located = locateStep(state, id);
+  }
+
+  return first;
 }
 
 export function workflowNotFound(name: string): WorkflowFailure {
