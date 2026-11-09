@@ -1077,16 +1077,19 @@ export class SyncManager {
   // Name-conflict handling
   // ------------------------------------------------------------------
 
+  /**
+   * `baseName`, or the first `<baseName>_<n>` none of whose files is there: a session's evidence or meta an older CLI
+   * left behind without its transcript takes the name too, so a new session never inherits it.
+   */
   private resolveNameConflict(repoIdentity: string | null, author: string, baseName: string): string {
-    const { jsonl } = this.sessionPaths(repoIdentity, author, baseName);
+    const isTaken = (name: string): boolean => Object.values(this.sessionPaths(repoIdentity, author, name)).some((file) => fs.existsSync(file));
 
-    if (!fs.existsSync(jsonl)) return baseName;
+    if (!isTaken(baseName)) return baseName;
 
     for (let i = 1; ; i++) {
       const candidate = `${baseName}_${i}`;
-      const { jsonl: cJsonl } = this.sessionPaths(repoIdentity, author, candidate);
 
-      if (!fs.existsSync(cJsonl)) return candidate;
+      if (!isTaken(candidate)) return candidate;
     }
   }
 

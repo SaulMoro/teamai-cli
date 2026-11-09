@@ -372,6 +372,19 @@ describe('saveSession dedup (origin sessionId + author)', () => {
     expect(readRepoIndex('github.com/org/alpha').sessions).toHaveLength(2);
   });
 
+  it('gives a new session another name than the evidence an older CLI left behind without its session', async () => {
+    const base = generateSessionName('claude-code', 'fix payment', '2026-01-02T03:04:05.000Z');
+    const authorDir = path.join(repoDirOf('github.com/org/alpha'), 'alice');
+    fs.mkdirSync(authorDir, { recursive: true });
+    fs.writeFileSync(path.join(authorDir, `${base}.evidence.json`), JSON.stringify({ version: 1, files: [{ kind: 'listed', path: 'old.png', type: 'image/png', size: 1, sha256: 'a'.repeat(64) }] }));
+
+    const mgr = new SyncManager(repoRoot);
+    await mgr.saveSession(mkSession({ sessionId: 'new-1' }), mkMeta({ sessionId: 'new-1' }));
+
+    expect(fs.existsSync(path.join(authorDir, `${base}_1.jsonl`))).toBe(true);
+    expect(mgr.loadEvidence('github.com/org/alpha', `${base}_1`, 'alice')).toBeUndefined();
+  });
+
   it('rebuilds a missing index before dedup so a re-push keeps the other sessions', async () => {
     const mgr = new SyncManager(repoRoot);
     await mgr.saveSession(mkSession({ sessionId: 's-1', title: 'fix payment' }), mkMeta({ sessionId: 's-1' }));
