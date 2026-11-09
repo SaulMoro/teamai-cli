@@ -569,12 +569,19 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
     if (!goesOn(op, following)) return;
     // One notice for the op, naming each way on it could not take: the conversation it continues, then the session it resumes.
-    const notImported = resume !== undefined && resumed && 'why' in resumed ? `resume session ${resume}: ${resumed.why}` : undefined;
+    const { step } = request.lease;
+    const notImported = resume !== undefined && resumed && 'why' in resumed ? { session: resume, why: resumed.why } : undefined;
 
     if (earlier && continued && 'why' in continued) {
-      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than continue the conversation of ${earlier.op}: ${continued.why}${notImported ? `; nor could it ${notImported}` : ''}.` });
+      write({
+        op,
+        event: 'notice',
+        message: notImported
+          ? `teamai-runtime-paseo starts a new agent for step "${step}" rather than continue the conversation of ${earlier.op}: ${continued.why}; nor could it resume session ${notImported.session}: ${notImported.why}.`
+          : `teamai-runtime-paseo starts a new agent for step "${step}" rather than continue the conversation of ${earlier.op}: ${continued.why}.`,
+      });
     } else if (notImported) {
-      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than ${notImported}.` });
+      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${step}" rather than resume session ${notImported.session}: ${notImported.why}.` });
     }
 
     const base = { kind: 'agent', handle: request.handle, tool: target.name, answer: how.answer, cwd: how.cwd } as const;
