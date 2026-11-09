@@ -230,9 +230,9 @@ export function withoutPrompt(message: string, input: LocalToolRun): string {
   return kept;
 }
 
-/** Whether what the tool printed says it stopped on its usage limit: by the kind of its error, or by its text. */
+/** Whether what the tool printed says it stopped on its usage limit: by the kind of its error, else, for one with no kind, by its text. */
 function isUsageLimit(printed: ToolReport | null): printed is ToolReport & { error: string } {
-  return printed?.error !== undefined && (printed.isUsageLimit === true || isUsageLimitText(printed.error));
+  return printed?.error !== undefined && (printed.isUsageLimit ?? isUsageLimitText(printed.error));
 }
 
 /** A spent usage limit, with the tool's own words, which name the reset when the tool gives it. */
@@ -529,6 +529,10 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
 
       // OpenCode 1.x exits 0 on a provider's error, a spent limit among them, and writes no result.
       if (!fileResult && isUsageLimit(printed)) return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: usageLimited(tool, printed.error, input) };
+
+      if (!fileResult && completed.exitCode === 0 && printed?.error !== undefined && launchAdapterIdOf(tool) === 'opencode') {
+        return { started: true, exitCode: 0, ...applied, ...ended, failure: { code: 'tool_failed', message: `${tool} ended on an error: ${withoutPrompt(printed.error, input)}` } };
+      }
 
       if (!result) {
         return {

@@ -562,6 +562,28 @@ describe('local tool adapter', () => {
     expect(ran.failure).toEqual({ code: 'tool_failed', message: 'opencode exited with status 1: Model unavailable: anthropic/claude-nonexistent-9' });
   });
 
+  it('fails a step OpenCode 1.x ended with an error event, though it exited 0', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-opencode-1x-${Date.now()}-${Math.random()}.json`);
+    files.push(resultPath);
+    const stdout = JSON.stringify({ type: 'error', sessionID: 'ses_1', error: { name: 'APIError', data: { message: 'Model unavailable: anthropic/claude-nonexistent-9' } } });
+    const adapter = createLocalToolAdapter(vi.fn(() => child(stdout, 0)) as unknown as ToolSpawn, () => '/usr/bin/opencode');
+
+    const ran = await adapter.run('opencode', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, secrets: {} });
+
+    expect(ran.failure).toMatchObject({ code: 'tool_failed' });
+  });
+
+  it('keeps tool_failed for an OpenCode 2.x error whose type is no limit, though its message reads like one', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-opencode-typed-${Date.now()}-${Math.random()}.json`);
+    files.push(resultPath);
+    const stdout = JSON.stringify({ type: 'error', sessionID: 'ses_1', error: { type: 'provider.no-route', message: 'Rate limit reached for anthropic/claude-nonexistent-9 on no route' } });
+    const adapter = createLocalToolAdapter(vi.fn(() => child(stdout, 1)) as unknown as ToolSpawn, () => '/usr/bin/opencode');
+
+    const ran = await adapter.run('opencode', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, secrets: {} });
+
+    expect(ran.failure).toMatchObject({ code: 'tool_failed' });
+  });
+
   // CodeBuddy prints Claude's result record; its limit text here is Claude Code's, as no CodeBuddy install was at hand.
   it.each(['claude', 'codebuddy'] as const)('fails usage_limited when %s says it hit its limit', async (tool) => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-${tool}-limit-${Date.now()}-${Math.random()}.json`);

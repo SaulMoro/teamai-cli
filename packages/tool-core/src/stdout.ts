@@ -20,8 +20,11 @@ export interface ToolReport {
   unfinished?: boolean;
   /** What the tool said went wrong, when its final result is an error: Claude's `result` text with `is_error`, Codex's and OpenCode's last `error`. */
   error?: string;
-  /** Whether the kind of `error` says the tool stopped on a usage limit: OpenCode's `provider.rate-limit`, `provider.quota` and `provider.<plan>-limit`. */
-  isUsageLimit?: true;
+  /**
+   * Whether the kind of `error` says the tool stopped on a usage limit: OpenCode's `provider.rate-limit`, `provider.quota`
+   * and `provider.<plan>-limit`. Set only for an error with a kind, which then decides; without one, its text does.
+   */
+  isUsageLimit?: boolean;
 }
 
 /** A count a tool printed, or nothing when the field holds something else. */
@@ -441,7 +444,7 @@ function opencodeStdout(stdout: string): ToolReport | null {
 
   if (error === undefined) return report;
 
-  return { ...report, error: error.message, ...(error.kind !== undefined && OPENCODE_LIMIT.test(error.kind) && { isUsageLimit: true as const }) };
+  return { ...report, error: error.message, ...(error.kind !== undefined && { isUsageLimit: OPENCODE_LIMIT.test(error.kind) }) };
 }
 
 /** What stdout of a tool on this adapter reports. CodeBuddy prints Claude's result record. */
