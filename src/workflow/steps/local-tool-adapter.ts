@@ -2,33 +2,22 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { z } from 'zod';
 import { launchEnv, type Launch } from '../../launch-context.js';
 import { opencodeMajorVersion } from '../../opencode-version.js';
 import { resolveCliPath, resolvePathCommand } from '../../utils/cli-path.js';
-import { log } from '../../utils/logger.js';
 import type { toolExtrasFor } from '../../resources/agent-format.js';
 import { stopProcess } from '@teamai/shared/process-group';
-import { stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../tool-launch/stdout.js';
-import type { LaunchAdapter, StepLaunch } from '@teamai/tool-core/launch';
 import { spawnCommand } from '@teamai/tool-core/exec';
+import { runStepLaunch, stepPrompt, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepLimits, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 import { executableOf, launchAdapterIdOf, launchAdapterOf, type LaunchTool } from '../../tool-launch/tools.js';
 import { AttemptResult } from '../attempt-result.js';
-import { budgeted } from '../limits.js';
 import { expectedOutput } from '../output.js';
-import type { Limit } from '../requirements.js';
-import { MAX_TIMER_MS } from '../../utils/timer.js';
-import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
 import type { StepModel } from '../step-model.js';
-import type { OutputSchema, WorkflowFailure } from '../types.js';
+import type { OutputSchema } from '../types.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 
-export interface LocalToolRun {
-  prompt: string;
-  cwd: string;
-  resultPath: string;
-  /** What the run masks: a result kept from the tool's stdout is masked with it before it is written. */
-  secrets: Record<string, string>;
+/** A step's launch as the engine asks for it: what the launch takes, its limits, and what this machine resolves. */
+export interface LocalToolRun extends Omit<StepLaunchInput, 'expected' | 'launchEnv' | 'agent' | 'model'>, StepLimits {
   /** The step's declared output, which the result instruction asks the tool to match. */
   output?: OutputSchema;
   /** The definition the step runs as. `settings` are the deployed OpenCode file's other fields, such as `mode` and `variant`. */
@@ -37,54 +26,12 @@ export interface LocalToolRun {
   model?: StepModel;
   /** The workflow launch the tool's session-start hook reads from its environment (#1176). */
   launch?: Launch;
-  /** A session id from the same tool. Claude and Codex resume it; OpenCode has no resume flag here. */
-  resume?: string;
-  /** The environment the tool runs with, scoped to the env keys its lease provides; the inherited one when unset. */
-  env?: NodeJS.ProcessEnv;
-  /** The most agent turns headless Claude may take. Other tools have no such flag. */
-  maxTurns?: number;
-  /** The most tokens the run may bill, counted as a budget counts them: once its stdout states more, it is stopped. */
-  budget?: number;
-  /** How long the tool may run from its spawn before it is stopped. */
-  timeoutMs?: number;
-  /**
-   * How long the tool may print nothing before it is stopped. Only a launch known to stream its output takes it: headless
-   * Claude, whose `stream-json` prints each message as it comes. A launch that prints only once it ends would always reach
-   * the limit, so every other launch has none.
-   */
-  idleTimeoutMs?: number;
-  /** Launch the tool in its own mode for editing and running commands without asking (`permissions: unattended`). */
-  unattended?: true;
   /** The command that starts the tool, when an instance of it has its own; the tool's own command otherwise. */
   command?: string;
 }
 
-/**
- * What a run gave. `started` is whether the tool's process spawned, as its `spawn` event says, so a pass that
- * launched nothing records no observation of a launch (#1176).
- */
-export type LocalToolResult =
-  | {
-    started: true;
-    exitCode: number;
-    /** How the launch handed over the definition, when it ran one. */
-    applied?: 'main' | 'prompt';
-    output?: unknown;
-    model?: string;
-    session?: string;
-    tokens?: TokenUsage;
-    /** What the tool said the run cost, as it said it. */
-    cost?: ToolReport['cost'];
-    /**
-     * The limit that ended the run: the first one at which the adapter stopped the tool, its timeout or its budget, or
-     * the turn cap, at which headless Claude ends itself with `error_max_turns`.
-     */
-    stoppedBy?: Limit;
-    /** The run was asked to resume a session, and its runtime started a new one instead. */
-    startedFresh?: true;
-    failure?: WorkflowFailure;
-  }
-  | { started: false; exitCode: number; failure: WorkflowFailure };
+/** What a run gave: the launch's result, which `started` says whether the tool's process started (#1176). */
+export type LocalToolResult = StepLaunchResult;
 
 export interface LocalToolAdapter {
   run(tool: LaunchTool, input: LocalToolRun, signal?: AbortSignal): Promise<LocalToolResult>;
@@ -96,150 +43,16 @@ export type ToolSpawn = (command: string, args: string[], options: SpawnOptions)
 
 export type ToolResolve = (command: string) => string | null;
 
-type ResultFile = ToolReport & { failure?: WorkflowFailure };
-
-function resultInstruction(input: LocalToolRun, prompt: string): string {
-  return `${prompt}\n\nWrite the workflow result as JSON to ${input.resultPath}. `
-    + `Use this shape: {"output":...}, where output is ${expectedOutput(input.output)}. `
-    + 'Leave failure out unless the step failed; then add "failure":{"code":"...","message":"..."}.';
-}
-
-/** The step's prompt after the agent definition's instructions, for a launch that hands the definition over in the prompt. */
-function withInstructions(input: LocalToolRun): string {
-  return input.agent?.instructions ? `${input.agent.instructions}\n\n${input.prompt}` : input.prompt;
-}
-
 /**
  * The whole prompt a runtime that launches agents its own way gets: the agent definition's instructions, which it has
  * no flag to pass, the step's prompt, and the instruction to write the result file.
  */
 export function agentPrompt(input: LocalToolRun): string {
-  return resultInstruction(input, withInstructions(input));
+  return stepPrompt({ ...input, expected: expectedOutput(input.output) }, true);
 }
 
-/** Codex, and OpenCode 1 for a subagent, which `opencode run --agent` does not start, get the definition's instructions in the prompt. */
-function promptHandoff(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number): boolean {
-  const family = launchAdapterIdOf(tool);
-
-  return family === 'codex' || (family === 'opencode' && opencodeMajor < 2 && input.agent?.settings?.['mode'] === 'subagent');
-}
-
-/** The arguments that launch `tool` unattended, or `'none'` when teamai knows no such mode of it. */
-function unattendedArgs(tool: LaunchTool): readonly string[] | 'none' {
-  const adapter: LaunchAdapter = launchAdapterOf(tool);
-  const unattended = adapter.step?.unattended ?? 'none';
-
-  return unattended === 'none' ? 'none' : unattended.args;
-}
-
-/** The argv that launches `tool` for one step, which its family builds: the prompt with its result instruction, then the flags the step's lease sets. */
-function stepArgv(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
-  const step: StepLaunch = launchAdapterOf(tool).step;
-  const inPrompt = promptHandoff(tool, input, opencodeMajor);
-
-  return step.args({
-    prompt: resultInstruction(input, inPrompt ? withInstructions(input) : input.prompt),
-    resultDir: path.dirname(input.resultPath),
-    resume: input.resume,
-    maxTurns: input.maxTurns,
-    model: input.model?.name,
-    effort: input.model?.effort,
-    agent: input.agent && { name: input.agent.name, model: input.agent.model, inPrompt },
-    unattended: input.unattended,
-    streamsUsage: input.budget !== undefined,
-  }, { interactive, opencodeMajor });
-}
-
-/** The result file a tool writes: its output, when it wrote one, and a failure with a code and a message. A null failure is none. */
-const ResultFileSchema = z.object({
-  output: z.unknown().optional(),
-  failure: z.object({ code: z.string(), message: z.string() }).nullish().transform((failure) => failure ?? undefined),
-});
-
-/** The result file a tool wrote, none when it wrote no valid one, or what it left there instead of a file, which is never read. */
-type ResultRead = { kind: 'read'; result: ResultFile | null } | { kind: 'not_a_file'; error: NotRegularFileError };
-
-async function readResultFile(resultPath: string): Promise<ResultRead> {
-  try {
-    const result = ResultFileSchema.safeParse(JSON.parse(await readRegularFile(resultPath, 'utf8')));
-
-    return { kind: 'read', result: result.success ? result.data : null };
-  } catch (error) {
-    return error instanceof NotRegularFileError ? { kind: 'not_a_file', error } : { kind: 'read', result: null };
-  }
-}
-
-/** A failure message a tool wrote, without the step's prompt or the agent's instructions it may quote. */
-export function withoutPrompt(message: string, input: LocalToolRun): string {
-  let kept = message;
-
-  for (const secret of [input.prompt, input.agent?.instructions]) {
-    if (secret) kept = kept.replaceAll(secret, '[prompt omitted]');
-  }
-
-  return kept;
-}
-
-/** Whether what the tool printed says it stopped on its usage limit: by the kind of its error, else, for one with no kind, by its text. */
-function isUsageLimit(printed: ToolReport | null): printed is ToolReport & { error: string } {
-  return printed?.error !== undefined && stoppedOnUsageLimit(printed, printed.error);
-}
-
-/** A spent usage limit, with the tool's own words, which name the reset when the tool gives it. */
-function usageLimited(tool: string, error: string, input: LocalToolRun): WorkflowFailure {
-  return { code: 'usage_limited', message: `${tool} hit its usage limit: ${withoutPrompt(error, input)}` };
-}
-
-function redactFailure(result: ResultFile, input: LocalToolRun): void {
-  if (result.failure) result.failure.message = withoutPrompt(result.failure.message, input);
-}
-
-async function persistFallback(input: LocalToolRun, result: ResultFile): Promise<void> {
-  const artifact: ResultFile = {};
-
-  if ('output' in result) artifact.output = result.output;
-
-  if (result.failure) artifact.failure = result.failure;
-  await AttemptResult.write(input.resultPath, artifact, input.secrets);
-}
-
-function combineResults(fileResult: ResultFile | null, reported: ToolReport | null): ResultFile | null {
-  if (!fileResult && !reported) return null;
-  const result: ResultFile = {};
-
-  if (fileResult && 'output' in fileResult) result.output = fileResult.output;
-  else if (reported && 'output' in reported) result.output = reported.output;
-
-  if (fileResult?.failure) result.failure = fileResult.failure;
-
-  if (reported?.model) result.model = reported.model;
-
-  if (reported?.session) result.session = reported.session;
-
-  if (reported?.tokens) result.tokens = reported.tokens;
-
-  if (reported?.cost) result.cost = reported.cost;
-
-  return result;
-}
-
-/** What a launched tool process ended with: its exit code and complete stdout, or why it ended without one. */
-export type ToolClosed = { exitCode: number; stdout: string; error?: NodeJS.ErrnoException } | { failure: WorkflowFailure };
-
-/** One launched tool process, as the adapter watches it. */
-export interface ToolProcess {
-  closed: Promise<ToolClosed>;
-  /** Whether the process started: it spawned, or its runtime accepted it. */
-  started(): boolean;
-  /** Stops the process and everything it started; a signal from the person is forwarded to an interactive one. */
-  stop(signal?: NodeJS.Signals): Promise<void>;
-}
-
-/**
- * Starts a tool process: here with `spawn`, or through a step runtime's `exec`. `onStart` is called once the process
- * started, after any place and setup before it; `onStdout` gets each decoded chunk.
- */
-export type ToolLauncher = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStart: () => void; onStdout: (text: string) => void }) => ToolProcess;
+/** What the launch reads from this machine. */
+const HOST: StepLaunchHost = { opencodeMajor: opencodeMajorVersion, agyGatewayEnv, writeResult: AttemptResult.write };
 
 /** The launcher that spawns the tool on this machine, in a process group of its own unless it is interactive. */
 function spawnLauncher(spawnTool: ToolSpawn): ToolLauncher {
@@ -299,9 +112,8 @@ export function createLocalToolAdapter(
 }
 
 /**
- * The adapter over `launcher`: everything teamai does around a tool's launch, whatever starts its process. It builds
- * the argv with the family's `step.args`, meters the budget from stdout and stops the tool at its limits, reads the result file,
- * and parses stdout for the session, tokens and cost. `resolveTool` finds the executable, and `resolveInstanceCommand` a tool instance's command, or says it is missing.
+ * The adapter over `launcher`: it finds the tool's executable, then runs the step's launch through `launcher`, whatever
+ * starts its process. `resolveTool` finds the executable, and `resolveInstanceCommand` a tool instance's command, or says it is missing.
  */
 export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, resolveInstanceCommand: ToolResolve): LocalToolAdapter {
   const launch =
@@ -318,207 +130,17 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         };
       }
 
-      if (input.unattended && unattendedArgs(tool) === 'none') {
-        return {
-          started: false,
-          exitCode: 1,
-          failure: { code: 'tool_unavailable', message: `The step sets permissions: unattended, and ${tool} has no unattended mode teamai knows. Run the step on a tool that has one, or remove permissions from the step.` },
-        };
-      }
+      const { budget, timeoutMs, idleTimeoutMs, output, launch: launched, command: _command, ...run } = input;
 
-      const opencode = launchAdapterIdOf(tool) === 'opencode';
-      const opencodeMajor = opencode && (input.agent || input.model?.effort) ? await opencodeMajorVersion(executable) : 1;
-
-      if (opencode && input.agent) {
-        const { name, model, settings = {} } = input.agent;
-        const viaPrompt = promptHandoff(tool, input, opencodeMajor);
-
-        // OpenCode 1 applies an agent's variant to a launch on the agent's own model that passes none.
-        if (opencodeMajor < 2 && !viaPrompt && settings['variant'] !== undefined && input.model && input.model.name === model && input.model.effort === undefined) {
-          return {
-            started: false,
-            exitCode: 1,
-            failure: {
-              code: 'model_unavailable',
-              message: `Agent "${name}" runs on its own model "${model}" with no effort, and ${tool} 1 applies the agent's variant "${String(settings['variant'])}" `
-                + `to that model. Remove model from the step to run at that variant, or set it to an alias with an effort for ${tool}.`,
-            },
-          };
-        }
-
-        // The variant goes on argv with a model, the definition's or the step's.
-        const dropped = Object.keys(settings).filter((key) => key !== 'mode' && (key !== 'variant' || !input.model));
-
-        if (viaPrompt && dropped.length > 0) {
-          log.warn(`Agent "${name}" runs on ${tool} 1 from the prompt, since opencode run does not start a subagent there, so it does not apply `
-            + `${dropped.join(', ')} from the deployed agent file. The step is not blocked.`);
-        } else if (opencodeMajor >= 2 && settings['variant'] !== undefined && !input.model) {
-          log.warn(`Agent "${name}" sets a variant with no model, and ${tool} 2 takes a variant only with a model, so it does not apply variant `
-            + 'from the deployed agent file. The step is not blocked.');
-        }
-      }
-
-      const args = stepArgv(tool, input, opencodeMajor, interactive);
-      const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
-      const meter = input.budget !== undefined ? tokenMeter(launchAdapterIdOf(tool)) : undefined;
-      let metered: TokenUsage | undefined;
-      // The first reason a stop was sent, so a limit crossed while the tool shuts down does not replace it.
-      let stopCause: 'timeout' | 'budget' | 'idle' | 'aborted' | undefined;
-      let partial = '';
-      const env: NodeJS.ProcessEnv = { ...input.env ?? process.env };
-
-      // A model switch hands agy its gateway through a shell function, and this launch runs no shell.
-      if (launchAdapterIdOf(tool) === 'agy') Object.assign(env, agyGatewayEnv(input.env ?? process.env));
-
-      if (input.launch) Object.assign(env, launchEnv(input.launch));
-      env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
-
-      // The idle limit starts with the tool, and each chunk it prints restarts it, so a tool that streams lives and a
-      // silent one is stopped.
-      const idleMs = !interactive && launchAdapterIdOf(tool) === 'claude' && input.idleTimeoutMs !== undefined && input.idleTimeoutMs <= MAX_TIMER_MS ? input.idleTimeoutMs : undefined;
-      let idleTimer: NodeJS.Timeout | undefined;
-
-      const active = (): void => {
-        if (idleMs === undefined) return;
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => stopAt('idle'), idleMs);
-      };
-
-      const onStdout = (text: string): void => {
-        active();
-
-        if (!meter || input.budget === undefined) return;
-        // A long line arrives over many chunks: only the chunk that ends it is split.
-        const end = text.lastIndexOf('\n');
-
-        if (end === -1) {
-          partial += text;
-
-          return;
-        }
-
-        const lines = `${partial}${text.slice(0, end)}`.split('\n');
-        partial = text.slice(end + 1);
-
-        for (const line of lines) metered = meter(line);
-
-        if (budgeted(metered) > input.budget) stopAt('budget');
-      };
-
-      // The timeout counts from the tool's spawn, as the idle limit does: a place and setup a runtime makes first take none of it.
-      let timer: NodeJS.Timeout | undefined;
-
-      const started = (): void => {
-        if (input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_MS) timer ??= setTimeout(() => stopAt('timeout'), input.timeoutMs);
-        active();
-      };
-
-      const processRun = launcher({ executable, args, cwd: input.cwd, env, interactive, onStart: started, onStdout });
-
-      function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {
-        stopCause ??= limit;
-        void processRun.stop();
-      }
-
-      const abort = (): void => {
-        const reason: unknown = signal?.reason;
-        const forwarded = reason === 'SIGINT' || reason === 'SIGQUIT' || reason === 'SIGTERM' || reason === 'SIGHUP' ? reason : undefined;
-        stopCause ??= 'aborted';
-        void processRun.stop(interactive ? forwarded : undefined);
-      };
-
-      signal?.addEventListener('abort', abort, { once: true });
-
-      if (signal?.aborted) abort();
-      const completed = await processRun.closed;
-      clearTimeout(timer);
-      clearTimeout(idleTimer);
-
-      if (stopCause !== undefined) await processRun.stop();
-      signal?.removeEventListener('abort', abort);
-
-      if (stopCause === 'idle' && idleMs !== undefined) {
-        return {
-          started: processRun.started(), exitCode: 'exitCode' in completed ? completed.exitCode : 1, ...applied,
-          failure: { code: 'tool_failed', message: `${tool} printed nothing for ${idleMs / 1000}s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.` },
-        };
-      }
-
-      const stopped = stopCause === 'aborted' || stopCause === 'idle' ? undefined : stopCause;
-
-      if ('failure' in completed) return { started: processRun.started(), exitCode: 1, ...applied, failure: completed.failure };
-
-      if (!processRun.started() || completed.error?.code === 'ENOENT') {
-        return {
-          started: false,
-          exitCode: completed.exitCode,
-          failure: completed.error?.code === 'ENOENT'
-            ? { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` }
-            : { code: 'tool_failed', message: `${tool} could not be started` },
-        };
-      }
-
-      if (completed.error) {
-        const failed: LocalToolResult = { started: true, exitCode: completed.exitCode, ...applied };
-
-        if (stopped) failed.stoppedBy = stopped;
-        failed.failure = { code: 'tool_failed', message: `${tool} could not be started` };
-
-        return failed;
-      }
-
-      const read = await readResultFile(input.resultPath);
-      const fileResult = read.kind === 'read' ? read.result : null;
-      const printed = toolStdout(launchAdapterIdOf(tool), completed.stdout);
-      // Only a tool stopped at a limit may end before its result: one that ended there on its own wrote none.
-      const stated = printed?.unfinished && !stopped ? null : printed;
-      // A tool stopped mid-run, such as Claude before its final result, states no total: what the meter counted stands in.
-      const reported = metered && !stated?.tokens ? { ...stated, tokens: metered } : stated;
-      const result = combineResults(fileResult, reported) ?? (interactive ? {} : null);
-      const stoppedBy: Limit | undefined = stopped ?? (stated?.reachedMaxTurns ? 'max_turns' : undefined);
-      const ended = stoppedBy ? { stoppedBy } : {};
-
-      if (read.kind === 'not_a_file') {
-        return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: { code: 'tool_failed', message: `${tool} left ${read.error.kind} at its result path, ${input.resultPath}, not a regular file, so teamai did not read it` } };
-      }
-
-      // OpenCode 1.x exits 0 on a provider's error, a spent limit among them, and writes no result.
-      if (!fileResult && isUsageLimit(printed)) return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: usageLimited(tool, printed.error, input) };
-
-      if (!fileResult && completed.exitCode === 0 && printed?.error !== undefined && launchAdapterIdOf(tool) === 'opencode') {
-        return { started: true, exitCode: 0, ...applied, ...ended, failure: { code: 'tool_failed', message: `${tool} ended on an error: ${withoutPrompt(printed.error, input)}` } };
-      }
-
-      if (!result) {
-        return {
-          started: true,
-          exitCode: completed.exitCode,
-          ...applied,
-          ...ended,
-          failure: { code: 'tool_failed', message: `${tool} did not write a valid workflow result` },
-        };
-      }
-
-      redactFailure(result, input);
-
-      // The tool's own reason, such as a provider's 401, says what the status cannot. It may echo a credential, so it is
-      // never written here: only the result the driver reports carries it, which the driver masks before keeping it.
-      let told: WorkflowFailure | undefined;
-
-      if (completed.exitCode !== 0 && !result.failure) {
-        result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
-
-        if (isUsageLimit(printed)) {
-          result.failure = { code: 'usage_limited', message: `${tool} hit its usage limit` };
-          told = usageLimited(tool, printed.error, input);
-        } else if (printed?.error !== undefined) {
-          told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
-        }
-      }
-
-      if (!fileResult) await persistFallback(input, result);
-
-      return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result, ...(told && { failure: told }) };
+      return runStepLaunch({
+        tool: { name: tool, family: launchAdapterIdOf(tool), step: launchAdapterOf(tool).step, executable },
+        input: { ...run, expected: expectedOutput(output), ...(launched && { launchEnv: launchEnv(launched) }) },
+        start: launcher,
+        limits: { budget, timeoutMs, idleTimeoutMs },
+        signal,
+        interactive,
+        host: HOST,
+      });
     };
 
   return {

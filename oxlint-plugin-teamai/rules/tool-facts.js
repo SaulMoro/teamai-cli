@@ -9,7 +9,7 @@ import { inProductionSource, lintedPath, sourcePath, stringLiteralValue, workspa
 const DESCRIPTOR = 'src/tools.ts';
 
 /** A family package (`packages/tool-<family>/src/`): not the contract, the test kit or the list of families. */
-const FAMILY_PACKAGE = /^packages\/tool-(?!(?:core|testing|definitions)\/)[^/]+\/src\//;
+const FAMILY_PACKAGE = /^packages\/tool-(?!(?:core|testing|definitions|launch)\/)[^/]+\/src\//;
 
 /** The contract tables a family declares its tools in: their descriptors, session platforms, launch profiles and version detectors. */
 const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|LaunchAdapter|VersionDetector)\s*>>?$/;

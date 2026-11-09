@@ -33,8 +33,8 @@ function packagesByName(root) {
   return names;
 }
 
-/** A tool family's folder: every `tool-*` package but the contract, the test kit and the list of families. */
-const FAMILY = /^tool-(?!(?:core|testing|definitions)$)/;
+/** A tool family's folder: every `tool-*` package but the contract, the test kit, the list of families and the launch library. */
+const FAMILY = /^tool-(?!(?:core|testing|definitions|launch)$)/;
 
 /** The one package that imports the families. */
 const DEFINITIONS = 'tool-definitions';

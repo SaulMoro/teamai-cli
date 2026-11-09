@@ -15,7 +15,8 @@ import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '..
 import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
 import type { LocalConfig } from '../../types.js';
-import { agentPrompt, withoutPrompt, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolClosed, type ToolLauncher } from './local-tool-adapter.js';
+import { withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import { agentPrompt, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from './local-tool-adapter.js';
 
 // ─── The local loop's steps on a step runtime ────────────
 //
