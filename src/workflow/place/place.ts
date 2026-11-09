@@ -398,7 +398,7 @@ async function prepareTeam(input: {
     if (!isDataBranch(branch)) return { kind: 'failed', failure: { code: 'workspace_base', message: `Step "${lease.step}" publishes to ${branch}, which is not a teamai data branch. Publish to teamai-reports or teamai-learnings.` } };
     const kept = await keptPlaceOf({ config, run, step: lease.step, holds: (held) => held.role === 'data' && held.branch === branch });
 
-    if (kept) return goOnInKept(config, { ...base, dir: kept.dir, place: kept.place, keptFrom: kept.attempt, phase: 'ready' }, kept, lease.prompt);
+    if (kept) return goOnInKept(config, readyInKept(base, kept), kept, lease.prompt);
     const { dir, at } = await openDataCheckout({ config, run, attempt: lease.attempt, branch });
     const ready: Placed = { ...base, dir, place: { role: 'data', branch, at }, phase: 'ready' };
     await writePlaceRecord(config, ready);
@@ -409,7 +409,7 @@ async function prepareTeam(input: {
   const onBranch = (held: KeptPlace['place']): boolean => held.role === 'team' && held.workspace.branch === workspace.branch;
   const kept = await keptPlaceOf({ config, run, step: lease.step, holds: onBranch });
 
-  if (kept) return goOnInKept(config, { ...base, dir: kept.dir, place: kept.place, keptFrom: kept.attempt, phase: 'ready' }, kept, lease.prompt);
+  if (kept) return goOnInKept(config, readyInKept(base, kept), kept, lease.prompt);
 
   // A run has one team clone per branch, and the fresh one replaces what another step's attempt kept there: that step starts afresh.
   for (const replaced of await keptPlacesOf({ config, run, holds: onBranch })) await retireKeptPlace(config, replaced);
@@ -1177,6 +1177,11 @@ async function keptPlaceOf(input: { config: LocalConfig; run: RunId; step: strin
 /** Gives up the place `kept` held, once the step's next attempt went on in it or a fresh place replaced it, so no later attempt goes on there. */
 async function retireKeptPlace(config: LocalConfig, kept: KeptPlace): Promise<void> {
   await writePlaceRecord(config, { ...baseOf(kept), phase: 'retired', at: new Date().toISOString() });
+}
+
+/** This attempt's place, ready, in the one `kept` held: its directory and place, as the attempt that kept it left them. */
+function readyInKept(base: OpeningBase, kept: KeptPlace): Placed {
+  return { ...base, dir: kept.dir, place: kept.place, keptFrom: kept.attempt, phase: 'ready' };
 }
 
 /** Prepares `ready`, the place `kept` held, for this attempt, recorded before the kept one is retired, so a kill between loses neither. */
