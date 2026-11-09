@@ -314,7 +314,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
    * Whether close settles `thread`: it ended and was not settled yet, and it is no turn of a conversation whose earlier
    * place is still open, which settles it when it closes.
    */
-  const toSettle = (thread: ThreadRecord): boolean => thread.ended !== undefined && !thread.ended.settlement && !(thread.turnOf && journal.read(thread.turnOf.handle).kind !== 'missing');
+  const toSettle = (thread: ThreadRecord): boolean => thread.ended !== undefined && !thread.ended.settlement && !(thread.turnOf && journal.read(thread.turnOf.handle).kind === 'found');
 
   /**
    * Settles each thread of `handle` that close settles and that T3 holds no run of, once, with the tasks it delegated:

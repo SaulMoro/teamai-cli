@@ -192,7 +192,8 @@ export function wakes({ serving }: { serving: Serving }) {
     try {
       outcome = await launch(session, request, waking);
     } catch (error) {
-      outcome = { kind: 'failed', failure: unavailable(`T3 Code did not launch the member on the linked machine: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. ${NEXT_STEP}`) };
+      // A cancel ended it already: its end stands.
+      outcome = waking.cancelled ? { kind: 'cancelled' } : { kind: 'failed', failure: unavailable(`T3 Code did not launch the member on the linked machine: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. ${NEXT_STEP}`) };
     } finally {
       under.delete(request.op);
     }
