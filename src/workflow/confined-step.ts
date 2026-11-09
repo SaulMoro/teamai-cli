@@ -268,7 +268,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
         return failed({ code: 'confined_failed', message: `Step runtime "${runtime}" kept the confined prompt at ${kept.level}, below the ${level} its directory asks for.` });
       }
 
-      if (end.result.failure) return failed({ code: 'confined_failed', message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` });
+      if (end.result.failure) return failed({ code: end.result.failure.code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` });
       const outputs = JsonValueSchema.safeParse(end.result.output);
 
       if (!outputs.success) return failed({ code: 'confined_reply_invalid', message: `${tool} on step runtime "${runtime}" replied with no JSON value.` });
@@ -281,7 +281,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
     case 'cancelled':
       return failed({ code: 'confined_failed', message: `The confined ${tool} prompt on step runtime "${runtime}" was stopped before it replied.` });
     case 'failed':
-      return failed({ code: 'confined_failed', message: withRetry({ code: end.failure.code, message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` }, retry) });
+      return failed({ code: end.failure.code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: withRetry({ code: end.failure.code, message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` }, retry) });
     case 'lost':
       return failed({ code: 'runtime_lost', message: `Step runtime "${runtime}" stopped answering while it ran the confined ${tool} prompt, which may still run there: ${end.failure.message}` });
     default: {

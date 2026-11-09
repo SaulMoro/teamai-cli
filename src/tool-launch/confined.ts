@@ -21,6 +21,7 @@ import { JsonValueSchema, type JsonValue } from '../types.js';
 import type { ConfinedUsage } from './confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
+import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { runTool, type ToolRun } from './run.js';
 import { toolStdout, type TokenUsage } from './stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
@@ -152,7 +153,7 @@ export interface ConfinedRun {
   usage?: ConfinedUsage;
 }
 
-export type ConfinedFailureCode = 'confined_tool_unavailable' | 'confined_failed' | 'confined_reply_invalid';
+export type ConfinedFailureCode = 'confined_tool_unavailable' | 'confined_failed' | 'confined_reply_invalid' | 'usage_limited';
 
 export type ConfinedResult =
   | { ok: true; reply: JsonValue; run: ConfinedRun }
@@ -539,9 +540,12 @@ async function outcomeOf({ input, tmp }: LaunchContext, launch: Launch, run: Too
   if (failure) return failure;
   const reported = reportedError(input.tool, run);
 
-  const toolError: ConfinedFailure | undefined = reported
-    ? { ok: false, code: 'confined_failed', message: `${input.tool} reported an error: ${reported.replace(/\.?$/, '.')} Fix that, then retry or use another tool or driver.`, raw, reported, ...spent }
-    : undefined;
+  // A usage limit keeps its own code, which says the step can run again once the limit resets.
+  const toolError: ConfinedFailure | undefined = !reported
+    ? undefined
+    : isUsageLimitText(reported)
+      ? { ok: false, code: 'usage_limited', message: `${input.tool} hit its usage limit: ${reported}`, raw, reported, ...spent }
+      : { ok: false, code: 'confined_failed', message: `${input.tool} reported an error: ${reported.replace(/\.?$/, '.')} Fix that, then retry or use another tool or driver.`, raw, reported, ...spent };
 
   if (run.code !== 0) return toolError ?? { ok: false, code: 'confined_failed', message: `${input.tool} exited with code ${run.code}${run.stopped === 'timeout' ? ` after its ${input.timeoutMs} ms limit` : ''}. See the saved output, then retry or use another tool or driver.`, raw, ...spent };
   const reply = await REPLIES[family](run.stdout, tmp, input.tool);
