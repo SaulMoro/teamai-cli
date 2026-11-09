@@ -618,7 +618,12 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
         case 'reports_failed':
         case 'reports_unreachable':
           break;
+        // The person's note holds a secret or a local path, which teamai-reports must not: the person answers again.
         case 'fleet_unpublishable':
+          log.warn(`${error.message} Answer the question of step "${step}" again, with no secret or local path in the note.`);
+          asked.closed.abort();
+          asked = undefined;
+          continue;
         case 'fleet_record_unreadable':
         case 'fleet_record_newer':
           return failed(fleetFailure(error));

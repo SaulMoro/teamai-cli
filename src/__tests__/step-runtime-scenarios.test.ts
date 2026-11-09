@@ -2351,6 +2351,28 @@ steps:
     expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
   }, 90_000);
 
+  it('asks the owner\'s person again when their answer to a member\'s gate holds a secret in its note, which teamai-reports must not hold', async () => {
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const answers = [{ choice: 'yes', note: 'deploy with ghp_0123456789abcdefghijklmnopqrstuvwxyzAB' }, { choice: 'yes' }];
+    const asked: ExecQuestion[] = [];
+    const ended = exec(newOpId(), 'workflow', { ask: async (question) => {
+      asked.push(question);
+
+      return answers.shift() ?? { refused: 'asked more than twice' };
+    } });
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(asked.map(({ step }) => step)).toEqual(['keep', 'keep']);
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
+  }, 90_000);
+
   it('keeps the gate a member asks open to the owner\'s person while a read of the record fails, and puts it to the person once', async () => {
     const owner = await ownerOf({ workflow: WHOLE, workflows: { pair: GATED }, inputs: { mark: 'made.txt' }, isWhole: true });
     const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
