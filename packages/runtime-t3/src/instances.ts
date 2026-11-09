@@ -14,7 +14,8 @@ import { sleep } from './within.js';
 // ─── The provider instances teamai adds ───
 //
 //  A tool instance init offers with no T3 provider instance yet gets one on the first open or prompt that runs it,
-//  added to T3's settings as the member adds one; the opens of parallel steps add it once.
+//  added to T3's settings as the member adds one; the opens of parallel steps add it once. A later open that finds T3
+//  no longer lists it, as after the member removed it, adds it again.
 //
 
 /**
@@ -66,6 +67,8 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
 
   /** The adding of each instance under way, by name, so the opens of parallel steps add it once. */
   const adding = new Map<string, Promise<NotAdded | Added>>();
+  /** The tool instances this process added or found a provider instance for, which a later open adds again when T3 lost it. */
+  const ours = new Map<string, NewInstance>();
 
   /** How long T3 gets to list an instance it was given, from its settings changing to its own check of it. */
   const ADD_WAIT_MS = 20_000;
@@ -111,6 +114,28 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
     return { ok: true, provider: listed };
   };
 
+  /**
+   * Adds the provider instance of `name` once, however many opens of parallel steps ask for it, and again when T3 no
+   * longer lists the one this process added or found, such as one the member removed under Settings → Providers.
+   */
+  const ensure = async (s: Session, name: string, instance: NewInstance, about: { op: OpId }): Promise<NotAdded | Added> => {
+    const going = adding.get(name);
+
+    if (!going) return addOnce(s, name, instance, about);
+    const done = await going;
+
+    if (!done.ok) return done;
+    // When T3 cannot say, the instance it listed stands: the launch on it says what is wrong.
+    const listed = await s.t3.providers().then((providers) => providers.some((one) => one.providerInstanceId === done.provider.providerInstanceId), () => true);
+
+    if (listed) return done;
+
+    // Parallel opens that find it gone add it once: the first forgets the add, the others take its new one.
+    if (adding.get(name) === going) adding.delete(name);
+
+    return addOnce(s, name, instance, about);
+  };
+
   /** Adds the provider instance of `name` once, however many opens of parallel steps ask for it. */
   const addOnce = (s: Session, name: string, instance: NewInstance, about: { op: OpId }): Promise<NotAdded | Added> => {
     // A failure nobody expected still answers the open, and leaves nothing for the process to die of.
@@ -127,14 +152,15 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
 
   /** The provider instance of `name` exists once this settles, when teamai offered to add it; a failure says why. */
   const instanceFor = (s: Session, name: string, about: { op: OpId }): Promise<NotAdded | Added> | undefined => {
-    const instance = s.pending.get(name);
+    const instance = s.pending.get(name) ?? ours.get(name);
 
     if (!instance) return adding.get(name);
 
-    return addOnce(s, name, instance, about).then((done) => {
+    return ensure(s, name, instance, about).then((done) => {
       if (done.ok) {
         s.instances.set(name, done.provider);
         s.pending.delete(name);
+        ours.set(name, instance);
       }
 
       return done;
@@ -163,7 +189,7 @@ export function instanceAdder({ options, notice }: { options: ServeOptions; noti
     if (found === null) return Promise.resolve({ ok: false, kind: 'not-added', why: `${command} is not on PATH here. It comes with teamai: install teamai-cli on this machine, so its commands are on PATH` });
 
     // A PATH folder named relatively finds it relative to this folder, which T3 does not run in.
-    return addOnce(s, command, { id: command, driver, displayName: command, command, binaryPath: path.resolve(found) }, about);
+    return ensure(s, command, { id: command, driver, displayName: command, command, binaryPath: path.resolve(found) }, about);
   };
 
   /** What a step whose instance cannot run is told: why, and what the person does about it. */
