@@ -359,7 +359,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-智能体拿到步骤的提示词。步骤的后续轮次会启动一个新的智能体，不会延续前一轮的会话。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
+智能体拿到步骤的提示词。延续前面某个步骤会话的步骤，能延续时会在那个步骤的智能体里继续，见[延续步骤的对话](#延续步骤的对话)。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
 
 ## 团队工具实例
 
@@ -479,6 +479,44 @@ paseo permit allow 7c483fce --all
 ## 交互式步骤
 
 在有人值守的运行中，`interactive: true` 的步骤作为一个 Paseo 智能体运行，你在 Paseo 应用里与它一起完成。它的提示词开头告诉智能体与你一起完成这个步骤，并且只在你说步骤完成后才写 teamai 的结果。智能体在你两次发言之间空闲时，步骤一直等待；结果写入后步骤结束。无人值守的运行中没有人可以协作，所以该步骤交给提供 HITL 的运行时，见 [HITL](workflow-advanced.md#hitl人在回路中)。
+
+## 延续步骤的对话
+
+带 `session.from` 或 `session: continue` 的提示词步骤，会在前面那个步骤的 Paseo 智能体里继续。teamai 把这个步骤作为该智能体的新一轮对话发送，所以它记得自己读过和说过的内容，运行记录把会话记为已恢复（resumed）。满足以下条件时才这样做：
+
+- 该智能体仍在 Paseo 中、没有被归档，且它的那一轮已经结束；
+- 这个步骤在同一个 Paseo 工作区中工作，例如在外层步骤打开的副本里、带 `workspace: continue` 的步骤；
+- 这个步骤使用相同的 provider、模型、effort 和 Paseo 模式；
+- 两个步骤都不通过沙箱运行。
+
+前面的步骤不是在这个运行时的智能体里运行的（例如它在另一个驱动或另一台机器上运行）时，如果 Paseo 在这个步骤的 worktree 里列出了那个会话，teamai 会把会话导入到一个新智能体中。这个智能体随后按步骤的要求运行，并被告知运行的临时目录在哪里，因为导入的智能体拿不到 `TEAMAI_RUN_DIR`。
+
+否则步骤会启动一个新智能体，并说明原因：
+
+```text
+⚠ Step runtime "paseo", operation op-6e0c41d2b7a9: teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-5781c58b81a1: agent 4ee42432-b44e-4cca-a6b2-c793f387d266 runs claude/claude-haiku-5-5, and this step runs claude/claude-opus-5-5.
+```
+
+后面的步骤可能会延续的智能体会一直留在 Paseo 中，直到 teamai 关闭前面那个步骤的位置。取消后面的步骤或关闭它的位置，只会停止它自己的那一轮：智能体和前面步骤的工作都会保留。
+
+## 在其他 daemon 上唤醒 fleet 成员
+
+`wake` 使用 `paseo` 的 [fleet](workflow-advanced.md#在其他成员的机器上运行步骤fleet) 条目，会在它提供的尝试无人领取时启动一个成员。Paseo daemon 在你保存在它上面的另一个 daemon 上启动该成员的智能体。
+
+设置方法：
+
+1. 把另一台机器的 daemon 保存到这台的 daemon 上：`paseo host add <host:port> --label gpu-box`。这台 daemon 连上它之后，`paseo host ls` 会显示它为 `online`。
+2. 在那台机器上，用 Paseo 打开仓库的一个检出。teamai 按其 git `origin` 指向的仓库来匹配，所以没有 `origin` 的检出不算。和任何 fleet 成员一样，那台机器需要装好 teamai 并设置好团队。
+
+teamai 选择第一个在线、且有该仓库工作区的已保存主机。智能体出现在那台主机的 Paseo 里、那个工作区中，标题包含运行和池，例如 `teamai: step review of run r70d31098c8884803 · gpu`，并带有标签 `teamai-pool`。它使用该主机运行的 Claude、Codex 或 OpenCode 中第一个的默认模型，处于该 provider 的默认模式。它的第一条提示词是 teamai 领取该池一个尝试的命令，结尾告诉它在这个尝试完成后结束。运行详情中会链接该智能体。唤醒成员会消耗那台机器的账号。
+
+Paseo 启动智能体后，teamai 不再跟踪它。要停止被唤醒的成员，在 Paseo 应用中打开它的智能体并停止，或运行 `paseo stop <agent> --host <host:port>`。`teamai workflow cancel <run>` 会撤回该尝试；尚未领取的成员会发现无可领取，然后结束。
+
+没有任何已保存主机有该仓库时，尝试会继续等待成员，运行会说明每台主机缺少什么，例如：
+
+```text
+No Paseo host saved on this machine has a workspace of https://github.com/acme/acme-app.git (lost-box is offline; build-box has no workspace of it). Add the machine with `paseo host add <host:port>`, and open a checkout of the repository in Paseo there.
+```
 
 ## 取消、崩溃和重启
 
