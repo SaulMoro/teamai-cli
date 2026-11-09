@@ -6,6 +6,7 @@
  * then reads through git again, as it would with nothing kept. A git command that is not read-only drops every answer.
  */
 import { createHash } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { errnoCode } from '../utils/fs.js';
@@ -85,8 +86,9 @@ function globalFiles(env: NodeJS.ProcessEnv): string[] | undefined {
 
 /**
  * The files of checkout `dir` git reads config and its index from: its `.git`, the git directory that names, the common
- * directory a linked worktree's names, their config and worktree config, and the index. Undefined when `dir` has no
- * `.git` of its own that names one.
+ * directory a linked worktree's names, their config and worktree config, and the index; and what makes that directory a
+ * repository (`HEAD`, `objects`, `refs`), without which git uses one in a directory above `dir`, whose config no read
+ * here named. Undefined when `dir` has no `.git` of its own that names one.
  */
 async function repositoryFiles(dir: string, index: string | undefined): Promise<string[] | undefined> {
   const dotGit = path.join(dir, '.git');
@@ -103,7 +105,7 @@ async function repositoryFiles(dir: string, index: string | undefined): Promise<
 
   const common = await fs.readFile(path.join(gitDir, 'commondir'), 'utf8').then((text) => path.resolve(gitDir, text.trim()), () => gitDir);
 
-  return [dotGit, path.join(gitDir, 'commondir'), path.join(common, 'config'), path.join(gitDir, 'config.worktree'), index ?? path.join(gitDir, 'index')];
+  return [dotGit, path.join(gitDir, 'commondir'), path.join(common, 'config'), path.join(gitDir, 'config.worktree'), index ?? path.join(gitDir, 'index'), path.join(gitDir, 'HEAD'), path.join(common, 'objects'), path.join(common, 'refs')];
 }
 
 /** The file `origin` names, resolved from `dir` as git prints it there; undefined for any origin but a file. */
@@ -152,15 +154,29 @@ async function sameInputs(inputs: ConfigInputs): Promise<boolean> {
   return now !== undefined && [...inputs].every(([file, digest]) => now.get(file) === digest);
 }
 
+/**
+ * What `file` holds: its digest, `dir`, `absent`, or undefined for anything else, such as a pipe a process put there,
+ * which is opened without waiting for a writer and never read.
+ */
 async function digestOf(file: string): Promise<string | undefined> {
+  let handle: fs.FileHandle | undefined;
+
   try {
-    return createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const kind = await handle.stat();
+
+    if (kind.isDirectory()) return 'dir';
+
+    return kind.isFile() ? createHash('sha256').update(await handle.readFile()).digest('hex') : undefined;
   } catch (error) {
     const code = errnoCode(error);
 
     if (code === 'ENOENT' || code === 'ENOTDIR') return 'absent';
 
+    // Where a directory cannot be opened as a file.
     return code === 'EISDIR' ? 'dir' : undefined;
+  } finally {
+    await handle?.close();
   }
 }
 

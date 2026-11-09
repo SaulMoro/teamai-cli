@@ -360,6 +360,40 @@ describe('untrustedGit reading the config of a copy once for several git calls',
 
     expect(ran(at)).toBe('');
   });
+
+  it('turns off a program a process writes into the config of a repository above the copy once the copy\'s own is no repository', async () => {
+    const at = repo();
+    const above = (args: string[]): string => at.git(['-C', at.root, ...args]);
+    above(['init', '-q', '-b', 'main']);
+    fs.writeFileSync(path.join(at.root, 'p'), 'a\n');
+    above(['add', 'p']);
+    above(['commit', '-q', '-m', 'above']);
+    fs.writeFileSync(path.join(at.root, 'p'), 'a\nb\n');
+    const copyGit = untrustedGit(at.env);
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, ['diff', '--quiet']);
+    // Without HEAD the copy's .git is no repository, so git looks for one in the directories above it.
+    fs.rmSync(path.join(at.dir, '.git', 'HEAD'));
+    above(['config', '--local', 'diff.external', at.planted]);
+    await copyGit(at.dir, ['diff']);
+
+    expect(ran(at)).toBe('');
+  });
+
+  it('answers when a process puts a pipe where the copy\'s worktree config would be, which git never opens', async () => {
+    const at = repo();
+    const copyGit = untrustedGit(at.env);
+
+    await copyGit(at.dir, ['diff', '--quiet']);
+    const pipe = path.join(at.dir, '.git', 'config.worktree');
+    execFileSync('mkfifo', [pipe]);
+    const late = new Promise<'still waiting'>((resolve) => { setTimeout(() => resolve('still waiting'), 5_000).unref(); });
+    const answered = await Promise.race([copyGit(at.dir, ['diff', '--quiet']).then(({ code }) => code), late]);
+
+    // A read the pipe still holds ends once a writer opens it and closes.
+    if (answered === 'still waiting') fs.closeSync(fs.openSync(pipe, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK));
+    expect(answered).not.toBe('still waiting');
+  });
 });
 
 /** A bare repository beside `at`, its origin. */
