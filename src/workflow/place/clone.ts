@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 import { observeCheckout, PreparedAgentSchema, type PreparedAgent } from '../../agent-observation.js';
 import { resolveCliEntry } from '../../builtin-hooks.js';
@@ -29,7 +30,7 @@ import { homeVariables, TOOL_ORDER } from '../../tool-registry.js';
 import { roleDeclaration } from '../../roles.js';
 import { getDataHome, LocalConfigSchema, type LocalConfig } from '../../types.js';
 import { execCommand } from '../../utils/exec.js';
-import { readJson, writeJsonAtomic } from '../../utils/fs.js';
+import { writeJsonAtomic } from '../../utils/fs.js';
 import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors, type HeadState } from '../../utils/git.js';
 import { log } from '../../utils/logger.js';
 import { projectSlug } from '../../utils/partition.js';
@@ -103,7 +104,20 @@ function receiptPath(runsRoot: string, run: string, branch: string): string {
 }
 
 async function readReceipt(file: string): Promise<CloneReceipt | undefined> {
-  const parsed = CloneReceiptSchema.safeParse(await readJson(file));
+  const text = await readRegularFile(file, 'utf8').catch(() => null);
+
+  if (text === null) return undefined;
+  let raw: unknown;
+
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    log.warn(`Failed to parse JSON: ${file}`);
+
+    return undefined;
+  }
+
+  const parsed = CloneReceiptSchema.safeParse(raw);
 
   return parsed.success ? parsed.data : undefined;
 }

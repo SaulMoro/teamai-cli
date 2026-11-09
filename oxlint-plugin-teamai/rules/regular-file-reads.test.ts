@@ -38,6 +38,11 @@ export const write = writeFileAtomic;`, (output) => {
   expect(output.match(/Read a file in src\/workflow/g)).toHaveLength(1);
 });
 
+rule.invalid('rejects every export of src/utils/fs.ts not known to leave file contents unread, readJson among them', `import { readJson, readJsonObject, fileHash, pathExists, writeJsonAtomic } from '../../utils/fs.js';
+export const all = [readJson, readJsonObject, fileHash, pathExists, writeJsonAtomic];`, (output) => {
+  expect(output.match(/Read a file in src\/workflow/g)).toHaveLength(3);
+});
+
 rule.valid('allows the helper, and a read of an open handle it returned', `import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 export const text = (file: string) => readRegularFile(file, 'utf8');
 export const head = async (file: string) => {
