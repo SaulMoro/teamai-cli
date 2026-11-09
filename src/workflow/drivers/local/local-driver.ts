@@ -982,12 +982,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   /**
    * A prompt that stopped on its tool's usage limit is handed back rather than failed, and the tool is held until the
-   * limit resets; the step runs again then. Any other end of a prompt says the tool's limit is over.
+   * limit resets; the step runs again then. Any other end of a prompt says the tool's limit is over; a lease handed back
+   * before its tool started says nothing of it.
    */
   const afterUsage = (body: ReportBody, { lease, startedAt }: { lease: StagedLease; startedAt: number }): ReportBody => {
     const tool = launchedTool(lease);
 
-    if (tool === undefined) return body;
+    if (tool === undefined || body.outcome === 'released') return body;
 
     if (body.failure?.code !== 'usage_limited') {
       limits.ran(tool, startedAt);
@@ -1361,6 +1362,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           }
 
           if (failure) return unstaged(lease, failure);
+          const tool = launchedTool(lease);
+
+          // Another step may have hit the tool's usage limit while this one's workspace was prepared: it waits for the reset.
+          if (tool !== undefined && limitedOn(slot)[tool] !== undefined) return releasedReport(lease);
           interactiveIgnores = ignored;
 
           const stepRun = runOf(lease);

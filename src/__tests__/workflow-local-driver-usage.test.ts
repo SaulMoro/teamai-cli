@@ -116,6 +116,48 @@ describe('a usage limit across the parallel steps of a run, under the local driv
     expect(later.every(({ at }) => at >= resetsAt)).toBe(true);
   }, 20_000);
 
+  it('launches no step on the tool whose workspace was still being prepared when another step hit the limit', async () => {
+    const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-usage-staging-')), 'hit');
+    dirs.push(path.dirname(marker));
+    const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
+name: build
+description: One prompt whose workspace takes a while to set up, and one in the checkout.
+setup:
+  command: node -e "const fs = require('fs'); const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(marker).replaceAll('"', '\\"')})) { clearInterval(t); } }, 20)"
+steps:
+  - id: one
+    needs: []
+    workspace: new
+    prompt: Implement the first part.
+  - id: two
+    needs: []
+    prompt: Implement the second part.
+`, 2);
+    const resetsAt = Math.ceil((Date.now() + 2000) / 1000) * 1000;
+    const launches: Array<{ step: string; at: number }> = [];
+    const warn = log.warn.bind(log);
+    vi.spyOn(log, 'warn').mockImplementation((message: string) => {
+      if (message.includes('hit its usage limit')) fs.writeFileSync(marker, '');
+      warn(message);
+    });
+
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_tool, input) => {
+        const step = input.prompt.includes('first') ? 'one' : 'two';
+        launches.push({ step, at: Date.now() });
+
+        return step === 'two' && launches.length === 1 ? claudeLimit(resetsAt) : { started: true as const, exitCode: 0 };
+      }),
+    };
+
+    const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(launches[0]?.step).toBe('two');
+    expect(launches.filter(({ step }) => step === 'one').every(({ at }) => at >= resetsAt)).toBe(true);
+  }, 20_000);
+
   it('runs an answer step beside a limited prompt step without leasing it over and over', async () => {
     // The command before the answer step ends once the prompt step has hit its limit, so the answer step is ready during it.
     const marks = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-usage-'));
