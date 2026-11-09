@@ -128,7 +128,7 @@ teamai 只处理它自己启动的线程，以及这些线程委派的任务的�
 | Auto-accept edits | worktree 内的编辑直接通过。每条命令都等你批准，写结果文件也是。 |
 | Supervised | 每条命令和每次编辑都等你批准，包括写结果文件。 |
 
-在你的机器上，teamai 允许 Claude 不经询问写入步骤的结果文件。T3 线程得不到这样的授权，因为 T3 没有办法传递它。结果文件在 worktree 之外，所以在 Auto-accept edits 和 Supervised 下，线程会为写入它询问一次（"Path is outside allowed working directories"）。批准这次写入，步骤就会结束。
+在你的机器上，teamai 允许 Claude 不经询问写入步骤的结果文件。T3 线程得不到这样的授权，因为 T3 没有办法传递它。结果文件在 worktree 之外，步骤写在它旁边 `out/` 里的其他文件（例如证据）也一样。在 Auto-accept edits 和 Supervised 下，线程会为每一次这样的写入询问（"Path is outside allowed working directories"）。批准这些写入，步骤就会结束。
 
 同一个 README 评审在 Auto 下什么都没问。在 Supervised 下问了两次，一次是创建结果目录，一次是写结果文件，步骤用了 9 分钟，因为请求一直在等人批准。
 
