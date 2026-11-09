@@ -23,7 +23,7 @@ import { outputMismatch } from './output.js';
 import { publishPendingRecords, publishRunRecords, queueRunRecord, runRecordState, type RecordState } from './records.js';
 import { resolveRetention, retentionEnds } from './retention.js';
 import {
-  parseTemplate, renderLeaseText, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
+  parseTemplate, renderLeaseText, renderStrings, renderText, stepExpressions, stepPaths, templatedTexts,
   type StepExpression, type TemplateContext, type TemplateError,
 } from './template.js';
 import { stageSettledEvidence } from './place/place.js';
@@ -831,21 +831,7 @@ function stepsRead(paths: ExpressionPath[]): Set<string> {
  */
 function readsOf(step: WorkflowStep, item: boolean): Set<string> {
   const bindsItem = item || step.forEach !== undefined;
-
-  const paths = [
-    ...stepExpressions(step).flatMap(({ source }) => {
-      const parsed = parseExpression(source);
-
-      return parsed.ok ? expressionPaths(parsed.expression) : [];
-    }),
-    ...templatedTexts(step).flatMap(({ text }) => {
-      const template = parseTemplate(text, bindsItem);
-
-      return template.ok ? templatePaths(template.template) : [];
-    }),
-  ];
-
-  const ids = stepsRead(paths);
+  const ids = stepsRead(stepPaths(step, bindsItem));
   const child = stepWorkflow(step);
 
   if (child?.kind === 'inline') {
@@ -1169,7 +1155,7 @@ function advanceInstance(
   // A workflow a runtime of the run's driver can run whole waits unstarted for `next`, which leases it whole or starts it
   // for its asker. One whose inputs do not fit starts here, and fails as any workflow step does, at the same point of
   // the run; so does every one once the driver has no such runtime, so a gate inside it is asked as soon as it is reached.
-  if (run.takesWhole !== false && 'runs' in wholeFit(definition, workflowRunBy(run, definition, scope.prefix), mergeRequirements(scope.requires, definition.requires)) && !('code' in childInputs(scope, states, state, definition, child))) {
+  if (run.takesWhole !== false && 'runs' in wholeFit(definition, workflowRunBy(run, definition, scope.prefix), { requires: mergeRequirements(scope.requires, definition.requires), around: scope.workflow }) && !('code' in childInputs(scope, states, state, definition, child))) {
     return { ready: [{ lease: state, definition, rendered: {} }] };
   }
 
@@ -1794,7 +1780,7 @@ function wholeNegotiation(
 ): Exclude<Negotiation, { kind: 'grant' }> | undefined {
   const state = run.steps.find((item) => item.id === id);
   const child = state && childScope(run, scope, statesIn(run, scope), state, step);
-  const fit = child && wholeFit(step, workflowRunBy(run, step, scope.prefix), mergeRequirements(scope.requires, step.requires));
+  const fit = child && wholeFit(step, workflowRunBy(run, step, scope.prefix), { requires: mergeRequirements(scope.requires, step.requires), around: scope.workflow });
 
   if (!child || !fit) return { kind: 'fail', failure: { code: 'run_unreadable', message: `Run ${run.id} step "${id}" runs workflow ${JSON.stringify(step.workflow)}, which the run did not keep` } };
 

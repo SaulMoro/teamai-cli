@@ -24,9 +24,9 @@ import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTexts, templateExpressions, type TemplateContext } from '../template.js';
-import type { WorkflowDefinition, WorkflowFailure, WorkflowStep } from '../types.js';
+import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
-import { wholeInputs } from '../whole-workflow.js';
+import { inlineReads, wholeInputs } from '../whole-workflow.js';
 
 /** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
 export const DEFAULT_FLEET_POOL = 'default';
@@ -301,9 +301,10 @@ function textLabel(what: string): string {
 /**
  * What the texts of step `step` a fleet lease renders read in `context`, the context its lease rendered them in, or why
  * a member could not render them from values: one reads something besides inputs, the item, the run's id and steps'
- * outputs. A read of the step's own `with` is rendered from the `with` texts.
+ * outputs. A read of the step's own `with` is rendered from the `with` texts. For an inline workflow, the inputs its
+ * steps read too.
  */
-export function leaseValues(step: Pick<WorkflowStep, 'id' | 'prompt' | 'env' | 'with' | 'model'>, context: TemplateContext): { values: LeaseValues } | { error: string } {
+export function leaseValues(step: Pick<WorkflowStep, 'id' | 'prompt' | 'env' | 'with' | 'model' | 'workflow'>, context: TemplateContext): { values: LeaseValues } | { error: string } {
   const given = JsonValueSchema.safeParse(context.inputs ?? {});
   const item = JsonValueSchema.safeParse(context.item);
   let inputs: JsonValue | undefined;
@@ -333,6 +334,12 @@ export function leaseValues(step: Pick<WorkflowStep, 'id' | 'prompt' | 'env' | '
       if (read.root === 'item' && item.success) itemValues = withPath(itemValues, item.data, read.fields) ?? {};
     }
   }
+
+  // The steps of an inline workflow read the inputs around it, which its nested run starts with.
+  const runs = stepWorkflow(step);
+  const inner = runs?.kind === 'inline' && given.success ? inlineReads(runs.workflow).flatMap(({ paths }) => paths) : [];
+
+  for (const read of inner) if (read.root === 'inputs' && given.success) inputs = withPath(inputs, given.data, read.fields);
 
   return {
     values: {
@@ -419,9 +426,12 @@ export function leasePrompt(step: Pick<WorkflowStep, 'id' | 'prompt' | 'with' | 
 
 /**
  * The inputs workflow `child` starts with when step `step` of run `run` runs it whole, rendered from `values` as its
- * owner's lease rendered them from the run.
+ * owner's lease rendered them from the run. An inline workflow takes no `with`: it reads the inputs around it, which
+ * `values` carries as its steps read them.
  */
-export function leaseInputs(step: Pick<WorkflowStep, 'with'>, child: Pick<WorkflowDefinition, 'defaults'>, values: LeaseValues, run: RunId): { inputs: JsonValue } | { error: string } {
+export function leaseInputs(step: Pick<WorkflowStep, 'with'>, child: WorkflowDefinition | InlineWorkflow, values: LeaseValues, run: RunId): { inputs: JsonValue } | { error: string } {
+  if (!isWorkflowFile(child)) return { inputs: values.inputs ?? {} };
+
   return wholeInputs(step, child, valuesContext(values, run));
 }
 

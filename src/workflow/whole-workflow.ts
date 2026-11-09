@@ -1,14 +1,15 @@
 /**
  * A `workflow:` step that goes to one runtime whole, as one attempt (case 24): a fleet member drives its sub-graph as a
  * nested run in the attempt's clone, and the owner settles the step from how that run ended. Only a step whose
- * sub-graph a member can run on its own goes whole; every other workflow step is started where it stands, as before.
+ * sub-graph a member can run on its own goes whole, a workflow file or an inline workflow that reads nothing around it
+ * but the inputs; every other workflow step is started where it stands, as before.
  */
 import { z } from 'zod';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { JsonValueSchema, type JsonValue } from '../utils/json.js';
-import { isRecord } from './expression.js';
+import { expressionPaths, isRecord, parseExpression, type ExpressionPath } from './expression.js';
 import { mergeRequirements, type InEffect } from './requirements.js';
-import { renderStrings, type TemplateContext } from './template.js';
+import { renderStrings, stepPaths, type TemplateContext } from './template.js';
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowStep } from './types.js';
 import { TokenUsageSchema } from './step-state.js';
 
@@ -16,60 +17,81 @@ import { TokenUsageSchema } from './step-state.js';
 export type WholeRun = { step: WorkflowStep; executor: 'command' | 'prompt'; requires: InEffect };
 
 /**
- * Whether workflow step `step`, which runs workflow `child` with `requires` in effect, goes whole: why not, or its
- * workflow and the steps of it that run something, each with the `requires` in effect for it. The one fit rule: the
- * owner's engine leaves only such a step unexpanded and judges a runtime's offer on these steps, and a fleet member
- * judges whether it can run them before it claims the step.
+ * Whether workflow step `step` of workflow file `around`, which runs workflow `child` with `requires` in effect, goes
+ * whole: why not, or its workflow and the steps of it that run something, each with the `requires` in effect for it.
+ * An inline workflow is given as a workflow file named after the step. The one fit rule: the owner's engine leaves only
+ * such a step unexpanded and judges a runtime's offer on these steps, and a fleet member judges whether it can run them
+ * before it claims the step.
  */
-export function wholeFit(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined, requires: InEffect): { unfit: string } | { child: WorkflowDefinition; runs: WholeRun[] } {
-  const unfit = notWhole(step, child);
+export function wholeFit(
+  step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined, { requires, around }: { requires: InEffect; around: string },
+): { unfit: string } | { child: WorkflowDefinition; runs: WholeRun[] } {
+  if (child === undefined) return { unfit: 'it runs no workflow this run kept' };
+  const unfit = notWhole(step, child, around);
 
-  if (unfit !== undefined || child === undefined || !isWorkflowFile(child)) return { unfit: unfit ?? 'it is not a workflow file' };
-  const inEffect = (inner: WorkflowStep): InEffect => mergeRequirements(requires, child.defaults?.requires, inner.requires);
+  if (unfit !== undefined) return { unfit };
+  const file = isWorkflowFile(child) ? child : inlineFile(step, child);
+  const inEffect = (inner: WorkflowStep): InEffect => mergeRequirements(requires, file.defaults?.requires, inner.requires);
 
   // A gate step runs nothing: the member asks its question through the attempt's record.
-  const runs = child.steps.flatMap((inner): WholeRun[] => {
+  const runs = file.steps.flatMap((inner): WholeRun[] => {
     if (inner.command !== undefined) return [{ step: inner, executor: 'command', requires: inEffect(inner) }];
 
     return inner.prompt === undefined ? [] : [{ step: inner, executor: 'prompt', requires: inEffect(inner) }];
   });
 
-  return { child, runs };
+  return { child: file, runs };
+}
+
+/** Inline workflow `inline` of step `step` as the workflow file a nested run runs: named after the step, with no inputs of its own. */
+function inlineFile(step: WorkflowStep, inline: InlineWorkflow): WorkflowDefinition {
+  return { schemaVersion: 'v1alpha1', name: step.id, description: `The inline workflow of step "${step.id}".`, ...inline };
 }
 
 /**
- * The workflow a member runs as the nested run of whole workflow step `step`: `child`, with the budget the step's
- * children spend together, the smaller of the step's own and the workflow's, as the owner's engine gives that workflow
- * (scope.ts `childScope`). A `for_each` step's budget covers all its items, which the owner counts as each item ends.
+ * The workflow a member runs as the nested run of whole workflow step `step`: `child`, as the owner's engine gives that
+ * workflow (scope.ts `childScope`), with the budget the step's children spend together, the smaller of the step's own
+ * and the workflow's, and the `defaults.model` in effect around the step, `defaultModel`, when the workflow sets none.
+ * A `for_each` step's budget covers all its items, which the owner counts as each item ends.
  */
-export function wholeRunDefinition(step: WorkflowStep, child: WorkflowDefinition): WorkflowDefinition {
+export function wholeRunDefinition(step: WorkflowStep, child: WorkflowDefinition, defaultModel: string | undefined): WorkflowDefinition {
   const budgets = [step.forEach === undefined ? step.budget?.tokens : undefined, child.budget?.tokens].filter((tokens) => tokens !== undefined);
+  const model = child.defaults?.model ?? defaultModel;
 
-  return budgets.length === 0 ? child : { ...child, budget: { tokens: Math.min(...budgets) } };
+  return {
+    ...child,
+    ...(budgets.length > 0 && { budget: { tokens: Math.min(...budgets) } }),
+    ...(model !== undefined && { defaults: { ...child.defaults, model } }),
+  };
 }
 
 /**
- * Why the workflow `child`, which step `step` runs, does not go whole, or undefined when it does: it is a workflow file
- * whose children are command, prompt or gate steps that work in the copy the step works in, with nothing a member
- * cannot run on its own: a gate the member asks the owner through the attempt's record.
+ * Why the workflow `child`, which step `step` of workflow file `around` runs, does not go whole, or undefined when it
+ * does: its children are command, prompt or gate steps that work in the copy the step works in, with nothing a member
+ * cannot run on its own: a gate the member asks the owner through the attempt's record. An inline workflow also reads
+ * nothing around it but the inputs.
  */
-function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined): string | undefined {
-  // An inline workflow reads the steps and the item around it (scope.ts childScope), which a nested run has none of.
-  if (child === undefined || !isWorkflowFile(child)) return 'it is not a workflow file';
-
+function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow, around: string): string | undefined {
   // A workflow a `from` step wrote is in no definition, so a member could not check what it runs.
   if (stepWorkflow(step)?.kind === 'from') return 'it runs the workflow a step wrote';
+
+  if (!isWorkflowFile(child)) {
+    const read = readAround(child);
+
+    if (read !== undefined) return read;
+  }
 
   if (isRecord(step.workspace)) return 'it opens a clone, the team repo or a confined directory';
 
   // A header's `workspace: new` opens a copy at the step only when none is around it, which the step alone does not say.
-  if (step.workspace === undefined && child.workspace === 'new') return 'its workflow opens a copy of its own';
+  if (isWorkflowFile(child) && step.workspace === undefined && child.workspace === 'new') return 'its workflow opens a copy of its own';
 
-  if (child.setup !== undefined) return 'its workflow has a setup of its own';
+  if (isWorkflowFile(child) && child.setup !== undefined) return 'its workflow has a setup of its own';
 
   // An allowance its prompts end their turn at is counted by the owner's engine across them, which a nested run is not.
   if (step.onLimit === 'end_turn') return 'it gives its prompts a turn allowance (on_limit: end_turn)';
-  const isShipped = DefaultWorkflows.named(child.name) !== undefined;
+  // An inline workflow's steps are steps of the file it is written in.
+  const isShipped = DefaultWorkflows.named(isWorkflowFile(child) ? child.name : around) !== undefined;
 
   for (const inner of child.steps) {
     const what = `step "${inner.id}"`;
@@ -91,6 +113,38 @@ function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow
   }
 
   return undefined;
+}
+
+/**
+ * What step of inline workflow `inline` reads around it, which the nested run of a member has none of, as the owner's
+ * engine gives it (scope.ts childScope): a step outside it, or the item of a `for_each`. Undefined when its steps read
+ * only the inputs and their own steps.
+ */
+function readAround(inline: InlineWorkflow): string | undefined {
+  const own = new Set(inline.steps.map((inner) => inner.id));
+
+  for (const { what, paths } of inlineReads(inline)) {
+    for (const read of paths) {
+      if (read.root === 'item') return `${what} of its inline workflow reads the item`;
+
+      if (read.root === 'steps' && !own.has(read.step)) return `${what} of its inline workflow reads step "${read.step}" around it`;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The paths inline workflow `inline` reads, by what reads them: each of its steps, and its `loop.while`. Its templates
+ * are read as if an item were bound, so an item read is one.
+ */
+export function inlineReads(inline: InlineWorkflow): Array<{ what: string; paths: ExpressionPath[] }> {
+  const loop = inline.loop?.while === undefined ? undefined : parseExpression(inline.loop.while);
+
+  return [
+    ...inline.steps.map((inner) => ({ what: `step "${inner.id}"`, paths: stepPaths(inner, true) })),
+    ...(loop?.ok ? [{ what: 'loop.while', paths: expressionPaths(loop.expression) }] : []),
+  ];
 }
 
 /**

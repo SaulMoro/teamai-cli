@@ -20,7 +20,7 @@ import { leaseContext } from '../engine.js';
 import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
-import { isWorkflowFile, workflowRunBy, type WorkflowFailure } from '../types.js';
+import { workflowRunBy, type WorkflowFailure } from '../types.js';
 import type { WholeEnd } from '../whole-workflow.js';
 import { isJsonObject } from '../../types.js';
 import { copyGit } from '../place/place.js';
@@ -437,7 +437,7 @@ async function leasedStep(config: LocalConfig, { run, attempt }: FleetPlace): Pr
   if (leased.step.workflow !== undefined) {
     const child = workflowRunBy(state, leased.step, '');
 
-    if (child === undefined || !isWorkflowFile(child)) return { error: `Run ${run} step "${step.id}" runs a workflow this run did not keep.`, isFatal: true };
+    if (child === undefined) return { error: `Run ${run} step "${step.id}" runs a workflow this run did not keep.`, isFatal: true };
     const inputs = leaseInputs(leased.step, child, values.values, run);
 
     return 'error' in inputs ? { error: `Step "${step.id}" ${inputs.error}`, isFatal: true } : { kind: 'workflow', step: step.id, inputs: inputs.inputs, env: {} };
