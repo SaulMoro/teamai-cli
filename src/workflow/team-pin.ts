@@ -56,7 +56,7 @@ async function changesPast(root: string, spec: string, revision: string): Promis
   try {
     const index = path.join(dir, 'index');
     const own = await git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'index']);
-    const copied = own.code === 0 && await fs.copyFile(own.stdout.trim(), index).then(() => true, () => false);
+    const copied = own.code === 0 && await readRegularFile(own.stdout.trim()).then((bytes) => fs.writeFile(index, bytes)).then(() => true, () => false);
     const withIndex = boundedGit(undefined, { ...process.env, GIT_INDEX_FILE: index });
 
     for (const args of [...copied ? [] : [['read-tree', 'HEAD']], ['add', '-A', '--', spec]]) {

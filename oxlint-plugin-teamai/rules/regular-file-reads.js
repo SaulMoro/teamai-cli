@@ -7,8 +7,11 @@ import { inProductionSource, sourcePath, variableOf } from '../utils.js';
 /** The modules a file is read from. */
 const FS = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'fs-extra']);
 
-/** The reads that open a path as they find it, and so wait on a FIFO there. */
-const READS = new Set(['readFile', 'readFileSync', 'createReadStream']);
+/** The calls that open a path to read it as they find it, and so wait on a FIFO there: reads, copies, and fs-extra's JSON reads. */
+const READS = new Set([
+  'readFile', 'readFileSync', 'createReadStream', 'copyFile', 'copyFileSync',
+  'readJson', 'readJsonSync', 'readJSON', 'readJSONSync',
+]);
 
 /**
  * The exports of `src/utils/fs.ts` that never open a file to read it. Any other export is refused, so a new wrapper

@@ -32,6 +32,12 @@ export const text = (file: string) => read(file, 'utf8');`, (output) => {
   expect(output).toContain(MESSAGE);
 });
 
+rule.invalid('rejects a copy of a path, and fs-extra reading JSON off one', `import fs from 'node:fs/promises';
+import fse from 'fs-extra';
+export const copy = async (from: string, to: string) => [await fs.copyFile(from, to), await fse.readJson(from), fse.readJSONSync(from)];`, (output) => {
+  expect(output.match(/Read a file in src\/workflow/g)).toHaveLength(3);
+});
+
 rule.invalid('rejects the read wrappers of src/utils/fs.ts, which call fs.readFile', `import { readFileSafe, writeFileAtomic } from '../../utils/fs.js';
 export const text = (file: string) => readFileSafe(file);
 export const write = writeFileAtomic;`, (output) => {
