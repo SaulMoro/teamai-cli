@@ -359,7 +359,7 @@ A model the daemon lacks fails before any agent starts:
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-The agent gets the step's prompt. A later pass of the step starts a new agent: it does not continue the earlier pass's session. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
+The agent gets the step's prompt. A step that continues an earlier step's session goes on in that step's agent when it can, as [Continue a step's conversation](#continue-a-steps-conversation) describes. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
 
 ## Team tool instances
 
@@ -479,6 +479,44 @@ An agent that stops on its tool's usage limit, or on a rate limit its model's AP
 ## Interactive steps
 
 In an attended run, a step with `interactive: true` runs as a Paseo agent you work with in the Paseo app. Its prompt starts by telling the agent to work through the step with you, and to write teamai's result only once you say the step is done. The step waits while the agent sits idle between your turns, and ends once the result is written. An unattended run has nobody to work with, so the step goes to a runtime with HITL, as [HITL](workflow-advanced.md#hitl-human-in-the-loop) describes.
+
+## Continue a step's conversation
+
+A prompt step with `session.from` or `session: continue` goes on in the earlier step's Paseo agent. teamai sends the step as a new turn of that agent, so it keeps what it read and said, and the run records the session as resumed. It does so when:
+
+- the agent is still in Paseo, not archived, and its turn has ended;
+- the step works in the same Paseo workspace, such as a step with `workspace: continue` in the copy an enclosing step opened;
+- the step runs the same provider, model, effort and Paseo mode;
+- neither step runs through a sandbox.
+
+When the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory is, since an imported agent gets no `TEAMAI_RUN_DIR`.
+
+Otherwise the step starts a new agent, and says why:
+
+```text
+⚠ Step runtime "paseo", operation op-6e0c41d2b7a9: teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-5781c58b81a1: agent 4ee42432-b44e-4cca-a6b2-c793f387d266 runs claude/claude-haiku-5-5, and this step runs claude/claude-opus-5-5.
+```
+
+An agent a later step may continue stays in Paseo until teamai closes the earlier step's place. Cancelling the later step, or closing its place, stops only its turn: the agent and the earlier step's work stay.
+
+## Wake fleet members on other daemons
+
+A [fleet](workflow-advanced.md#run-steps-on-other-members-machines-fleet) entry whose `wake` uses `paseo` starts a member when nobody takes an attempt it offered. The Paseo daemon starts the member's agent on another daemon you saved on it.
+
+To set it up:
+
+1. Save the other machine's daemon on this one: `paseo host add <host:port> --label gpu-box`. `paseo host ls` shows it `online` once this daemon reaches it.
+2. On that machine, open a checkout of the repository in Paseo. teamai matches it by the repository its git `origin` names, so a checkout with no `origin` does not count. The machine needs teamai and the team set up, as any fleet member does.
+
+teamai picks the first saved host that is online and has a workspace of the repository. The agent appears in that host's Paseo, in that workspace, titled after the run and the pool, such as `teamai: step review of run r70d31098c8884803 · gpu`, with the label `teamai-pool`. It runs on the default model of the first of Claude, Codex or OpenCode that host runs, in that provider's default mode. Its first prompt is teamai's command to take one attempt of the pool, and ends by telling it to end once that attempt is done. The run's details link the agent. Waking a member spends that machine's account.
+
+teamai does not follow the agent once Paseo started it. To stop a woken member, open its agent in the Paseo app and stop it, or run `paseo stop <agent> --host <host:port>`. `teamai workflow cancel <run>` withdraws the attempt; a member that has not taken it yet finds nothing to claim and ends.
+
+When no saved host has the repository, the attempt keeps waiting for a member, and the run says what each host lacked, in words such as:
+
+```text
+No Paseo host saved on this machine has a workspace of https://github.com/acme/acme-app.git (lost-box is offline; build-box has no workspace of it). Add the machine with `paseo host add <host:port>`, and open a checkout of the repository in Paseo there.
+```
 
 ## Cancel, crash and restart
 
