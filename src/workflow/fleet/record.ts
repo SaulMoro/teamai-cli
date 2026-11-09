@@ -293,6 +293,11 @@ function unpublishable(record: FleetRecord, secrets: Record<string, string>): Fl
   const textHit = leased && inText?.unfit.kind === 'secret' ? { at: ['lease', leased.field], unfit: inText.unfit } : undefined;
   const hit = textHit ?? firstUnfit(JsonValueSchema.parse(leased ? { ...record, lease: { ...record.lease, [leased.field]: '' } } : record), secrets);
 
+  return unpublishableAt(record, hit);
+}
+
+/** The refusal of attempt `record` that `hit` names, if any: what of the record holds a secret or a path of this machine. */
+function unpublishableAt(record: Pick<FleetRecord, 'attempt' | 'run'>, hit: ReturnType<typeof firstUnfit>): FleetError | undefined {
   if (hit === undefined) return undefined;
   const at = hit.at.join('.');
   const what = hit.unfit.kind === 'secret' ? `what looks like a secret (${hit.unfit.label})` : 'an absolute path of this machine';
@@ -547,11 +552,12 @@ export async function cancelAttempt(config: LocalConfig, record: Offered | HeldA
 
 /**
  * Writes the owner's answer `answer` to the question of claim `asking`; a progress of its member that landed first answers
- * `state_moved`. The person's note is checked against `secrets` as a run is before it is published.
+ * `state_moved`. The answer, the person's note among it, is checked against `secrets` as a run is before it is published.
  */
 export async function answerQuestion(config: LocalConfig, asking: Asking, answer: ExecAnswer, secrets: Record<string, string>): Promise<Written<Extract<FleetRecord, { state: 'answered' }>>> {
   const answered: Extract<FleetRecord, { state: 'answered' }> = { ...asking, write: randomUUID(), state: 'answered', answer };
-  const unfit = unpublishable(answered, secrets);
+  // Only the answer is the owner's to check: the rest of the record is what the member wrote, which its own check passed.
+  const unfit = unpublishableAt(answered, firstUnfit(JsonValueSchema.parse({ answer }), secrets));
 
   if (unfit) return { ok: false, error: unfit };
   const written = await writeRecord(config, answered, { replaces: asking.write, message: `[teamai] Answer attempt ${asking.attempt} of run ${asking.run}` });

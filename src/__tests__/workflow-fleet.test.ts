@@ -777,6 +777,17 @@ describe('cancelling an attempt through its record', () => {
     expect(await readAttemptRecord(alice.config, offered.run, offered.attempt)).toMatchObject({ ok: true, value: { state: 'asking' } });
   });
 
+  it('writes an answer with a plain note though the member\'s question names a value the owner holds as a secret', async () => {
+    const { alice, bob, offered } = await offerSlow(60_000);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const question = { step: 'keep', kind: 'approve' as const, message: 'Ship to stage-eu-west-71b9?', options: ['yes', 'no'], required: false };
+    const asking = await recordProgress(bob.config, claimed.value, 'e'.repeat(40), { question, secrets: {} });
+    if (!asking.ok || asking.value.state !== 'asking') throw new Error('the member did not ask');
+
+    expect(await answerQuestion(alice.config, asking.value, { choice: 'yes' }, { STAGE: 'stage-eu-west-71b9' })).toMatchObject({ ok: true, value: { state: 'answered' } });
+  });
+
   it('goes on from the work a member pushed before a cancel it never answered', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000);
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
