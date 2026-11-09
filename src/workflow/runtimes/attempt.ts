@@ -220,13 +220,13 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 //
 
 /**
- * Whether a place on `slot` may be held for a conversation: on a runtime entry whose init said a prompt's conversation
- * outlives the prompt in its place (`conversations`), as T3's and Paseo's do. One that launches a tool per prompt keeps
+ * Whether a place on `slot` may be held for a conversation: on a runtime entry that launches agents its own way and whose
+ * init said a prompt's conversation outlives the prompt in its place (`conversations`), as T3's and Paseo's do. One that launches a tool per prompt keeps
  * nothing to continue, so none of its places is held. A place through another runtime is never held, as it would keep
  * the step's credentials past the step.
  */
-function holdsOn(slot: { kind: 'local' | 'external'; keepsConversations?: true; isThrough?: true } | undefined): boolean {
-  return slot?.kind === 'external' && slot.keepsConversations === true && slot.isThrough !== true;
+function holdsOn(slot: { kind: 'local' | 'external'; launchesAgents: boolean; keepsConversations?: true; isThrough?: true } | undefined): boolean {
+  return slot?.kind === 'external' && slot.launchesAgents && slot.keepsConversations === true && slot.isThrough !== true;
 }
 
 /** A held place: the attempt and its record, whose `heldFor` names the conversation. */

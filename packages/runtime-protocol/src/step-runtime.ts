@@ -4,10 +4,11 @@ import type { z } from 'zod';
 
 // ─── Step runtimes ───────────────────────────────────────
 //
-//  A step runtime is where and how a workflow step's processes run: `local`, in teamai's process on the host, or an
-//  external program speaking the runtime protocol over stdio (protocol.ts). The local loop reaches each through this
-//  one interface, which a runtime package can implement from the protocol alone. Not to be confused with the bundled runtime (`src/bundled-runtime.ts`), the Node and shell that
-//  WorkBuddy and CodeBuddy ship, nor with `Executor` (`command` or `prompt`), nor with a tool.
+//  A step runtime is where and how a workflow step's processes run: in teamai's process on the host, or an external
+//  program speaking the runtime protocol over stdio (protocol.ts). teamai's local loop reaches each through this one
+//  interface, which a runtime package can implement from the protocol alone. Not to be confused with the bundled
+//  runtime, the Node and shell that WorkBuddy and CodeBuddy ship, nor with a workflow's executor (`command` or
+//  `prompt`), nor with a tool.
 //
 //  Every operation is accepted first and finishes later. teamai names each with an id it persists before it sends the
 //  request, and a runtime answers a repeated id with the same acceptance and the same terminal outcome until `close`.
@@ -107,12 +108,17 @@ export interface ExecEvents {
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
 }
 
-/** A runtime's offer: what it can, and whether it launches agents its own way, so prompt steps reach it as `prompt`. */
-/** `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step. */
-/** `ownLogins`: the tools whose login the runtime's provider keeps: teamai copies none of their logins, nor sends the sign-ins it found for them. */
-/** `wakes`: it launches a fleet member on another machine it reaches, through `StepRuntime.wake`. */
-/** `runsOnToolHome`: it runs each tool in the attempt's tool home, which teamai seeds, copies a login into and reads sessions in. */
-/** `keepsConversations`: a prompt's conversation outlives the prompt in its place, so teamai holds the place for a later prompt. */
+/**
+ * A runtime's offer: what it can, and whether it launches agents its own way, so prompt steps reach it as `prompt`.
+ * - `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step.
+ * - `ownLogins`: the tools whose login the runtime's provider keeps: teamai copies none of their logins, nor sends the
+ *   sign-ins it found for them.
+ * - `wakes`: it launches a fleet member on another machine it reaches, through `StepRuntime.wake`.
+ * - `runsOnToolHome`: it runs each tool in the attempt's tool home, which teamai seeds, copies a login into and reads
+ *   sessions in.
+ * - `keepsConversations`: a prompt's conversation outlives the prompt in its place, so teamai may hold the place for a
+ *   later prompt.
+ */
 export type Initialized<TCan = Can> =
   | { ok: true; can: TCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[]; wakes?: true; runsOnToolHome?: true; keepsConversations?: true }
   | { ok: false; failure: RuntimeFailure };

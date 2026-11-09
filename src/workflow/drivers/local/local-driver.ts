@@ -1084,9 +1084,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
     if (isWorkflowError(answer) && answer.error.code !== 'lease_cancelled') return answer;
     // Its handle is closed only once the report is recorded, so a teamai killed before then reattaches to it. A prompt
-    // on a runtime that launches agents its own way, not through another, keeps its place held for the conversation it
-    // launched while a step that has not settled continues it in the same workspace, outside any room under
-    // max_parallel; and each held place no such step continues any more is closed.
+    // on a runtime that keeps conversations (`HeldPlace.holdsOn`), not through another, keeps its place held for the
+    // conversation it launched while a step that has not settled continues it in the same workspace, outside any room
+    // under max_parallel; and each held place no such step continues any more is closed.
     const slot = slotOf.get(lease.attempt);
     const mayHold = !isWorkflowError(answer) && lease.prompt !== undefined && !lease.answer && !lease.confined && HeldPlace.holdsOn(slot);
     const { continued, workspace } = await continuedAround(lease.step);
