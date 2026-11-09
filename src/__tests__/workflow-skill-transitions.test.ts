@@ -1527,16 +1527,21 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'an unattended session whose step a usage limit holds past the wait offers the run, and waits on, holding the step, when it cannot be offered',
-    rows: ['P12', 'D37', 'D38'],
+    name: 'an unattended session whose step a usage limit holds past the wait offers the run once, and when it cannot be offered ends its loop with the step held, saying how to go on',
+    rows: ['P12', 'D37', 'D38', 'D26'],
     run: async () => {
+      let offers = 0;
       // A team repository of the checkout itself has no teamai-reports to offer the run on.
-      const made = await harness({ review: REVIEW }, { mode: 'unattended' });
+      const made = await harness({ review: REVIEW }, { mode: 'unattended', client: (client) => ({ ...client, offer: (run, checkout) => { offers += 1; return client.offer(run, checkout); } }) });
       const { run } = await limitedReview(made, 7 * 3_600_000);
+      // The poll offers the run once and wakes the session, whose call offers it once more and ends the loop.
+      expect((await turnOf(await made.call({ kind: 'next', run, wait: true }))).then?.kind).toBe('wake');
+      expect(offers).toBe(1);
       const held = await turnOf(await made.call({ kind: 'next', run, wait: false }));
+      expect(offers).toBe(2);
+      expect(held.then).toBeUndefined();
       expect(dispatches(held)).toEqual([]);
-      expect(held.waiting?.reason).toMatch(/^claude hit its usage limit, which resets at .+, past the .+ an unattended run waits for it, and the run could not be offered on teamai-reports: .+/);
-      expect(held.then?.kind).toBe('poll');
+      expect(held.waiting?.reason).toMatch(/^claude hit its usage limit, which resets at .+, past the .+ an unattended run waits for it, and the run could not be offered on teamai-reports: .+\. Once the limit resets, continue it from this session$/);
       expect(await readRun(made.config, run)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
       return made.rows;
     },

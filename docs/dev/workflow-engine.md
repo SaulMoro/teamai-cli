@@ -220,7 +220,7 @@ Where the guards of several rows hold, the first row in the order below answers:
 | D27 | drive | reply wait, after its row | it lists `held`, and no reply of this tick came to a `next` that took no lease | engine `next` as D1, with `canTakeLease: false`, since the engine answers a held step before a gate; H5, then D10 to D12 for a gate, take its reply | drive | |
 | D36 | drive | reply wait, before D30 and D14 | no attempt or score run is open, it lists steps held for a `limitedTool`, and the usage limits kept in `usage` wait for that tool's reset: within the cap, or attended, past it | none | drive | waiting with the limit's reason; `then: poll` |
 | D37 | drive | reply wait, before D30 and D14 | as D36, in run mode `unattended`, past the cap an unattended run waits for the limit | `WorkflowClient.offer` as D30 | drive | D31 naming the steps that tool holds, or D38 |
-| D38 | drive | D37's offer answered `unoffered` | | none | drive | waiting with the limit's reason and why the run could not be offered; `then: poll` |
+| D38 | drive | D37's offer answered `unoffered` | | none | drive | waiting with the limit's reason, why the run could not be offered, and that the session continues it once the limit resets; no `then`, so a poll does not offer it again, as the local driver stops there |
 | D30 | drive | reply wait, before D13 to D15 | run mode `unattended`, it lists steps held for `hitl`, and no attempt or score run is open | `WorkflowClient.offer`: publish the run on teamai-reports, offered, from the run's checkout | drive | D31 or D32 by the offer's answer |
 | D31 | drive | D30's offer answered `offers` | | none | drive | `person why:offered` naming those steps and the person's `teamai workflow resume <run> --claim` literal; waiting held; no `then` |
 | D32 | drive | D30's offer answered `unoffered` | | engine `next` as D1, with `handoff: unoffered` and the reason, so each of those steps fails `hitl_required` saying why the run could not be offered | drive | the reply's row |
@@ -234,7 +234,7 @@ Where the guards of several rows hold, the first row in the order below answers:
 | D23 | done | a poll tick | `seen[s]` is below seq, and no attempt is open | `seen[s]` := seq | done | `done` with its events; `then: poll` while a judge is open |
 | D24 | host, drive, done | a poll tick | the bound is reached, and D25 does not apply | none | unchanged | `then: poll`, no actions |
 | D25 | drive, done | a poll tick | a `settled` or `stopped` event came after `seen[s]`, and neither D22 nor D23 applies | `seen[s]` := seq | unchanged | the events after the old `seen[s]`, no actions; `then: poll` |
-| D26 | drive | a poll tick | the tick took D14, and D22 does not apply | none | drive | `then: wake` with the next literal, no actions |
+| D26 | drive | a poll tick | the tick's turn ends the loop (D14, D31 or D38), and D22 does not apply | none | drive | `then: wake` with the next literal, no actions |
 
 `giveUp` in `protocol.ts` is the only cancel a driver makes for steps it can never take: it takes only confined steps, cancels the nearest enclosing step whose definition sets `continue_on_failure` (`isUnder` in `loop.ts`) with a message that says why, and answers `not_cancellable` for a step with none.
 

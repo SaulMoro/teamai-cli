@@ -2064,7 +2064,7 @@ The local driver does not fail such a step. It hands the step back, and launches
 claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here until it resets, or offer run r7a1… to another machine on teamai-reports? [wait/offer]
 ```
 
-The skill driver holds such a step the same way when the child that ran it reports `usage_limited`: it keeps the limit with the run between calls, each turn says what the step waits for, and once the limit resets it dispatches the step again. Unattended, past the 6 hours, it offers the run on teamai-reports, and waits on when it cannot.
+The skill driver holds such a step the same way when the child that ran it reports `usage_limited`: it keeps the limit with the run between calls, each turn says what the step waits for, and once the limit resets it dispatches the step again. Unattended, past the 6 hours, it offers the run on teamai-reports. When it cannot, the turn says why and ends the loop with the step held: continue the run from the session once the limit resets.
 
 A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed`, ending its message with the command that retries the step: `Then run: teamai workflow retry <run> <step>`. So does a confined prompt, such as a judge's. A confined prompt that stops on its tool's usage limit fails `usage_limited`: teamai does not wait for that limit to reset. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
 
