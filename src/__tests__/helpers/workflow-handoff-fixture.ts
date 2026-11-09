@@ -1,3 +1,4 @@
+import type { JsonValue } from '../../types.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -258,7 +259,7 @@ export async function settle(member: Member, runId: string): Promise<void> {
 }
 
 /** Starts `workflow` in the member's business checkout, which fixes the run's base. */
-export async function startIn({ config, checkout }: Member, workflow: string, inputs: Record<string, string> = {}): Promise<string> {
+export async function startIn({ config, checkout }: Member, workflow: string, inputs: Record<string, JsonValue> = {}): Promise<string> {
   const base = await headCommit(checkout);
   const started = await startRun(config, workflow, inputs, { secrets: await knownSecrets(config), ...(base ? { base } : {}), checkout });
   if ('error' in started) throw new Error(started.error.message);

@@ -1044,7 +1044,7 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
 
       if (!isDeepStrictEqual(inputs.inputs, lease.inputs)) return { refused: `the offer's inputs differ from what workflow "${definition.name}" renders from the offer's values for step "${lease.step}".` };
 
-      return { kind: 'workflow', child: wholeRunDefinition(step, fit.child, defaultModel), inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
+      return { kind: 'workflow', child: wholeRunDefinition(step, fit.child, { defaultModel, budgetLeft: lease.budget?.tokens }), inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
     }
 
     case 'command': {

@@ -50,12 +50,16 @@ function inlineFile(step: WorkflowStep, inline: InlineWorkflow): WorkflowDefinit
 
 /**
  * The workflow a member runs as the nested run of whole workflow step `step`: `child`, as the owner's engine gives that
- * workflow (scope.ts `childScope`), with the budget the step's children spend together, the smaller of the step's own
- * and the workflow's, and the `defaults.model` in effect around the step, `defaultModel`, when the workflow sets none.
- * A `for_each` step's budget covers all its items, which the owner counts as each item ends.
+ * workflow (scope.ts `childScope`), with the budget the step's children spend together, the smallest of the step's own,
+ * the workflow's, and `budgetLeft`, what the budgets around the step had left as the owner offered it, and the
+ * `defaults.model` in effect around the step, `defaultModel`, when the workflow sets none. A `for_each` step's budget
+ * covers all its items, so the owner counts it in `budgetLeft`.
  */
-export function wholeRunDefinition(step: WorkflowStep, child: WorkflowDefinition, defaultModel: string | undefined): WorkflowDefinition {
-  const budgets = [step.forEach === undefined ? step.budget?.tokens : undefined, child.budget?.tokens].filter((tokens) => tokens !== undefined);
+export function wholeRunDefinition(
+  step: WorkflowStep, child: WorkflowDefinition, { defaultModel, budgetLeft }: { defaultModel: string | undefined; budgetLeft: number | undefined },
+): WorkflowDefinition {
+  const own = step.forEach === undefined ? step.budget?.tokens : undefined;
+  const budgets = [own, child.budget?.tokens, budgetLeft].filter((tokens) => tokens !== undefined);
   const model = child.defaults?.model ?? defaultModel;
 
   return {
