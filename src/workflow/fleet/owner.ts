@@ -154,9 +154,11 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
       return { op, state: 'running' };
     // The member was asked to stop, and nothing of the step runs on this machine: the record ends cancelled or expired.
     case 'cancelling':
-    case 'cancelled':
     case 'withdrawn':
       return { op, state: 'cancelled' };
+    // A whole workflow ends with what its steps spent before it stopped, as the live end gives it.
+    case 'cancelled':
+      return record.lease.kind === 'workflow' && record.tokens ? { op, state: 'cancelled', stdout: cancelledWholeStdout(cancelledMessage(record), record.tokens) } : { op, state: 'cancelled' };
     case 'finished':
       return finishedState(op, record);
 
@@ -168,6 +170,16 @@ function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
       return unhandled;
     }
   }
+}
+
+/** What a cancelled record says the member did, for the person. */
+function cancelledMessage(record: Extract<FleetRecord, { state: 'cancelled' }>): string {
+  return `Step "${record.lease.step}" was cancelled, and the fleet member ${record.member.user} that ran it stopped it.${record.pushed === record.start ? '' : ` Its work up to ${record.pushed} is kept.`}`;
+}
+
+/** The stdout of a whole workflow step that ended cancelled: what its steps spent before it stopped, which the budgets around the step count. */
+function cancelledWholeStdout(message: string, tokens: TokenUsage): string {
+  return JSON.stringify({ outcome: 'failed', failure: { code: 'cancelled', message }, tokens } satisfies WholeEnd);
 }
 
 /** What a finished record says of the exec that offered it: a command or a whole workflow exited, a prompt finished or failed. */
@@ -245,7 +257,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
         events.onOutput?.('stderr', waited.message);
 
         // What a whole workflow's steps spent before it stopped, which the budgets around the step count.
-        return isWhole && waited.tokens ? { kind: 'cancelled', stdout: JSON.stringify({ outcome: 'failed', failure: { code: 'cancelled', message: waited.message }, tokens: waited.tokens } satisfies WholeEnd) } : { kind: 'cancelled' };
+        return isWhole && waited.tokens ? { kind: 'cancelled', stdout: cancelledWholeStdout(waited.message, waited.tokens) } : { kind: 'cancelled' };
       case 'failed':
         return { kind: 'failed', failure: waited.failure, isStepOutcome: true };
       // Only a disposed runtime ends a wait this way, once its teamai no longer reads the exec.
@@ -560,7 +572,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
 
       if (taken) return failed(taken);
 
-      return { kind: 'cancelled', message: `Step "${step}" was cancelled, and the fleet member ${record.member.user} that ran it stopped it.${record.pushed === record.start ? '' : ` Its work up to ${record.pushed} is kept.`}`, ...(record.tokens && { tokens: record.tokens }) };
+      return { kind: 'cancelled', message: cancelledMessage(record), ...(record.tokens && { tokens: record.tokens }) };
     }
 
     for (const { member, why } of record?.state === 'offered' ? record.left ?? [] : []) {

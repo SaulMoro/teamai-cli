@@ -13,7 +13,7 @@ function endedState(op: OpId, end: LocalEnd): OpState {
     case 'exited':
       return { op, state: 'exited', code: end.code, stdout: end.stdout };
     case 'cancelled':
-      return { op, state: 'cancelled' };
+      return { op, state: 'cancelled', ...(end.stdout !== undefined && { stdout: end.stdout }) };
     case 'failed':
       return { op, state: 'failed', failure: end.failure };
     default: {

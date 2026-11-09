@@ -571,7 +571,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
         if (state?.state === 'exited') return { kind: 'exited', code: state.code, stdout: state.stdout };
 
-        if (state?.state === 'cancelled') return { kind: 'cancelled' };
+        if (state?.state === 'cancelled') return { kind: 'cancelled', ...(state.stdout !== undefined && { stdout: state.stdout }) };
 
         if (state?.state === 'failed') return { kind: 'failed', failure: state.failure };
 

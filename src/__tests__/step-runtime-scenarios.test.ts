@@ -2497,7 +2497,7 @@ done`);
     }
   }, 90_000);
 
-  it('ends a member\'s whole workflow the owner cancelled with what its steps spent before it stopped, so the budgets around the step count it', async () => {
+  it('ends a member\'s whole workflow the owner cancelled with what its steps spent before it stopped, so the budgets around the step count it, also to a teamai that reattaches after a restart', async () => {
     const owner = await ownerOf({ workflow: RUN_BUDGETED.replace('budget: { tokens: 1 }', 'budget: { tokens: 1000000 }'), workflows: { reviews: REVIEW_HOLD }, tools: ['claude'], isWhole: true, isMeasured: true });
     const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
     const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}' });
@@ -2507,7 +2507,7 @@ done`);
     const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
     git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
     // Bob reads the record for a cancel every 4 s, a third of stale_after.
-    const { runtime, exec } = await owner.open(place, { stale_after: '12s' });
+    const { runtime, handle, exec } = await owner.open(place, { stale_after: '12s' });
     const op = newOpId();
 
     try {
@@ -2524,6 +2524,11 @@ done`);
       expect(end.kind).toBe('cancelled');
       expect(end.kind === 'cancelled' && JSON.parse(end.stdout ?? '{}')).toMatchObject({ tokens: { input: expect.any(Number), output: expect.any(Number) } });
       expect(await owner.record()).toMatchObject({ state: 'cancelled', tokens: { input: expect.any(Number) } });
+      // A teamai that restarted reads the end from the record as the live one gave it.
+      const restarted = fleetStepRuntime({ config: owner.alice.config, masks: {} });
+      fleetRuntimes.push(restarted);
+      expect(await restarted.init({ options: { stale_after: '12s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
+      expect(await restarted.reattach(handle)).toMatchObject({ kind: 'alive', ops: [{ op, state: 'cancelled', stdout: end.kind === 'cancelled' ? end.stdout : '' }] });
     } finally {
       vi.unstubAllEnvs();
       expect(claude.stopLeft(), 'fake agents left running').toEqual([]);

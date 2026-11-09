@@ -508,7 +508,8 @@ export const OpStateSchema = z.discriminatedUnion('state', [
   z.object({ op: OpIdSchema, state: z.literal('running') }),
   z.object({ op: OpIdSchema, state: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
   z.object({ op: OpIdSchema, state: z.literal('finished'), ...finishedPrompt }),
-  z.object({ op: OpIdSchema, state: z.literal('cancelled') }),
+  // `stdout`: what an exec that ended cancelled printed, as the live end gave it, such as what a whole workflow spent.
+  z.object({ op: OpIdSchema, state: z.literal('cancelled'), stdout: z.string().optional() }),
   z.object({ op: OpIdSchema, state: z.literal('failed'), failure: RuntimeFailureSchema }),
 ]);
 
