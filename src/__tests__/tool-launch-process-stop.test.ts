@@ -207,6 +207,25 @@ it.skipIf(process.platform === 'win32')('stops every group recorded in a directo
   }
 });
 
+it.skipIf(process.platform === 'win32')('stops a group whose starter was killed before ps told it when the group started', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-unread-'));
+  const group = await detachedGroup();
+  try {
+    // No ps answers while the starter records the group, as when it is killed before ps does.
+    vi.stubEnv('PATH', '');
+    recordGroup(group.shell, directory);
+    vi.unstubAllEnvs();
+
+    await stopRecordedGroup(directory);
+
+    expect(group.alive()).toBe(false);
+    expect(fs.readdirSync(directory)).toEqual([]);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it.skipIf(process.platform === 'win32')('stops an attached command and what it started once its starter is gone, from the record it left', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-attached-'));
   const pidFile = path.join(directory, 'sleep.pid');

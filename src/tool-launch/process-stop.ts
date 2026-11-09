@@ -21,19 +21,31 @@ export function processStarts(): Map<number, string> | undefined {
   }));
 }
 
-/** A detached process group: the pid of the process that leads it, and when that process started. */
-export interface ProcessGroup {
-  pid: number;
-  start: string;
-}
-
 /**
  * What a record names: a detached process group, or with `tree`, an attached command, which shares its starter's group
- * and is reached as the process and its descendants.
+ * and is reached as the process and its descendants. `start` is when that process started, as ps prints it; a record
+ * written before ps answered has `spawnedAt` instead, the time in milliseconds its starter spawned it.
  */
-const RecordedSchema = z.object({ pid: z.number().int().positive(), start: z.string().min(1), tree: z.literal(true).optional() });
+const RecordedSchema = z.union([
+  z.object({ pid: z.number().int().positive(), start: z.string().min(1), tree: z.literal(true).optional() }),
+  z.object({ pid: z.number().int().positive(), spawnedAt: z.number().int().nonnegative(), tree: z.literal(true).optional() }),
+]);
 
 type Recorded = z.infer<typeof RecordedSchema>;
+
+/** How long before its starter read the clock a spawned process may have started: the spawn, which load slows. */
+const SPAWN_LEEWAY_MS = 10_000;
+
+/** Whether `now`, when ps says the recorded pid's process started, names the process `recorded` names. */
+function isRecordedStart(recorded: Recorded, now: string | undefined): boolean {
+  if (now === undefined) return false;
+
+  if ('start' in recorded) return now === recorded.start;
+  const started = Date.parse(now);
+
+  // ps prints the start to the second, and the starter read the clock once the spawn returned.
+  return started <= recorded.spawnedAt && recorded.spawnedAt - started < SPAWN_LEEWAY_MS;
+}
 
 /** The file a teamai before #1523 wrote in a directory: the last process group started there. */
 const LEGACY_GROUP_FILE = 'group.json';
@@ -53,12 +65,19 @@ const GROUP_FILE = /^group-\d+\.json$/;
  * must not displace the first, or a stop of the attempt leaves the first running (#1523).
  */
 export function recordGroup(child: ChildProcess, dir: string, { isAttached = false }: { isAttached?: boolean } = {}): void {
-  const start = child.pid === undefined ? undefined : processStarts()?.get(child.pid);
+  if (child.pid === undefined) return;
+  const file = path.join(dir, `${GROUP_PREFIX}${child.pid}.json`);
 
-  if (child.pid === undefined || start === undefined) return;
+  // Recorded before ps answers, which takes long enough for the command to start working and its starter to be killed:
+  // until then the spawn time stands for the start. A teamai that reads only `start` stops nothing from it, as when
+  // nothing was recorded.
+  writeGroup(file, JSON.stringify({ pid: child.pid, spawnedAt: Date.now(), ...(isAttached && { tree: true }) }));
+  const start = processStarts()?.get(child.pid);
+
+  if (start === undefined) return;
   // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
   const body = JSON.stringify({ pid: child.pid, start, ...(isAttached && { tree: true }) });
-  writeGroup(path.join(dir, `${GROUP_PREFIX}${child.pid}.json`), body);
+  writeGroup(file, body);
   // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
   // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
   // stops nothing twice.
@@ -130,13 +149,13 @@ function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
  * group lives, POSIX reuses no pid equal to its id, so a group whose leader is gone is still the one recorded. Whether
  * it signalled the group. POSIX only: Windows has no process groups to reach.
  */
-export async function stopGroup(group: ProcessGroup): Promise<boolean> {
+export async function stopGroup(group: Recorded): Promise<boolean> {
   if (process.platform === 'win32' || !signalGroup(group.pid, 0)) return false;
   const starts = processStarts();
   const leader = starts?.get(group.pid);
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
-  if (!starts || (leader !== undefined && leader !== group.start)) return false;
+  if (!starts || (leader !== undefined && !isRecordedStart(group, leader))) return false;
   signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
@@ -192,11 +211,11 @@ function descendantsOf(pid: number): { pid: number; start: string }[] {
  * five-second grace period before SIGKILL. A command whose pid now names a process started at another time is left
  * alone, as `stopGroup` leaves a group. POSIX only.
  */
-async function stopTree(recorded: ProcessGroup): Promise<void> {
-  const starts = processStarts();
+async function stopTree(recorded: Recorded): Promise<void> {
+  const rootStart = processStarts()?.get(recorded.pid);
 
-  if (process.platform === 'win32' || starts?.get(recorded.pid) !== recorded.start) return;
-  const tree = [...descendantsOf(recorded.pid), recorded];
+  if (process.platform === 'win32' || rootStart === undefined || !isRecordedStart(recorded, rootStart)) return;
+  const tree = [...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }];
 
   /** Signals each process of the tree that is still the one recorded; whether any was reached. */
   const signal = (name: NodeJS.Signals | 0): boolean => {
