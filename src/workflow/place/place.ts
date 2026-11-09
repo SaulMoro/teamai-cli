@@ -406,9 +406,13 @@ async function prepareTeam(input: {
     return preparedOf(ready, lease.prompt);
   }
 
-  const kept = await keptPlaceOf({ config, run, step: lease.step, holds: (held) => held.role === 'team' && held.workspace.branch === workspace.branch });
+  const onBranch = (held: KeptPlace['place']): boolean => held.role === 'team' && held.workspace.branch === workspace.branch;
+  const kept = await keptPlaceOf({ config, run, step: lease.step, holds: onBranch });
 
   if (kept) return goOnInKept(config, { ...base, dir: kept.dir, place: kept.place, keptFrom: kept.attempt, phase: 'ready' }, kept, lease.prompt);
+
+  // A run has one team clone per branch, and the fresh one replaces what another step's attempt kept there: that step starts afresh.
+  for (const replaced of await keptPlacesOf({ config, run, holds: onBranch })) await retireKeptPlace(config, replaced);
   const opened = await openTeamClone({ config, run, step: lease.step, branch: workspace.branch });
 
   if ('code' in opened) {
@@ -1127,22 +1131,35 @@ export async function releaseUnlaunchedPlace(input: { config: LocalConfig; lock:
   return read.kind === 'found' && read.record.keptFrom !== undefined ? keepPlace(input) : abandonPlace(input);
 }
 
-/** The place an earlier attempt of `step` kept when it was released after its tool ran, when it `holds` what this one needs. */
-async function keptPlaceOf(input: { config: LocalConfig; run: RunId; step: string; holds: (place: KeptPlace['place']) => boolean }): Promise<KeptPlace | undefined> {
-  const { config, run, step, holds } = input;
+/** Every place an attempt of `run` kept when it was released after its tool ran that `holds` what an attempt needs. */
+async function keptPlacesOf(input: { config: LocalConfig; run: RunId; holds: (place: KeptPlace['place']) => boolean }): Promise<KeptPlace[]> {
+  const { config, run, holds } = input;
+  const kept: KeptPlace[] = [];
 
   for (const name of await fs.readdir(attemptsDir(config, run)).catch(() => [])) {
     const attempt = AttemptIdSchema.safeParse(name);
     const read = attempt.success ? await readPlaceRecord(config, run, attempt.data) : undefined;
     const recorded = read?.kind === 'found' ? read.record : undefined;
 
-    if (recorded?.phase === 'kept' && recorded.step === step && holds(recorded.place)) return recorded;
+    if (recorded?.phase === 'kept' && holds(recorded.place)) kept.push(recorded);
+  }
+
+  return kept;
+}
+
+/**
+ * The place an earlier attempt of `step` kept when it was released after its tool ran, when it `holds` what this one needs
+ * and is still there: the end of its run removes it, and a retry can reopen the run.
+ */
+async function keptPlaceOf(input: { config: LocalConfig; run: RunId; step: string; holds: (place: KeptPlace['place']) => boolean }): Promise<KeptPlace | undefined> {
+  for (const kept of await keptPlacesOf(input)) {
+    if (kept.step === input.step && await fs.stat(kept.dir).then(() => true, () => false)) return kept;
   }
 
   return undefined;
 }
 
-/** Records that the step's next attempt went on in the place `kept` held, so no later attempt takes it over again. */
+/** Gives up the place `kept` held, once the step's next attempt went on in it or a fresh place replaced it, so no later attempt goes on there. */
 async function retireKeptPlace(config: LocalConfig, kept: KeptPlace): Promise<void> {
   await writePlaceRecord(config, { ...baseOf(kept), phase: 'abandoned', at: new Date().toISOString() });
 }

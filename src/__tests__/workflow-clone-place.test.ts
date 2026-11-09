@@ -435,6 +435,70 @@ describe('a clone place', () => {
     expect(fs.existsSync(first.cwd)).toBe(false);
   });
 
+  it('gives a fresh team clone to a step that goes on in a reopened run whose end removed the clone it kept', async () => {
+    const { config, runId } = await fixture(() => `schemaVersion: v1alpha1
+name: build
+description: Write a note in the team repo beside another step.
+steps:
+  - id: note
+    workspace: { team: { branch: teamai/notes/alpha } }
+    prompt: Write a note.
+  - id: other
+    needs: []
+    workspace: { team: { branch: teamai/notes/beta } }
+    prompt: Write another note.
+`);
+    teamOrigin(config);
+    const client = inProcessClient({ config: { ...config, workflows: { tools: {}, ...config.workflows, max_parallel: 2 } }, env: await resolveWorkflowEnv(config) });
+    const next = (running: string[] = []): ReturnType<typeof client.next> => client.next(runId, { driver: { ...driver, can: teamCan }, running }, { prepare: true });
+    const first = leaseOf(await next());
+    const other = leaseOf(await next([first.attempt]));
+    expect(await managedReport({ config, runId, report: { attempt: first.attempt, revision: first.revision, outcome: 'released', driver, launched: true }, secrets: {}, lock: undefined })).not.toHaveProperty('error');
+    const failure = { code: 'tool_failed', message: 'the tool exited with status 1' } as const;
+    expect(await client.report(runId, { attempt: other.attempt, revision: other.revision, outcome: 'failed', driver, message: failure.message, failure })).not.toHaveProperty('error');
+    expect(await client.cancel(runId)).not.toHaveProperty('error');
+    await next();
+    expect(fs.existsSync(first.cwd)).toBe(false);
+
+    expect(await client.retry(runId, other.step)).toMatchObject({ data: { reopened: true } });
+    const again = leaseOf(await next());
+
+    expect(again.step).toBe(first.step);
+    expect(fs.existsSync(again.cwd)).toBe(true);
+  });
+
+  it('gives a step a fresh team clone once another step on its branch replaced the clone it kept', async () => {
+    const { config, runId } = await fixture(() => `schemaVersion: v1alpha1
+name: build
+description: Write two notes on one team branch.
+steps:
+  - id: note
+    tool: claude
+    workspace: { team: { branch: teamai/notes/alpha } }
+    prompt: Write a note.
+  - id: other
+    needs: []
+    tool: codex
+    workspace: { team: { branch: teamai/notes/alpha } }
+    prompt: Write another note.
+`);
+    teamOrigin(config);
+    const client = inProcessClient({ config: { ...config, workflows: { tools: {}, ...config.workflows, max_parallel: 2 } }, env: await resolveWorkflowEnv(config) });
+    // A driver that has one tool at a time leases each step in turn.
+    const next = (tool: string): ReturnType<typeof client.next> => client.next(runId, { driver: { ...driver, can: { ...teamCan, tools: [tool] } }, running: [] }, { prepare: true });
+    const first = leaseOf(await next('claude'));
+    expect(await managedReport({ config, runId, report: { attempt: first.attempt, revision: first.revision, outcome: 'released', driver, launched: true }, secrets: {}, lock: undefined })).not.toHaveProperty('error');
+    const other = leaseOf(await next('codex'));
+    fs.writeFileSync(path.join(other.cwd, 'other.txt'), 'O');
+    await client.report(runId, { attempt: other.attempt, revision: other.revision, outcome: 'released', driver });
+
+    const again = leaseOf(await next('claude'));
+
+    expect(again.step).toBe(first.step);
+    expect(fs.existsSync(again.cwd)).toBe(true);
+    expect(fs.existsSync(path.join(again.cwd, 'other.txt'))).toBe(false);
+  });
+
   it('gives a fresh team clone to the next attempt of a step released before its tool started', async () => {
     const { config, runId } = await fixture(TEAM_PROMPT('{ team: { branch: teamai/notes/alpha } }', ''));
     teamOrigin(config);
