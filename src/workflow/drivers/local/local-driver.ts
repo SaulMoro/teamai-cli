@@ -429,7 +429,7 @@ function localCan({ strict, hitl, tools, confined }: { strict: StrictCan; hitl: 
   return { hitl, exec: true, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true, confined };
 }
 
-type StrictCan = Required<Pick<DriverCan, 'network' | 'isolation' | 'env'>>;
+type StrictCan = Required<Pick<DecidedCan, 'network' | 'isolation' | 'env'>>;
 
 /**
  * What this driver gives the strict requirements of a run on this machine, which a local start checks before the run

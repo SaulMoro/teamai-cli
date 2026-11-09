@@ -1744,6 +1744,17 @@ steps:
       ok: boolean
 `;
 
+/** A command step that requires env, which it writes into its copy. */
+const KEYED = `schemaVersion: v1alpha1
+name: slow
+description: Writes the deploy key.
+steps:
+  - id: work
+    workspace: new
+    requires: { env: [FLEET_DEPLOY_KEY] }
+    command: printf %s "$FLEET_DEPLOY_KEY" > key.txt
+`;
+
 /** As PAIR, with a gate step of its own between the commands, which runs no tool. */
 const ASKED = `schemaVersion: v1alpha1
 name: pair
@@ -1782,12 +1793,12 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, isMeasured = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean; isMeasured?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, isMeasured = false, isMemberEnv = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean; isMeasured?: boolean; isMemberEnv?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
   const acme = team({ slow: workflow, ...workflows }, files);
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await beforeStart?.(alice);
   const run = RunIdSchema.parse(await startIn(alice, 'slow', inputs));
-  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }), ...(isPromptless && { prompt: false as const }), ...(isMeasured && { tokens: true }) } });
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], ...(tools && { tools }), ...(labels && { labels }), ...(isSandbox && { isolation: 'sandbox' as const, env: true }), ...(isWhole && { workflow: true }), ...(isPromptless && { prompt: false as const }), ...(isMeasured && { tokens: true }), ...(isMemberEnv && { env: 'member' as const }) } });
   if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
   const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
   /** A fleet runtime of Alice's install, as a driver of hers opens it, whose place is `cwd`; `handle` names it. */
@@ -2004,6 +2015,43 @@ steps:
     const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], workflow: true } });
 
     expect(next).toMatchObject({ data: { lease: { step: 'work.write' } } });
+  }, 60_000);
+
+  it('offers a step whose requires.env has no value on the owner to a fleet entry whose env is member, whose member gives it from its own env', async () => {
+    const owner = await ownerOf({ workflow: KEYED, isMemberEnv: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId());
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+    vi.stubEnv('FLEET_DEPLOY_KEY', 'deploy-key-of-bob');
+
+    try {
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+      expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(await ended).toMatchObject({ kind: 'exited', code: 0 });
+    expect(fs.readFileSync(path.join(place, 'key.txt'), 'utf8')).toBe('deploy-key-of-bob');
+  }, 90_000);
+
+  it('leaves a step whose requires.env has no value on this member for another member, naming the variable, rather than claiming and failing it', async () => {
+    const owner = await ownerOf({ workflow: KEYED, isMemberEnv: true });
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
+    const { exec } = await owner.open();
+    void exec(newOpId());
+    await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ state: 'offered' });
+    expect(infos).toHaveBeenCalledWith(expect.stringContaining(`Left attempt ${owner.attempt} of run ${owner.run} for another member: its step requires env FLEET_DEPLOY_KEY, which has no value here:`));
   }, 60_000);
 
   it('leaves a whole workflow step one of whose steps requires env this member\'s workflows.allow.env does not allow, as the owner\'s negotiation judges each step, rather than claiming and failing it', async () => {

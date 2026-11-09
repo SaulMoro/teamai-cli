@@ -170,8 +170,12 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * - `labels`: what the machine that runs its steps declares: `workflows.labels` for this host, a fleet entry's `labels`.
  * - `workflow`: it runs a whole `workflow:` step as one attempt, as the fleet runtime does, so `next` leases such a step
  *   to it whole instead of starting its workflow (`whole-workflow.ts`).
+ * - `env: 'member'`: as `true`, but the machine that runs the step gives each `requires.env` its value, as a fleet
+ *   member does from its own team env, so this host needs none for the step, only for its setup, which runs here.
  */
-export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true };
+export type DriverCan = Omit<Can, 'env'> & {
+  env?: Can['env'] | 'member'; remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true;
+};
 
 /**
  * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
@@ -356,6 +360,7 @@ function envCovers(env: DriverCan['env'], executor: Executor): EnvCover {
     case false:
       return { step: false, setup: false };
     case true:
+    case 'member':
       return { step: true, setup: true };
     case 'commands':
       return { step: executor === 'command', setup: true };
@@ -501,7 +506,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
-    ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true) ? ['env' as const] : []),
+    ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true && can.env !== 'member') ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
     ...(lackedLabels(requires, can.labels).length > 0 ? ['labels' as const] : []),
   ];
@@ -510,8 +515,11 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
 
   if (first !== undefined) return { kind: 'hold', missing: [first, ...rest] };
 
+  // A step whose values the machine that runs it gives needs none here; its setup still runs here.
+  const isGivenThere = can.env === 'member';
+
   if (covers.step || covers.setup) {
-    const unavailable = envUnavailable(`Step "${offer.step}"`, required, env) ?? envUnavailable(`The setup of step "${offer.step}"`, setupKeys, env);
+    const unavailable = (isGivenThere ? undefined : envUnavailable(`Step "${offer.step}"`, required, env)) ?? envUnavailable(`The setup of step "${offer.step}"`, setupKeys, env);
 
     if (unavailable) return { kind: 'fail', failure: unavailable };
   }
@@ -529,7 +537,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
 
   if (offer.endTurn && !can.end_turn) unenforced.push({ requirement: 'on_limit' });
   const limits = offer.endTurn && can.end_turn ? { limits: offer.endTurn } : {};
-  const envScope = covers.step && (required.length > 0 || withhold.length > 0) ? { envScope: { provide: required, withhold } } : {};
+  const envScope = covers.step && (required.length > 0 || withhold.length > 0) ? { envScope: { provide: isGivenThere ? [] : required, withhold } } : {};
   const maxTurns = offer.maxTurns !== undefined && can.max_turns && !limits.limits ? { maxTurns: offer.maxTurns } : {};
   const setup: Pick<Terms, 'setup'> = {};
 

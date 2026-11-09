@@ -10,7 +10,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { CanSchema, ISOLATION_LEVELS, WORKSPACE_MODES, type Can, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CanSchema, ISOLATION_LEVELS, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { getRepoIdentity } from '../../session-flow/sync.js';
 import { readableReportsWorktree } from '../../utils/reports-branch.js';
 import type { LocalConfig } from '../../types.js';
@@ -46,7 +46,8 @@ const FleetOptionsSchema = z.object({
 
     return z.NEVER;
   }),
-  can: CanSchema.optional(),
+  /** `env: member`: a member gives each `requires.env` its value from its own team env, so this install needs none. */
+  can: CanSchema.extend({ env: z.union([z.boolean(), z.enum(['commands', 'member'])], { error: "Expected true, false, 'commands' or 'member'" }).optional() }).optional(),
   /** What the pool's machines declare in their `workflows.labels`: a step that requires them goes to this entry. */
   labels: z.array(LabelSchema).optional(),
 }).strict();
@@ -64,14 +65,17 @@ export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z
 /** The flags a step may need, which an entry that offers them takes it for. */
 const NEEDED_FLAGS = ['hitl', 'network', 'tokens', 'max_turns', 'setup', 'end_turn', 'unattended', 'role'] as const;
 
-/** How far an entry's `env` reaches, none first. */
-const ENV_REACH = [false, 'commands', true] as const;
+/** How far an entry's `env` reaches, none first: `member` also takes a step whose value this install lacks. */
+const ENV_REACH = [false, 'commands', true, 'member'] as const;
+
+/** A fleet entry's `can`, with its `labels`. */
+type FleetCan = z.infer<typeof FleetOptionsSchema>['can'] & { labels?: readonly string[] };
 
 /**
  * Whether a fleet entry that offers `earlier` takes every step one that offers `later` could take, so the later one never
  * gets a step. What cannot be ordered, the tools and the confined offers, must be the same.
  */
-function coversCan(earlier: Can & { labels?: readonly string[] }, later: Can & { labels?: readonly string[] }): boolean {
+function coversCan(earlier: NonNullable<FleetCan>, later: NonNullable<FleetCan>): boolean {
   if ((later.labels ?? []).some((label) => !(earlier.labels ?? []).includes(label))) return false;
 
   if (NEEDED_FLAGS.some((flag) => later[flag] === true && earlier[flag] !== true)) return false;
@@ -92,7 +96,7 @@ function coversCan(earlier: Can & { labels?: readonly string[] }, later: Can & {
  * options do not parse is left to its own check.
  */
 export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; through?: string; options?: RuntimeOptions }>): string[] {
-  const seen: Array<{ pool: string; can: Can & { labels?: readonly string[] } }> = [];
+  const seen: Array<{ pool: string; can: NonNullable<FleetCan> }> = [];
   const warnings: string[] = [];
 
   for (const entry of runtimes) {

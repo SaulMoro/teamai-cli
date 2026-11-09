@@ -37,7 +37,7 @@ import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
-import { envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
+import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { launchToolFor, runPromptStep, type StagedLease } from '../steps/prompt.js';
 import { memberTools } from '../../tool-launch/member-tools.js';
@@ -167,6 +167,21 @@ async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<Me
     const which = offer.lease.kind === 'workflow' ? `its step "${step.id}"` : 'its step';
 
     if (denied.length > 0) return `${which} requires env ${denied.join(', ')}, which workflows.allow.env on this machine does not allow`;
+  }
+
+  // The member gives each key its value from its own team env, as it scopes the step (`scopedStep`), whatever the owner has.
+  const required = runs.map(({ step, requires }) => ({ step, keys: envScopeOf(requires.env ?? [], { ...(requires.floor && { floor: requires.floor }), guarded: [] }).provide }));
+  const { facts } = required.some(({ keys }) => keys.length > 0) ? await resolveWorkflowEnv(config) : { facts: undefined };
+
+  for (const { step, keys } of required) {
+    const absent = facts === undefined ? [] : facts.unreadable === undefined ? keys.filter((key) => sameEnvName(facts.present, key) === undefined) : keys;
+
+    if (facts === undefined || absent.length === 0) continue;
+    const which = offer.lease.kind === 'workflow' ? `its step "${step.id}"` : 'its step';
+
+    return facts.unreadable === undefined
+      ? `${which} requires env ${absent.join(', ')}, which has no value here: ${envAdvice(absent, facts.declared)}`
+      : `${which} requires env ${absent.join(', ')}, and the team env cannot be read here: ${facts.unreadable}`;
   }
 
   switch (offer.lease.kind) {
