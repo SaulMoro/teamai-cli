@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -675,7 +676,7 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
     runInteractive: vi.fn(),
     run: vi.fn(async () => ({ started: true as const, exitCode: 0, ...result })),
   });
-  const codexToolPaths = { codex: { agents: '.codex/agents' } } as TeamaiConfig['toolPaths'];
+  const codexToolPaths = { codex: { agents: '.codex/agents' } } satisfies TeamaiConfig['toolPaths'];
 
   async function entry(config: LocalConfig): Promise<NonNullable<WorkflowRunRecord['steps']>[number] | undefined> {
     return (await endRecord(config))?.steps?.[0];
@@ -824,7 +825,7 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
   });
 
   it('publishes an OpenCode pass with the handoff its launch used and the model and variant of its file it passed', async () => {
-    const opencodeToolPaths = { opencode: { agents: '.opencode/agents' } } as TeamaiConfig['toolPaths'];
+    const opencodeToolPaths = { opencode: { agents: '.opencode/agents' } } satisfies TeamaiConfig['toolPaths'];
     const agentModels = { reviewer: { opencode: { step: 'alias', model: 'anthropic/claude-sonnet-4-5', alias: 'smart' } } };
     const viaPrompt = await observed(reviewStep('reviewer'), { tool: 'opencode', record: { agentModels } });
     const viaAgent = await observed(reviewStep('reviewer'), { tool: 'opencode', record: { agentModels } });
@@ -972,7 +973,11 @@ steps:
 
 describe('a place held open for a conversation a later step continues', () => {
   /** What the toy was asked, in order: each request's type, operation and handle, and each prompt lease's continue. */
-  type Asked = { type: string; op?: string; handle?: string };
+  // A request the toy logged to `calls`, and a prompt it was sent, as it appends them to `prompts.jsonl`.
+  const AskedSchema = z.object({ type: z.string(), op: z.string().optional(), handle: z.string().optional() });
+  type Asked = z.infer<typeof AskedSchema>;
+  const ContinueSchema = z.object({ handle: z.string(), op: z.string() });
+  const SentSchema = z.object({ op: z.string(), sent: z.object({ step: z.string(), continue: ContinueSchema.optional() }).optional() });
 
   const toyDriver = async (dir: string, { maxParallel, can = {}, release }: { maxParallel?: number; can?: Record<string, JsonValue>; release?: string } = {}) => {
     const state = path.join(dir, 'toy-state');
@@ -988,9 +993,9 @@ describe('a place held open for a conversation a later step continues', () => {
       runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [], ...(maxParallel !== undefined && { maxParallel }) }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
     };
 
-    const asked = (): Asked[] => fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Asked);
-    const leases = (): Array<{ op: string; step: string; continue?: { handle: string; op: string } }> => fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n')
-      .map((line) => JSON.parse(line) as { op: string; sent?: { step: string; continue?: { handle: string; op: string } } })
+    const asked = (): Asked[] => fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => AskedSchema.parse(JSON.parse(line)));
+    const leases = (): Array<{ op: string; step: string; continue?: z.infer<typeof ContinueSchema> }> => fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => SentSchema.parse(JSON.parse(line)))
       .flatMap(({ op, sent }) => (sent ? [{ op, step: sent.step, ...(sent.continue && { continue: sent.continue }) }] : []));
 
     return { runtimes, asked, leases };
