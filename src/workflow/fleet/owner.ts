@@ -12,6 +12,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
+import { safeText } from '../../session-flow/session-cmd-shared.js';
 import { getRepoIdentity } from '../../session-flow/sync.js';
 import { readableReportsWorktree } from '../../utils/reports-branch.js';
 import type { LocalConfig } from '../../types.js';
@@ -615,7 +616,8 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
       if (shownLeft.has(key)) continue;
       shownLeft.add(key);
-      log.warn(`Fleet member ${member.user} left step "${step}" of run ${run} for another member of pool ${pool}: ${why}. The step waits for a member that can run it; to stop waiting, run teamai workflow cancel ${run}.`);
+      // Both come from another machine's write.
+      log.warn(`Fleet member ${safeText(member.user)} left step "${step}" of run ${run} for another member of pool ${pool}: ${safeText(why)}. The step waits for a member that can run it; to stop waiting, run teamai workflow cancel ${run}.`);
     }
 
     if (record !== undefined && record.write !== lastSeen?.write) {

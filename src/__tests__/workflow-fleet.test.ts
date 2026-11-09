@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken } from '../workflow/fleet/record.js';
+import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -1164,6 +1164,110 @@ describe('where a member runs an attempt', () => {
   });
 });
 
+/**
+ * Alice starts workflow `slow` and leases its step, which the fleet runtime of her install offers to pool `gpu`, with
+ * `wake` as given when there is one. Each runtime it opens goes to `opened`, for the test to dispose.
+ */
+async function ownerOffering(opened: StepRuntime[], wake?: () => Promise<{ runtime: StepRuntime; wakes: boolean }>) {
+  const acme = team({ slow: SLOW });
+  const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+  const run = RunIdSchema.parse(await startIn(alice, 'slow'));
+  const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES] } });
+  if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
+  const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
+  const open = async () => {
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {}, ...(wake && { openWake: async () => ({ ok: true as const, ...(await wake()) }) }) });
+    opened.push(runtime);
+    const ready = await runtime.init({ options: { stale_after: '60s', pool: 'gpu', ...(wake && { wake: { use: 'toy' } }) }, mode: 'unattended', checkout: alice.checkout });
+    const place = ready.ok ? await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined) : undefined;
+    const exec = (op: OpId) => {
+      if (place?.kind !== 'ready') throw new Error('the fleet runtime opened no place');
+
+      return runtime.exec({ op, handle: place.handle, argv: ['sh', '-c', 'echo begun > begun.txt; sleep 60'], env: {}, unset: [], credentials: {}, cwd: alice.checkout }, {}, 'command');
+    };
+
+    return { runtime, ready, exec };
+  };
+
+  return { alice, bob, run, attempt, open };
+}
+
+describe('the reasons members give for leaving an offer', () => {
+  const opened: StepRuntime[] = [];
+
+  afterEach(async () => {
+    await Promise.all(opened.splice(0).map(async (runtime) => runtime.dispose()));
+  });
+
+  const leftOf = async (member: Member) => {
+    await readableReportsWorktree(member.config);
+    const read = await readAttemptRecord(member.config, RUN, ATTEMPT);
+    if (!read.ok || read.value === 'absent' || read.value.state !== 'offered') throw new Error(`no offer: ${JSON.stringify(read)}`);
+
+    return read.value;
+  };
+
+  it('writes a reason that names a path of the member\'s machine as one that does not, once', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const member = await installOwner(bob.config);
+    const why = `the tool it needs is not in ${bob.checkout}/bin`;
+
+    expect(await leaveOffer(bob.config, offered.value, { member, why, secrets: {} })).toEqual({ ok: true, value: undefined });
+    const once = await leftOf(bob);
+
+    expect(once.left).toEqual([{ member, why: expect.not.stringContaining(bob.checkout), at: expect.any(String) }]);
+    expect(await leaveOffer(bob.config, once, { member, why, secrets: {} })).toEqual({ ok: true, value: undefined });
+    expect((await leftOf(bob)).write).toBe(once.write);
+  });
+
+  it('stops rewriting the offer once 16 members left it, for a member it does not list', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    let current = offered.value;
+
+    for (let index = 0; index < 16; index += 1) {
+      const said = await leaveOffer(bob.config, current, { member: { id: `member-${index}`, user: `user${index}` }, why: 'it declares no gpu label', secrets: {} });
+      if (!said.ok) throw new Error(said.error.message);
+      current = await leftOf(bob);
+    }
+
+    expect(await leaveOffer(bob.config, current, { member: { id: 'member-16', user: 'user16' }, why: 'it declares no gpu label', secrets: {} })).toEqual({ ok: true, value: undefined });
+    const after = await leftOf(bob);
+
+    expect(after.write).toBe(current.write);
+    expect(after.left?.map((entry) => entry.member.id)).toEqual(Array.from({ length: 16 }, (_, index) => `member-${index}`));
+  });
+
+  it('prints a member\'s reason with the control characters it holds taken out', async () => {
+    const warned = vi.spyOn(log, 'warn');
+    const { bob, run, attempt, open } = await ownerOffering(opened);
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    const offered = await eventually(async () => {
+      await readableReportsWorktree(bob.config);
+      const read = await readAttemptRecord(bob.config, run, attempt);
+
+      return read.ok && read.value !== 'absent' && read.value.state === 'offered' ? read.value : undefined;
+    });
+    const said = await leaveOffer(bob.config, offered, { member: { id: 'member-x', user: 'eve\u001b[2J' }, why: 'it lacks \u001b]52;c;cGFzdGU=\u0007 the gpu label', secrets: {} });
+    if (!said.ok) throw new Error(said.error.message);
+    const message = await eventually(async () => warned.mock.calls.map(([text]) => String(text)).find((text) => text.includes('the gpu label')));
+
+    expect(message).not.toContain('\u001b');
+    expect(message).not.toContain('\u0007');
+    expect(message).toContain('eve');
+    await runtime.cancel(op);
+    await ended;
+    warned.mockRestore();
+  });
+});
+
 describe('waking a fleet member for an offer no member claimed', () => {
   const opened: StepRuntime[] = [];
 
@@ -1181,30 +1285,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
     return { runtime, wakes: ready.wakes === true };
   }
 
-  /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install offers with `wake` as given. */
-  async function owner(wake: () => Promise<{ runtime: StepRuntime; wakes: boolean }>) {
-    const acme = team({ slow: SLOW });
-    const alice = await acme.member('alice');
-    const run = RunIdSchema.parse(await startIn(alice, 'slow'));
-    const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES] } });
-    if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
-    const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
-    const open = async () => {
-      const runtime = fleetStepRuntime({ config: alice.config, masks: {}, openWake: async () => ({ ok: true, ...(await wake()) }) });
-      opened.push(runtime);
-      const ready = await runtime.init({ options: { stale_after: '60s', pool: 'gpu', wake: { use: 'toy' } }, mode: 'unattended', checkout: alice.checkout });
-      const place = ready.ok ? await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined) : undefined;
-      const exec = (op: OpId) => {
-        if (place?.kind !== 'ready') throw new Error('the fleet runtime opened no place');
-
-        return runtime.exec({ op, handle: place.handle, argv: ['sh', '-c', 'echo begun > begun.txt; sleep 60'], env: {}, unset: [], credentials: {}, cwd: alice.checkout }, {}, 'command');
-      };
-
-      return { runtime, ready, exec };
-    };
-
-    return { alice, run, attempt, open };
-  }
+  const owner = (wake: () => Promise<{ runtime: StepRuntime; wakes: boolean }>) => ownerOffering(opened, wake);
 
   const lines = (file: string): Array<Record<string, unknown>> => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []);
 
