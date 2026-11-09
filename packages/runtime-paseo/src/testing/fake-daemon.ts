@@ -133,6 +133,8 @@ const BehaviourSchema = z.object({
   provider_sessions: z.array(z.string()).default([]),
   /** The person deletes every agent that finished its turn in the Paseo app, before the daemon answers the next request. */
   forget_finished: z.boolean().default(false),
+  /** The person deletes in the Paseo app the agent each of these creates started (by idempotency key: teamai's op), before the daemon answers the next request. */
+  forget_creates: z.array(z.string()).default([]),
   /** The provider reports no session id once the agent is done. */
   no_session: z.boolean().default(false),
   /** The provider fails the agent with this error. */
@@ -599,6 +601,15 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
     if (behaviour().forget_finished) {
       for (const agent of Object.values(kept.agents)) if (agent.status === 'idle') delete kept.agents[agent.id];
       save();
+    }
+
+    for (const key of behaviour().forget_creates) {
+      const receipt = kept.receipts[key];
+
+      if (receipt && kept.agents[receipt.agentId]) {
+        delete kept.agents[receipt.agentId];
+        save();
+      }
     }
 
     const { models_ms: listing, list_ms: listingWorkspaces, open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();

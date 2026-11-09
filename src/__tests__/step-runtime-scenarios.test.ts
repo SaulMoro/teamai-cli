@@ -464,6 +464,8 @@ interface PromptSubject {
    * subject does not continue a conversation yet, and the scenarios of `continue` do not run for it.
    */
   forget?(state: string, op: OpId): void | Promise<void>;
+  /** Lays out `at` as another working directory of the scenario's project, a later place's. Absent: an empty folder. */
+  elsewhere?(state: string, at: string): void;
 }
 
 const T3 = await t3OnFakeServer();
@@ -494,6 +496,8 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 't3')],
     stop: (state) => T3.stop(state),
+    forget: (state, op) => T3.forget(state, op),
+    elsewhere: (state, at) => T3.worktreeAt(state, at),
   },
   {
     name: 'paseo over stdio, on a fake Paseo daemon',
@@ -509,6 +513,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     reportsUsage: false,
     failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
+    forget: (_, op) => paseo.forget(op),
   },
 ];
 
@@ -753,7 +758,8 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   describe.runIf(subject.forget !== undefined)('a prompt that continues an earlier conversation, over stdio', () => {
     /** The place of a later attempt, in `at`. */
     const openedAt = async (runtime: StepRuntime, at: string): Promise<string> => {
-      fs.mkdirSync(at, { recursive: true });
+      if (at !== worktree && subject.elsewhere) subject.elsewhere(state, at);
+      else fs.mkdirSync(at, { recursive: true });
       const place = await runtime.open({
         op: newOpId(), run: 'r0123abcd', attempt: 'a4567cdef', credentials: {},
         view: { worktree: at, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },

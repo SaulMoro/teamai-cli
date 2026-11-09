@@ -309,7 +309,7 @@ function launch(args) {
   if (strategy.type === 'existing_worktree') runScript(args.projectId, (script) => script.runOnWorktreeCreate, folder);
 
   writeThread({
-    threadId, title: args.title, message: args.message, worktreePath: folder, projectId: scratch ? 'scratch-project' : args.projectId, workspace: scratch ? 'scratch' : strategy.type,
+    threadId, clientRequestId: args.clientRequestId, title: args.title, message: args.message, worktreePath: folder, projectId: scratch ? 'scratch-project' : args.projectId, workspace: scratch ? 'scratch' : strategy.type,
     provider: provider.driverKind, instanceId: provider.providerInstanceId, model: modelSelection.model, runtimeMode: args.runtimeMode, status: idle ? 'idle' : 'starting', settled: false, runCount: idle ? 0 : 1,
   });
 

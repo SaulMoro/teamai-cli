@@ -26,7 +26,8 @@ const ToyAgentSchema = z.object({
  * (the worktree as a git checkout the fake lists as a T3 project, and the fake's agent playing the scenario's toy
  * agent), then gives the runtime's options. `ready(state)` starts the fake once per state and signs the member in;
  * `stop(state)` stops it, and it stops by itself once `state` is removed. Its command line names `state`, so a leak check
- * of the test's directory sees it.
+ * of the test's directory sees it. `forget(state, op)` deletes the thread prompt `op` launched (its clientRequestId), as
+ * the person deletes it in T3 Code. `worktreeAt(state, at)` adds `at` as another git worktree of the project.
  */
 export async function t3OnFakeServer(): Promise<{
   command: string;
@@ -34,6 +35,8 @@ export async function t3OnFakeServer(): Promise<{
   options: (state: string, agent: JsonValue) => RuntimeOptions;
   ready: (state: string) => Promise<void>;
   stop: (state: string) => Promise<void>;
+  forget: (state: string, op: string) => void;
+  worktreeAt: (state: string, at: string) => void;
 }> {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-t3-runtime-')));
   const executable = path.join(dir, 'teamai-runtime-t3.mjs');
@@ -90,6 +93,21 @@ export async function t3OnFakeServer(): Promise<{
       const server = servers.get(state) ?? serve(state);
       servers.set(state, server);
       await server;
+    },
+    worktreeAt(state, at) {
+      const worktree = path.join(path.dirname(state), 'worktree');
+      const identity = ['-c', 'user.name=teamai', '-c', 'user.email=teamai@example.com'];
+
+      // A worktree needs a commit to check out; the project's is empty until then.
+      if (!execFileSync('git', ['-C', worktree, 'rev-list', '--all'], { encoding: 'utf8' }).trim()) execFileSync('git', ['-C', worktree, ...identity, 'commit', '-q', '--allow-empty', '-m', 'start']);
+      execFileSync('git', ['-C', worktree, 'worktree', 'add', '-q', '--detach', at]);
+    },
+    forget(state, op) {
+      const threads = path.join(state, 't3-state', 'threads');
+      const launched = fs.readdirSync(threads).filter((name) => z.object({ clientRequestId: z.string().optional() }).loose().parse(JSON.parse(fs.readFileSync(path.join(threads, name), 'utf8'))).clientRequestId === op);
+
+      if (launched.length !== 1) throw new Error(`The fake T3 server has ${launched.length} threads launched by ${op}.`);
+      for (const name of launched) fs.rmSync(path.join(threads, name));
     },
     async stop(state) {
       const server = exits.get(state);
