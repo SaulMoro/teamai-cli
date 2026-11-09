@@ -420,6 +420,21 @@ describe('a clone place', () => {
     expect(fs.readFileSync(path.join(third.cwd, 'half.txt'), 'utf8')).toBe('H');
   });
 
+  it('removes the data checkout a step kept for its next attempt once its run ends without that attempt', async () => {
+    const { config, runId } = await fixture(TEAM_PROMPT('{ team: { branch: teamai-reports } }', '    deliver: publish\n'));
+    teamOrigin(config);
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+    const next = (): ReturnType<typeof client.next> => client.next(runId, { driver: { ...driver, can: teamCan }, running: [] }, { prepare: true });
+    const first = leaseOf(await next());
+    fs.writeFileSync(path.join(first.cwd, 'half.txt'), 'H');
+    expect(await managedReport({ config, runId, report: { attempt: first.attempt, revision: first.revision, outcome: 'released', driver, launched: true }, secrets: {}, lock: undefined })).not.toHaveProperty('error');
+
+    expect(await client.cancel(runId)).not.toHaveProperty('error');
+    await next();
+
+    expect(fs.existsSync(first.cwd)).toBe(false);
+  });
+
   it('gives a fresh team clone to the next attempt of a step released before its tool started', async () => {
     const { config, runId } = await fixture(TEAM_PROMPT('{ team: { branch: teamai/notes/alpha } }', ''));
     teamOrigin(config);

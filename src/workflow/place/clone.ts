@@ -48,6 +48,7 @@ import { cloneBranchOf } from '../workspace.js';
 import { cloneRoleProblem, copyKnowledgePaths, launchedTools, roleCopyRefusal, roleNotDeliveredFailure, type CloneRoleGap } from './role-copy.js';
 import { commitWithout } from './team-without.js';
 import { teamClonesOf } from './team.js';
+import { dataCheckoutsOf, removeDataCheckout } from './data.js';
 import { AGENT_PATHS, boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type UntrustedGit } from '../worktree.js';
 
 /**
@@ -369,14 +370,17 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
   for (const id of runs) {
     const dir = path.join(root, id, 'clones');
     const teamClones = teamClonesOf(config, id);
+    const dataCheckouts = dataCheckoutsOf(config, id);
+    const hasTeamClones = await fs.stat(teamClones).then(() => true, () => false);
+    const hasDataCheckouts = await fs.stat(dataCheckouts).then(() => true, () => false);
+    const state = hasTeamClones || hasDataCheckouts ? await readRun(config, id) : undefined;
 
-    if (await fs.stat(teamClones).then(() => true, () => false)) {
-      const read = await readRun(config, id);
+    if (state !== undefined && (state === 'missing' || state === 'corrupt' || state.status !== 'running')) {
+      if (hasTeamClones) await fs.rm(teamClones, { recursive: true, force: true });
 
-      if (read === 'missing' || read === 'corrupt' || read.status !== 'running') {
-        await fs.rm(teamClones, { recursive: true, force: true });
-        swept.add(id);
-      }
+      // An attempt's data checkout goes when it finishes or is given up: one left was kept for a next attempt that never came.
+      if (hasDataCheckouts) await removeDataCheckout(config, dataCheckouts);
+      swept.add(id);
     }
 
     for (const name of (await fs.readdir(dir).catch((): string[] => [])).filter((entry) => entry.endsWith('.json'))) {

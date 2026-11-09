@@ -24,7 +24,12 @@ import { git } from '../worktree.js';
 const said = (result: { stderr: string; stdout: string }): string => (result.stderr || result.stdout).trim();
 
 export function dataCheckoutOf(config: LocalConfig, run: RunId, attempt: AttemptId): string {
-  return path.join(runsDir(config), run, 'data', attempt);
+  return path.join(dataCheckoutsOf(config, run), attempt);
+}
+
+/** The directory of every data checkout of `run`'s attempts. */
+export function dataCheckoutsOf(config: LocalConfig, run: string): string {
+  return path.join(runsDir(config), run, 'data');
 }
 
 /** Removes the checkout at `dir` and git's record of it. */
