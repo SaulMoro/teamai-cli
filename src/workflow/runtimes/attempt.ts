@@ -208,6 +208,14 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 //  and on a handoff, and `teamai workflow cancel` / `--release`, which close every place whose record is not closed.
 //
 
+/**
+ * Whether a place on `slot` may be held for a conversation: on a runtime entry that launches agents its own way. A
+ * place through another runtime is never held, as it would keep the step's credentials past the step.
+ */
+function holdsOn(slot: { kind: 'local' | 'external'; launchesAgents: boolean; isThrough?: true } | undefined): boolean {
+  return slot?.kind === 'external' && slot.launchesAgents && slot.isThrough !== true;
+}
+
 /** A held place: the attempt and its record, whose `heldFor` names the conversation. */
 type Held = { attempt: AttemptId; record: AttemptRuntimeRecord & { heldFor: NonNullable<AttemptRuntimeRecord['heldFor']> } };
 
@@ -272,7 +280,7 @@ async function toRelease(config: LocalConfig, run: RunId, continued?: readonly S
 }
 
 /** The places held open for a conversation a later step continues (`heldFor`), and the moves between their states. */
-export const HeldPlace = { conversationOf, hold, toRelease } as const;
+export const HeldPlace = { conversationOf, hold, holdsOn, toRelease } as const;
 
 /**
  * The session a prompt on a step runtime resumes: the first of `sessions` (the lease's, then each earlier one it

@@ -87,11 +87,16 @@ export async function applyEffects(context: SkillContext, lock: RunLock, start: 
         break;
       }
 
-      case 'usage': {
+      case 'usage-hit': {
         const book = UsageLimits.open({ kept: applied.state.usage });
+        book.hit({ tool: effect.tool, message: effect.said, now: context.now().getTime() });
+        applied.state = { ...applied.state, usage: book.kept() };
+        break;
+      }
 
-        if ('hit' in effect) book.hit({ tool: effect.tool, message: effect.hit, now: context.now().getTime() });
-        else book.ran(effect.tool, effect.spawnedAt);
+      case 'usage-ran': {
+        const book = UsageLimits.open({ kept: applied.state.usage });
+        book.ran(effect.tool, effect.spawnedAt);
         applied.state = { ...applied.state, usage: book.kept() };
         break;
       }

@@ -237,12 +237,10 @@ export type Effect =
   | { kind: 'send'; attempt: AttemptId; body: ReportBody; changed?: readonly string[] }
   /** Gives up `steps`, held steps this driver can never take, so the run goes on without them. */
   | { kind: 'give-up'; steps: string[] }
-  /**
-   * Keeps in `usage` what a child's end says of its tool's usage limit: it stopped on the limit (`hit`, what it said), or it
-   * ended without it, spawned at `spawnedAt`, which ends a limit hit before.
-   */
-  | { kind: 'usage'; tool: string; hit: string }
-  | { kind: 'usage'; tool: string; spawnedAt: number };
+  /** Keeps in `usage` that a child on `tool` stopped on its usage limit, saying `said`. */
+  | { kind: 'usage-hit'; tool: string; said: string }
+  /** Keeps in `usage` that a child on `tool`, spawned at `spawnedAt`, ended without its limit, which ends one hit before. */
+  | { kind: 'usage-ran'; tool: string; spawnedAt: number };
 
 /** A call the skill driver refuses, with what its message names. */
 export type Refusal =
@@ -1270,7 +1268,7 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
     const body: ReportBody = { ...base, outcome: 'released', launched: true };
     const reporting: Extract<AttemptState, { phase: 'reporting' }> = { ...baseOf(open), phase: 'reporting', body };
 
-    return { row: 'P12', state: withAttempt(state, reporting), effects: [{ kind: 'usage', tool, hit: failure.message }, { kind: 'send', attempt: open.attempt, body }] };
+    return { row: 'P12', state: withAttempt(state, reporting), effects: [{ kind: 'usage-hit', tool, said: failure.message }, { kind: 'send', attempt: open.attempt, body }] };
   }
 
   let body: ReportBody;
@@ -1292,7 +1290,7 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
 
   if (unavailable) return { row: 'P4', state: withAttempt(state, reporting), effects: [send] };
 
-  return { row: 'P5', state: withAttempt(state, reporting), effects: tool === undefined || Number.isNaN(spawnedAt) ? [send] : [{ kind: 'usage', tool, spawnedAt }, send] };
+  return { row: 'P5', state: withAttempt(state, reporting), effects: tool === undefined || Number.isNaN(spawnedAt) ? [send] : [{ kind: 'usage-ran', tool, spawnedAt }, send] };
 }
 
 /**

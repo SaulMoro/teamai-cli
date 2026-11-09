@@ -198,7 +198,6 @@ async function fail(context: SkillContext, lock: RunLock, input: { state: SkillS
   return send(context, lock, prepareFailedRow(state, { attempt, body: failedBody(state, attempt, revision, failure), cause, changed }), attempt);
 }
 
-/** Under the lock: prepares the attempt's place (C4 to C7), or sends the report it already has. */
 /**
  * The child of the earlier step whose conversation `step` goes on in (`session.from`), on a host that starts children:
  * the one this run dispatched that step's settled attempt to. The run records no session of such a child, whose session
@@ -211,6 +210,7 @@ async function continuedChild(config: LocalConfig, state: SkillState, step: stri
   return earlier && state.settled.includes(earlier.attempt) ? { title: childTitle(earlier.step, earlier.attempt) } : undefined;
 }
 
+/** Under the lock: prepares the attempt's place (C4 to C7), or sends the report it already has. */
 async function prepare(context: SkillContext, lock: RunLock, attempt: AttemptId): Promise<Stage> {
   const state = await readState(context, lock);
   const open = state && openAttempt(state, attempt);

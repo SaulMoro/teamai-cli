@@ -117,7 +117,9 @@ function memberZone(): string {
  * Whose account a limit is on: this machine's (`here`), which every runtime of the driver launches the tool with, or the
  * fleet's, whose members sign in with their own.
  */
-export type LimitedOn = 'here' | 'fleet';
+const LIMITED_ON = ['here', 'fleet'] as const;
+
+export type LimitedOn = typeof LIMITED_ON[number];
 
 /**
  * One tool's limit: since when it holds, when the tool said it resets, when the driver tries it again, and what a person
@@ -125,7 +127,7 @@ export type LimitedOn = 'here' | 'fleet';
  */
 export const KeptLimitSchema = z.object({
   tool: z.string(),
-  on: z.enum(['here', 'fleet']),
+  on: z.enum(LIMITED_ON),
   since: z.number(),
   /** The last time a step on the tool stopped on it. */
   hitAt: z.number(),
@@ -136,7 +138,7 @@ export const KeptLimitSchema = z.object({
   isWaitChosen: z.boolean(),
 });
 
-type Limit = z.infer<typeof KeptLimitSchema>;
+export type KeptLimit = z.infer<typeof KeptLimitSchema>;
 
 /** What the driver does once nothing runs and only usage limits hold the steps left. */
 export type WhenIdle =
@@ -162,11 +164,12 @@ export interface UsageLimitBook {
   /** The person chose to wait for `tool`'s limit, past the cap, until a launch on it ends without the limit. */
   choseWait(tool: string): void;
   /** The limits the book holds, for a driver that keeps them until its next call opens the book again with them. */
-  kept(): Limit[];
+  kept(): KeptLimit[];
 }
 
-function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?: number; zone?: string; kept?: readonly Limit[] } = {}): UsageLimitBook {
-  const limits = new Map<string, Limit>(kept.map((limit) => [`${limit.on} ${limit.tool}`, { ...limit }]));
+function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?: number; zone?: string; kept?: readonly KeptLimit[] } = {}): UsageLimitBook {
+  const keyOf = (tool: string, on: LimitedOn): string => `${on} ${tool}`;
+  const limits = new Map<string, KeptLimit>(kept.map((limit) => [keyOf(limit.tool, limit.on), { ...limit }]));
 
   const clock = ({ at, now }: { at: number; now: number }): string => {
     const wall = wallAt(at, zone);
@@ -180,21 +183,21 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?:
     return `${isToday ? time : `${wall.year}-${pad(wall.month)}-${pad(wall.day)} ${time}`} (${zone})`;
   };
 
-  const reasonOf = (tool: string, limit: Limit, now: number): string => (limit.resetsAt === undefined
+  const reasonOf = (tool: string, limit: KeptLimit, now: number): string => (limit.resetsAt === undefined
     ? `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`
     : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}`);
 
   const capText = capMs % 3_600_000 === 0 ? `${capMs / 3_600_000} hour${capMs === 3_600_000 ? '' : 's'}` : `${Math.ceil(capMs / 60_000)} minutes`;
 
-  const pastCapReason = (tool: string, limit: Limit, now: number): string => (limit.resetsAt === undefined
+  const pastCapReason = (tool: string, limit: KeptLimit, now: number): string => (limit.resetsAt === undefined
     ? `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and gave no reset time, and it held for the ${capText} an unattended run waits for it`
     : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}, past the ${capText} an unattended run waits for it`);
 
-  const isPastCap = (limit: Limit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
+  const isPastCap = (limit: KeptLimit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
 
   // A tool held both here and on the fleet is named by the limit it waits for longest.
-  const heldBy = (now: number, keep: (limit: Limit) => boolean): Record<string, string> => {
-    const longest = new Map<string, Limit>();
+  const heldBy = (now: number, keep: (limit: KeptLimit) => boolean): Record<string, string> => {
+    const longest = new Map<string, KeptLimit>();
 
     for (const limit of limits.values()) {
       const other = longest.get(limit.tool);
@@ -204,8 +207,6 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?:
 
     return Object.fromEntries([...longest].map(([tool, limit]) => [tool, reasonOf(tool, limit, now)]));
   };
-
-  const keyOf = (tool: string, on: LimitedOn): string => `${on} ${tool}`;
 
   return {
     hit({ tool, message, now, on = 'here' }) {

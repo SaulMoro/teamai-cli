@@ -1068,7 +1068,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // launched while a step that has not settled continues it, outside any room under max_parallel; and each held place
     // no such step continues any more is closed.
     const slot = slotOf.get(lease.attempt);
-    const mayHold = !isWorkflowError(answer) && lease.prompt !== undefined && !lease.answer && !lease.confined && slot?.kind === 'external' && slot.launchesAgents && !slot.isThrough;
+    const mayHold = !isWorkflowError(answer) && lease.prompt !== undefined && !lease.answer && !lease.confined && HeldPlace.holdsOn(slot);
     const continued = await continuedSessions();
 
     if (mayHold && await HeldPlace.hold({ config, run: runId, attempt: lease.attempt, report: body, continued })) {
@@ -1104,21 +1104,21 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const unstaged = (lease: StagedLease, failure: WorkflowFailure): ReportBody => ({ attempt: lease.attempt, revision: lease.revision, driver, ...failureReport(failure) });
 
   /**
-   * What a staged prompt lease ends with before its tool starts, or undefined to launch it: nothing once it was stopped
-   * (its place given back), its staging failure, or released while another step's usage limit holds its tool, which it
-   * may have hit while this one's workspace was prepared.
+   * Whether a staged prompt lease launches its tool: `launch`; `given-back` once it was stopped (its place given back,
+   * nothing to report); or `ends` with its staging failure, or released while another step's usage limit holds its tool,
+   * which it may have hit while this one's workspace was prepared.
    */
-  const beforeLaunch = async (lease: StagedLease, { signal, failure, slot }: { signal: AbortSignal; failure: WorkflowFailure | undefined; slot: RuntimeSlot | undefined }): Promise<{ end: ReportBody | undefined } | undefined> => {
+  const beforeLaunch = async (lease: StagedLease, { signal, failure, slot }: { signal: AbortSignal; failure: WorkflowFailure | undefined; slot: RuntimeSlot | undefined }): Promise<{ kind: 'launch' } | { kind: 'given-back' } | { kind: 'ends'; report: ReportBody }> => {
     if (!startable(lease, signal)) {
       await giveBackUnlaunched(lease.attempt);
 
-      return { end: undefined };
+      return { kind: 'given-back' };
     }
 
-    if (failure) return { end: unstaged(lease, failure) };
+    if (failure) return { kind: 'ends', report: unstaged(lease, failure) };
     const tool = launchedTool(lease);
 
-    return tool !== undefined && limitedOn(slot)[tool] !== undefined ? { end: releasedReport(lease) } : undefined;
+    return tool !== undefined && limitedOn(slot)[tool] !== undefined ? { kind: 'ends', report: releasedReport(lease) } : { kind: 'launch' };
   };
 
   // Why a confined step this driver was leased has no tool here that resolves its model. It hands that lease back and
@@ -1385,9 +1385,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           if (lease.answer && prompt !== undefined) {
             const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease) });
-            const stoppedBefore = await beforeLaunch(lease, { signal: controller.signal, failure, slot: slotOf.get(lease.attempt) });
+            const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot: slotOf.get(lease.attempt) });
 
-            if (stoppedBefore) return stoppedBefore.end;
+            if (before.kind !== 'launch') return before.kind === 'ends' ? before.report : undefined;
             const answered = await runAnswerStep({ config, prompt, output: lease.output, cwd: lease.cwd ?? root, expiresAt: lease.expiresAt, signal: controller.signal, ...lookup });
 
             // Cancelled while it answered: the engine settles the step, and the reply is not wanted.
@@ -1423,9 +1423,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), slot?.can.default_tool) : undefined;
           const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease) });
 
-          const stoppedBefore = await beforeLaunch(lease, { signal: controller.signal, failure, slot });
+          const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot });
 
-          if (stoppedBefore) return stoppedBefore.end;
+          if (before.kind !== 'launch') return before.kind === 'ends' ? before.report : undefined;
           interactiveIgnores = ignored;
 
           const stepRun = runOf(lease);
@@ -1436,8 +1436,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             onRuntime: stepRun && {
               run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn,
               ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }),
-              // A place through another runtime is never held: it would keep the step's credentials past the step.
-              ...(slot?.kind === 'external' && slot.launchesAgents && !slot.isThrough && {
+              ...(slot && HeldPlace.holdsOn(slot) && {
                 conversationHeld: (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions }),
               }),
             },
