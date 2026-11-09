@@ -1088,6 +1088,16 @@ describe('workflow start --driver local scores the passes it settles', () => {
     fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'quality.md'), QUALITY);
     await syncScorersThenWorkflows(config);
     state.config = config;
+    // The run works in a directory of its own, not the checkout the suite runs in, whose origin it would read, and
+    // finds git and node only, not the AI tools of the machine the suite runs on, which picking a judge would probe.
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workflow-scored-'));
+    dirs.push(work);
+    vi.spyOn(process, 'cwd').mockReturnValue(work);
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(path.delimiter));
     return config;
   }
 
@@ -1107,7 +1117,7 @@ describe('workflow start --driver local scores the passes it settles', () => {
 
     const run = z.object({ done: z.object({ run: z.string(), outcome: z.literal('succeeded') }) }).parse(started.data).done.run;
     const scoring = await scoreRuns(config);
-    // Its command steps run the teamai on PATH, which in a unit test is not this build, so only its start and its end are this test's.
+    // Its command steps run the teamai on PATH, which this test's PATH does not hold, so only its start and its end are this test's.
     expect(scoring).toEqual([expect.objectContaining({ startedBy: 'cli', inputs: expect.objectContaining({ subject: `run:${run}:build:1`, demand: 'auto' }) })]);
     expect(scoring.map((item) => typeof item === 'object' && item.status)).not.toContain('running');
     expect([...said.mock.calls, ...warned.mock.calls].flat()).toContainEqual(expect.stringContaining(`run:${run}:build:1`));
