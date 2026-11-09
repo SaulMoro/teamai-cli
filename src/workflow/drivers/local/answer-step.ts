@@ -37,12 +37,26 @@ function replySchema(output: OutputSchema | undefined): z.ZodType<JsonValue> {
 const FAILURE_OF = {
   no_tool: 'tool_unavailable',
   override_invalid: 'tool_unconfigured',
+  usage_limited: 'usage_limited',
   call_failed: 'tool_failed',
 } as const satisfies Record<CallErrorKind, WorkflowFailure['code']>;
 
 
 function failed(failure: WorkflowFailure): AnswerReport {
   return { outcome: 'failed', message: failure.message, failure };
+}
+
+/**
+ * The tool an answer step's call runs on now, picked as the call picks it, so a usage limit on that tool holds the step.
+ * Undefined when no tool can be picked: the step's call then fails on its own.
+ */
+export async function answerTool({ config, resolveTool }: { config: LocalConfig; resolveTool?: ToolCallerDeps['resolveTool'] }): Promise<string | undefined> {
+  try {
+    return await createToolCaller(resolveTool ? { resolveTool } : {}).toolFor(config);
+  } catch (cause) {
+    if (cause instanceof CallError) return undefined;
+    throw cause;
+  }
 }
 
 /**
@@ -88,7 +102,7 @@ export async function runAnswerStep({ config, prompt, output, cwd, expiresAt, si
 
     return { ...ran, outputs: reply };
   } catch (cause) {
-    if (cause instanceof CallError) return failed({ code: FAILURE_OF[cause.kind], message: cause.message });
+    if (cause instanceof CallError) return { ...failed({ code: FAILURE_OF[cause.kind], message: cause.message }), ...(cause.tool !== undefined && { tool: cause.tool }) };
     throw cause;
   }
 }

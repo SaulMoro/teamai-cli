@@ -2055,7 +2055,7 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 ← {"op":"op-83bf2a9d01e4","event":"failed","failure":{"code":"usage_limited","message":"claude hit its usage limit, which resets at 14:00."}}
 ```
 
-A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's, Codex's or OpenCode's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too.
+A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's, Codex's or OpenCode's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too. So does an answer step's call, on the tool `ai.tool` names.
 
 The local driver does not fail such a step. It hands the step back, and launches nothing more on that tool, on any runtime of the driver, until the limit resets; then it runs the step again, in the same workspace, with what the tool did there before it stopped. Steps on other tools go on, and an instance with a home of its own has a limit of its own. Once only the limit holds the steps left, the driver waits for the reset, at most 6 hours when nobody attends. Past that, or for a reset after it, a fleet entry of the driver may take the step; otherwise the run is offered on teamai-reports, as for a step only a person can take. At a terminal, the driver asks instead:
 

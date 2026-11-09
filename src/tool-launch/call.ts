@@ -13,6 +13,7 @@ import { addTokens } from '@teamai/tool-core/stdout';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf, type LaunchOrderTool } from './tools.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
+import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import type { CallLaunch } from '@teamai/tool-core/launch';
 import type { z } from 'zod';
 
@@ -53,6 +54,8 @@ export interface ToolCaller {
    * times, for a tool whose call can continue its session. A tool that cannot is asked once.
    */
   callForReply<T>(prompt: string, schema: z.ZodType<T>, options: ReplyOptions): Promise<ReplyResult<T>>;
+  /** The tool a call for `scope` runs on, picked as a call picks it; throws the `CallError` a call would. */
+  toolFor(scope: LocalConfig | undefined): Promise<LaunchOrderTool>;
 }
 
 const DEFAULT_REPLY_RETRIES = 1;
@@ -186,7 +189,9 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
         if (run.code !== 0 || !reading.ok) {
           // A streamed call's stdout is its transcript, files it read included, so only a plain one stands for a reason.
           const reason = (reading.ok ? undefined : reading.message) || run.stderr.trim() || (streaming ? '' : run.stdout.trim()) || `exit code ${run.code}`;
-          throw new CallError('call_failed', `AI call failed (tool: ${tool}): ${reason}`);
+
+          if (isUsageLimitText(reason)) throw new CallError('usage_limited', `${tool} hit its usage limit: ${reason}`, tool);
+          throw new CallError('call_failed', `AI call failed (tool: ${tool}): ${reason}`, tool);
         }
 
         const result: CallResult & { session?: string } = { text: reading.text, tool };
@@ -244,5 +249,5 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     return result;
   };
 
-  return { callTool, callForReply };
+  return { callTool, callForReply, toolFor: async (scope) => (await pick(scope)).tool };
 }

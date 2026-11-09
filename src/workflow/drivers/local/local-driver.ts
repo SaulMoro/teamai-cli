@@ -40,7 +40,7 @@ import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../tool-
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';
-import { runAnswerStep } from './answer-step.js';
+import { answerTool, runAnswerStep } from './answer-step.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, stepWorkflow, unattendedChoice } from '../../types.js';
 import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
@@ -966,14 +966,18 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const limits = UsageLimits.open();
   // The reset the driver last said it waits for, so it says each once.
   let waitSaid: string | undefined;
+  // The tool an answer step's call runs on, looked up at each turn while a usage limit holds, so `next` holds the step too.
+  let answerToolNow: string | undefined;
 
   /**
    * The tool or instance a prompt lease launches, as `next` names it: the account a usage limit holds. An answer step's call
-   * runs on the tool `ai.tool` names, and the engine holds no answer step, so it is not keyed here.
+   * runs on the tool `ai.tool` names, which `next` is told while a limit holds.
    */
-  const launchedTool = (lease: StagedLease): string | undefined => (lease.prompt === undefined || lease.answer === true || lease.confined
-    ? undefined
-    : lease.tool ?? toolForOn(slotOf.get(lease.attempt)?.can.default_tool)({ agent: lease.agent, tool: lease.tool }));
+  const launchedTool = (lease: StagedLease): string | undefined => (lease.answer === true
+    ? answerToolNow
+    : lease.prompt === undefined || lease.confined
+      ? undefined
+      : lease.tool ?? toolForOn(slotOf.get(lease.attempt)?.can.default_tool)({ agent: lease.agent, tool: lease.tool }));
 
   /** The tools held on `slot` now: a fleet member signs in with its own account, so it is held only within the cap. */
   const limitedOn = (slot: RuntimeSlot | undefined): Record<string, string> => (slot?.use === 'fleet' ? limits.heldWithinCap(Date.now()) : limits.held(Date.now()));
@@ -986,7 +990,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
    * before its tool started says nothing of it.
    */
   const afterUsage = (body: ReportBody, { lease, startedAt }: { lease: StagedLease; startedAt: number }): ReportBody => {
-    const tool = launchedTool(lease);
+    // An answer step's call says which tool it ran on.
+    const tool = lease.answer === true ? body.tool : launchedTool(lease);
 
     if (tool === undefined || body.outcome === 'released') return body;
 
@@ -1063,13 +1068,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const resolved = await resolveWorkflowEnv(config);
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
+      answerToolNow = Object.keys(limits.held(Date.now())).length > 0 ? await answerTool({ config, ...lookup }) : undefined;
 
       // A runtime's notice is masked as the step's output is, with the team's secrets too.
       for (const entry of defined.runtimes) if (entry.kind === 'external') rememberSecrets(entry.masks, turn.secrets);
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
         running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, relay, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
-        limitedTools: limitedOn(slot),
+        limitedTools: limitedOn(slot), ...(answerToolNow !== undefined && { answerTool: answerToolNow }),
       });
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
@@ -1319,6 +1325,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             }
 
             if (failure) return unstaged(lease, failure);
+            const tool = launchedTool(lease);
+
+            // Another step may have hit the tool's usage limit while this one's workspace was prepared: it waits for the reset.
+            if (tool !== undefined && limitedOn(slotOf.get(lease.attempt))[tool] !== undefined) return releasedReport(lease);
 
             const answered = await runAnswerStep({ config, prompt, output: lease.output, cwd: lease.cwd ?? root, expiresAt: lease.expiresAt, signal: controller.signal, ...lookup });
 

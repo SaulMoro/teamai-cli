@@ -214,6 +214,101 @@ steps:
     expect(run.revision).toBeLessThan(40);
   }, 20_000);
 
+  it('holds an answer step whose call stopped on its tool\'s usage limit until the limit resets, then answers it', async () => {
+    const marks = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-usage-'));
+    dirs.push(marks);
+    const answeredAt = path.join(marks, 'answered');
+    const resetsAt = Math.ceil((Date.now() + 3000) / 1000) * 1000;
+    const bin = path.join(marks, 'bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    // The first call says the limit is spent and exits 1; each later one answers.
+    fs.writeFileSync(path.join(bin, 'hermes'), `#!${process.execPath}
+const fs = require('fs');
+const first = !fs.existsSync(${JSON.stringify(answeredAt)});
+fs.appendFileSync(${JSON.stringify(answeredAt)}, Date.now() + '\\n');
+if (first) { process.stderr.write('Claude AI usage limit reached|${resetsAt / 1000}\\n'); process.exit(1); }
+process.stdout.write('hi\\n');
+`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}:/bin`);
+    vi.stubEnv('TEAMAI_AI_TOOL', '');
+    const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
+name: build
+description: One answer step.
+steps:
+  - id: ask
+    answer: Say hi.
+    output:
+      text: string
+`, 1);
+    projectAiTool(config, 'hermes');
+    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn() };
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const answers = fs.readFileSync(answeredAt, 'utf8').trim().split('\n').map(Number);
+    expect(answers).toHaveLength(2);
+    expect(answers[1]).toBeGreaterThanOrEqual(resetsAt);
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(`run ${runId} is ${run}`);
+    expect(run.revision).toBeLessThan(40);
+  }, 20_000);
+
+  it('holds an answer step whose call runs on the tool a prompt step\'s usage limit holds, until the limit resets', async () => {
+    const marks = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-usage-'));
+    dirs.push(marks);
+    const hit = path.join(marks, 'hit');
+    const answeredAt = path.join(marks, 'answered');
+    const bin = path.join(marks, 'bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    // The answer step's call runs Claude from PATH: it notes when it ran.
+    fs.writeFileSync(path.join(bin, 'claude'), `#!${process.execPath}\nrequire('fs').appendFileSync(${JSON.stringify(answeredAt)}, Date.now() + '\\n');\nprocess.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'hi' }) + '\\n');\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}:/bin`);
+    vi.stubEnv('TEAMAI_AI_TOOL', '');
+    const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
+name: build
+description: A prompt beside a command that an answer step follows.
+steps:
+  - id: zero
+    needs: []
+    command: node -e "const t = setInterval(() => { if (require('fs').existsSync(process.argv[1])) clearInterval(t); }, 20)" ${hit}
+  - id: one
+    needs: []
+    workspace: new
+    prompt: Implement the first part.
+  - id: ask
+    needs: [zero]
+    answer: Say hi.
+    output:
+      text: string
+`, 3);
+    projectAiTool(config, 'claude');
+    const resetsAt = Math.ceil((Date.now() + 3000) / 1000) * 1000;
+    let launches = 0;
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async () => {
+        launches += 1;
+        if (launches > 1) return { started: true as const, exitCode: 0 };
+        fs.writeFileSync(hit, '');
+
+        return claudeLimit(resetsAt);
+      }),
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const answers = fs.readFileSync(answeredAt, 'utf8').trim().split('\n').map(Number);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toBeGreaterThanOrEqual(resetsAt);
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(`run ${runId} is ${run}`);
+    expect(run.revision).toBeLessThan(40);
+  }, 20_000);
+
   const FIX = `schemaVersion: v1alpha1
 name: fix
 description: One prompt.

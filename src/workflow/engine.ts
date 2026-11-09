@@ -2196,6 +2196,8 @@ export interface NextOptions {
    * step on one is held, never failed, and its hold names the tool (`limitedTool`), so the driver waits for the reset.
    */
   limitedTools?: Readonly<Record<string, string>>;
+  /** Process-only: the tool an answer step's call runs on, so a usage limit on it (`limitedTools`) holds the step too. */
+  answerTool?: string;
 }
 
 /**
@@ -2524,7 +2526,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             continue;
           }
 
-          const limitedTool = definition.prompt === undefined ? undefined : promptTool(definition, context.toolFor);
+          const limitedTool = definition.answer !== undefined ? options.answerTool : definition.prompt === undefined ? undefined : promptTool(definition, context.toolFor);
           const limit = limitedTool === undefined ? undefined : options.limitedTools?.[limitedTool];
 
           if (limitedTool !== undefined && limit !== undefined) {
