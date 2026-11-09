@@ -319,6 +319,21 @@ describe('untrustedGit reading the config of a copy once for several git calls',
     expect(ran(at)).toBe('');
   });
 
+  it('turns off a program a process writes into a file the copy\'s config includes from a user\'s home by name', async () => {
+    const at = repo();
+    const included = path.join(at.root, 'extra.cfg');
+    const { username, homedir } = os.userInfo();
+    // git finds `~<user>` in the system's user database, never in HOME.
+    at.git(['config', '--local', 'include.path', `~${username}/${path.relative(homedir, included)}`]);
+    const copyGit = untrustedGit(at.env);
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, ['diff', '--quiet']);
+    fs.writeFileSync(included, `[diff]\n\texternal = ${at.planted}\n`);
+    await copyGit(at.dir, ['diff']);
+
+    expect(ran(at)).toBe('');
+  });
+
   it('turns off a program a file names that the copy\'s config includes on a branch a process checks out between two git calls', async () => {
     const at = repo();
     const included = path.join(at.root, 'side.cfg');
