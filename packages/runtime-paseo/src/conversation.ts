@@ -156,8 +156,22 @@ function readResult(file: string): PromptResult | undefined {
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** `file` as it resolves through links, or through its directory's when it does not exist yet. */
-const resolvedFile = (file: string): string => (fs.existsSync(file) ? resolvedDir(file) : path.join(resolvedDir(path.dirname(file)), path.basename(file)));
+/**
+ * Where a write to `file` lands: its deepest part that exists, resolved through its links, with the rest after it.
+ * Undefined for a link whose target is gone, which a write would create wherever it points.
+ */
+function resolvedFile(file: string): string | undefined {
+  const rest: string[] = [];
+
+  for (let at = file; ; at = path.dirname(at)) {
+    const found = fs.lstatSync(at, { throwIfNoEntry: false });
+
+    if (found) return found.isSymbolicLink() && !fs.existsSync(at) ? undefined : path.join(fs.realpathSync(at), ...rest);
+
+    if (path.dirname(at) === at) return undefined;
+    rest.unshift(path.basename(at));
+  }
+}
 
 /**
  * Whether a permission request asks to write or edit a file under one of `dirs`: what a step's grant allows without
@@ -169,6 +183,8 @@ function isGranted(asked: NonNullable<WaitEnd['final']>['pendingPermissions'][nu
 
   if (detail?.type !== 'write' && detail?.type !== 'edit') return false;
   const file = resolvedFile(path.resolve(cwd, detail.filePath));
+
+  if (file === undefined) return false;
 
   return dirs.some((dir) => {
     const inside = path.relative(resolvedDir(dir), file);
@@ -257,6 +273,8 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
   /** Answers how `outcome`'s prompt ended, as its record or this process holds it. */
   const send = (outcome: OpState): void => ledger.end(endOf(outcome));
+  /** The prompt each conversation takes its turn for in this process, by the conversation's op, until that prompt ends. */
+  const turning = new Map<OpId, OpId>();
 
   /** Follows a prompt from here on: a cancel and a close find it, and wait for its create. */
   const track = (op: OpId): Following => {
@@ -426,9 +444,10 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
    * The conversation a lease continues, by its id, when this prompt can send it its turn: one this runtime holds for a
    * place still open, whose agent was created as `create` would be, in this place's Paseo workspace, and idle there; or
    * why not, for the notice. A place that runs through a sandbox never continues one: each prompt there runs in an agent
-   * its registration names.
+   * its registration names. A conversation takes one turn at a time: the prompt it answers for holds it, in this process,
+   * until that prompt ends.
    */
-  async function continuable(live: Daemon, earlier: { handle: string; op: OpId }, create: AgentCreate, place: Place): Promise<Conversation | { why: string }> {
+  async function continuable(live: Daemon, { op, earlier, create, place }: { op: OpId; earlier: { handle: string; op: OpId }; create: AgentCreate; place: Place }): Promise<Conversation | { why: string }> {
     const conversation = journal.conversation(earlier.op);
     const at = conversation && journal.place(conversation.handle);
 
@@ -453,6 +472,12 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     } catch (error) {
       return { why: `Paseo did not show agent ${agentId} (${error instanceof Error ? error.message : String(error)})` };
     }
+
+    // Read and taken with no wait between, so two prompts that continue it at once never both send it a turn.
+    const turn = turning.get(earlier.op);
+
+    if (turn !== undefined && turn !== op && ledger.endsOf(turn) === 0) return { why: `agent ${agentId} runs the turn of ${turn}` };
+    turning.set(earlier.op, op);
 
     return conversation;
   }
@@ -533,7 +558,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     }
 
     const earlier = request.lease.continue;
-    const continued = earlier && (await continuable(live, earlier, create, how.place));
+    const continued = earlier && (await continuable(live, { op, earlier, create, place: how.place }));
 
     if (!goesOn(op, following)) return;
 
@@ -541,9 +566,10 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than continue the conversation of ${earlier.op}: ${continued.why}.` });
     }
 
-    // A session another driver ran, or an earlier pass whose place is gone, is imported only when nothing continues.
+    // A session another driver ran, or an earlier pass whose place is gone, is imported when no conversation goes on.
     const { resume } = request.lease;
-    const resumed = !earlier && resume !== undefined && !through ? await imported(live, { session: resume, create, provider: on.provider, how }) : undefined;
+    const goesOnInEarlier = continued !== undefined && !('why' in continued);
+    const resumed = !goesOnInEarlier && resume !== undefined && !through ? await imported(live, { session: resume, create, provider: on.provider, how }) : undefined;
 
     if (!goesOn(op, following)) return;
 
