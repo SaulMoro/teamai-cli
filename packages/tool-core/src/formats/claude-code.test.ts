@@ -1,35 +1,17 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ClaudeCodeAdapter } from './claude-code.js';
 
-const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const dirs: string[] = [];
+const releasers: ChildProcess[] = [];
 
 afterEach(() => {
+  for (const releaser of releasers.splice(0)) releaser.kill();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
-
-/**
- * How reading the session `sid` at `filePath`, the path a listing named, from the store `storageRoot` ends in a process
- * of its own, which is stopped after five seconds: a read that blocks the event loop cannot be timed out from inside the
- * process it blocks.
- */
-function readInOwnProcess(storageRoot: string, sid: string, filePath: string): Promise<{ stopped: true } | { said: string }> {
-  const script = path.join(path.dirname(storageRoot), 'read.mjs');
-  fs.writeFileSync(script, `import { register } from 'node:module';
-register(${JSON.stringify(pathToFileURL(path.join(repo, 'scripts', 'typescript-loader.mjs')).href)});
-const { ClaudeCodeAdapter } = await import(${JSON.stringify(pathToFileURL(path.join(repo, 'packages', 'tool-core', 'src', 'formats', 'claude-code.ts')).href)});
-const adapter = new ClaudeCodeAdapter('claude-code', ${JSON.stringify(storageRoot)});
-await adapter.readSession({ sessionId: ${JSON.stringify(sid)}, filePath: ${JSON.stringify(filePath)} }).then(() => console.log('read'), (error) => console.log(error.message));
-`);
-
-  return new Promise((resolve) => {
-    execFile(process.execPath, [script], { timeout: 5_000 }, (error, stdout) => resolve(error?.killed ? { stopped: true } : { said: stdout.trim() }));
-  });
-}
 
 describe.skipIf(process.platform === 'win32')('a Claude transcript a step left as something other than a file', () => {
   // A listing names only files, but a step can put a FIFO at a listed path before the transcript is read from it.
@@ -41,7 +23,14 @@ describe.skipIf(process.platform === 'win32')('a Claude transcript a step left a
     const transcript = path.join(storageRoot, '-home-user-project', `${sid}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
     execFileSync('mkfifo', [transcript]);
+    // A read that waits on the FIFO blocks this process, so another one opens it from three seconds on: such a read
+    // then ends late, rather than never.
+    releasers.push(spawn('sh', ['-c', 'sleep 3; while :; do exec 3<>"$1"; exec 3>&-; sleep 0.1; done', 'sh', transcript], { stdio: 'ignore' }));
 
-    expect(await readInOwnProcess(storageRoot, sid, transcript)).toEqual({ said: `${transcript} is a pipe, not a regular file, so teamai does not read it` });
+    const start = Date.now();
+    const read = new ClaudeCodeAdapter('claude-code', storageRoot).readSession({ sessionId: sid, filePath: transcript });
+
+    await expect(read).rejects.toThrow(`${transcript} is a pipe, not a regular file, so teamai does not read it`);
+    expect(Date.now() - start).toBeLessThan(1_000);
   });
 });
