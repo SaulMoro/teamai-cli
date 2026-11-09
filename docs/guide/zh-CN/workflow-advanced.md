@@ -1417,7 +1417,7 @@ teamai workflow resume [--next]
 
 步骤的工具需要在那台机器上有自己的会话存储，例如 Claude Code 的 `~/.claude/projects`，和 `teamai session restore` 一样。OpenCode 会得到归档的会话，但它的步骤仍然开一个新会话，因为 OpenCode 没有恢复会话的参数。
 
-租约的 `session` 在 `earlier` 中按从新到旧列出它所继续的会话，供拿不到该会话本身的驱动使用。`local` 以外的驱动如果继续了租约的 `session` 或 `earlier` 中的某个会话（按 id 或在副本中），要在上报中把它继续的那个会话作为 `resumed`（`{"tool","id"}`）放在它运行的 `session` 旁边。新开会话时不带 `resumed`。没有 `resumed` 时，后续步骤恢复租约的会话，而不是副本。缺少工具或 id 的 `resumed`、出现在不恢复会话的步骤上的 `resumed`，或指向租约未提供的会话（既不是它的 `session`，也不在 `earlier` 中）的 `resumed`，都返回 `invalid_report`。
+租约的 `session` 在 `earlier` 中按从新到旧列出它所继续的会话，供拿不到该会话本身的驱动使用。`local` 以外的驱动如果继续了租约的 `session` 或 `earlier` 中的某个会话（按 id 或在副本中），要在上报中把它继续的那个会话作为 `resumed`（`{"tool","id"}`）放在它运行的 `session` 旁边。新开会话时不带 `resumed`。在以自己的方式启动智能体的运行时上，local 驱动的 prompt 还带有 `continue`（`{"handle","op"}`），即之前某个尝试在 teamai 保持打开的位置里启动的对话；运行时只有在这一轮确实在其中继续时才回答 `resumed: true`，否则开一个新对话，并发出一条 `notice`。没有 `resumed` 时，后续步骤恢复租约的会话，而不是副本。缺少工具或 id 的 `resumed`、出现在不恢复会话的步骤上的 `resumed`，或指向租约未提供的会话（既不是它的 `session`，也不在 `earlier` 中）的 `resumed`，都返回 `invalid_report`。
 
 每个拒绝都是一个 JSON 信封，带 `error.code`、`error.message` 和下表列出的额外字段。命令以退出码 1 结束。
 

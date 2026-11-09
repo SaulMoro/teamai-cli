@@ -290,6 +290,8 @@ When the checkout has an `origin` and the step made commits, the driver pushes t
 
 `session: continue` resumes this step's previous pass with the same tool. `session: { from: <step> }` resumes a step this one needs. A different tool resumes a copy of the session. OpenCode gets the copy but always starts fresh, because it has no flag to resume a session. A step resumes a session as the last step that continued it left it, whichever tool or machine that step ran on. A step that started a new session, such as an OpenCode step, does not change what later steps resume.
 
+On a runtime that launches agents its own way, such as T3 or Paseo, a step that continues a session goes on in the same conversation: teamai keeps the earlier step's place open, outside `max_parallel`, until no step left continues it, and the later step's prompt is one more turn of that thread or agent. The runtime starts a new conversation, with a notice that says why, when the earlier one is gone, runs another tool, or works in another directory. A runtime entry through another one (`through:`) keeps no place open. With the skill driver, a host that starts children sends the later step to the child that worked the earlier one.
+
 A command that starts its own sandbox, such as `docker`, stays read-only. What it writes does not become a branch a later step can merge.
 
 ```yaml
@@ -769,7 +771,7 @@ When a published run ends, teamai publishes how it ended, without `--sessions`. 
 
 `publish` writes the run's state with [usage reporting](reporting.md) on or off: it is the state another machine needs to continue the run, not a usage report. A run you never publish stays on this machine. While usage reporting is on, only its [run records](#run-records) reach `teamai-reports`.
 
-A step with `session: continue` or `session.from` starts a new agent session on the other machine, unless you publish with `--sessions`. When a run goes back and forth, every machine that continued a session publishes with `--sessions` before the next claim, so the next step gets every turn. [Publish and claim](workflow-advanced.md#publish-and-claim) covers what the published state carries, every error and its next step, and publishing from CI.
+A step with `session: continue` or `session.from` starts a new agent session on the other machine, unless you publish with `--sessions`. A conversation T3 or Paseo keeps open stays on this machine: the handoff closes its place. When a run goes back and forth, every machine that continued a session publishes with `--sessions` before the next claim, so the next step gets every turn. [Publish and claim](workflow-advanced.md#publish-and-claim) covers what the published state carries, every error and its next step, and publishing from CI.
 
 ### Hand a run to a runner
 
