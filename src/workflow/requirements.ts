@@ -174,8 +174,16 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  *   member does from its own team env, so this host needs none for the step, only for its setup, which runs here.
  */
 export type DriverCan = Omit<Can, 'env'> & {
-  env?: Can['env'] | 'member'; remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true;
+  env?: DriverEnv; remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true;
 };
+
+/** How far a driver's `env` reaches, none first: the protocol's values, then `member`, which a fleet entry declares. */
+export const DRIVER_ENV_REACH = [false, 'commands', true, 'member'] as const satisfies ReadonlyArray<Can['env'] | 'member'>;
+
+export type DriverEnv = (typeof DRIVER_ENV_REACH)[number];
+
+/** A fleet entry's `can.env`: the protocol's values, or `member`. */
+export const DriverEnvSchema = z.literal(DRIVER_ENV_REACH, { error: "Expected true, false, 'commands' or 'member'" });
 
 /**
  * A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do.
@@ -505,7 +513,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
-    // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
+    // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` or `member` does.
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true && can.env !== 'member') ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
     ...(lackedLabels(requires, can.labels).length > 0 ? ['labels' as const] : []),

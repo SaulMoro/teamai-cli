@@ -28,7 +28,7 @@ import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
 import type { ExecAnswer, ExecEnd, ExecEvents, ExecQuestion, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
 import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
-import { LabelSchema } from '../requirements.js';
+import { DRIVER_ENV_REACH, DriverEnvSchema, LabelSchema } from '../requirements.js';
 
 /** How often the owner reads the attempt's record while a member runs it. */
 const RECORD_POLL_MS = 1_000;
@@ -47,7 +47,7 @@ const FleetOptionsSchema = z.object({
     return z.NEVER;
   }),
   /** `env: member`: a member gives each `requires.env` its value from its own team env, so this install needs none. */
-  can: CanSchema.extend({ env: z.union([z.boolean(), z.enum(['commands', 'member'])], { error: "Expected true, false, 'commands' or 'member'" }).optional() }).optional(),
+  can: CanSchema.extend({ env: DriverEnvSchema.optional() }).optional(),
   /** What the pool's machines declare in their `workflows.labels`: a step that requires them goes to this entry. */
   labels: z.array(LabelSchema).optional(),
 }).strict();
@@ -65,17 +65,14 @@ export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z
 /** The flags a step may need, which an entry that offers them takes it for. */
 const NEEDED_FLAGS = ['hitl', 'network', 'tokens', 'max_turns', 'setup', 'end_turn', 'unattended', 'role'] as const;
 
-/** How far an entry's `env` reaches, none first: `member` also takes a step whose value this install lacks. */
-const ENV_REACH = [false, 'commands', true, 'member'] as const;
-
 /** A fleet entry's `can`, with its `labels`. */
-type FleetCan = z.infer<typeof FleetOptionsSchema>['can'] & { labels?: readonly string[] };
+type FleetCan = NonNullable<z.infer<typeof FleetOptionsSchema>['can']> & { labels?: readonly string[] };
 
 /**
  * Whether a fleet entry that offers `earlier` takes every step one that offers `later` could take, so the later one never
  * gets a step. What cannot be ordered, the tools and the confined offers, must be the same.
  */
-function coversCan(earlier: NonNullable<FleetCan>, later: NonNullable<FleetCan>): boolean {
+function coversCan(earlier: FleetCan, later: FleetCan): boolean {
   if ((later.labels ?? []).some((label) => !(earlier.labels ?? []).includes(label))) return false;
 
   if (NEEDED_FLAGS.some((flag) => later[flag] === true && earlier[flag] !== true)) return false;
@@ -85,7 +82,7 @@ function coversCan(earlier: NonNullable<FleetCan>, later: NonNullable<FleetCan>)
 
   if (ISOLATION_LEVELS.indexOf(later.isolation ?? 'none') > ISOLATION_LEVELS.indexOf(earlier.isolation ?? 'none')) return false;
 
-  if (ENV_REACH.indexOf(later.env ?? false) > ENV_REACH.indexOf(earlier.env ?? false)) return false;
+  if (DRIVER_ENV_REACH.indexOf(later.env ?? false) > DRIVER_ENV_REACH.indexOf(earlier.env ?? false)) return false;
 
   return isDeepStrictEqual(earlier.tools, later.tools) && isDeepStrictEqual(earlier.confined, later.confined);
 }
@@ -96,7 +93,7 @@ function coversCan(earlier: NonNullable<FleetCan>, later: NonNullable<FleetCan>)
  * options do not parse is left to its own check.
  */
 export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; through?: string; options?: RuntimeOptions }>): string[] {
-  const seen: Array<{ pool: string; can: NonNullable<FleetCan> }> = [];
+  const seen: Array<{ pool: string; can: FleetCan }> = [];
   const warnings: string[] = [];
 
   for (const entry of runtimes) {

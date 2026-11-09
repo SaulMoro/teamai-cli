@@ -1083,13 +1083,10 @@ function startWorkflowStep(
 }
 
 /**
- * A step takes how what it ran settled: a workflow step, the outcome, the end, and the outputs of its workflow; a
- * `for_each` step, the outcome and the results of its items. A workflow step or `for_each` item that delivers goes on
- * to deliver what it wrote; a `for_each` step delivers nothing of its own, its items do.
- */
-/**
- * Settles workflow step `state` from how its workflow ended: run here as its children, or by a runtime that took it
- * whole, whose attempt's own fields (`attempt`) the step keeps beside the result.
+ * A step takes how what it ran settled: a workflow step, the outcome, the end, and the outputs of its workflow, run here
+ * as its children or by a runtime that took it whole, whose attempt's own fields (`attempt`) the step keeps beside the
+ * result; a `for_each` step, the outcome and the results of its items. A workflow step or `for_each` item that delivers
+ * goes on to deliver what it wrote; a `for_each` step delivers nothing of its own, its items do.
  */
 function finishStep(run: RunState, state: StepState, definition: WorkflowStep, result: WorkflowResult, attempt: Omit<Parameters<typeof succeed>[1], 'settledAt'> = {}): StepState {
   const settlement: Parameters<typeof succeed>[1] = { ...attempt, settledAt: result.settledAt };
