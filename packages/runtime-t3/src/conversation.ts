@@ -12,7 +12,7 @@ import type { Reach, Reached, Serving, Session } from './runtime.js';
 import { driverOf, isDefaultToolHome, sessionSince, DRIVERS } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider } from './tool-instances.js';
-import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Provider, type T3, type Waited } from './t3.js';
+import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Provider, type T3, type ThreadShell, type Waited } from './t3.js';
 import { sleep, within } from './within.js';
 
 // ─── A step's conversation ───
@@ -424,15 +424,22 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     // T3 runs a later turn on another model of the same provider instance once the thread is set to it, in the same
     // conversation; a thread cannot move to another instance.
     if (thread.instanceId !== instanceId) return { ok: false, why: `${where} runs on T3 Code provider instance "${thread.instanceId ?? thread.tool}", and this step asks for "${instanceId}"` };
-    const configure = selection && !sameSelection(thread.conversation.modelSelection, selection) ? selection : undefined;
+    let shell: ThreadShell;
 
     try {
-      return { ok: true, thread, runs: (await s.t3.thread(thread.threadId)).runCount, ...(configure && { configure }) };
+      shell = await s.t3.thread(thread.threadId);
     } catch (error) {
       if (error instanceof T3Error && error.threadGone) return { ok: false, why: `${where} is no longer in T3 Code` };
 
       return { ok: false, why: `T3 Code did not say whether it still has ${where}: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}` };
     }
+
+    // A chain names its first prompt, and a turn between may have set the thread to another model: T3 says which it
+    // runs now, though not its options.
+    const moved = shell.model !== undefined && shell.model !== null && shell.model !== selection?.model;
+    const configure = selection && (moved || !sameSelection(thread.conversation.modelSelection, selection)) ? selection : undefined;
+
+    return { ok: true, thread, runs: shell.runCount, ...(configure && { configure }) };
   };
 
   /**
