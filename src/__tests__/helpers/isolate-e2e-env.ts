@@ -38,7 +38,9 @@ fs.writeFileSync(path.join(bin, 'teamai.cmd'), `@"${process.execPath}" "${cli}" 
 // other file then works in it, so a skill runner left working there fails the
 // test that left it (teardown-writers.ts). Beside the sandbox rather than in
 // it, under a short name: a step runtime's attempt socket sits under it, and
-// macOS holds a unix socket path of at most 103 bytes.
+// macOS holds a unix socket path of at most 103 bytes. A process that must
+// outlive the teardown, as a detached hook pass does on Windows, works in the
+// directory this one sits in (hook-shells-windows.test.ts).
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-'));
 
 const saved = Object.fromEntries(
