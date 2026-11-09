@@ -27,9 +27,9 @@ const LINKED: Pick<FakeT3Config, 'links' | 'environments'> = {
 const wake = (op: string, request: Line = {}) => ({ type: 'wake', op, pool: 'gpu', repository: REPOSITORY, message: 'Run teamai workflow resume --claim gpu, then report.', title: 'teamai fleet r7f3a91c2 · gpu', ...request });
 
 /** A runtime past an attended init, and its init reply. */
-async function initialized(env: Record<string, string> = {}): Promise<{ runtime: Connection; reply: Line }> {
+async function initialized(env: Record<string, string> = {}, options: Line = {}): Promise<{ runtime: Connection; reply: Line }> {
   const runtime = start(env);
-  runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+  runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options } });
   const reply = await runtime.next((line) => line['type'] === 'init');
   expect(reply).toMatchObject({ ok: true });
 
@@ -96,6 +96,36 @@ describe('teamai-runtime-t3', () => {
 
       expect(await woke(runtime, 'op-000000e2')).toMatchObject({ event: 'woken', where: 'sams-laptop' });
       expect(t3.threads().find((thread) => thread.environmentId !== undefined)).toMatchObject({ title: 'teamai fleet r7f3a91c2 · gpu', provider: 'claudeAgent', model: 'claude-sonnet-5-5' });
+    });
+
+    // A woken member runs on another machine, which the run's definition grants no full access.
+    it('launches the member in Auto when runtime_mode is full-access, never in full access', async () => {
+      signIn(t3, undefined, undefined, 'orchestration:read orchestration:operate settings:write source-control:write');
+      t3.config(LINKED);
+      const { runtime } = await initialized({}, { runtime_mode: 'full-access' });
+
+      runtime.send(wake('op-000000e7'));
+
+      expect(await woke(runtime, 'op-000000e7')).toMatchObject({ event: 'woken' });
+      expect(t3.threads().find((thread) => thread.environmentId !== undefined)).toMatchObject({ runtimeMode: 'auto', message: `Run teamai workflow resume --claim gpu, then report.\n\n${END_OF_WAKE}` });
+    });
+
+    // In Auto, T3 runs teamai's command without asking; a stricter mode asks first, with nobody there to answer.
+    it.each([
+      { mode: 'approval-required', label: 'Supervised' },
+      { mode: 'auto-accept-edits', label: 'Auto-accept edits' },
+    ])('keeps runtime_mode $mode, and starts the message with what to approve', async ({ mode, label }) => {
+      signIn(t3);
+      t3.config(LINKED);
+      const { runtime } = await initialized({}, { runtime_mode: mode });
+
+      runtime.send(wake('op-000000e8'));
+
+      expect(await woke(runtime, 'op-000000e8')).toMatchObject({ event: 'woken' });
+      expect(t3.threads().find((thread) => thread.environmentId !== undefined)).toMatchObject({
+        runtimeMode: mode,
+        message: `This thread runs in ${label} mode, so it asks before it runs teamai's command below: approve that command, or allow it on this machine with the permission rule Bash(teamai workflow resume:*) in this checkout's .claude/settings.local.json.\n\nRun teamai workflow resume --claim gpu, then report.\n\n${END_OF_WAKE}`,
+      });
     });
 
     it('fails wake_unavailable, naming each machine it looked at and what to add, when no linked machine has the repository', async () => {
