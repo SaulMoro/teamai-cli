@@ -13,7 +13,6 @@ import type { FileHandle } from 'node:fs/promises';
 /** Opening for reading without waiting: a FIFO opens at once. Windows has no flag, and no FIFO a path opens. */
 const NONBLOCKING_READ = process.platform === 'win32' ? fs.constants.O_RDONLY : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
 
-/** What a path holds when it is not a regular file, in the words a person reads. */
 /** What stands at a path in place of a regular file, as an error names it. */
 export type NotRegularFileKind = 'a pipe' | 'a directory' | 'a device' | 'a socket' | 'a special file';
 
