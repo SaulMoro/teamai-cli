@@ -190,6 +190,8 @@ export interface T3 {
   launchScratch(thread: NewThread): Promise<z.infer<typeof LaunchedSchema>>;
   /** Starts a run of the thread with `message`; a repeated `clientRequestId` sends nothing more. */
   send(threadId: string, message: string, clientRequestId: string): Promise<void>;
+  /** Sets the model the thread's next runs use, on the provider instance it runs on. */
+  configure(threadId: string, modelSelection: NonNullable<NewThread['modelSelection']>): Promise<void>;
   thread(threadId: string): Promise<ThreadShell>;
   /** Every thread whose run still goes, in every project, delegated tasks' threads included. */
   activeThreads(): Promise<ListedThread[]>;
@@ -328,6 +330,7 @@ function t3Over(client: Client): T3 {
       clientRequestId: thread.clientRequestId,
     }, LaunchedSchema),
     send: async (threadId, message, clientRequestId) => { await call('t3_thread_send', { threadId, message, mode: 'auto', clientRequestId }, z.object({}).loose()); },
+    configure: async (threadId, modelSelection) => { await call('t3_thread_configure', { threadId, modelSelection }, z.object({}).loose()); },
     thread: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, maxCharsPerItem: 1 }, z.object({ thread: ThreadShellSchema }))).thread,
     activeThreads: () => listThreads({ statuses: [...ACTIVE_STATUSES] }),
     unsettledThreadsSince: (since) => listThreads({ settled: false }, since),

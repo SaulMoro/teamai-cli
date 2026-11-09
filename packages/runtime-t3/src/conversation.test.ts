@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
@@ -1708,6 +1709,223 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-00000016')).toMatchObject({ event: 'failed', failure: { code: 'exec_unsupported' } });
       expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
+    });
+  });
+});
+
+// A prompt whose lease names the conversation of an earlier prompt runs as a new turn of that prompt's T3 thread, when
+// the runtime still holds it, on the same provider instance and model selection, in the same folder.
+
+/** The place of the step that continues the conversation: a later attempt, on the same worktree unless `folder` says. */
+async function openLater(runtime: Connection, folder = worktree): Promise<{ handle: string; result: string }> {
+  const laterResult = path.join(dir, 'later', 'out', 'result.json');
+  fs.mkdirSync(path.dirname(laterResult), { recursive: true });
+  runtime.send({ type: 'open', op: 'op-000000c0', run: RUN, attempt: 'a5e6f7a8', credentials: {}, view: { worktree: folder, readonly: [], result: path.dirname(laterResult), runDir: path.join(dir, 'run'), toolHome: {} } });
+  const accepted = await runtime.next((line) => line['op'] === 'op-000000c0' && line['event'] === 'accepted');
+  expect(await runtime.next((line) => line['op'] === 'op-000000c0' && line['event'] !== 'accepted' && line['event'] !== 'notice')).toMatchObject({ event: 'ready' });
+
+  return { handle: z.string().parse(accepted['handle']), result: laterResult };
+}
+
+/** The later step's prompt, which continues the conversation of `earlier`'s op in the place `earlier.handle`. */
+const turn = (at: { handle: string; result: string }, op: string, earlier: { handle: string; op: string }, lease: Line = {}) => prompt(at.handle, op, {
+  step: 'fix', result: at.result, prompt: `Fix what the review found.\n\nWrite the workflow result as JSON to ${at.result}. Use this shape: {"output":{}}.`, continue: earlier, ...lease,
+});
+
+describe('teamai-runtime-t3', () => {
+  useT3Runtime();
+
+  describe('a prompt that continues an earlier prompt\'s conversation', () => {
+    usePromptStep();
+
+    it('sends the prompt as a new turn of the earlier thread, follows it under its own op, and answers resumed with the same session', async () => {
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-000000b1'));
+      const first = await ended(runtime, 'op-000000b1');
+      expect(first).toMatchObject({ event: 'finished' });
+      const later = await openLater(runtime);
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true, session: first['session'], result: { output: { verdict: 'approve' } } });
+      expect(t3.threads()).toHaveLength(1);
+      expect(t3.threads()[0]).toMatchObject({ runCount: 2, settled: false, message: expect.stringContaining('Fix what the review found.') });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_send').map((call) => call.args['clientRequestId'])).toEqual(['op-000000b2']);
+      expect(noticesOf(runtime)).toEqual([]);
+    });
+
+    /** A first step that finished in the place `handle`, and the later step's place on `folder`. */
+    const finishedFirst = async (folder = worktree) => {
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-000000b1'));
+      const first = await ended(runtime, 'op-000000b1');
+      expect(first).toMatchObject({ event: 'finished' });
+      const threadId = z.string().parse(t3.threads()[0]?.threadId);
+
+      return { runtime, handle, first, threadId, later: await openLater(runtime, folder) };
+    };
+
+    /** The one notice the runtime wrote for `op`. */
+    const noticeOf = (runtime: Connection, op: string) => noticesOf(runtime).filter((line) => line['op'] === op);
+
+    it('starts a new thread, saying why, when the person deleted the earlier thread in T3 Code', async () => {
+      const { runtime, handle, threadId, later } = await finishedFirst();
+      t3.deleteThread(threadId);
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+
+      const end = await ended(runtime, 'op-000000b2');
+      expect(end).toMatchObject({ event: 'finished' });
+      expect(end['resumed']).toBeUndefined();
+      expect(t3.threads()).toHaveLength(1);
+      expect(t3.threads()[0]?.threadId).not.toBe(threadId);
+      expect(noticeOf(runtime, 'op-000000b2')).toEqual([{
+        event: 'notice', op: 'op-000000b2', handle: later.handle,
+        message: `Runtime t3 starts a new T3 thread for step "fix" rather than continue the conversation of op-000000b1: the T3 thread ${linkTo(threadId)} ("review · teamai ${RUN}") of op-000000b1 is no longer in T3 Code.`,
+      }]);
+    });
+
+    it('starts a new thread, saying why, when the step works in another folder than the earlier thread', async () => {
+      const other = path.join(checkout, '.teamai', 'workflow-worktrees', `${RUN}-a5e6f7a8`);
+      execFileSync('git', ['-C', checkout, 'worktree', 'add', '-q', '--detach', other]);
+      const { runtime, handle, threadId, later } = await finishedFirst(other);
+
+      runtime.send({ ...turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }), cwd: other });
+
+      const end = await ended(runtime, 'op-000000b2');
+      expect(end).toMatchObject({ event: 'finished' });
+      expect(end['resumed']).toBeUndefined();
+      expect(t3.threads()).toHaveLength(2);
+      expect(noticeOf(runtime, 'op-000000b2')).toEqual([{
+        event: 'notice', op: 'op-000000b2', handle: later.handle,
+        message: `Runtime t3 starts a new T3 thread for step "fix" rather than continue the conversation of op-000000b1: the T3 thread ${linkTo(threadId)} ("review · teamai ${RUN}") of op-000000b1 works in ${worktree}, not in this step's folder ${other}.`,
+      }]);
+    });
+
+    // T3 runs a later turn on another model of the thread's provider instance once the thread is set to it.
+    it.each<{ change: string; lease: Line; selection: Line }>([
+      { change: 'another model', lease: { model: { name: 'claude-sonnet-5-5' } }, selection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } },
+      { change: 'another effort', lease: { model: { name: 'claude-opus-5-5', effort: 'high' } }, selection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5', options: [{ id: 'effort', value: 'high' }] } },
+    ])('continues the thread on $change of the same provider instance, set on the thread before the turn', async ({ lease, selection }) => {
+      const { runtime, handle, first, later } = await finishedFirst();
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }, lease));
+
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true, session: first['session'] });
+      expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 2, model: selection['model'] })]);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_configure' || call.tool === 't3_thread_send').map((call) => [call.tool, call.args['modelSelection']])).toEqual([['t3_thread_configure', selection], ['t3_thread_send', undefined]]);
+      expect(noticesOf(runtime)).toEqual([]);
+    });
+
+    it('starts a new thread, saying why, when the step runs on another provider instance than the earlier thread', async () => {
+      const { runtime, handle, threadId, later } = await finishedFirst();
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }, { tool: 'codex', model: { name: 'gpt-6.1-sol' } }));
+
+      expect(await ended(runtime, 'op-000000b2')).not.toHaveProperty('resumed');
+      expect(t3.threads()).toHaveLength(2);
+      expect(noticeOf(runtime, 'op-000000b2')).toEqual([{
+        event: 'notice', op: 'op-000000b2', handle: later.handle,
+        message: `Runtime t3 starts a new T3 thread for step "fix" rather than continue the conversation of op-000000b1: the T3 thread ${linkTo(threadId)} ("review · teamai ${RUN}") of op-000000b1 runs on T3 Code provider instance "claudeAgent", and this step asks for "codex".`,
+      }]);
+    });
+
+    it('stops only the continuing turn on its cancel, and leaves the thread to the earlier place to settle at its close', async () => {
+      const { runtime, handle, threadId, later } = await finishedFirst();
+      t3.config({ agent: { hold: true, output: {} } });
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      await expect.poll(() => t3.threads()[0]).toMatchObject({ status: 'running', runCount: 2 });
+
+      runtime.send({ type: 'cancel', op: 'op-000000b2' });
+
+      expect(await ended(runtime, 'op-000000b2')).toEqual({ op: 'op-000000b2', event: 'cancelled' });
+      expect(t3.threads()).toEqual([expect.objectContaining({ threadId, status: 'interrupted' })]);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive' && line['handle'] === handle)).toMatchObject({ ops: [{ op: 'op-000000b1', state: 'finished' }] });
+
+      runtime.send({ type: 'close', handle: later.handle });
+      expect(await runtime.next((line) => line['handle'] === later.handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle: later.handle });
+      expect(t3.threads()[0]?.settled).toBe(false);
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(t3.threads()[0]?.settled).toBe(true);
+    });
+
+    it('stops only its turn when the later place closes while the turn runs, and leaves the conversation to the earlier place', async () => {
+      const { runtime, handle, threadId, later } = await finishedFirst();
+      t3.config({ agent: { hold: true, output: {} } });
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      await expect.poll(() => t3.threads()[0]).toMatchObject({ status: 'running', runCount: 2 });
+
+      runtime.send({ type: 'close', handle: later.handle });
+
+      expect(await runtime.next((line) => line['handle'] === later.handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle: later.handle });
+      expect(await ended(runtime, 'op-000000b2')).toEqual({ op: 'op-000000b2', event: 'cancelled' });
+      expect(t3.threads()).toEqual([expect.objectContaining({ threadId, status: 'interrupted', settled: false })]);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive' && line['handle'] === handle)).toMatchObject({ ops: [{ op: 'op-000000b1', state: 'finished' }] });
+    });
+
+    it('reattaches the later op to its turn after a restart while the turn runs, and follows the turn to its end', async () => {
+      const release = path.join(dir, 'release');
+      const { runtime, handle, first, later } = await finishedFirst();
+      t3.config({ agent: { release, output: { verdict: 'approve' } } });
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      await expect.poll(() => t3.threads()[0]).toMatchObject({ status: 'running', runCount: 2 });
+      await runtime.close();
+
+      const again = start();
+      again.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      expect(await again.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      again.send({ type: 'reattach', handle: later.handle });
+      expect(await again.next((line) => line['event'] === 'alive' && line['handle'] === later.handle)).toMatchObject({ ops: [{ op: 'op-000000b2', state: 'running' }] });
+      again.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      fs.writeFileSync(release, '');
+
+      expect(await ended(again, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true, session: first['session'] });
+      expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 2, status: 'completed' })]);
+    });
+
+    it('settles the thread at the later place\'s close when the earlier place closed first', async () => {
+      const { runtime, handle, later } = await finishedFirst();
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true });
+
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(t3.threads()[0]?.settled).toBe(true);
+      // The turn left the Settled group; the later place settles it once more.
+      runtime.send({ type: 'close', handle: later.handle });
+      expect(await runtime.next((line) => line['handle'] === later.handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle: later.handle });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_organize')).toHaveLength(2);
+    });
+
+    it('follows the turn\'s own run, not the earlier run T3 still shows as ended right after the send', async () => {
+      const { runtime, handle, later } = await finishedFirst();
+      t3.config({ turnStartsLateMs: 600 });
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true, result: { output: { verdict: 'approve' } } });
+      expect(t3.threads()[0]?.runCount).toBe(2);
+    });
+
+    it('sends the turn once, after a restart between its send and T3\'s answer, and follows it to the end', async () => {
+      const { runtime, handle, first, later } = await finishedFirst();
+      t3.config({ sendMs: 5_000 });
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      await expect.poll(() => t3.threads()[0]?.runCount).toBe(2);
+      await runtime.close();
+      t3.config({ sendMs: 0 });
+
+      const again = start();
+      again.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      expect(await again.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      again.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+
+      expect(await ended(again, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true, session: first['session'] });
+      expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 2 })]);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_send').map((call) => call.args['clientRequestId'])).toEqual(['op-000000b2', 'op-000000b2']);
     });
   });
 });

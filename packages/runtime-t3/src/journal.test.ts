@@ -86,18 +86,17 @@ describe('the T3 journal', () => {
     expect(places.read(PLACE.handle)).toEqual({ kind: 'unreadable', handle: PLACE.handle, file: record, why: expect.any(String) });
   });
 
-  it('keeps, when it removes a place, the records of the operations whose conversations a later step continues', async () => {
+  it('finds a conversation by the op that launched it while its place is there, and forgets it with the place', async () => {
     const places = journal(dir);
     places.open(PLACE);
     const thread = { threadId: 'thread-1', title: 'review · teamai r0123abcd', model: 'claude-opus-5-5', tool: 'claude', launchedAt: 1 };
     await places.update({ handle: PLACE.handle, op: FIRST }, () => ({ state: { op: FIRST, state: 'cancelled' }, thread }));
-    await places.update({ handle: PLACE.handle, op: SECOND }, () => ({ state: { op: SECOND, state: 'cancelled' } }));
 
-    places.remove(PLACE.handle, { keep: new Set([FIRST]) });
+    expect(places.conversation(FIRST)).toEqual({ kind: 'found', record: { handle: PLACE.handle, state: { op: FIRST, state: 'cancelled' }, thread } });
+    places.remove(PLACE.handle);
 
     expect(places.read(PLACE.handle)).toEqual({ kind: 'missing' });
-    expect(places.conversation(FIRST)).toEqual({ kind: 'found', record: { handle: PLACE.handle, state: { op: FIRST, state: 'cancelled' }, thread } });
-    expect(places.conversation(SECOND)).toEqual({ kind: 'missing' });
+    expect(places.conversation(FIRST)).toEqual({ kind: 'missing' });
   });
 
   it('keeps the ends two runtime processes write for different operations of one place, each from what it read before', async () => {
