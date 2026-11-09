@@ -571,15 +571,19 @@ describe('the fleet', () => {
     await waitOn(() => fresh() !== undefined && wakes().length > 0, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
     const [wake] = wakes();
-    expect(wake).toMatchObject({ type: 'wake', pool: 'wake', repository: URL, message: 'teamai workflow resume --next --pool wake' });
+    expect(wake).toMatchObject({ type: 'wake', pool: 'wake', repository: URL });
+    expect(wake?.message).toContain(URL);
     expect(wake?.title).toContain('build');
+    expect(wake?.title).toContain('wake');
 
     // The owner's listing says where the member was woken.
     const listed = await teamai('alice', ['workflow', 'resume']);
     expect(listed.stdout.split('\n').find((line) => line.startsWith(run) && line.includes(' wake ')), said(listed)).toMatch(/ offered .* toy\s*$/);
 
     // The member the wake started runs what its message says, in a checkout of the repository it names.
-    const taken = await teamai('bob', (wake?.message ?? '').split(' ').slice(1));
+    const command = /`teamai ([^`]+)`/.exec(wake?.message ?? '')?.[1] ?? '';
+    expect(command).toBe('workflow resume --next --pool wake');
+    const taken = await teamai('bob', command.split(' '));
     expect(taken.envelope(), said(taken)).toMatchObject({ data: { ran: { run, step: 'build', exit_code: 0 } } });
     const done = await started;
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });

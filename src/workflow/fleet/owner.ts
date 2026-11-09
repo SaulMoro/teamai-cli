@@ -133,7 +133,7 @@ type Waited =
 export type OpenWake = (entry: { use: string; options: RuntimeOptions }) => Promise<{ ok: true; runtime: StepRuntime; wakes: boolean } | { ok: false; failure: WorkflowFailure }>;
 
 /** The runtime a fleet entry wakes members through, by the name its entry gave. */
-type Waker = { use: string; runtime: StepRuntime };
+type Waker = { use: string; runtime: StepRuntime; wake: NonNullable<StepRuntime['wake']> };
 
 /** The place of an attempt on the fleet: its handle names the run and the attempt, so a restarted teamai reads it again. */
 type FleetPlace = { run: RunId; attempt: AttemptId };
@@ -741,13 +741,15 @@ async function openWaker(wake: { use: string; options?: RuntimeOptions | undefin
 
   if (!opened.ok) return refused(`runtime "${wake.use}" did not open: ${opened.failure.message}`);
 
-  if (!opened.wakes) {
+  const wakes = opened.runtime.wake?.bind(opened.runtime);
+
+  if (!opened.wakes || wakes === undefined) {
     await opened.runtime.dispose();
 
     return refused(`runtime "${wake.use}" wakes no fleet member: its init does not offer wake. Remove options.wake, or name a runtime that wakes members`);
   }
 
-  return { waker: { use: wake.use, runtime: opened.runtime } };
+  return { waker: { use: wake.use, runtime: opened.runtime, wake: wakes } };
 }
 
 /** The wake of one offer: shown each record the owner reads, and stopped once the owner stops waiting. */
@@ -808,17 +810,31 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
         return;
       }
 
+      const { pool, lease: { step } } = record;
+
+      const unsent = (why: string): void => {
+        isDone = true;
+        log.warn(`Fleet pool ${pool} could not wake a member for step "${step}" of run ${run} through ${waker.use}: ${why} The step waits for a member someone starts: teamai workflow resume --next --pool ${pool}, in a checkout of the business repository.`);
+      };
+
       // The URL as configured, which the machine woken knows the repository by: no insteadOf rewrites it into one of this machine's.
       const origin = await git(root, ['config', '--get', 'remote.origin.url']);
-      const repository = sanitizeGitUrl(origin.stdout.trim());
+      const repository = origin.code === 0 ? sanitizeGitUrl(origin.stdout.trim()) : '';
+
+      if (repository === '') return unsent(`${root} names no origin to tell the member which repository to work in.`);
+
       const op = newOpId();
       const note: WakeNote = { op };
 
-      await noteWake(config, run, attempt, note);
-      const { pool, lease: { step } } = record;
+      try {
+        await noteWake(config, run, attempt, note);
+      } catch (error) {
+        return unsent(`teamai could not note the wake before sending it, so it sent none: ${error instanceof Error ? error.message : String(error)}`);
+      }
 
-      const end = waker.runtime.wake?.({ op, pool, repository, message: `teamai workflow resume --next --pool ${pool}`, title: `teamai: step ${step} of run ${run}` }, {})
-        ?? Promise.resolve<WakeEnd>({ kind: 'failed', failure: { code: 'wake_unavailable', message: `Runtime "${waker.use}" wakes no fleet member.` } });
+      const take = `teamai workflow resume --next --pool ${pool}`;
+      const message = `Take one attempt of fleet pool ${pool}: in a checkout of ${repository}, run \`${take}\` once, then end, whether it ran a step or found nothing to claim.`;
+      const end = waker.wake({ op, pool, repository, message, title: `teamai: step ${step} of run ${run}, fleet pool ${pool}` }, {});
 
       const current = { op, settled: Promise.resolve(), isSettled: false };
 

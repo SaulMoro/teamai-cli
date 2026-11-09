@@ -14,6 +14,7 @@ import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getReportsDir, type LocalConfig } from '../../types.js';
 import { gitRoot } from '../../utils/branch-worktree.js';
 import { log } from '../../utils/logger.js';
+import { writeJsonAtomic } from '../../utils/fs.js';
 import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
@@ -841,7 +842,8 @@ export async function noteWake(config: LocalConfig, run: RunId, attempt: Attempt
   const marker = await readOfferedMarker(config, run, attempt);
 
   if (marker === undefined) return;
-  await fs.writeFile(offeredMarker(config, run, attempt), `${JSON.stringify({ ...marker, wake })}\n`, 'utf8');
+  // Whole or not at all: a marker cut short would read as no offer, and its wake as never sent.
+  await writeJsonAtomic(offeredMarker(config, run, attempt), { ...marker, wake }, { compact: true });
 }
 
 /** The member a wake launched for an offer, as the attempt listing names it: what the runtime shows of it, else where; undefined when none was woken. */
