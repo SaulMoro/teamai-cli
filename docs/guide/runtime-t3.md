@@ -111,7 +111,7 @@ Once a step ends, teamai settles its thread. The thread leaves your list of acti
 
 | The step | Its thread |
 | --- | --- |
-| succeeded, failed, or reported a failure in its result | settled once teamai collects the step |
+| succeeded, failed, or reported a failure in its result | settled once teamai closes the step's place |
 | was cancelled (`teamai workflow cancel`) | stopped, then settled |
 | still runs, or is an interactive step waiting for you | stays active |
 | ended before teamai saw its thread stop (T3 did not stop it, or teamai lost track of it) | stays active, so you can stop it; closing the step's place stops it first |
@@ -222,7 +222,7 @@ When no instance runs it, teamai adds one the first time a step runs on it, and 
 ⚠ Step runtime "t3", operation op-5781c58b81a1: Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path /opt/acme/bin/acme-claude), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
 ```
 
-The instance is named after the tool. Its Binary path is the tool's command as your PATH finds it (Claude's own binary for `claude-work`), and its Home path the tool's own home, when that is not its base tool's (`~/.claude`, `~/.codex`), which teamai leaves unset. teamai writes it into T3's settings and keeps every other setting; T3 Code picks it up at once. Two runs add it once, and later runs use it with no change. A run that never runs the tool adds nothing.
+The instance is named after the tool. Its Binary path is the tool's command as your PATH finds it (Claude's own binary for `claude-work`), and its Home path the tool's own home, when that is not its base tool's (`~/.claude`, `~/.codex`), which teamai leaves unset. teamai writes it into T3's settings and keeps every other setting; T3 Code picks it up at once. Two runs add it once, and later runs use it with no change. When you remove it while a run goes on, that run's next step on the tool adds it again and says so again. A run that never runs the tool adds nothing.
 
 teamai writes T3's settings file as you, in attended and unattended runs alike, as it adds a project with the `t3` command. It asks T3 for no wider sign-in: each thread still starts in the mode it would. When T3 Code writes the file at the same moment, teamai reads it again and keeps what T3 wrote.
 
@@ -348,6 +348,42 @@ teamai workflow cancel r70d31098c8884803
 
 An `interactive: true` prompt step opens a thread you work in. The thread is told to write the result file only once you say the step is done, so a thread that goes idle between your turns does not end the step. No other step of the run starts until it ends.
 
+## Continue a step's conversation
+
+A prompt step with `session.from` or `session: continue` goes on in the earlier step's T3 thread. teamai sends the step as a new turn in that thread, so the agent keeps what it read and said there, and the run records the session as resumed. It does so when:
+
+- the earlier step's thread is still in T3 Code, and its turn has ended;
+- the step works in the same folder;
+- the step runs on the same provider instance. Another model or effort of that instance is fine: teamai switches the thread to it first.
+
+Otherwise the step starts a new thread, and says why:
+
+```text
+⚠ Step runtime "t3", operation op-6e0c41d2b7a9: Runtime t3 starts a new T3 thread for step "fix" rather than continue the conversation of op-5781c58b81a1: the T3 thread t3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149… ("review · teamai r70d31098c8884803") of op-5781c58b81a1 runs on T3 Code provider instance "claudeAgent", and this step asks for "codex".
+```
+
+A thread a later step may continue stays active until teamai closes the earlier step's place. Cancelling the later step, or closing its place, stops only its turn: the thread and the earlier step's work in it stay.
+
+## Wake fleet members on linked machines
+
+A [fleet](workflow-advanced.md#run-steps-on-other-members-machines-fleet) entry whose `wake` uses `t3` starts a member when nobody takes an attempt it offered. T3 Code launches the member's thread on another machine linked to it.
+
+To set it up:
+
+1. In T3 Code, turn on Linked environments under Settings → Labs.
+2. Link the other machine to this T3 Code.
+3. On that machine, add a checkout of the repository as a T3 project. T3 matches it by the repository its git remote names, so a checkout with only a local remote does not count. The machine needs teamai and the team set up, as any fleet member does.
+
+teamai picks the first linked machine that answers and has the project. The thread appears in that machine's T3 Code, in that project, titled after the run and the pool, such as `teamai fleet r70d31098c8884803 · gpu`. When you started the run from a T3 thread, T3 shows the new thread as delegated from it. It starts on the project's default model there, else the first Claude or Codex instance that machine runs, in `runtime_mode`, else Auto. Its first message is teamai's command to take one attempt of the pool, and ends by telling it to end once that attempt is done. The run's details link the thread. Waking a member spends that machine's account.
+
+teamai does not follow the thread once T3 launched it. To stop a woken member, open its thread in that machine's T3 Code and press Stop. `teamai workflow cancel <run>` withdraws the attempt; a member that has not taken it yet finds nothing to claim and ends.
+
+When no linked machine has the repository, the attempt keeps waiting for a member, and the run says what to add, in words such as:
+
+```text
+No machine linked to T3 Code has https://github.com/acme/acme-app.git as a project (build-box has no project of it). Link a machine in T3 Code, and add the repository there as a project.
+```
+
 ## When it does not start
 
 | What you see | Why | Do this |
@@ -376,7 +412,6 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 
 - A step's thread is a thread of its own, not a child of the thread that started the run. T3 keeps a parent link only for a thread launched on another, linked environment.
 - It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
-- A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
 - A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A step with a `role`, `env` or `setup` goes to `local`.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.
