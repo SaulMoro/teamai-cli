@@ -1717,12 +1717,12 @@ describe('teamai-runtime-t3', () => {
 // the runtime still holds it, on the same provider instance and model selection, in the same folder.
 
 /** The place of the step that continues the conversation: a later attempt, on the same worktree unless `folder` says. */
-async function openLater(runtime: Connection, folder = worktree): Promise<{ handle: string; result: string }> {
-  const laterResult = path.join(dir, 'later', 'out', 'result.json');
+async function openLater(runtime: Connection, folder = worktree, { op, attempt }: { op: string; attempt: string } = { op: 'op-000000c0', attempt: 'a5e6f7a8' }): Promise<{ handle: string; result: string }> {
+  const laterResult = path.join(dir, attempt, 'out', 'result.json');
   fs.mkdirSync(path.dirname(laterResult), { recursive: true });
-  runtime.send({ type: 'open', op: 'op-000000c0', run: RUN, attempt: 'a5e6f7a8', credentials: {}, view: { worktree: folder, readonly: [], result: path.dirname(laterResult), runDir: path.join(dir, 'run'), toolHome: {} } });
-  const accepted = await runtime.next((line) => line['op'] === 'op-000000c0' && line['event'] === 'accepted');
-  expect(await runtime.next((line) => line['op'] === 'op-000000c0' && line['event'] !== 'accepted' && line['event'] !== 'notice')).toMatchObject({ event: 'ready' });
+  runtime.send({ type: 'open', op, run: RUN, attempt, credentials: {}, view: { worktree: folder, readonly: [], result: path.dirname(laterResult), runDir: path.join(dir, 'run'), toolHome: {} } });
+  const accepted = await runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
+  expect(await runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'notice')).toMatchObject({ event: 'ready' });
 
   return { handle: z.string().parse(accepted['handle']), result: laterResult };
 }
@@ -1815,6 +1815,22 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 2, model: selection['model'] })]);
       expect(t3.calls().filter((call) => call.tool === 't3_thread_configure' || call.tool === 't3_thread_send').map((call) => [call.tool, call.args['modelSelection']])).toEqual([['t3_thread_configure', selection], ['t3_thread_send', undefined]]);
       expect(noticesOf(runtime)).toEqual([]);
+    });
+
+    // A chain names its first prompt, while a turn between may have set the thread to another model.
+    it('sets the thread back to the model a third step asks for, after the second step set it to another', async () => {
+      const { runtime, handle, later } = await finishedFirst();
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }, { model: { name: 'claude-sonnet-5-5' } }));
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true });
+      const third = await openLater(runtime, worktree, { op: 'op-000000c1', attempt: 'a9b0c1d2' });
+
+      runtime.send(turn(third, 'op-000000b3', { handle, op: 'op-000000b1' }, { model: { name: 'claude-opus-5-5' } }));
+
+      expect(await ended(runtime, 'op-000000b3')).toMatchObject({ event: 'finished', resumed: true });
+      expect(t3.threads()).toEqual([expect.objectContaining({ runCount: 3, model: 'claude-opus-5-5' })]);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_configure').map((call) => call.args['modelSelection'])).toEqual([
+        { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' }, { instanceId: 'claudeAgent', model: 'claude-opus-5-5' },
+      ]);
     });
 
     it('starts a new thread, saying why, when the step runs on another provider instance than the earlier thread', async () => {
