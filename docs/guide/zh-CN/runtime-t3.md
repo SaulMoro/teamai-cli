@@ -111,7 +111,7 @@ open 't3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149…'
 
 | 步骤 | 它的线程 |
 | --- | --- |
-| 成功、失败，或在结果里报告了失败 | teamai 收集步骤后标记为已处理 |
+| 成功、失败，或在结果里报告了失败 | teamai 关闭步骤的位置后标记为已处理 |
 | 被取消（`teamai workflow cancel`） | 先停止，再标记为已处理 |
 | 仍在运行，或是在等你的交互式步骤 | 留在活动列表里 |
 | 步骤在 teamai 看到线程停止之前就结束了（T3 没有停止它，或 teamai 失去了对它的跟踪） | 留在活动列表里，方便你停止它；关闭步骤的位置时会先停止它 |
@@ -222,7 +222,7 @@ workflows:
 ⚠ Step runtime "t3", operation op-5781c58b81a1: Added the T3 Code provider instance "acme-claude" (driver Claude, Binary path /opt/acme/bin/acme-claude), so acme-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
 ```
 
-实例以工具命名。它的 Binary path 是你的 PATH 找到的工具命令（`claude-work` 则是 Claude 自己的二进制文件），工具有自己的 home 且不是基础工具的 home（`~/.claude`、`~/.codex`）时，Home path 就是那个 home，否则 teamai 不设置它。teamai 把它写进 T3 的设置，其他设置保持不变，T3 Code 会立即读取。两个运行只会添加一次，之后的运行直接使用它，不再改动。从不用到这个工具的运行不会添加任何东西。
+实例以工具命名。它的 Binary path 是你的 PATH 找到的工具命令（`claude-work` 则是 Claude 自己的二进制文件），工具有自己的 home 且不是基础工具的 home（`~/.claude`、`~/.codex`）时，Home path 就是那个 home，否则 teamai 不设置它。teamai 把它写进 T3 的设置，其他设置保持不变，T3 Code 会立即读取。两个运行只会添加一次，之后的运行直接使用它，不再改动。运行进行中你删除了它时，该运行下一个使用这个工具的步骤会再次添加它，并再次告诉你。从不用到这个工具的运行不会添加任何东西。
 
 teamai 以你的身份写入 T3 的设置文件，有人值守和无人值守的运行都一样，就像它用 `t3` 命令添加项目那样。它不会向 T3 申请更大的登录权限：每个线程仍按原来的模式启动。如果 T3 Code 同时也在写这个文件，teamai 会重新读取，并保留 T3 写入的内容。
 
@@ -348,6 +348,42 @@ teamai workflow cancel r70d31098c8884803
 
 `interactive: true` 的提示词步骤会打开一个由你在其中工作的线程。线程被告知只有在你说步骤完成后才写结果文件，所以线程在你两次发言之间空闲时，步骤不会结束。在它结束之前，运行中的其他步骤都不会开始。
 
+## 继续一个步骤的对话
+
+带 `session.from` 或 `session: continue` 的提示词步骤会在前一个步骤的 T3 线程里继续。teamai 把这个步骤作为该线程的新一轮发送，所以 agent 保留它在那里读过和说过的内容，运行把会话记为 resumed。满足以下条件时才会这样：
+
+- 前一个步骤的线程仍在 T3 Code 中，并且它的那一轮已经结束；
+- 这个步骤在同一个文件夹里工作；
+- 这个步骤运行在同一个提供方实例上。换成该实例的另一个模型或 effort 也可以：teamai 会先把线程切换过去。
+
+否则步骤会开始一个新线程，并说明原因：
+
+```text
+⚠ Step runtime "t3", operation op-6e0c41d2b7a9: Runtime t3 starts a new T3 thread for step "fix" rather than continue the conversation of op-5781c58b81a1: the T3 thread t3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149… ("review · teamai r70d31098c8884803") of op-5781c58b81a1 runs on T3 Code provider instance "claudeAgent", and this step asks for "codex".
+```
+
+后续步骤可能继续的线程，会一直留在活动列表里，直到 teamai 关闭前一个步骤的位置（place）。取消后续步骤或关闭它的位置，只会停止它的那一轮：线程以及前一个步骤在其中的工作都会保留。
+
+## 在关联的机器上唤醒 fleet 成员
+
+[fleet](workflow-advanced.md#在其他成员的机器上运行步骤fleet) 条目的 `wake` 使用 `t3` 时，若它发出的某个 attempt 没有人接，teamai 就会启动一个成员：T3 Code 在与它关联的另一台机器上启动成员的线程。
+
+设置方法：
+
+1. 在 T3 Code 的 Settings → Labs 中打开 Linked environments。
+2. 把另一台机器关联到这个 T3 Code。
+3. 在那台机器上，把仓库的一个检出添加为 T3 项目。T3 按 git remote 指向的仓库来匹配，所以只有本地 remote 的检出不算。那台机器需要装好 teamai 并设置好团队，和任何 fleet 成员一样。
+
+teamai 选择第一台有响应并且有该项目的关联机器。线程出现在那台机器的 T3 Code 中、该项目下，标题包含运行和池，例如 `teamai fleet r70d31098c8884803 · gpu`。如果你是从一个 T3 线程启动的运行，T3 会把新线程显示为由它委派。线程使用那里项目的默认模型，否则使用那台机器运行的第一个 Claude 或 Codex 实例，模式为 `runtime_mode`，否则为 Auto。它的第一条消息是 teamai 让它接手该池一个 attempt 的命令，最后一句告诉它完成那个 attempt 后就结束。运行的详情会链接这个线程。唤醒成员会消耗那台机器的账号。
+
+T3 启动线程后，teamai 不再跟踪它。要停止被唤醒的成员，在那台机器的 T3 Code 中打开它的线程并点 Stop。`teamai workflow cancel <run>` 会撤回 attempt；还没接手的成员找不到可领取的工作，就会结束。
+
+没有任何关联机器有该仓库时，attempt 继续等待成员，运行会说明需要添加什么，例如：
+
+```text
+No machine linked to T3 Code has https://github.com/acme/acme-app.git as a project (build-box has no project of it). Link a machine in T3 Code, and add the repository there as a project.
+```
+
 ## 启动不了时
 
 | 你看到的 | 原因 | 怎么做 |
@@ -376,7 +412,6 @@ teamai workflow cancel r70d31098c8884803
 
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程。T3 只为在另一个已链接环境上创建的线程保留父线程链接。
 - 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
-- 带 `session: continue` 或 `session.from` 的步骤会开始一段新的对话，和 OpenCode 一样：T3 无法在已有会话上启动线程。
 - 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。文件夹被删除后，下一个关闭的 T3 步骤会删除这个项目。带 `role`、`env` 或 `setup` 的步骤会交给 `local`。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
 - 不提供 `permissions: unattended` 的步骤。它们需要一个工具在沙箱中运行的线程，后续版本会加入。
