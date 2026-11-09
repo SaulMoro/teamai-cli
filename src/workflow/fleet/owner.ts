@@ -24,7 +24,7 @@ import { workflowRunBy, type WorkflowFailure } from '../types.js';
 import type { WholeEnd } from '../whole-workflow.js';
 import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { isJsonObject } from '../../types.js';
-import { copyGit } from '../place/place.js';
+import { copyGit, placeEditsOf } from '../place/place.js';
 import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
 import type { ExecAnswer, ExecEnd, ExecEvents, ExecQuestion, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
@@ -521,7 +521,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     const resumed = await goOnFromGoneWork({ config, run, root, dir, step });
 
     if (resumed) return failed(resumed);
-    const started = await startOf({ config, run, root, dir, step });
+    const started = await startOf({ config, run, attempt, root, dir, step });
 
     if ('code' in started) return failed(started);
     const { start } = started;
@@ -756,23 +756,29 @@ async function goOnFromGoneWork({ config, run, root, dir, step }: { config: Loca
 /**
  * The commit a member starts step `step` from: HEAD of place `dir`, with what the place holds uncommitted, such as the
  * work of an earlier attempt it kept on a usage limit, committed over it as a member commits its own work, so the member
- * finds the place as the step would here. The place moves to that commit, which the member's work then fast-forwards.
+ * finds the place as the step would here. What teamai delivered there, such as the team's skills, stays out: the member
+ * delivers its own. The place moves to that commit, which the member's work then fast-forwards.
  */
-async function startOf({ config, run, root, dir, step }: { config: LocalConfig; run: RunId; root: string; dir: string; step: string }): Promise<{ start: string } | WorkflowFailure> {
+async function startOf(input: { config: LocalConfig; run: RunId; attempt: AttemptId; root: string; dir: string; step: string }): Promise<{ start: string } | WorkflowFailure> {
+  const { config, run, root, dir, step } = input;
+
   // A step with no workspace runs in the checkout, whose files are the person's.
   if (dir !== root) {
-    // A step ran in the copy before, so its config may name programs.
-    const placeGit = await copyGit(config, { run, root });
-    const added = await placeGit(dir, ['add', '-A']);
+    const edits = await placeEditsOf(input);
 
-    // `diff --quiet` exits 1 when something is staged.
-    const staged = added.code === 0 ? await placeGit(dir, ['diff', '--cached', '--quiet']) : undefined;
+    if ('error' in edits) return { code: 'workspace_base', message: `Step "${step}" could not list what its place ${dir} holds uncommitted, so no fleet member can start from it: ${edits.error}` };
 
-    const committed = staged?.code === 1
-      ? await placeGit(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '--quiet', '--no-verify', '-m', `Work step "${step}" left uncommitted in its place`])
-      : staged ?? added;
+    if (edits.paths.length > 0) {
+      // A step ran in the copy before, so its config may name programs.
+      const placeGit = await copyGit(config, { run, root });
+      const added = await placeGit(dir, ['--literal-pathspecs', 'add', '-A', '--', ...edits.paths]);
 
-    if (committed.code !== 0) return { code: 'workspace_base', message: `Step "${step}" could not commit what its place ${dir} holds uncommitted, so no fleet member can start from it: ${committed.stderr.trim()}` };
+      const committed = added.code === 0
+        ? await placeGit(dir, ['--literal-pathspecs', '-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '--quiet', '--no-verify', '-m', `Work step "${step}" left uncommitted in its place`, '--', ...edits.paths])
+        : added;
+
+      if (committed.code !== 0) return { code: 'workspace_base', message: `Step "${step}" could not commit what its place ${dir} holds uncommitted, so no fleet member can start from it: ${committed.stderr.trim()}` };
+    }
   }
 
   return { start: (await git(dir, ['rev-parse', '--verify', 'HEAD'])).stdout.trim() };

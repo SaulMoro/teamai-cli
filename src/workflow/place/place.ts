@@ -746,6 +746,19 @@ async function giveUpSetup(config: LocalConfig, record: Extract<PlaceRecord, { p
 }
 
 /**
+ * The paths of place `dir` of `attempt` that git would commit, less the base agent files prepare put there that still
+ * match the overlay it recorded: what the place holds that teamai did not deliver.
+ */
+export async function placeEditsOf(input: { config: LocalConfig; run: RunId; attempt: AttemptId; dir: string }): Promise<{ paths: string[] } | { error: string }> {
+  const listed = await commitPathsOf(input.dir);
+
+  if ('error' in listed) return listed;
+  const overlay = await unchangedOverlayPaths(input.dir, placeFiles(input.config, input.run, input.attempt).overlay, listed.paths);
+
+  return 'error' in overlay ? overlay : { paths: listed.paths.filter((relative) => !overlay.paths.has(relative)) };
+}
+
+/**
  * Why a command must not start in an adopted place, or undefined when it may. A file written after adopt, such as a
  * host's background setup, is already there: the command does not run, and nothing is committed. The base agent files
  * prepare checked out over the branch are not that file when they still match the overlay it recorded. A file the
