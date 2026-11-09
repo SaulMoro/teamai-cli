@@ -443,7 +443,7 @@ Paseo 以明文把智能体的环境变量存在它的 home 下，所以这个�
 
 ## 权限
 
-Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果文件>)` 和 `Edit(/<运行目录>/**)`，模式是 Paseo 启动它时的模式。Codex 智能体可以写同样两处：它在 `auto-review` 下的沙箱可写工作树，运行时再把结果文件所在目录和运行的临时目录加为可写根目录：
+Claude 智能体可以不经询问写两样东西：teamai 结果文件所在的目录（步骤也把证据留在这里），以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果目录>/**)` 和 `Edit(/<运行目录>/**)`，模式是 Paseo 启动它时的模式。Codex 智能体可以写同样两处：它在 `auto-review` 下的沙箱可写工作树，运行时再把结果文件所在目录和运行的临时目录加为可写根目录：
 
 ```json
 { "provider": "codex", "modeId": "auto-review", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }

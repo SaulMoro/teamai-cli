@@ -443,7 +443,7 @@ Remove the entry, and give the tool what it needs on the daemon's host instead: 
 
 ## Permissions
 
-A Claude agent may write two things without asking: teamai's result file, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result file>)` and `Edit(/<run directory>/**)`, in the mode Paseo starts it in. A Codex agent may write the same two places: its sandbox in `auto-review` writes the worktree, and the runtime adds the result file's directory and the run's scratch directory as writable roots:
+A Claude agent may write two things without asking: the directory of teamai's result file, where the step also leaves its evidence, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result directory>/**)` and `Edit(/<run directory>/**)`, in the mode Paseo starts it in. A Codex agent may write the same two places: its sandbox in `auto-review` writes the worktree, and the runtime adds the result file's directory and the run's scratch directory as writable roots:
 
 ```json
 { "provider": "codex", "modeId": "auto-review", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }

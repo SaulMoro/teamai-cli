@@ -40,7 +40,7 @@ describe('teamai-runtime-paseo', () => {
     expect(create?.labels).toEqual({ 'teamai-attempt': `${RUN}/${ATTEMPT}`, 'teamai-run': RUN, 'teamai-step': 'review' });
     // The result file and the run's scratch directory, and only they, are allowed without asking, as teamai's own launch
     // allows the result file.
-    expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } } });
+    expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out')}/**)`, `Edit(/${path.join(dir, 'run')}/**)`] } } });
     // Only the run directory's name crosses, so $TEAMAI_RUN_DIR works in the agent's shell: Paseo keeps a create's env in
     // plain text, so nothing of the step's env does.
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });

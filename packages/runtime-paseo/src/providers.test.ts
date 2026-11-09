@@ -24,7 +24,7 @@ describe('teamai-runtime-paseo', () => {
 
       expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'acme-claude' }, result: { output: { ok: true } } });
       expect(received()).toMatchObject([{
-        config: { provider: 'claude-acme', model: 'claude-opus-5-5', modeId: 'auto', providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } },
+        config: { provider: 'claude-acme', model: 'claude-opus-5-5', modeId: 'auto', providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out')}/**)`, `Edit(/${path.join(dir, 'run')}/**)`] } },
       }]);
     });
 
