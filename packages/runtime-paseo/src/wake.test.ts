@@ -35,7 +35,7 @@ async function otherDaemon(name: string, behaviour: Behaviour = {}) {
   return { url: running.url, creates };
 }
 
-const CreateSchema = z.looseObject({ agentId: z.string(), initialPrompt: z.string(), config: z.looseObject({ provider: z.string(), cwd: z.string(), title: z.string() }) });
+const CreateSchema = z.looseObject({ agentId: z.string(), initialPrompt: z.string(), config: z.looseObject({ provider: z.string(), cwd: z.string(), title: z.string(), providerOptions: z.unknown().optional() }) });
 
 /** A checkout of the repository on another machine, opened in its Paseo. */
 const checkout = (name: string): { member_workspaces: string[]; repositories: Record<string, string> } => {
@@ -80,6 +80,39 @@ describe('waking a fleet member through another Paseo daemon', () => {
       display: { label: 'teamai: step review of run r0123abcd · gpu', url: expect.stringContaining(String(create?.agentId)), fields: { agent: create?.agentId, host: 'gpu-box' } },
     });
     expect(runtime.lines.filter(isOp('op-000000ee', 'accepted'))).toHaveLength(1);
+  });
+
+  it.each([
+    { tool: 'claude', allowed: { allowedTools: ['Bash(teamai workflow resume:*)'] } },
+    { tool: 'opencode', allowed: { permission: { bash: { 'teamai workflow resume *': 'allow' } } } },
+  ])('lets a woken $tool agent run teamai workflow resume without asking, in the mode Paseo starts it in', async ({ tool, allowed }) => {
+    const gpu = await otherDaemon('gpu', { server_id: 'srv_gpu', models: { [tool]: tool === 'claude' ? ['claude-opus-5-5'] : ['opencode/beam-free'] }, ...checkout('gpu') });
+    behave({ hosts: [{ label: 'gpu-box', server_id: 'srv_gpu', url: gpu.url }] });
+    const runtime = start();
+    await ready(runtime);
+
+    runtime.send(wakeRequest('op-000000ee'));
+
+    expect(await runtime.next(isWakeEnd('op-000000ee'))).toMatchObject({ event: 'woken' });
+    const [create] = gpu.creates();
+    expect(create?.config).toMatchObject({ provider: tool, providerOptions: allowed });
+    expect(create?.config).not.toHaveProperty('modeId');
+    expect(create?.initialPrompt).toBe(`teamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
+  });
+
+  it('tells the person what to approve first when a woken Codex agent has no rule that allows the command', async () => {
+    const gpu = await otherDaemon('gpu', { server_id: 'srv_gpu', models: { codex: ['gpt-6.1-sol'] }, ...checkout('gpu') });
+    behave({ hosts: [{ label: 'gpu-box', server_id: 'srv_gpu', url: gpu.url }] });
+    const runtime = start();
+    await ready(runtime);
+
+    runtime.send(wakeRequest('op-000000ee'));
+
+    expect(await runtime.next(isWakeEnd('op-000000ee'))).toMatchObject({ event: 'woken' });
+    const [create] = gpu.creates();
+    expect(create?.config).toMatchObject({ provider: 'codex' });
+    expect(create?.config.providerOptions).toBeUndefined();
+    expect(create?.initialPrompt).toBe(`teamai woke this agent to take one attempt of the fleet pool gpu: approve \`teamai workflow resume\` when Codex asks, or the attempt waits here.\n\nteamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
   });
 
   it('wakes once for a repeated op, answering it as it ended', async () => {
