@@ -233,6 +233,11 @@ export const start = () => spawn('claude');`, (output) => {
   expect(output).toContain('packages/tool-launch/src/step.ts -> node:child_process');
 }, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
 
+rule.invalid('rejects the launch library starting a process through tool-core\'s exec helpers', `import { spawnCommand } from '@teamai/tool-core/exec';
+export const run = () => spawnCommand('x', [], {});`, (output) => {
+  expect(output).toContain('packages/tool-launch/src/step.ts -> @teamai/tool-core/exec');
+}, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
+
 rule.valid('allows the launch library\'s tests to start a process', `import { execFileSync } from 'node:child_process';
 export const fifo = () => execFileSync('mkfifo', ['x']);`, inWorkspace('packages/tool-launch/src/step.test.ts', launchLibrary));
 

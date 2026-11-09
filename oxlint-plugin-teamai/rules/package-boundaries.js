@@ -4,7 +4,7 @@ import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
 
 import { importVisitors } from '../imports.js';
-import { FAMILY, isTestSupportPath, lintedPath, manifest, workspaceRoot } from '../utils.js';
+import { FAMILY, PROCESS_STARTERS, isTestSupportPath, lintedPath, manifest, workspaceRoot } from '../utils.js';
 
 /** @type {Map<string, Map<string, string>>} */
 const packageNames = new Map();
@@ -41,9 +41,6 @@ const TEST_KIT = 'tool-testing';
 
 /** The launch library: it runs a tool's launch over a process port it is given, so it starts no process and knows no runtime. */
 const LAUNCH_LIBRARY = 'tool-launch';
-
-/** The modules that start a process. */
-const PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
 
 /** The runtime protocol, which teamai and every runtime parse with: the one runtime package src/ imports. */
 const RUNTIME_PROTOCOL = 'runtime-protocol';
@@ -129,7 +126,7 @@ export default defineRule({
           context.report({ node, message: `src/ imports values only from Node, the workspace packages and the dependencies in package.json, since tsup bundles whatever src/ loads into dist/: ${from} -> ${specifier}. Import only its types (import type), or add it to dependencies if teamai-cli ships it.` });
         }
 
-        if (own === LAUNCH_LIBRARY && !isTestSupport && !typeOnly && PROCESS_MODULES.has(specifier)) {
+        if (own === LAUNCH_LIBRARY && !isTestSupport && !typeOnly && PROCESS_STARTERS.has(specifier)) {
           context.report({ node, message: `@teamai/tool-launch starts no process: it runs a launch through the port its caller gives, the host's spawn or a sandbox's exec. ${from} -> ${specifier}.` });
         }
 

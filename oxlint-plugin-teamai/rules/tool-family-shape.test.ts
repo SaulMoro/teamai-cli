@@ -22,12 +22,14 @@ export const run = () => spawn('codex', ['exec']);`, (output) => {
   expect(output).toContain('A tool family builds argv and reads output, and never starts a process: packages/tool-codex/src/launch.ts imports node:child_process');
 }, { filename: 'packages/tool-codex/src/launch.ts' });
 
-rule.invalid('rejects the spawn helpers of tool-core, and child_process loaded at run time', `import { spawnCommand, execCommand } from '@teamai/tool-core/exec';
-export const run = () => [spawnCommand('codex', [], {}), execCommand, require('child_process')];`, (output) => {
-  expect(output).toContain('imports spawnCommand from @teamai/tool-core/exec');
-  expect(output).not.toContain('execCommand from');
+rule.invalid('rejects every value of tool-core\'s exec module, and child_process loaded at run time', `import { execCommand } from '@teamai/tool-core/exec';
+export const run = () => [execCommand('sqlite3', []), require('child_process')];`, (output) => {
+  expect(output).toContain('imports @teamai/tool-core/exec');
   expect(output).toContain('imports child_process');
 }, { filename: 'packages/tool-codex/src/launch.ts' });
+
+rule.valid('allows the types of tool-core\'s exec module', `import type { ExecResult } from '@teamai/tool-core/exec';
+export const ok = (result: ExecResult) => result.code === 0;`, { filename: 'packages/tool-codex/src/launch.ts' });
 
 rule.invalid('rejects an index.ts exporting more than family', `export const family = {} as const;
 export { ClaudeCodeAdapter } from './session-adapter.js';`, (output) => {
@@ -44,11 +46,14 @@ export const run = () => execFile('zzz');`, (output) => {
   expect(output).toContain('packages/tool-zzz/src/readers/run.ts imports node:child_process');
 }, { filename: 'packages/tool-zzz/src/readers/run.ts' });
 
-rule.valid('leaves the infrastructure packages, a family\'s tests and its test support alone', `import { spawn } from 'node:child_process';
+rule.valid('leaves the launch library alone', `import { spawn } from 'node:child_process';
 export const run = () => spawn('x');`, { filename: 'packages/tool-launch/src/run-step-launch.ts' });
 
 rule.valid('leaves a family\'s tests alone', `import { execFileSync } from 'node:child_process';
 export const fifo = () => execFileSync('mkfifo', ['x']);`, { filename: 'packages/tool-claude/src/launch.test.ts' });
+
+rule.valid('leaves a family\'s test support alone', `import { spawn } from 'node:child_process';
+export const fake = () => spawn('claude');`, { filename: 'packages/tool-claude/src/testing/fake-claude.ts' });
 
 rule.valid('leaves a family file listed in stillSpawns alone while it still starts a process', `import { spawnSync } from 'node:child_process';
 export const read = () => spawnSync('sqlite3');`, { filename: LISTED });

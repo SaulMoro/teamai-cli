@@ -10,6 +10,12 @@ import { z } from 'zod';
 export const FAMILY = /^tool-(?!(?:core|testing|definitions|launch)$)/;
 
 /**
+ * The modules whose values start a process: Node's, and the workspace's spawn and exec helpers, which a new helper there
+ * joins. `@teamai/shared/exec` is where the helpers move out of tool-core, so the move keeps them covered.
+ */
+export const PROCESS_STARTERS = new Set(['child_process', 'node:child_process', '@teamai/tool-core/exec', '@teamai/shared/exec']);
+
+/**
  * The linted file's path with `/` separators, so a rule can scope itself on any platform.
  * @param {Context} context
  * @returns {string}

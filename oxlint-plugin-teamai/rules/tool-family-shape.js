@@ -5,13 +5,7 @@ import { defineRule } from '@oxlint/plugins';
 import { z } from 'zod';
 
 import { importVisitors } from '../imports.js';
-import { FAMILY, lintedPath } from '../utils.js';
-
-/** The modules that start a process. */
-const PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
-
-/** The workspace modules whose spawn helpers start a process, and those helpers. */
-const SPAWN_HELPERS = new Map([['@teamai/tool-core/exec', new Set(['spawnCommand', 'spawnCommandSync'])], ['@teamai/shared/exec', new Set(['spawnCommand', 'spawnCommandSync'])]]);
+import { FAMILY, PROCESS_STARTERS, lintedPath } from '../utils.js';
 
 /** The rule's option, as `meta.schema` lets it be written; unset lists nothing. */
 const OptionsSchema = z.tuple([z.object({ stillSpawns: z.array(z.string()) })]).or(z.tuple([]));
@@ -80,14 +74,8 @@ export default defineRule({
       }
     };
 
-    const imports = importVisitors(({ node, specifier, typeOnly, names }) => {
-      if (typeOnly) return;
-
-      if (PROCESS_MODULES.has(specifier)) starts(node, `imports ${specifier}`);
-      const helpers = SPAWN_HELPERS.get(specifier);
-      const used = helpers === undefined ? [] : names.filter((name) => name === '*' || helpers.has(name));
-
-      if (used.length > 0) starts(node, `imports ${used.join(', ')} from ${specifier}`);
+    const imports = importVisitors(({ node, specifier, typeOnly }) => {
+      if (!typeOnly && PROCESS_STARTERS.has(specifier)) starts(node, `imports ${specifier}`);
     });
 
     /** @param {ESTree.Node} node @param {string} what */
