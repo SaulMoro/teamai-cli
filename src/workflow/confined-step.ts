@@ -149,21 +149,22 @@ export async function runConfinedStep(input: ConfinedStepInput): Promise<Confine
 
   const durationMs = Date.now() - startedAt;
 
-  if (!result.ok) return { kind: 'ran', report: await failedReport({ file: attemptResultPath(config, run, lease.attempt), tool: found.tool, durationMs, result, secrets }) };
+  if (!result.ok) return { kind: 'ran', report: await failedReport({ file: attemptResultPath(config, run, lease.attempt), tool: found.tool, durationMs, result, secrets, retry: { run, step: lease.step } }) };
 
   return { kind: 'ran', report: ranReport({ run: result.run, reply: result.reply, durationMs }) };
 }
 
 /**
  * The report of a run that failed. The tool's output, when it gave any, is kept in `file`, which the message names, with
- * `secrets` masked: a tool's error can repeat a credential it was given.
+ * `secrets` masked: a tool's error can repeat a credential it was given. A failure a retry fixes ends with the command
+ * that runs the step again.
  */
-async function failedReport(input: { file: string; tool: ConfinedTool; durationMs: number; result: Extract<ConfinedResult, { ok: false }>; secrets: Record<string, string> }): Promise<ConfinedStepReport> {
-  const { file, tool, durationMs, result, secrets } = input;
+async function failedReport(input: { file: string; tool: ConfinedTool; durationMs: number; result: Extract<ConfinedResult, { ok: false }>; secrets: Record<string, string>; retry: { run: string; step: string } }): Promise<ConfinedStepReport> {
+  const { file, tool, durationMs, result, secrets, retry } = input;
 
   if (result.raw !== undefined) await AttemptResult.write(file, { raw: result.raw }, secrets);
   const saved = result.raw === undefined ? '' : ` The tool's output is in ${file}.`;
-  const failure = { code: result.code, message: `${result.message}${saved}` };
+  const failure = { code: result.code, message: withRetry({ code: result.code, message: `${result.message}${saved}` }, retry) };
 
   return { outcome: 'failed', tool, durationMs, message: failure.message, failure, ...spentOf(result.usage) };
 }
@@ -268,7 +269,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
         return failed({ code: 'confined_failed', message: `Step runtime "${runtime}" kept the confined prompt at ${kept.level}, below the ${level} its directory asks for.` });
       }
 
-      if (end.result.failure) return failed({ code: end.result.failure.code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` });
+      if (end.result.failure) return failed({ code: end.result.failure.code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: withRetry({ code: end.result.failure.code, message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` }, retry) });
       const outputs = JsonValueSchema.safeParse(end.result.output);
 
       if (!outputs.success) return failed({ code: 'confined_reply_invalid', message: `${tool} on step runtime "${runtime}" replied with no JSON value.` });

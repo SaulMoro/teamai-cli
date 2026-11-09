@@ -106,6 +106,8 @@ describe('runConfinedStep', () => {
     const ended = await runConfinedStep({ config, run, secrets: {}, lease: leaseIn(dir), resolveTool });
 
     expect(ended).toMatchObject({ kind: 'ran', report: { outcome: 'failed', tool: 'claude', failure: { code: 'usage_limited', message: expect.stringMatching(/^claude hit its usage limit: You've hit your limit · resets 3pm \(Europe\/Madrid\)/) } } });
+    // The step fails rather than waiting for the reset, so it says how to run it again then.
+    expect(ended).toMatchObject({ report: { failure: { message: expect.stringMatching(/ Then run: teamai workflow retry r0c0f1ed0 judge$/) } } });
   });
 
   it('masks the run\'s secrets in the output it keeps of a tool that failed, before anything else reads the file', async () => {
@@ -196,5 +198,6 @@ describe('runConfinedStepOnRuntime', () => {
     const ended = await runConfinedStepOnRuntime({ config, run, secrets: {}, lease, signal: new AbortController().signal, runtime: 'toy', attemptRun, offers: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], credentials: {} });
 
     expect(ended).toMatchObject({ kind: 'ran', report: { outcome: 'failed', failure: { code: 'usage_limited', message: expect.stringContaining(limited) } } });
+    expect(ended).toMatchObject({ report: { failure: { message: expect.stringMatching(/ Then run: teamai workflow retry r0c0f1ed0 judge$/) } } });
   });
 });
