@@ -16,9 +16,10 @@ import { within } from './within.js';
 
 // ─── A place ───
 //
-//  The place of a step is its T3 project and the attempt's worktree; a judge's place needs no project. Collect settles
-//  the threads that ended there; close stops each thread the runtime has not seen stop, settles what collect did not,
-//  and removes a judge's copy and each project teamai added for a folder of its own that teamai has removed since.
+//  The place of a step is its T3 project and the attempt's worktree; a judge's place needs no project. Collect leaves
+//  the threads that ended there in the person's active threads, since a later step may continue one; close stops each
+//  thread the runtime has not seen stop, settles every thread that ended, and removes a judge's copy and each project
+//  teamai added for a folder of its own that teamai has removed since.
 //
 
 /** How long `t3 project add` may take before an open gives up on it. */
@@ -518,10 +519,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       return;
     }
 
-    const session = serving.session();
-
-    // In recover mode nothing is settled before close, which connects only when it needs T3.
-    if (session) await settleEnded(request.handle, session);
+    // A later step may continue a thread that ended here, so close settles it, not collect.
     write({ event: 'collected', handle: request.handle });
   };
 

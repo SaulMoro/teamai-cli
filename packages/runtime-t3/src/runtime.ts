@@ -29,10 +29,10 @@ import type { T3Command } from './t3-command.js';
 //             confined: an idle scratch thread, its folder filled with a read-only copy of `dir`, then briefed to read
 //             only that; its last message is the reply
 //    cancel   stop the thread                     reattach  the ops and the thread, from the journal
-//    collect  nothing to copy: the worktree, the result and the transcript are already on this machine. Settle the
-//             thread of each op that ended, once T3 holds no run of it, so it leaves the person's active threads
-//    close    stop each thread the runtime has not seen stop, whichever process launched it, settle what collect did
-//             not (a judge's place is never collected), and remove a judge's copy, and each project teamai added
+//    collect  nothing to copy: the worktree, the result and the transcript are already on this machine. A thread that
+//             ended stays in the person's active threads, since a later step may continue its conversation
+//    close    stop each thread the runtime has not seen stop, whichever process launched it, settle each thread that
+//             ended, once T3 holds no run of it, and remove a judge's copy, and each project teamai added
 //             for a folder of its own that teamai has removed since
 //
 //  A thread the journal holds stays the runtime's to stop until it saw that thread stop: no failure path forgets it.
