@@ -3017,9 +3017,10 @@ done`);
     const op = newOpId();
     const ended = exec(op);
     await owner.record();
-    // Another teamai process of this install writing teamai-reports, as a cancel's own publish does.
+    // Another teamai process of this install writing teamai-reports, as a cancel's own publish does. The offer's own
+    // publish may still hold the lock after its record can be read, until its push ends.
     const lock = path.join(path.dirname(getWorktreeDir(owner.alice.config, REPORTS_WORKTREE_DIRNAME)), REPORTS_LOCK_FILENAME);
-    expect(await acquireLock(lock)).toBe(true);
+    await eventually(async () => (await acquireLock(lock)) || undefined);
 
     const cancelled = runtime.cancel(op);
     await new Promise((resolve) => setTimeout(resolve, 2_000));
