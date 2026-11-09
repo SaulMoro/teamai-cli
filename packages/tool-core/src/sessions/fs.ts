@@ -40,8 +40,8 @@ export function resolveRealCwd(cwd: string): string {
 /**
  * The project directory Claude Code names after `realCwd`, a cwd with its links resolved: every non-alphanumeric
  * character `-`, so a leading `-`. A name over 200 characters is cut to 200 and gets `-` and Claude Code's 32-bit
- * string hash of the whole cwd over UTF-16 code units, in base 36. It names nothing outside its body: a fake Claude
- * written as a script carries its source (`String(claudeProjectDirName)`), so every copy names a project alike.
+ * string hash of the whole cwd over UTF-16 code units, in base 36. It names nothing outside its body, which
+ * `fs.test.ts` runs it to check: a fake Claude written as a script carries its source (`String(claudeProjectDirName)`).
  * Example: `/home/user/project` → `-home-user-project`
  *          `/Users/foo/my project` → `-Users-foo-my-project`
  */
