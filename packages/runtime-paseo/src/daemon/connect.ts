@@ -299,6 +299,16 @@ export interface Daemon {
   send(agentId: string, text: string): Promise<void>;
   /** Allows the agent's pending permission request `requestId`, as a person who answers it in the app does. */
   allow(agentId: string, requestId: string): Promise<void>;
+  /** The ids of the sessions of `provider` in `cwd` that Paseo can import: those it holds and no agent of its has. */
+  sessions(cwd: string, provider: string): Promise<string[]>;
+  /**
+   * Imports session `session` of `provider` as an idle agent in workspace `workspaceId`, which runs nothing until it is
+   * sent a message, and answers its id, which Paseo chooses. Paseo imports a session it does not hold all the same, and
+   * fails the agent's first turn.
+   */
+  importSession(session: { provider: string; session: string; cwd: string; workspaceId: string; labels: Record<string, string> }): Promise<string>;
+  /** Sets an agent's model, mode and thinking option, as an imported agent starts on Paseo's defaults. */
+  configure(agentId: string, config: { model: string; modeId?: string; thinkingOptionId?: string }): Promise<void>;
   /** Deletes an agent, which stops its tool; its logs go with it. */
   remove(agentId: string): Promise<void>;
   agent(agentId: string): Promise<PaseoAgent | null>;
@@ -772,6 +782,21 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       await client.sendAgentMessage(agentId, text);
     },
     allow: (agentId, requestId) => client.respondToPermission(agentId, requestId, { behavior: 'allow' }),
+    async sessions(cwd, provider) {
+      const listed = await client.fetchRecentProviderSessions({ cwd, providers: [provider], limit: 200 });
+
+      return listed.entries.map((entry) => entry.providerHandleId);
+    },
+    async importSession({ provider, session, cwd, workspaceId, labels }) {
+      return (await client.importAgent({ providerId: provider, providerHandleId: session, cwd, workspaceId, labels })).id;
+    },
+    async configure(agentId, { model, modeId, thinkingOptionId }) {
+      await client.setAgentModel(agentId, model);
+
+      if (modeId !== undefined) await client.setAgentMode(agentId, modeId);
+
+      if (thinkingOptionId !== undefined) await client.setAgentThinkingOption(agentId, thinkingOptionId);
+    },
     remove: (agentId) => client.deleteAgent(agentId),
     wait: (agentId) => client.waitForFinish(agentId, 0),
     cancel: (agentId) => client.cancelAgent(agentId),

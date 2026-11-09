@@ -461,8 +461,48 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
   }
 
   /**
+   * The agent Paseo imports for session `session`, which a new prompt's lease resumes, set to run as `create` would, and
+   * the turn it is sent; or why it was not imported, for the notice. Paseo imports a session it does not hold all the
+   * same and fails its first turn, so only one it lists in the place's directory is imported. An import runs nothing
+   * until the turn is sent, so one a stop overtakes leaves an idle agent, never work in the worktree.
+   */
+  async function imported(live: Daemon, { session, create, provider, how }: { session: string; create: AgentCreate; provider: string; how: Launch }): Promise<{ create: AgentCreate; turn: NonNullable<AgentPrompt['turn']> } | { why: string }> {
+    const { place } = how;
+
+    if (place.kind !== 'worktree' || !place.workspace) return { why: 'its place has no Paseo workspace' };
+
+
+    try {
+      if (!(await live.sessions(how.cwd, provider)).includes(session)) return { why: `Paseo lists no ${provider} session of that id in ${how.cwd}` };
+    } catch (error) {
+      return { why: `Paseo did not list its sessions in ${how.cwd} (${error instanceof Error ? error.message : String(error)})` };
+    }
+
+    let agentId: string;
+
+    try {
+      agentId = await live.importSession({ provider, session, cwd: how.cwd, workspaceId: place.workspace.id, labels: create.labels });
+    } catch (error) {
+      return { why: `Paseo did not import it (${error instanceof Error ? error.message : String(error)})` };
+    }
+
+    const { modeId, thinkingOptionId } = create.config;
+
+    try {
+      await live.configure(agentId, { model: create.config.provider.slice(provider.length + 1), ...(modeId !== undefined && { modeId }), ...(thinkingOptionId !== undefined && { thinkingOptionId }) });
+    } catch (error) {
+      return { why: `Paseo did not set the agent ${agentId} it imported to run as the step asks (${error instanceof Error ? error.message : String(error)}), so that agent stays idle` };
+    }
+
+    // An import carries no env, so the turn names the run's scratch directory the agent's shell does not.
+    const scratch = `This agent resumes an earlier session, so its shell has no ${RUN_DIR_ENV}: the run's scratch directory is ${place.runDir}.`;
+
+    return { create: { ...create, agentId }, turn: { prompt: `${scratch}\n\n${how.prompt}`, of: { session } } };
+  }
+
+  /**
    * Creates a pending prompt's agent on one of the tool's models, and follows it, or sends its turn to the agent of the
-   * earlier prompt it continues. Its agent record is journaled before
+   * earlier prompt it continues, or to the one Paseo imported for the session it resumes. Its agent record is journaled before
    * the cancel marker is read, so a cancel, here or in another process, either finds that record and stops the agent, or
    * is seen here, and no create is sent.
    */
@@ -504,12 +544,24 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than continue the conversation of ${earlier.op}: ${continued.why}.` });
     }
 
+    // A session another driver ran, or an earlier pass whose place is gone, is imported only when nothing continues.
+    const { resume } = request.lease;
+    const resumed = !earlier && resume !== undefined && !through ? await imported(live, { session: resume, create, provider: on.provider, how }) : undefined;
+
+    if (!goesOn(op, following)) return;
+
+    if (resume !== undefined && resumed && 'why' in resumed) {
+      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than resume session ${resume}: ${resumed.why}.` });
+    }
+
     const base = { kind: 'agent', handle: request.handle, tool: target.name, answer: how.answer, cwd: how.cwd } as const;
 
     // A turn of the earlier agent: Paseo already shows it, and its create stays the earlier prompt's.
     const record: AgentPrompt = earlier && continued && !('why' in continued)
-      ? { ...base, create: continued.create, dispatched: 'confirmed', continues: { op: earlier.op, prompt: how.prompt } }
-      : { ...base, create };
+      ? { ...base, create: continued.create, dispatched: 'confirmed', turn: { prompt: how.prompt, of: { op: earlier.op } } }
+      : resumed && !('why' in resumed)
+        ? { ...base, create: resumed.create, dispatched: 'confirmed', turn: resumed.turn }
+        : { ...base, create };
 
     journal.savePrompt(op, record);
 
@@ -604,12 +656,12 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     const { stopped } = following;
 
     try {
-      // A turn of an earlier prompt's agent creates none: one Paseo no longer shows ends the prompt, which sent it nothing
-      // the agent could still run, or whose turn ended with the agent.
-      if (record.continues && !(await live.agent(create.agentId))) {
+      // A turn of an agent the prompt did not create creates none: one Paseo no longer shows ends the prompt, which sent
+      // it nothing the agent could still run, or whose turn ended with the agent.
+      if (record.turn && !(await live.agent(create.agentId))) {
         settle(op, {
           op, state: 'failed',
-          failure: { code: 'tool_failed', message: `Paseo no longer shows the ${record.tool} agent ${create.agentId}, whose conversation this step continues. Run \`teamai workflow retry\` to run the step in a new agent.` },
+          failure: { code: 'tool_failed', message: `Paseo no longer shows the ${record.tool} agent ${create.agentId}, whose conversation this step goes on with. Run \`teamai workflow retry\` to run the step in a new agent.` },
         }, following);
 
         return;
@@ -619,7 +671,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       // that fails throws: an earlier runtime may have created the agent.
       let creation: Creation = { outcome: 'created' };
 
-      if (!record.continues && !(await live.agent(create.agentId))) {
+      if (!record.turn && !(await live.agent(create.agentId))) {
         // Journaled before it is sent, and kept until Paseo shows the agent: a create that failed may still start it.
         dispatch(op, 'unconfirmed');
         creation = await live.create(record.cwd, create, { isIdle: sandboxed !== undefined });
@@ -684,12 +736,12 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       }
     }
 
-    // A turn of an earlier prompt's agent is sent once, unless a stop came first: its record says so before it is sent.
-    if (record.continues && current?.kind === 'agent' && !current.sent && !journal.isCancelled(op) && !closeStops.has(op) && waiting.get(op) === following) {
+    // A turn of an agent the prompt did not create is sent once, unless a stop came first: its record says so before it is sent.
+    if (record.turn && current?.kind === 'agent' && !current.sent && !journal.isCancelled(op) && !closeStops.has(op) && waiting.get(op) === following) {
       journal.savePrompt(op, { ...current, sent: true });
 
       try {
-        await live.send(create.agentId, record.continues.prompt);
+        await live.send(create.agentId, record.turn.prompt);
       } catch (error) {
         settle(op, {
           op, state: 'failed',
@@ -854,7 +906,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result, ...(record.continues && { resumed: true }) }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result, ...(record.turn && { resumed: true }) }, following);
 
           return;
         }

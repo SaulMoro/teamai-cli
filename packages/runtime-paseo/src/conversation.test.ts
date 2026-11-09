@@ -157,8 +157,8 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode', home: written } });
   });
 
-  it('starts a new agent for a step that asks to resume a session, and says it did not resume it', async () => {
-    behave({ output: { verdict: 'approve' } });
+  it('starts a new agent for a step that asks to resume a session Paseo does not list in the worktree, and says why', async () => {
+    behave({ output: { verdict: 'approve' }, provider_sessions: ['session-of-another-directory'] });
     const runtime = start();
     await ready(runtime);
     const handle = await opened(runtime);
@@ -166,9 +166,46 @@ describe('teamai-runtime-paseo', () => {
     runtime.send(promptRequest(handle, 'op-0000000b', { resume: 'session-of-an-earlier-pass' }));
 
     const end = await runtime.next(isEnd('op-0000000b'));
-    const [create] = received();
+    const create = received().find((request) => request.type === 'agent.create.request');
     expect(end).toEqual({ op: 'op-0000000b', event: 'finished', session: { tool: 'claude', id: `fake-session-${String(create?.agentId)}` }, result: { output: { verdict: 'approve' } } });
     expect(JSON.stringify(create)).not.toContain('session-of-an-earlier-pass');
+    expect(received().filter((request) => request.type === 'import_agent_request')).toEqual([]);
+    // Paseo imports a session it does not hold all the same, and fails its first turn (recorded on 0.14.0).
+    expect(runtime.lines.filter((line) => 'event' in line && line.event === 'notice' && 'op' in line && line.op === 'op-0000000b')).toEqual([{
+      op: 'op-0000000b', event: 'notice',
+      message: `teamai-runtime-paseo starts a new agent for step "review" rather than resume session session-of-an-earlier-pass: Paseo lists no claude session of that id in ${worktree}.`,
+    }]);
+  });
+
+  it('imports the session a step resumes, which Paseo lists in the worktree, runs it as the step asks, and sends it the prompt as a new turn', async () => {
+    behave({ output: { verdict: 'approve' }, provider_sessions: ['session-of-another-driver'] });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+
+    runtime.send(promptRequest(handle, 'op-0000000b', { resume: 'session-of-another-driver', model: { name: 'claude-opus-5-5', effort: 'high' } }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'finished', session: { tool: 'claude', id: 'session-of-another-driver' }, result: { output: { verdict: 'approve' } }, resumed: true,
+    });
+    const crossed = received();
+    expect(crossed.filter((request) => request.type === 'agent.create.request')).toEqual([]);
+    const imported = crossed.find((request) => request.type === 'import_agent_request');
+    expect(imported).toMatchObject({
+      providerId: 'claude', providerHandleId: 'session-of-another-driver', cwd: worktree, workspaceId: worktreeWorkspace(),
+      labels: { 'teamai-attempt': `${RUN}/${ATTEMPT}`, 'teamai-run': RUN, 'teamai-step': 'review' },
+    });
+    const agent = String(crossed.find((request) => request.type === 'send_agent_message_request')?.agentId);
+    // Paseo starts an imported agent on its own default model and mode (recorded on 0.14.0): the step's are set before the turn.
+    expect(crossed.filter((request) => request.type.startsWith('set_agent_')).map(({ type, agentId, modelId, modeId, thinkingOptionId }) => ({ type, agentId, modelId, modeId, thinkingOptionId }))).toEqual([
+      { type: 'set_agent_model_request', agentId: agent, modelId: 'claude-opus-5-5', modeId: undefined, thinkingOptionId: undefined },
+      { type: 'set_agent_mode_request', agentId: agent, modelId: undefined, modeId: 'auto', thinkingOptionId: undefined },
+      { type: 'set_agent_thinking_request', agentId: agent, modelId: undefined, modeId: undefined, thinkingOptionId: 'high' },
+    ]);
+    // An import carries no env, so the turn names the run's scratch directory.
+    const text = String(crossed.find((request) => request.type === 'send_agent_message_request')?.text);
+    expect(text.split('\n\n')[0]).toBe(`This agent resumes an earlier session, so its shell has no TEAMAI_RUN_DIR: the run's scratch directory is ${path.join(dir, 'run')}.`);
+    expect(text).toContain('Review the change.');
   });
 
   it('fails a step whose model the daemon lacks as model_unavailable, naming what it offers, and creates no agent', async () => {
