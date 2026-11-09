@@ -1201,6 +1201,68 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     }]);
   });
 
+  it('stops only the running turn when the later place closes, and leaves the conversation to a step that continues it after', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ hold_ms: 60_000, output: { fixed: true } });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000d', 'display'));
+    runtime.send({ type: 'close', handle: fix });
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toEqual({ op: 'op-0000000d', event: 'cancelled' });
+    await runtime.next((line) => 'handle' in line && line.handle === fix && 'event' in line && line.event === 'closed');
+    expect(received().filter((request) => ['cancel_agent_request', 'archive_workspace_request', 'delete_agent_request'].includes(request.type))).toEqual([expect.objectContaining({ type: 'cancel_agent_request', agentId: agent })]);
+
+    // A later step goes on with the same conversation.
+    const again = await opened(runtime, { attempt: 'a0123abcf', op: 'op-0000000e' });
+    behave({ output: { fixed: true } });
+    runtime.send(fixing(again, 'op-0000000f', review, 'op-0000000b'));
+    expect(await runtime.next(isEnd('op-0000000f'))).toMatchObject({ event: 'finished', session: { id: `fake-session-${agent}` }, resumed: true });
+  });
+
+  it('reattaches a continuing prompt resent to a runtime started again while its turn runs, and sends the turn once', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const first = start();
+    await ready(first);
+    const { review, agent } = await reviewed(first);
+    const fix = await opened(first, { attempt: 'a0123abce', op: 'op-0000000c' });
+    const release = path.join(dir, 'release');
+    behave({ release, output: { fixed: true } });
+    first.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    // Killed once Paseo runs the turn.
+    await expect.poll(() => received().some((request) => request.type === 'send_agent_message_request')).toBe(true);
+    await first.kill();
+
+    const second = start();
+    await ready(second);
+    second.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    await second.next(isOp('op-0000000d', 'accepted'));
+    fs.writeFileSync(release, '');
+
+    expect(await second.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', session: { id: `fake-session-${agent}` }, result: { output: { fixed: true } }, resumed: true });
+    expect(received().filter((request) => request.type === 'send_agent_message_request')).toHaveLength(1);
+  });
+
+  it('continues the first prompt\'s conversation in a chain, as the lease of a third step names it', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000d'));
+    const check = await opened(runtime, { attempt: 'a0123abcf', op: 'op-0000000e' });
+
+    runtime.send(fixing(check, 'op-0000000f', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000f'))).toMatchObject({ event: 'finished', session: { id: `fake-session-${agent}` }, resumed: true });
+    expect(received().filter((request) => request.type === 'send_agent_message_request').map((request) => request.agentId)).toEqual([agent, agent]);
+  });
+
   it('cancels only the continued turn, and leaves the agent to the earlier place, whose close ends it', async () => {
     behave({ output: { verdict: 'request-changes' } });
     const runtime = start();

@@ -12,7 +12,7 @@ import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { z } from 'zod';
 import type { Creation, Daemon, Model, Target, WaitEnd } from './daemon/connect.js';
-import { resolvedDir, type AgentCreate, type AgentPrompt, type Place, type PromptRecord } from './journal.js';
+import { resolvedDir, type AgentCreate, type AgentPrompt, type Conversation, type Place, type PromptRecord } from './journal.js';
 import { notOffered } from './offer.js';
 import type { Following, ProcessState } from './process-state.js';
 import { isPaseoTool, type EnsureProvider, type PaseoTool } from './providers.js';
@@ -424,22 +424,20 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
   };
 
   /**
-   * The agent of the earlier prompt a lease continues, when this prompt can send it its turn: one this runtime holds in
-   * a place still open, whose prompt finished a step, created as `create` would be, in this place's Paseo workspace, and
-   * idle there; or why not, for the notice. A place that runs through a sandbox never continues one: each prompt there
-   * runs in an agent its registration names.
+   * The conversation a lease continues, by its id, when this prompt can send it its turn: one this runtime holds for a
+   * place still open, whose agent was created as `create` would be, in this place's Paseo workspace, and idle there; or
+   * why not, for the notice. A place that runs through a sandbox never continues one: each prompt there runs in an agent
+   * its registration names.
    */
-  async function continuable(live: Daemon, earlier: { handle: string; op: OpId }, create: AgentCreate, place: Place): Promise<AgentPrompt | { why: string }> {
-    const record = journal.prompt(earlier.op);
-    const at = journal.place(earlier.handle);
+  async function continuable(live: Daemon, earlier: { handle: string; op: OpId }, create: AgentCreate, place: Place): Promise<Conversation | { why: string }> {
+    const conversation = journal.conversation(earlier.op);
+    const at = conversation && journal.place(conversation.handle);
 
-    if (record?.kind !== 'agent' || record.handle !== earlier.handle || !at) return { why: 'this runtime no longer holds its agent' };
-    const { agentId } = record.create;
-
-    if (record.outcome?.state !== 'finished' || record.answer.kind !== 'result-file') return { why: `agent ${agentId} did not finish a step` };
+    if (conversation?.handle !== earlier.handle || !at) return { why: 'this runtime no longer holds its agent' };
+    const { agentId } = conversation.create;
 
     if (throughOf(at) || throughOf(place)) return { why: 'a place that runs through a sandbox runs each prompt in an agent of its own' };
-    const other = differs(agentId, record.create.config, create.config);
+    const other = differs(agentId, conversation.create.config, create.config);
 
     if (other) return { why: other };
 
@@ -457,7 +455,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       return { why: `Paseo did not show agent ${agentId} (${error instanceof Error ? error.message : String(error)})` };
     }
 
-    return record;
+    return conversation;
   }
 
   /**
@@ -564,6 +562,9 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
         : { ...base, create };
 
     journal.savePrompt(op, record);
+
+    // A conversation this prompt started is this place's, which a later prompt may continue; a turn starts none.
+    if (record.answer.kind === 'result-file' && (!record.turn || 'session' in record.turn.of)) journal.saveConversation(op, { handle: request.handle, tool: record.tool, create: record.create });
 
     if (!goesOn(op, following)) return;
     await follow(live, op, record, following);
