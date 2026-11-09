@@ -798,10 +798,6 @@ function latestContinuation(run: RunState, session: SessionRef | undefined): Lea
 }
 
 /**
- * The session a step resumes: its own latest with `session: continue`, or the latest of the step `session.from` names,
- * as later steps that continued it left it.
- */
-/**
  * The step `session.from: name` of a step in `scope` resumes: the step of that name in the scope, else, inside a nested
  * scope, the one beside its enclosing step. Undefined when there is none.
  */
@@ -820,6 +816,10 @@ export function sessionSource(run: RunState, scope: Scope, name: string): { stat
   return outer && outerDefinition ? { state: outer, definition: outerDefinition } : undefined;
 }
 
+/**
+ * The session a step resumes: its own latest with `session: continue`, or the latest of the step `session.from` names,
+ * as later steps that continued it left it.
+ */
 export function sessionOf(run: RunState, scope: Scope, state: StepState, definition: WorkflowStep): LeaseSession | WorkflowFailure | undefined {
   if (!definition.session) return undefined;
 
