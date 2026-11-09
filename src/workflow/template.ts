@@ -379,6 +379,26 @@ export function stepExpressions(step: Pick<WorkflowStep, 'if' | 'loop' | 'break'
 }
 
 /**
+ * The paths step `step` reads in its expressions and templates, its own workflow's steps, the inputs, the item and the
+ * run alike. `bindsItem` is whether its templates read `item`, as pull decided. An expression or template that does
+ * not parse reads nothing here; settling its workflow reports it.
+ */
+export function stepPaths(step: WorkflowStep, bindsItem: boolean): ExpressionPath[] {
+  return [
+    ...stepExpressions(step).flatMap(({ source }) => {
+      const parsed = parseExpression(source);
+
+      return parsed.ok ? expressionPaths(parsed.expression) : [];
+    }),
+    ...templatedTexts(step).flatMap(({ text }) => {
+      const template = parseTemplate(text, bindsItem);
+
+      return template.ok ? templatePaths(template.template) : [];
+    }),
+  ];
+}
+
+/**
  * Renders every string inside a value, at any depth, with `renderValue`, so a string that is exactly one
  * `{{ … }}` keeps the JSON value it reads. Other values stay as they are. Fails at the first template that does not parse.
  * `item` is a template only when `context` binds one.

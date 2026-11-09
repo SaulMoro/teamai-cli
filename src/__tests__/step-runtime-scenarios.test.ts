@@ -5,6 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
+import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '../utils/logger.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
@@ -20,7 +21,7 @@ import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { dirs, git, pull, receiveHook, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
 import { fakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
-import { leaseNext } from '../workflow/engine.js';
+import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
@@ -1597,6 +1598,52 @@ steps:
       counted: number
 `;
 
+/** As WHOLE with PAIR, written inline: its steps read the run's inputs and their own steps. */
+const INLINE = `schemaVersion: v1alpha1
+name: slow
+description: Runs a pair of steps written inline.
+inputs: { mark: string }
+steps:
+  - id: work
+    workspace: new
+    workflow:
+      outputs:
+        counted: steps.count.outputs.counted
+      steps:
+        - id: write
+          workspace: continue
+          env:
+            MARK: "{{ inputs.mark }}"
+          command: echo written > "$MARK"
+        - id: count
+          needs: [write]
+          workspace: continue
+          command: echo '{"counted":1}'
+          output:
+            counted: number
+`;
+
+/** An inline workflow whose step reads a step around it, which a nested run has none of. */
+const INLINE_AROUND = `schemaVersion: v1alpha1
+name: slow
+description: Names a mark, then writes it in an inline workflow.
+steps:
+  - id: name
+    command: echo '{"mark":"made.txt"}'
+    output:
+      mark: string
+  - id: work
+    needs: [name]
+    workspace: new
+    workflow:
+      steps:
+        - id: write
+          workspace: continue
+          env:
+            MARK: "{{ steps.name.outputs.mark }}"
+          command: echo written > "$MARK"
+`;
+
 /** As PAIR, with a gate before the count: the member asks the owner, whose person answers. */
 const GATED = `schemaVersion: v1alpha1
 name: pair
@@ -1928,6 +1975,36 @@ steps:
     expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
     expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
   }, 90_000);
+
+  it('offers an inline workflow step whose steps read only the run\'s inputs as one attempt, which a member runs as a nested run and ends with its outputs', async () => {
+    const owner = await ownerOf({ workflow: INLINE, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId(), 'workflow');
+    expect(await owner.record()).toMatchObject({ state: 'offered', lease: { kind: 'workflow', step: 'work', inputs: { mark: 'made.txt' } } });
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', outputs: { counted: 1 } }) });
+    expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
+  }, 90_000);
+
+  it('starts an inline workflow step one of whose steps reads a step around it where it stands, since a nested run has none of them', async () => {
+    const acme = team({ slow: INLINE_AROUND });
+    const alice = await acme.member('alice');
+    const run = await startIn(alice, 'slow', {});
+    const named = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], workflow: true } });
+    const lease = z.object({ step: z.string(), attempt: z.string(), revision: z.number() }).parse('data' in named ? named.data.lease : undefined);
+    expect(lease.step).toBe('name');
+    await reportAttempt(alice.config, run, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: alice.driver, outputs: { mark: 'made.txt' } });
+
+    const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES], workflow: true } });
+
+    expect(next).toMatchObject({ data: { lease: { step: 'work.write' } } });
+  }, 60_000);
 
   it('leaves a whole workflow step one of whose steps requires env this member\'s workflows.allow.env does not allow, as the owner\'s negotiation judges each step, rather than claiming and failing it', async () => {
     const owner = await ownerOf({

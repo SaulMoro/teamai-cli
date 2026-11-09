@@ -36,7 +36,7 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
+import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { launchToolFor, runPromptStep, type StagedLease } from '../steps/prompt.js';
@@ -203,7 +203,7 @@ function runsOf(kind: FleetLease['kind'], defined: Extract<ReturnType<typeof def
     case 'prompt':
       return [{ step: defined.step, executor: kind, requires: defined.requires }];
     case 'workflow': {
-      const fit = wholeFit(defined.step, workflowRunBy(definitions, defined.step, ''), defined.requires);
+      const fit = wholeFit(defined.step, workflowRunBy(definitions, defined.step, ''), defined);
 
       return 'unfit' in fit ? fit : fit.runs;
     }
@@ -1008,17 +1008,17 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
     case 'workflow': {
       if (step.workflow === undefined) return { refused: `workflow "${definition.name}" has no workflow step at ${lease.step}.` };
       // A member runs only the sub-graph it was offered whole, as its own copy of the team's workflows defines it.
-      const fit = wholeFit(step, workflowRunBy(found.definitions, step, ''), requires);
+      const runs = workflowRunBy(found.definitions, step, '');
+      const fit = wholeFit(step, runs, defined);
 
-      if ('unfit' in fit) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${fit.unfit}.` };
-      const { child } = fit;
-      const inputs = leaseInputs(step, child, values, run);
+      if ('unfit' in fit || runs === undefined) return { refused: `in workflow "${definition.name}", step "${lease.step}" does not run whole here: ${'unfit' in fit ? fit.unfit : 'it runs no workflow'}.` };
+      const inputs = leaseInputs(step, runs, values, run);
 
       if ('error' in inputs) return { refused: `workflow "${definition.name}" step "${lease.step}" ${inputs.error}.` };
 
       if (!isDeepStrictEqual(inputs.inputs, lease.inputs)) return { refused: `the offer's inputs differ from what workflow "${definition.name}" renders from the offer's values for step "${lease.step}".` };
 
-      return { kind: 'workflow', child: wholeRunDefinition(step, child), inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
+      return { kind: 'workflow', child: wholeRunDefinition(step, fit.child, defaultModel), inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
     }
 
     case 'command': {
@@ -1060,20 +1060,22 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
  * `by` that runs it and the step `from` that wrote it.
  */
 function definedStep({ definition, workflows }: Definitions, stepPath: string):
-  | { kind: 'step'; step: WorkflowStep; defaultModel?: string; requires: InEffect } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
+  | { kind: 'step'; step: WorkflowStep; defaultModel?: string; requires: InEffect; around: string } | { kind: 'admitted'; by: string; from: string } | { kind: 'none' } {
   const segments = parseStepPath(stepPath);
   let steps = definition.finally?.some((step) => step.id === segments[0]?.id) ? definition.finally : definition.steps;
   // The `defaults.model` in effect, a nested workflow's over the one it runs in, as the engine's scope keeps it.
   let defaultModel = definition.defaults?.model;
   // The `requires` in effect, which add up level by level as the engine's scope merges them.
   let requires = mergeRequirements(definition.defaults?.requires);
+  // The workflow file the step is in, an inline workflow's steps being steps of the file it is written in.
+  let around = definition.name;
 
   for (const [index, segment] of segments.entries()) {
     const step = steps.find((item) => item.id === segment.id);
 
     if (!step) return { kind: 'none' };
 
-    if (index === segments.length - 1) return { kind: 'step', step, requires: mergeRequirements(requires, step.requires), ...(defaultModel !== undefined && { defaultModel }) };
+    if (index === segments.length - 1) return { kind: 'step', step, requires: mergeRequirements(requires, step.requires), around, ...(defaultModel !== undefined && { defaultModel }) };
     const runs = stepWorkflow(step);
 
     if (runs?.kind === 'from') return { kind: 'admitted', by: step.id, from: runs.step };
@@ -1083,6 +1085,7 @@ function definedStep({ definition, workflows }: Definitions, stepPath: string):
     steps = child.steps;
     defaultModel = ('defaults' in child ? child.defaults?.model : undefined) ?? defaultModel;
     requires = mergeRequirements(requires, step.requires, 'defaults' in child ? child.defaults?.requires : undefined);
+    around = isWorkflowFile(child) ? child.name : around;
   }
 
   return { kind: 'none' };
