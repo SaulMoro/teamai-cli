@@ -651,6 +651,42 @@ describe('the fleet', () => {
     expect(runsOf('bob').filter((id) => !bobsBefore.has(id)).map((id) => runStatusOf('bob', id)).sort()).toEqual(['cancelled', 'succeeded']);
   }, 240_000);
 
+  it('runs no whole workflow step again after a restart while the record of the nested run the killed member left cannot be read, and says why', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const started = teamai('alice', ['workflow', 'start', 'wholehold', '--driver', 'fan-fleet'], (pid) => { alicePid = pid; });
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    const pidFile = path.join(homeOf('bob'), 'nested.pid');
+    fs.rmSync(pidFile, { force: true });
+    const bobsBefore = new Set(runsOf('bob'));
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool'], (pid) => { bobPid = pid; });
+    await waitOn(() => fs.existsSync(pidFile), 60_000, () => bobPid, taking);
+    const left = Number(fs.readFileSync(pidFile, 'utf8'));
+    process.kill(bobPid, 'SIGKILL');
+    await taking;
+    const nested = path.join(dataHomeOf('bob'), 'workflows', 'runs', run, 'attempts', records(run)[0]?.attempt ?? '', 'nested-run');
+    fs.chmodSync(nested, 0o000);
+
+    try {
+      const again = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+
+      // The member keeps the claim it cannot finish, and takes no other work: the owner gives it up after stale_after.
+      expect(again.envelope(), said(again)).toMatchObject({ data: { idle: {} } });
+      expect(again.stderr).toContain(`which this member claimed before: The nested run of the whole workflow it ran may still run: its id in ${nested} could not be read`);
+      expect(isAlive(left)).toBe(true);
+      expect(runsOf('bob').filter((id) => !bobsBefore.has(id))).toHaveLength(1);
+    } finally {
+      fs.chmodSync(nested, 0o644);
+      if (isAlive(left)) process.kill(left, 'SIGKILL');
+      await teamai('alice', ['workflow', 'cancel', run]);
+      await started;
+    }
+  }, 240_000);
+
   it('stops a member\'s step when the owner cancels the run, and the member pushes its work and answers the cancel', async () => {
     let alicePid = 0;
     const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });

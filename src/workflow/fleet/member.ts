@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
+import { readFileIfExists } from '../../utils/fs.js';
 import { log } from '../../utils/logger.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../tool-launch/process-stop.js';
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
@@ -829,9 +830,19 @@ async function endNestedRun(config: LocalConfig, nested: RunId, message: string)
  */
 async function endLeftNestedRun(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<string | undefined> {
   const file = nestedRunPath(config, run, attempt);
-  const left = RunIdSchema.safeParse((await fs.readFile(file, 'utf8').catch(() => '')).trim());
+  // Only a record that is not there says no nested run is left: one that cannot be read may name a run still running.
+  let text: string | null;
 
-  if (!left.success) return undefined;
+  try {
+    text = await readFileIfExists(file);
+  } catch (error) {
+    return `The nested run of the whole workflow it ran may still run: its id in ${file} could not be read (${error instanceof Error ? error.message : String(error)}). Make the file readable, then run the step again.`;
+  }
+
+  if (text === null) return undefined;
+  const left = RunIdSchema.safeParse(text.trim());
+
+  if (!left.success) return `The nested run of the whole workflow it ran may still run: ${file} does not hold a run id. Stop that run with teamai workflow cancel, remove the file, then run the step again.`;
   const failed = await endNestedRun(config, left.data, 'Cancelled: the fleet member that ran it stopped, and runs its step again');
 
   if (failed !== undefined) return `The nested run ${left.data} of the whole workflow it ran may still run: ${failed}`;
