@@ -292,6 +292,27 @@ When the checkout has an `origin` and the step made commits, the driver pushes t
 
 On a runtime that launches agents its own way, such as T3 or Paseo, a step that continues a session goes on in the same conversation: teamai keeps the earlier step's place open, outside `max_parallel`, until no step left continues it, and the later step's prompt is one more turn of that thread or agent. The runtime starts a new conversation, with a notice that says why, when the earlier one is gone, runs another tool, or works in another directory. A runtime entry through another one (`through:`) keeps no place open. With the skill driver, a host that starts children sends each later step to the child that worked the conversation's first step.
 
+Steps share a conversation only when they share a workspace. T3 and Paseo give each top-level step its own worktree, so a top-level step that continues another always starts a new conversation, with the notice. To keep one conversation across steps, put them in a `workflow` step with `workspace: new`, and continue its workspace in each of them:
+
+```yaml
+schemaVersion: v1alpha1
+name: plan-and-make
+description: Plan a change, then make it in the same T3 thread or Paseo agent.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: plan
+          prompt: Plan the change.
+        - id: make
+          needs: [plan]
+          workspace: continue
+          session:
+            from: plan
+          prompt: Make the change you planned.
+```
+
 A command that starts its own sandbox, such as `docker`, stays read-only. What it writes does not become a branch a later step can merge.
 
 ```yaml

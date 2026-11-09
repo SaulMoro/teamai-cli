@@ -292,6 +292,27 @@ steps:
 
 在以自己的方式启动智能体的运行时上（例如 T3 或 Paseo），继续会话的步骤会在同一个对话里继续：teamai 让前一个步骤的位置保持打开（不占 `max_parallel`），直到没有剩下的步骤再继续它，后一个步骤的 prompt 是那个线程或智能体的又一轮。前一个对话已不存在、运行的是另一个工具，或工作在另一个目录时，运行时会开一个新对话，并发出一条说明原因的通知。经由另一个运行时（`through:`）的运行时条目不会保持任何位置打开。使用 skill 驱动时，会启动子智能体的宿主把之后的每个步骤都交给完成该对话第一个步骤的那个子智能体。
 
+只有共用一个工作区的步骤才会共用一个对话。T3 和 Paseo 给每个顶层步骤各自的 worktree，所以继续另一个步骤的顶层步骤总会开一个新对话，并发出那条通知。要让多个步骤保持在同一个对话里，把它们放进一个带 `workspace: new` 的 `workflow` 步骤，并在每个步骤里继续它的工作区：
+
+```yaml
+schemaVersion: v1alpha1
+name: plan-and-make
+description: Plan a change, then make it in the same T3 thread or Paseo agent.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: plan
+          prompt: Plan the change.
+        - id: make
+          needs: [plan]
+          workspace: continue
+          session:
+            from: plan
+          prompt: Make the change you planned.
+```
+
 自己启动沙箱的命令（例如 `docker`）仍然是只读的。它写出去的内容不会变成后续步骤可以合并的分支。
 
 ```yaml
