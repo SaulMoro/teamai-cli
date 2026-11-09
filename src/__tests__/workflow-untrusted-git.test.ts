@@ -2,7 +2,7 @@
  * git in a copy a step controlled (`untrustedGit`) starts no program the copy's own config names, whatever command a
  * finishing path runs there, while the programs the member's own config names still run.
  */
-import { execFileSync } from 'node:child_process';
+import { ChildProcess, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -219,6 +219,131 @@ describe('untrustedGit in a copy a step controlled', () => {
     const added = await untrustedGit(at.env, expiresAt)(at.dir, ['add', 'f']);
 
     expect({ code: added.code, ran: ran(at) }).toEqual({ code: 0, ran: 'slow\n' });
+  });
+});
+
+describe('untrustedGit reading the config of a copy once for several git calls', () => {
+  /** `at` with submodule `s` checked out at `s`, which has submodule `inner` checked out in it. */
+  function nested(at: Repo): { s: string; inner: string } {
+    const commitIn = (dir: string, file: string): void => {
+      execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: at.env });
+      fs.writeFileSync(path.join(dir, file), `${file}\n`);
+      execFileSync('git', ['add', file], { cwd: dir, env: at.env });
+      execFileSync('git', ['commit', '-q', '-m', file], { cwd: dir, env: at.env });
+    };
+    const innerSource = path.join(at.root, 'inner-source');
+    const subSource = path.join(at.root, 'sub-source');
+    commitIn(innerSource, 'i');
+    commitIn(subSource, 'g');
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', innerSource, 'inner'], { cwd: subSource, env: at.env });
+    execFileSync('git', ['commit', '-q', '-m', 'inner'], { cwd: subSource, env: at.env });
+    at.git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', subSource, 's']);
+    at.git(['-c', 'protocol.file.allow=always', 'submodule', 'update', '-q', '--init', '--recursive']);
+
+    return { s: path.join(at.dir, 's'), inner: path.join(at.dir, 's', 'inner') };
+  }
+
+  /** The git processes `run` spawns, counted where every child process of this one starts, as a `--require` preload would. */
+  async function gitSpawns(run: () => Promise<void>): Promise<number> {
+    const prototype: object = ChildProcess.prototype;
+    const original: unknown = Reflect.get(prototype, 'spawn');
+    if (typeof original !== 'function') throw new Error('ChildProcess has no spawn to count');
+    let count = 0;
+    Reflect.set(prototype, 'spawn', function (this: unknown, options: unknown) {
+      if (typeof options === 'object' && options !== null && 'file' in options && options.file === 'git') count += 1;
+
+      return Reflect.apply(original, this, [options]);
+    });
+
+    try {
+      await run();
+    } finally {
+      Reflect.set(prototype, 'spawn', original);
+    }
+
+    return count;
+  }
+
+  it('spawns no git to read the config of a copy with nested submodules again when nothing it depends on changed', async () => {
+    const at = repo();
+    nested(at);
+    const copyGit = untrustedGit(at.env);
+
+    const spawns = await gitSpawns(async () => {
+      for (let call = 0; call < 10; call += 1) expect((await copyGit(at.dir, ['rev-parse', 'HEAD'])).code).toBe(0);
+    });
+
+    // Ten calls, and the config and index of each of the three repositories read at most twice, not ten times.
+    expect(spawns).toBeLessThanOrEqual(10 + 2 * 3 * 2);
+  });
+
+  it('turns off a program a process writes into the copy\'s config between two git calls', async () => {
+    const at = repo();
+    const copyGit = untrustedGit(at.env);
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, ['diff', '--quiet']);
+    at.git(['config', '--local', 'diff.external', at.planted]);
+    await copyGit(at.dir, ['diff']);
+
+    expect(ran(at)).toBe('');
+  });
+
+  it('turns off a program a process writes into a nested submodule\'s config between two git calls', async () => {
+    const at = repo();
+    const { inner } = nested(at);
+    const copyGit = untrustedGit(at.env);
+    const status = ['status', '--porcelain', '--ignore-submodules=none'];
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, status);
+    execFileSync('git', ['config', '--local', 'filter.y.clean', at.passing], { cwd: inner, env: at.env });
+    fs.writeFileSync(path.join(execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: inner, env: at.env, encoding: 'utf8' }).trim(), 'info', 'attributes'), '* filter=y\n');
+    // A file whose stat changed and content did not makes git run the clean filter to compare it.
+    fs.utimesSync(path.join(inner, 'i'), new Date(), new Date(Date.now() + 5000));
+    const after = await copyGit(at.dir, status);
+
+    expect(after.code, after.stderr).toBe(0);
+    expect(ran(at)).toBe('');
+  });
+
+  it('turns off a program a process writes into a file the copy\'s config includes', async () => {
+    const at = repo();
+    const included = path.join(at.dir, 'extra.cfg');
+    fs.writeFileSync(included, '');
+    at.git(['config', '--local', 'include.path', included]);
+    const copyGit = untrustedGit(at.env);
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, ['diff', '--quiet']);
+    fs.writeFileSync(included, `[diff]\n\texternal = ${at.planted}\n`);
+    await copyGit(at.dir, ['diff']);
+
+    expect(ran(at)).toBe('');
+  });
+
+  it('turns off a program a file names that the copy\'s config includes on a branch a process checks out between two git calls', async () => {
+    const at = repo();
+    const included = path.join(at.root, 'side.cfg');
+    fs.writeFileSync(included, `[diff]\n\texternal = ${at.planted}\n`);
+    at.git(['config', '--local', 'includeIf.onbranch:side.path', included]);
+    at.git(['branch', 'side']);
+    const copyGit = untrustedGit(at.env);
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, ['diff', '--quiet']);
+    // The same commit, so neither the index nor any config file changes.
+    at.git(['symbolic-ref', 'HEAD', 'refs/heads/side']);
+    await copyGit(at.dir, ['diff']);
+
+    expect(ran(at)).toBe('');
+  });
+
+  it('turns off a program its own git call wrote into the copy\'s config on the next call', async () => {
+    const at = repo();
+    const copyGit = untrustedGit(at.env);
+
+    for (let call = 0; call < 3; call += 1) await copyGit(at.dir, ['diff', '--quiet']);
+    await copyGit(at.dir, ['config', '--local', 'diff.external', at.planted]);
+    await copyGit(at.dir, ['diff']);
+
+    expect(ran(at)).toBe('');
   });
 });
 
