@@ -1030,7 +1030,14 @@ steps:
       ok: boolean
 `;
 
-  it('keeps step one\'s place open until step two reports, and step two\'s lease continues its conversation', async () => {
+  /** `workflow`'s steps inside a \`workflow\` step \`change\` that opens a workspace they all work in. */
+  const inOneWorkspace = (workflow: string): string => {
+    const [header = '', steps = ''] = workflow.split('steps:\n');
+
+    return `${header}steps:\n  - id: change\n    workspace: new\n    workflow:\n      steps:\n${steps.replace(/^(?=.)/gmu, '      ')}`;
+  };
+
+  it('closes step one\'s place at its report when step two, a top-level step, gets a place of its own', async () => {
     const { config, workspace, runId } = await workflowFixture(PAIR);
     const toy = await toyDriver(path.dirname(workspace));
 
@@ -1039,6 +1046,20 @@ steps:
     const asked = toy.asked();
     const one = promptOf(asked, toy.leases(), 'one');
     const two = promptOf(asked, toy.leases(), 'two');
+    expect(two.continue).toBeUndefined();
+    expect(closedAt(asked, one.handle)).toBeGreaterThan(-1);
+    expect(closedAt(asked, one.handle)).toBeLessThan(two.at);
+  }, 30_000);
+
+  it('keeps step one\'s place open until step two reports, and step two\'s lease continues its conversation', async () => {
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
+    const toy = await toyDriver(path.dirname(workspace));
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const asked = toy.asked();
+    const one = promptOf(asked, toy.leases(), 'change.one');
+    const two = promptOf(asked, toy.leases(), 'change.two');
     expect(two.continue).toEqual({ handle: one.handle, op: one.op });
     expect(closedAt(asked, one.handle)).toBeGreaterThan(two.at);
     // Step two's own place closes once its report is recorded; step one's, which held the conversation, only after it.
@@ -1046,79 +1067,79 @@ steps:
     expect(closedAt(asked, two.handle)).toBeGreaterThan(two.at);
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error('run was not stored');
-    const sessions = run.steps.map((step) => ('session' in step ? step.session : undefined));
-    expect(run.steps[1]).toMatchObject({ id: 'two', resumed: { tool: 'claude', id: sessions[0] } });
+    const sessionOf = (id: string) => { const step = run.steps.find((item) => item.id === id); return step && 'session' in step ? step.session : undefined; };
+    expect(run.steps.find((step) => step.id === 'change.two')).toMatchObject({ resumed: { tool: 'claude', id: sessionOf('change.one') } });
   }, 30_000);
 
   it('names the conversation\'s first step in the lease of every later step of a chain', async () => {
-    const { config, workspace, runId } = await workflowFixture(`${PAIR}  - id: three
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(`${PAIR}  - id: three
     needs: [two]
     session:
       from: two
     prompt: Test the change.
     output:
       ok: boolean
-`);
+`));
     const toy = await toyDriver(path.dirname(workspace));
 
     expect(await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
     const asked = toy.asked();
-    const one = promptOf(asked, toy.leases(), 'one');
-    const three = promptOf(asked, toy.leases(), 'three');
+    const one = promptOf(asked, toy.leases(), 'change.one');
+    const three = promptOf(asked, toy.leases(), 'change.three');
     expect(three.continue).toEqual({ handle: one.handle, op: one.op });
     expect(closedAt(asked, one.handle)).toBeGreaterThan(three.at);
   }, 30_000);
 
   it('gives step two room under max_parallel: 1 while step one\'s place is held', async () => {
-    const { config, workspace, runId } = await workflowFixture(PAIR);
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
     const toy = await toyDriver(path.dirname(workspace), { maxParallel: 1 });
 
     expect(await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
-    expect(promptOf(toy.asked(), toy.leases(), 'two').continue).toBeDefined();
+    expect(promptOf(toy.asked(), toy.leases(), 'change.two').continue).toBeDefined();
   }, 30_000);
 
   it('closes step one\'s place at the run\'s end after the teamai that held it stopped between the two reports', async () => {
-    const { config, workspace, runId } = await workflowFixture(PAIR.replace('    needs: [one]\n', '    needs: [go]\n').replace('  - id: two\n', '  - id: go\n    needs: [one]\n    choose: { message: Go on?, options: [yes, no] }\n  - id: two\n'));
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR.replace('    needs: [one]\n', '    needs: [go]\n').replace('  - id: two\n', '  - id: go\n    needs: [one]\n    choose: { message: Go on?, options: [yes, no] }\n  - id: two\n')));
     const dir = path.dirname(workspace);
     const before = await toyDriver(dir);
     // Nobody answers the gate after step one, so this teamai stops with step one's place held.
     const unanswered = async (): Promise<string> => { throw new Error('closed'); };
 
     expect(await runLocalDriver(config, runId, workspace, { runtimes: before.runtimes, hitl: true, question: unanswered })).toMatchObject({ error: { code: 'interrupted' } });
-    const one = promptOf(before.asked(), before.leases(), 'one');
+    const one = promptOf(before.asked(), before.leases(), 'change.one');
     expect(closedAt(before.asked(), one.handle)).toBe(-1);
 
     const after = await toyDriver(dir);
     expect(await runLocalDriver(config, runId, workspace, { runtimes: after.runtimes, hitl: true, question: async () => 'yes' })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
     const asked = after.asked();
-    const two = promptOf(asked, after.leases(), 'two');
+    const two = promptOf(asked, after.leases(), 'change.two');
     expect(two.continue).toEqual({ handle: one.handle, op: one.op });
     expect(closedAt(asked, one.handle)).toBeGreaterThan(two.at);
   }, 30_000);
 
   it('closes step one\'s held place when the run is cancelled while step two runs', async () => {
-    const { config, workspace, runId } = await workflowFixture(PAIR);
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
     const dir = path.dirname(workspace);
     // Step one's agent finishes at once; step two's works until the run is cancelled.
-    fs.writeFileSync(path.join(dir, 'release-one'), '');
+    fs.writeFileSync(path.join(dir, 'release-change.one'), '');
     const toy = await toyDriver(dir, { release: path.join(dir, 'release-{step}') });
     const driving = runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes });
 
-    for (let waited = 0; !fs.existsSync(path.join(dir, 'toy-state', 'prompts.jsonl')) || !toy.leases().some((lease) => lease.step === 'two'); waited += 20) {
+    for (let waited = 0; !fs.existsSync(path.join(dir, 'toy-state', 'prompts.jsonl')) || !toy.leases().some((lease) => lease.step === 'change.two'); waited += 20) {
       if (waited > 20_000) throw new Error('step two was not sent');
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
 
     expect(await cancelRun(config, runId, await knownSecrets(config))).toMatchObject({ data: { run: { status: 'cancelled' } } });
     expect(await driving).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
-    const one = promptOf(toy.asked(), toy.leases(), 'one');
+    const one = promptOf(toy.asked(), toy.leases(), 'change.one');
     expect(closedAt(toy.asked(), one.handle)).toBeGreaterThan(-1);
   }, 30_000);
 
   it('lets step one\'s place close at the report of a step that continues its session on another runtime', async () => {
-    const { config, workspace, runId } = await workflowFixture(PAIR.replace('    prompt: Make the change you planned.\n', '    prompt: Make the change you planned.\n    tool: codex\n'));
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR.replace('    prompt: Make the change you planned.\n', '    prompt: Make the change you planned.\n    tool: codex\n')));
     const toy = await toyDriver(path.dirname(workspace), { can: { tools: ['claude'] } });
     const local = { kind: 'local' as const, use: 'local' as const, engine: { logins: [] } };
     const adapter: LocalToolAdapter = {
@@ -1129,8 +1150,8 @@ steps:
     expect(await runLocalDriver(config, runId, workspace, { adapter, runtimes: { ...toy.runtimes, runtimes: [...toy.runtimes.runtimes, local] } })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
     const asked = toy.asked();
-    const one = promptOf(asked, toy.leases(), 'one');
-    expect(toy.leases().map((lease) => lease.step)).toEqual(['one']);
+    const one = promptOf(asked, toy.leases(), 'change.one');
+    expect(toy.leases().map((lease) => lease.step)).toEqual(['change.one']);
     expect(closedAt(asked, one.handle)).toBeGreaterThan(-1);
   }, 30_000);
 });

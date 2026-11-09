@@ -11,7 +11,7 @@ import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '../
 import { redact } from '@teamai/shared/redact';
 import { openSessionArchive } from '../../../session-flow/archive.js';
 import { agentEvidence, attemptEnv } from '../../attempt-marker.js';
-import { leaseNext, promptTool, resumableSessions, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
+import { continuedConversations, leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { UsageLimits } from '../../usage-limits.js';
 import { LeaseWireSchema } from '../../lease-wire.js';
@@ -44,7 +44,7 @@ import { answerCallTool, runAnswerStep } from './answer-step.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, stepWorkflow, unattendedChoice } from '../../types.js';
 import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
-import { confinedOf, type SessionRef } from '../../workspace.js';
+import { confinedOf, sharedWorkspace, type SessionRef } from '../../workspace.js';
 import { git, headCommit } from '../../worktree.js';
 
 /** The signals that stop teamai, which the driver passes on to what it runs before it exits. */
@@ -793,18 +793,21 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     }
   }
 
-  /** The sessions the steps of the run that have not settled continue: each chain, with the sessions it continued. */
-  const continuedSessions = async (): Promise<SessionRef[]> => {
+  /**
+   * The conversations the steps of the run that have not settled go on in, each with its workspace, and the workspace
+   * step `step` shares with the steps beside it, where a later one may go on in its conversation.
+   */
+  const continuedAround = async (step: string): Promise<{ continued: ReturnType<typeof continuedConversations>; workspace: string | undefined }> => {
     const state = await readRun(config, runId);
 
-    return state !== 'missing' && state !== 'corrupt' ? resumableSessions(state).flatMap((chain) => [chain, ...chain.earlier ?? []]) : [];
+    return state !== 'missing' && state !== 'corrupt' ? { continued: continuedConversations(state), workspace: sharedWorkspace(state, step) } : { continued: [], workspace: undefined };
   };
 
   /**
-   * Closes each place held open for a conversation (`HeldPlace`) that `continued` no longer names, or, without it, every
+   * Closes each place held open for a conversation (`HeldPlace`) that `continued` no longer names in its workspace, or, without it, every
    * one: on its runtime of this driver, else through the driver its record names, as a killed teamai's are.
    */
-  const releaseHeld = async (continued?: readonly SessionRef[]): Promise<void> => {
+  const releaseHeld = async (continued?: ReturnType<typeof continuedConversations>): Promise<void> => {
     for (const { attempt, record } of await HeldPlace.toRelease(config, runId, continued)) {
       const slot = record.driver === defined.driver ? slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime) : undefined;
 
@@ -1065,13 +1068,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (isWorkflowError(answer) && answer.error.code !== 'lease_cancelled') return answer;
     // Its handle is closed only once the report is recorded, so a teamai killed before then reattaches to it. A prompt
     // on a runtime that launches agents its own way, not through another, keeps its place held for the conversation it
-    // launched while a step that has not settled continues it, outside any room under max_parallel; and each held place
-    // no such step continues any more is closed.
+    // launched while a step that has not settled continues it in the same workspace, outside any room under
+    // max_parallel; and each held place no such step continues any more is closed.
     const slot = slotOf.get(lease.attempt);
     const mayHold = !isWorkflowError(answer) && lease.prompt !== undefined && !lease.answer && !lease.confined && HeldPlace.holdsOn(slot);
-    const continued = await continuedSessions();
+    const { continued, workspace } = await continuedAround(lease.step);
 
-    if (mayHold && await HeldPlace.hold({ config, run: runId, attempt: lease.attempt, report: body, continued })) {
+    if (mayHold && await HeldPlace.hold({ config, run: runId, attempt: lease.attempt, report: body, continued, workspace })) {
       slotOf.delete(lease.attempt);
       attemptRuns.delete(lease.attempt);
     } else {

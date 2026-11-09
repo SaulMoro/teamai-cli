@@ -72,10 +72,11 @@ export const AttemptRuntimeRecordSchema = z.object({
   prompt: z.object({ op: OpIdSchema, continues: z.object({ handle: z.string(), op: OpIdSchema }).optional() }).optional(),
   /**
    * Set once the attempt reported, on a runtime that launches agents its own way: the place stays open for the
-   * conversation its prompt launched, whose session is `conversation`, since a step that has not settled continues it.
-   * The local driver closes it as soon as none does (`resumableSessions`), at the run's end, on a cancel or a release.
+   * conversation its prompt launched, whose session is `conversation`, since a step that has not settled continues it
+   * in `workspace`, the one the attempt's step shares with it. The local driver closes it as soon as none does
+   * (`continuedConversations`), at the run's end, on a cancel or a release.
    */
-  heldFor: z.object({ conversation: z.object({ tool: z.string(), id: z.string() }) }).optional(),
+  heldFor: z.object({ conversation: z.object({ tool: z.string(), id: z.string() }), workspace: z.string() }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
   toolHome: ToolHomeSchema.optional(),
   /**
@@ -198,10 +199,11 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 //
 //  A prompt on a runtime that launches agents its own way launches a conversation (a T3 thread, a Paseo agent) in its
 //  attempt's place. Once the attempt reported, the place is held open (`heldFor`) while a step that has not settled
-//  continues that conversation, so that step's prompt is a new turn of it (`PromptLease.continue`). The record is the
-//  one owner of that state:
+//  continues that conversation in the workspace the attempt's step worked in, so that step's prompt is a new turn of it
+//  (`PromptLease.continue`). A step with a place of its own, such as a top-level step, starts a new conversation, so no
+//  place is held for it. The record is the one owner of that state:
 //
-//    reported ──hold (a later step continues its conversation)──▶ held ──release (none does, run end, cancel)──▶ closed
+//    reported ──hold (a later step continues its conversation, in its workspace)──▶ held ──release (none does, run end, cancel)──▶ closed
 //        └──────────────────────────── any other report ──────────────────────────────────────────────────────▶ closed
 //
 //  A held place takes no room under `max_parallel`. Its exits are the driver's close after a report, at the run's end
@@ -220,6 +222,12 @@ function holdsOn(slot: { kind: 'local' | 'external'; launchesAgents: boolean; is
 type Held = { attempt: AttemptId; record: AttemptRuntimeRecord & { heldFor: NonNullable<AttemptRuntimeRecord['heldFor']> } };
 
 const isSameSession = (one: SessionRef, other: SessionRef): boolean => one.tool === other.tool && one.id === other.id;
+
+/** A conversation a step that has not settled goes on in, and the workspace it goes on in. */
+type Continued = SessionRef & { workspace: string };
+
+const continuesIn = (continued: readonly Continued[], conversation: SessionRef, workspace: string): boolean =>
+  continued.some((session) => isSameSession(session, conversation) && session.workspace === workspace);
 
 /** The places of run `run` held open for a conversation. */
 async function heldIn(config: LocalConfig, run: RunId): Promise<Held[]> {
@@ -257,26 +265,27 @@ async function conversationOf({ config, run, runtime, driver, sessions }: { conf
 
 /**
  * Holds the place of attempt `attempt`, which reported `report`, open for the conversation its prompt launched, when
- * `continued` (the sessions the steps that have not settled continue) names it. A prompt the runtime took as a turn of
- * an earlier attempt's conversation launched none: that attempt's place holds it. Answers whether it is held.
+ * `continued` (the conversations the steps that have not settled continue) names it in `workspace`, the one the
+ * attempt's step shares with the steps beside it. A step with no shared workspace holds none. A prompt the runtime took
+ * as a turn of an earlier attempt's conversation launched none: that attempt's place holds it. Answers whether it is held.
  */
-async function hold({ config, run, attempt, report, continued }: { config: LocalConfig; run: RunId; attempt: AttemptId; report: { tool?: string; session?: string; resumed?: SessionRef }; continued: readonly SessionRef[] }): Promise<boolean> {
+async function hold({ config, run, attempt, report, continued, workspace }: { config: LocalConfig; run: RunId; attempt: AttemptId; report: { tool?: string; session?: string; resumed?: SessionRef }; continued: readonly Continued[]; workspace: string | undefined }): Promise<boolean> {
   const record = await readAttemptRuntime(config, run, attempt);
 
-  if (!record?.prompt || record.phase === 'closed' || !report.tool || !report.session || (record.prompt.continues && report.resumed)) return false;
+  if (workspace === undefined || !record?.prompt || record.phase === 'closed' || !report.tool || !report.session || (record.prompt.continues && report.resumed)) return false;
   const conversation = { tool: report.tool, id: report.session };
 
-  if (!continued.some((session) => isSameSession(session, conversation))) return false;
-  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...record, heldFor: { conversation } });
+  if (!continuesIn(continued, conversation, workspace)) return false;
+  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...record, heldFor: { conversation, workspace } });
 
   return true;
 }
 
-/** The held places of run `run` to close: those whose conversation `continued` no longer names, or, without it, every one. */
-async function toRelease(config: LocalConfig, run: RunId, continued?: readonly SessionRef[]): Promise<Held[]> {
+/** The held places of run `run` to close: those whose conversation `continued` no longer names in their workspace, or, without it, every one. */
+async function toRelease(config: LocalConfig, run: RunId, continued?: readonly Continued[]): Promise<Held[]> {
   const held = await heldIn(config, run);
 
-  return continued === undefined ? held : held.filter(({ record }) => !continued.some((session) => isSameSession(session, record.heldFor.conversation)));
+  return continued === undefined ? held : held.filter(({ record }) => !continuesIn(continued, record.heldFor.conversation, record.heldFor.workspace));
 }
 
 /** The places held open for a conversation a later step continues (`heldFor`), and the moves between their states. */

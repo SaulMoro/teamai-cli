@@ -390,6 +390,20 @@ function copyOwner(run: StepTree, path: string): PathLevel | undefined {
   return splitLevels(levelsTo(run, path), path).ancestors.toReversed().find((ancestor) => opensCopy(ancestor.step));
 }
 
+/**
+ * The workspace step `path` shares with the steps beside it, so one conversation may go on from one of them to the next:
+ * the branch of the copy a step around it opens, when the step works in that copy (no workspace of its own, or
+ * `workspace: continue`). Undefined for a step that gets a place of its own, such as a top-level step.
+ */
+export function sharedWorkspace(run: RunState, path: string): string | undefined {
+  const { own, ancestors } = splitLevels(levelsTo(run, path), path);
+
+  if (!own || confinedOf(own.step) !== undefined || resolveMode(own.step, ancestors.map((ancestor) => ancestor.step)) !== 'continue') return undefined;
+  const owner = ancestors.toReversed().find((ancestor) => opensCopy(ancestor.step));
+
+  return owner?.kind === 'step' ? ownerBranch(run.id, owner) : undefined;
+}
+
 /** The branch of the copy `owner` opens: the run's own copy, or the branch of the step instance and its pass. */
 function ownerBranch(runId: string, owner: PathLevel): string {
   switch (owner.kind) {

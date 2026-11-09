@@ -38,7 +38,7 @@ import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, lease
 import { addItems, afterStanding, expandItems, isItem, itemLimit, itemLimitMismatch, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan, type WorkspaceRequest } from './workspace.js';
+import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, sharedWorkspace, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan, type WorkspaceRequest } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
 } from './pr-delivery.js';
@@ -3225,9 +3225,26 @@ function branchWriterLeased(run: RunState, branch: string): boolean {
  * step continues a pass a loop archived, or resumes the step it names around its workflow.
  */
 export function resumableSessions(run: RunState): LeaseSession[] {
+  const sessions = new Map(continuingSteps(run).map(({ session }) => [`${session.tool}\0${session.id}`, session]));
+
+  return [...sessions.values()];
+}
+
+/**
+ * The conversations the steps that have not settled go on in where they work: each session of a step's chain, with the
+ * workspace the step shares with the steps beside it (`sharedWorkspace`). A step that gets a place of its own, such as a
+ * top-level step, goes on in none, since its runtime starts it in a new one.
+ */
+export function continuedConversations(run: RunState): Array<SessionRef & { workspace: string }> {
+  return continuingSteps(run).flatMap(({ session, workspace }) => (workspace === undefined ? []
+    : [session, ...session.earlier ?? []].map(({ tool, id }) => ({ tool, id, workspace }))));
+}
+
+/** Each step that has not settled and resumes a session (see `resumableSessions`), with the workspace it shares. */
+function continuingSteps(run: RunState): Array<{ session: LeaseSession; workspace: string | undefined }> {
   const ahead = structuredClone(run);
   reconcileRun(ahead, new Date().toISOString());
-  const sessions = new Map<string, LeaseSession>();
+  const continuing: Array<{ session: LeaseSession; workspace: string | undefined }> = [];
 
   const visit = (scope: Scope, state: StepState, step: WorkflowStep, unstarted: boolean): void => {
     // A step of a workflow that has not started reads none of that workflow's steps yet.
@@ -3235,7 +3252,7 @@ export function resumableSessions(run: RunState): LeaseSession[] {
     const own = unstarted && scope.definition.steps.some((item) => item.id === from);
     const session = own ? undefined : sessionOf(ahead, scope, state, step);
 
-    if (session && !('code' in session)) sessions.set(`${session.tool}\0${session.id}`, session);
+    if (session && !('code' in session)) continuing.push({ session, workspace: sharedWorkspace(ahead, state.id) });
 
     if (state.status !== 'pending' || step.forEach) return;
     const child = childScope(ahead, scope, statesIn(ahead, scope), state, step);
@@ -3252,7 +3269,7 @@ export function resumableSessions(run: RunState): LeaseSession[] {
     if (located) visit(located.scope, state, located.step, false);
   }
 
-  return [...sessions.values()];
+  return continuing;
 }
 
 /** Why `resumed` is not a session the lease of `step` offered: its session, or one of the earlier ones it names. */
