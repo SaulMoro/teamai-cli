@@ -59,6 +59,18 @@ describe('waking a fleet member through another Paseo daemon', () => {
     expect(await ready(start())).not.toHaveProperty('wake');
   });
 
+  it('keeps the title of a wake that already names its pool, as the fleet owner writes it', async () => {
+    const gpu = await otherDaemon('gpu', { server_id: 'srv_gpu', ...checkout('gpu') });
+    behave({ hosts: [{ label: 'gpu-box', server_id: 'srv_gpu', url: gpu.url }] });
+    const runtime = start();
+    await ready(runtime);
+
+    runtime.send({ ...wakeRequest('op-000000ef'), title: 'teamai: step review of run r0123abcd, fleet pool gpu' });
+
+    await runtime.next(isWakeEnd('op-000000ef'));
+    expect(gpu.creates()).toMatchObject([{ config: { title: 'teamai: step review of run r0123abcd, fleet pool gpu' } }]);
+  });
+
   it('starts an agent on the first saved host that answers and has a workspace of the repository, titled with the run and pool, and told to end', async () => {
     const bare = await otherDaemon('bare', { server_id: 'srv_bare' });
     const gpu = await otherDaemon('gpu', { server_id: 'srv_gpu', ...checkout('gpu') });

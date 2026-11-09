@@ -86,7 +86,7 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
         }
 
         if (isCancelled(waking)) return { kind: 'cancelled' };
-        const title = request.title.endsWith(` · ${request.pool}`) ? request.title : `${request.title} · ${request.pool}`;
+        const title = request.title.includes(request.pool) ? request.title : `${request.title} · ${request.pool}`;
         const agentId = agentIdOf(request.op);
         waking.state = 'launched';
         const options = WAKE_ALLOWS[member.tool];
