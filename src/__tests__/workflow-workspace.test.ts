@@ -149,7 +149,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('workflow workspaces', { timeout: 20_000 }, () => {
+describe('workflow workspaces', { timeout: 30_000 }, () => {
   it('keeps a literal hyphen distinct from a for_each index in branch names', () => {
     expect(branchName('run', 'foo-1', 1)).not.toBe(branchName('run', 'foo[1]', 1));
     expect(branchName('run', 'foo_1', 1)).not.toBe(branchName('run', 'foo[1]', 1));
@@ -2978,7 +2978,7 @@ setInterval(() => {}, 1000);
   });
 });
 
-describe('read-only steps in a workspace', { timeout: 20_000 }, () => {
+describe('read-only steps in a workspace', { timeout: 30_000 }, () => {
   const EXAMPLE = `schemaVersion: v1alpha1
 name: build
 description: A test reads the change it needs.

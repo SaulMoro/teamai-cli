@@ -13,7 +13,6 @@ import { stopProcess } from '../tool-launch/process-stop.js';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
 import { MAX_TIMER_MS } from '../utils/timer.js';
-import { ConfigReads, type ConfigRead, type OriginEntry } from './config-reads.js';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */
 export const AGENT_PATHS: readonly string[] = agentConfigPaths();
@@ -126,21 +125,15 @@ export const UNTRUSTED_CONFIG: readonly string[] = [
  * first, then every program its config names turned off or replaced by the member's own (`plantedOff`), and `env`
  * instead of this process's environment, for git and for whatever the member's config starts, such as a filter, `kept`
  * among it. Past `expiresAt`, each git it started is stopped, so a filter that never returns holds its caller no longer
- * than that. What `plantedOff` read in a directory is reused for its next call there only while every file it depends on
- * is unchanged (`ConfigReads`).
+ * than that.
  */
 export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string, kept: MemberConfig = NO_MEMBER_CONFIG): UntrustedGit {
-  const reads = ConfigReads.open<PlantedOff, GitResult>(env);
-
   const run: Git = async (cwd, args, options) => {
-    const found = await reads.answer(cwd, () => plantedOff({ cwd, env, expiresAt, kept }));
+    const off = await plantedOff({ cwd, env, expiresAt, kept });
 
-    if ('failure' in found) return found.failure;
-    const off = found.answer;
-    const result = await spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...withPackPrograms(args, off.hasPackPrograms)], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
-    reads.ran(args);
+    if ('error' in off) return off.error;
 
-    return result;
+    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...withPackPrograms(args, off.hasPackPrograms)], boundedBy(options, expiresAt), { ...env, ...off.env, [HOOK_OFF]: 'false' });
   };
 
   return Object.assign(run, { [UNTRUSTED]: true as const });
@@ -343,11 +336,12 @@ export async function remoteGit(dir: string, member: MemberRemote, args: string[
  *
  * An entry `kept` holds counts as the member's own, as one in their global config does; a hook it names is still off.
  */
-async function plantedOff(input: { cwd: string; env: NodeJS.ProcessEnv; expiresAt: string | undefined; kept: MemberConfig }): Promise<{ answer: PlantedOff; read: ConfigRead } | { failure: GitResult }> {
+async function plantedOff(input: { cwd: string; env: NodeJS.ProcessEnv; expiresAt: string | undefined; kept: MemberConfig }): Promise<{ args: string[]; env: Record<string, string>; hasPackPrograms: boolean } | { error: GitResult }> {
   const { cwd, env, expiresAt, kept } = input;
+  // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
   const listed = await plantableIn({ cwd, env, expiresAt });
 
-  if ('error' in listed) return { failure: listed.error };
+  if ('error' in listed) return listed;
   const hooks = new Set<string>();
   const helpers = new Map<string, Array<{ trusted: boolean; value: string }>>();
   const programs = new Map<string, Array<{ trusted: boolean; value: string }>>();
@@ -394,73 +388,41 @@ async function plantedOff(input: { cwd: string; env: NodeJS.ProcessEnv; expiresA
   // The first `core.gitProxy` that matches a host wins, so no `-c` replaces one; the variable outranks every one.
   if (gitProxy) values.GIT_PROXY_COMMAND = env.GIT_PROXY_COMMAND ?? '';
 
-  return { answer: { args, env: values, hasPackPrograms }, read: listed.read };
+  return { args, env: values, hasPackPrograms };
 }
-
-/** The options and environment that turn off what a checkout's config names (`plantedOff`). */
-type PlantedOff = { args: string[]; env: Record<string, string>; hasPackPrograms: boolean };
 
 /**
  * The `PLANTABLE` entries of the config in `cwd`, then the local and worktree ones of each submodule checked out
  * under it, at any depth: git runs in a submodule for a command such as `status`, with what `-c` gives the
- * superproject, so the keys a submodule's config sets are turned off there too. `read` says what it read, for
- * `inputsOf`.
+ * superproject, so the keys a submodule's config sets are turned off there too.
  */
-async function plantableIn(input: { cwd: string; env: NodeJS.ProcessEnv; expiresAt: string | undefined; nested?: true }): Promise<{ entries: ConfigEntry[]; read: ConfigRead } | { error: GitResult }> {
+async function plantableIn(input: { cwd: string; env: NodeJS.ProcessEnv; expiresAt: string | undefined; nested?: true }): Promise<{ entries: ConfigEntry[] } | { error: GitResult }> {
   const { cwd, env, expiresAt, nested } = input;
-  // Bounded too: a config can include a file that never ends, such as a pipe no one writes. Include keys come along,
-  // with every entry's file, for `inputsOf`.
-  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--show-origin', '--get-regexp', `${PLANTABLE}|${INCLUDES}`], boundedBy(undefined, expiresAt), env);
+  // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
+  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', PLANTABLE], boundedBy(undefined, expiresAt), env);
 
   // git config exits 1 when no key matches.
   if (listed.code !== 0 && listed.code !== 1) return { error: listed };
-  const found = originEntries(listed.stdout);
-  const own = found.filter((entry) => !INCLUDE_KEY.test(entry.key) && (!nested || !TRUSTED_SCOPES.has(entry.scope)));
-  const level = { dir: cwd, entries: found };
+  const own = configEntries(listed.stdout).filter((entry) => !nested || !TRUSTED_SCOPES.has(entry.scope));
   // Reading the index starts the fsmonitor its config names.
   const staged = await spawnGit(cwd, [...UNTRUSTED_CONFIG, 'ls-files', '--stage', '-z'], boundedBy(undefined, expiresAt), env);
 
   // An index git cannot read lists no submodule, and fails the command itself where it would reach one: that command
-  // says what is wrong with it. Nothing read here is reused, as a later read may tell another story.
-  if (staged.code !== 0) return { entries: own, read: { levels: [level], gitlinks: [], unread: true } };
-  const entries: ConfigEntry[][] = [own];
-  const levels: Array<ConfigRead['levels'][number]> = [level];
-  const gitlinks: string[] = [];
+  // says what is wrong with it.
+  if (staged.code !== 0) return { entries: own };
+  const entries = [own];
 
   for (const line of gitlinkLines(staged.stdout)) {
     const sub = path.join(cwd, line.slice(line.indexOf('\t') + 1));
-    gitlinks.push(sub);
 
     if (!(await fs.stat(path.join(sub, '.git')).then(() => true, () => false))) continue;
     const inner = await plantableIn({ cwd: sub, env, expiresAt, nested: true });
 
     if ('error' in inner) return inner;
     entries.push(inner.entries);
-    levels.push(...inner.read.levels);
-    gitlinks.push(...inner.read.gitlinks);
-
-    if (inner.read.unread) return { entries: entries.flat(), read: { levels, gitlinks, unread: true } };
   }
 
-  return { entries: entries.flat(), read: { levels, gitlinks } };
-}
-
-/** The include keys, which `plantableIn` reads for `inputsOf` alone. */
-const INCLUDES = '^include\\.path$|^includeif\\..*\\.path$';
-const INCLUDE_KEY = /^include\.path$|^includeif\..*\.path$/;
-
-/** The entries of `git config --null --show-scope --show-origin`, which writes each as scope NUL origin NUL key LF value NUL. */
-function originEntries(stdout: string): Array<ConfigEntry & OriginEntry> {
-  const fields = stdout.split('\0');
-  const entries: Array<ConfigEntry & OriginEntry> = [];
-
-  for (let at = 0; at + 2 < fields.length; at += 3) {
-    const entry = fields[at + 2] ?? '';
-    const newline = entry.indexOf('\n');
-    entries.push({ scope: fields[at] ?? '', origin: fields[at + 1] ?? '', key: newline === -1 ? entry : entry.slice(0, newline), value: newline === -1 ? '' : entry.slice(newline + 1) });
-  }
-
-  return entries;
+  return { entries: entries.flat() };
 }
 
 /** The subcommands that start a remote's `upload-pack` or `receive-pack`, with the option that names it. */
