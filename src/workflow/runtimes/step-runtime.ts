@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions, type WakeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { DriverCan } from '../requirements.js';
 
@@ -96,6 +96,12 @@ export type PromptEnd =
   | { kind: 'failed'; failure: RuntimeFailure }
   | Lost;
 
+/**
+ * How a wake ended: the member launched, on `where`, with what the runtime shows of it; or failed, `wake_unavailable`
+ * when the runtime has no machine to wake on, `cancelled` when a cancel stopped it before it launched.
+ */
+export type WakeEnd = { kind: 'woken'; where: string; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure } | Lost;
+
 /** A reattach: the handle is gone, alive with what the runtime retains, or the runtime could not be asked. */
 export type Reattached = { kind: 'gone' } | { kind: 'alive'; ops: OpState[]; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
@@ -128,7 +134,8 @@ export interface ExecEvents {
 /** A runtime's offer: what it can, and whether it launches agents its own way, so prompt steps reach it as `prompt`. */
 /** `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step. */
 /** `ownLogins`: the tools whose login the runtime's provider keeps: teamai copies none of their logins, nor sends the sign-ins it found for them. */
-export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[] } | { ok: false; failure: RuntimeFailure };
+/** `wakes`: it launches a fleet member on another machine it reaches, through `StepRuntime.wake`. */
+export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[]; wakes?: true } | { ok: false; failure: RuntimeFailure };
 
 /** One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in flight. */
 export interface StepRuntime {
@@ -159,6 +166,11 @@ export interface StepRuntime {
   exec(request: ExecRequest, events: ExecEvents, kind: ExecKind): Promise<ExecEnd>;
   /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */
   prompt(request: PromptRequest, events: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>): Promise<PromptEnd>;
+  /**
+   * Launches a fleet member of `pool` on another machine, for a runtime whose `init` answered `wakes`, and forgets it:
+   * the runtime never follows, settles or stops what it woke. At-least-once: the fleet record keeps one claim.
+   */
+  wake?(request: Omit<WakeRequest, 'type'>, events: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>): Promise<WakeEnd>;
   /** Stops operation `op` and every process it started. Its `exec` or `prompt` then ends `cancelled`. */
   cancel(op: OpId): Promise<void>;
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */

@@ -114,6 +114,28 @@ describe('serving runtime protocol 1', () => {
   });
 });
 
+describe('a wake', () => {
+  const wake: RuntimeRequest = { type: 'wake', op: OP, pool: 'gpu', repository: 'https://example.com/acme/app.git', message: 'teamai workflow resume --pool gpu --next', title: 'Fleet member for gpu' };
+
+  it('goes to the runtime\'s wake handler', async () => {
+    const seen: string[] = [];
+    const runtime = served(() => ({ wake: async (request) => { seen.push(`wake ${request.op} ${request.pool}`); } }));
+
+    await runtime.send(wake);
+
+    expect(seen).toEqual([`wake ${OP} gpu`]);
+    expect(runtime.written).toEqual([]);
+  });
+
+  it('fails on a runtime that wakes no fleet member', async () => {
+    const runtime = served();
+
+    await runtime.send(wake);
+
+    expect(runtime.written).toEqual([{ op: OP, event: 'failed', failure: { code: 'runtime_protocol', message: 'Runtime fake wakes no fleet member, so it cannot carry out wake of op-0123abcd.' } }]);
+  });
+});
+
 describe('a runtime process teamai did not start', () => {
   it('reads no request, says why on stderr, and ends with status 2', async () => {
     const runtime = served(() => ({}), {});

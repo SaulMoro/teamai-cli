@@ -25,6 +25,9 @@ import { z } from 'zod';
 //    < {"op":"op-91c4…","event":"accepted"}                                     accepted before the slow launch
 //    < {"op":"op-91c4…","event":"display","display":{"label":"…","url":"…"}}        once the agent exists; neither accepts nor ends it
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…","home":"…"},"result":{"output":{…}},"usage":{…},"resumed":true}   resumed: true only when it continued lease.resume
+//    > {"type":"prompt","op":"op-c27e…","handle":"…","lease":{…,"resume":"…","continue":{"handle":"<earlier place>","op":"op-91c4…"}},…}
+//    < {"op":"op-c27e…","event":"finished","session":{…the conversation's…},…,"resumed":true}   a new turn of op-91c4…'s conversation
+//    < {"event":"notice","op":"op-c27e…","message":"…why not…"}  or a new conversation, resuming `resume` if it can, `resumed` false or absent
 //    > {"type":"open",…,"credentials":{}}                                      no view: the place of a confined prompt
 //    > {"type":"prompt",…,"confined":{"dir":"…","level":"verified","access":"read","schema":{…}}}
 //    < {"op":"op-a3d5…","event":"finished",…,"result":{"output":{…}},"confined":{"level":"verified","access":"read"}}
@@ -36,6 +39,11 @@ import { z } from 'zod';
 //    > {"type":"close","handle":"…","release":true}  the person let the attempt go: forget the place either way
 //                                                   a close's answer may name what it leaves on purpose: "kept":["…"]
 //    < {"event":"notice","op":"op-8b10…","message":"…"}   any time, op or handle optional: a line for the person; it answers nothing
+//    > {"type":"wake","op":"op-d4e9…","pool":"gpu","repository":"https://…","message":"teamai workflow …","title":"…"}   from a runtime whose init said "wake":true
+//    < {"op":"op-d4e9…","event":"accepted"}
+//    < {"op":"op-d4e9…","event":"display","display":{"label":"…","url":"…"}}        the thread or agent it launched; optional
+//    < {"op":"op-d4e9…","event":"woken","where":"…"}  or {"op":"op-d4e9…","event":"failed","failure":{"code":"wake_unavailable",…}}
+//                                                   it launches and forgets: it never follows, settles or stops what it woke
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
 //                                                   or, when the stop is not confirmed, {"op":"op-8b10…","event":"failed",
 //                                                   "failure":{"code":"cancel_failed",…}}, which reattach keeps reporting
@@ -246,6 +254,18 @@ export const PromptLeaseSchema = z.object({
   result: z.string().min(1),
   /** A session of the same tool to continue. */
   resume: z.string().min(1).optional(),
+  /**
+   * The conversation of an earlier prompt this prompt continues as a new turn: the place it ran in, which teamai keeps
+   * open while a later step continues it, and that prompt's op. Absent: a new conversation, which resumes `resume` when
+   * the runtime can.
+   *
+   * The runtime continues that conversation only when it still holds it, on the same tool or instance as this lease,
+   * with the working directory of this prompt's place, and then answers `finished` with `resumed: true` and the
+   * conversation's session. Otherwise it starts a new conversation, resuming `resume` its own way when it can, sends one
+   * `notice` for this prompt's op saying why it did not continue, and answers `resumed` false or absent. A conversation
+   * that is continued stays the earlier place's: that place's `close` ends it, as it ends the place's other conversations.
+   */
+  continue: z.object({ handle: RuntimeHandleSchema, op: OpIdSchema }).strict().optional(),
   /** `unattended`: the tool's mode for editing and running commands without asking; never granted otherwise. */
   permissions: z.enum(['approval-required', 'unattended']),
   /** A person works in the step: the runtime gives them the agent, and the step ends once they are done. */
@@ -457,12 +477,35 @@ export const PromptRequestSchema = z.object({
   confined: ConfinedPromptSchema.optional(),
 });
 
+/**
+ * Launches a fleet member on another machine the runtime reaches, from a runtime whose `init` answered `wake: true`. It
+ * ends `woken` with where it launched it, or `failed`: `wake_unavailable`, naming what the member adds (a linked
+ * environment, a remote daemon), when the runtime has no machine to wake on. A wake is at-least-once: the fleet
+ * record's compare-and-replace keeps one claim, and a woken member that finds nothing to claim ends. The runtime
+ * launches and forgets: it never follows, settles or stops what it woke. A `cancel` of a wake that has not launched
+ * ends it `cancelled`.
+ */
+export const WakeRequestSchema = z.object({
+  type: z.literal('wake'),
+  op: OpIdSchema,
+  pool: z.string().min(1),
+  /** The business repository's origin URL, credentials stripped: the member works in a checkout of it. */
+  repository: z.string().min(1),
+  /** The member's first message, which teamai writes: the command that takes one attempt of `pool`, then to end. */
+  message: z.string().min(1),
+  /** A short title for what the runtime launches. */
+  title: z.string().min(1),
+}).strict();
+
+export type WakeRequest = z.infer<typeof WakeRequestSchema>;
+
 /** A request teamai writes to a runtime's stdin. */
 export const RuntimeRequestSchema = z.discriminatedUnion('type', [
   InitRequestSchema,
   OpenRequestSchema,
   ExecRequestSchema,
   PromptRequestSchema,
+  WakeRequestSchema,
   z.object({ type: z.literal('cancel'), op: OpIdSchema }),
   z.object({ type: z.literal('collect'), handle: RuntimeHandleSchema }),
   // `credentials`: for the outer runtime of an entry that runs another through it, the prompt's credentials again,
@@ -526,12 +569,14 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * launches agents its own way, so teamai sends it each prompt step as a `prompt`, never as an `exec` of the tool.
    * With `can.exec: false` it runs no command: command steps, and steps with setup, go to the next runtime.
    * `confinedPrompt: true` says it answers a `prompt` with `confined`; without it, teamai drops `can.confined`.
+   * `wake: true` says it launches a fleet member on another machine it reaches (a `wake` request). It is not a `can` key:
+   * `can` is what a step can require, and no step requires a wake.
    * Read strictly, as every reply is: a key teamai does not know fails the start. Protocol 1 has not been released, and
    * teamai ships its runtimes with the engine, so a new key lands with the teamai that reads it and the protocol stays 1.
    */
   const InitReply = z.discriminatedUnion('ok', [
     z.object({
-      type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(),
+      type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(), wake: z.boolean().optional(),
       // The tools it cannot run now, each with why and what the person does about it; it still offers the rest.
       unavailable: z.record(z.string().min(1), z.string().min(1).max(UNAVAILABLE_REASON_MAX)).optional(),
       // The tools it runs without permission prompts, because an option of its definition or of the member set that.
@@ -557,6 +602,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
     z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }).strict(),
     z.object({ op: OpIdSchema, event: z.literal('finished'), ...finishedPrompt }).strict(),
     z.object({ op: OpIdSchema, event: z.literal('cancelled') }).strict(),
+    /** A `wake`'s end: the member launched, on `where`, the machine or environment it launched on. */
+    z.object({ op: OpIdSchema, event: z.literal('woken'), where: z.string(), display }).strict(),
   ]);
 
   /**

@@ -5,7 +5,7 @@ import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
 import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
-import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
+import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from './step-runtime.js';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
@@ -22,7 +22,7 @@ const ANSWER_WITHIN_MS = 15_000;
 const NOTICE_SHOWN = 2000;
 
 // The events that end an operation: only the first counts.
-const OP_ENDS = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
+const OP_ENDS = new Set(['ready', 'exited', 'finished', 'woken', 'cancelled', 'failed']);
 
 /**
  * The stdout an exec printed: `streamed`, what teamai read of it in `output` events, when the stdout its `exited`
@@ -72,7 +72,7 @@ function displayOf(name: string, shown: Shown) {
 type HandleWaiter = { request: HandleRequest; events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
 
 /** What waits on one operation: the request that started it, and what reads each of its events or its failure. */
-type OpWaiter = { type: 'open' | 'exec' | 'prompt'; on: (event: OpEvent | RuntimeFailure) => void };
+type OpWaiter = { type: 'open' | 'exec' | 'prompt' | 'wake'; on: (event: OpEvent | RuntimeFailure) => void };
 
 /** A runtime's offer as teamai takes it: `can.confined` only from a runtime that says it answers confined prompts. */
 function offered(can: Can, answersConfined: boolean): Can {
@@ -108,6 +108,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   const opening = new Map<string, { join: (onAccepted: (handle: string) => Promise<void>) => Promise<Opened> }>();
   const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
   const prompting = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<PromptEnd> }>();
+  const waking = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<WakeEnd> }>();
   // Operations this connection cancelled: a cancel may race their end, and each cancel is answered with an end.
   const cancelSent = new Set<string>();
   // Ends of operations nothing waits on any more, which teamai ignores but counts.
@@ -179,7 +180,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     if ('type' in message) {
       onInit?.(message.ok
         ? {
-          ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }), ...(message.ownLogins && { ownLogins: message.ownLogins }),
+          ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }), ...(message.ownLogins && { ownLogins: message.ownLogins }), ...(message.wake === true && { wakes: true }),
           can: { ...offered(message.can, message.confinedPrompt === true), ...(message.permissions && { fullAccess: Object.keys(message.permissions) }) },
         }
         : { ok: false, failure: message.error });
@@ -508,7 +509,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
             case 'ready':
               return;
             case 'finished':
-              die(`it answered exec ${request.op} with finished, which an exec does not have`);
+            case 'woken':
+              die(`it answered exec ${request.op} with ${event.event}, which an exec does not have`);
 
               return;
             default: {
@@ -598,6 +600,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
             case 'ready':
             case 'output':
             case 'exited':
+            case 'woken':
               die(`it answered prompt ${request.op} with ${event.event}, which a prompt does not have`);
 
               return;
@@ -623,6 +626,87 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
         },
       });
       void ended.then(() => { prompting.delete(request.op); });
+
+      return ended;
+    },
+
+    wake(request, events) {
+      if (dead) return Promise.resolve<WakeEnd>({ kind: 'failed', failure: dead });
+
+      const inFlight = waking.get(request.op);
+
+      if (inFlight) return inFlight.join(events);
+      const callers = [events];
+      let accepted: ReturnType<typeof displayOf> | undefined;
+
+      const ended = new Promise<WakeEnd>((resolve) => {
+        const settle = (end: WakeEnd): void => {
+          ops.delete(request.op);
+          resolve(end);
+        };
+
+        listen('wake', request.op, (event) => {
+          if (isFailure(event)) {
+            settle({ kind: 'lost', failure: event });
+
+            return;
+          }
+
+          switch (event.event) {
+            case 'accepted': {
+              const shownWith = displayOf(name, event.display);
+              accepted = shownWith;
+
+              for (const caller of callers) caller.onAccepted?.(shownWith);
+
+              return;
+            }
+
+            case 'display':
+              for (const caller of callers) showApart(caller, event.display);
+
+              return;
+            case 'woken':
+              settle({ kind: 'woken', where: event.where, ...displayOf(name, event.display) });
+
+              return;
+            // A wake ends woken, failed or lost: one a cancel stopped before it launched fails `cancelled`.
+            case 'cancelled':
+              settle({ kind: 'failed', failure: { code: 'cancelled', message: `Step runtime "${name}" stopped wake ${request.op} before it launched a fleet member.` } });
+
+              return;
+            case 'failed':
+              settle({ kind: 'failed', failure: event.failure });
+
+              return;
+            case 'ready':
+            case 'output':
+            case 'exited':
+            case 'finished':
+              die(`it answered wake ${request.op} with ${event.event}, which a wake does not have`);
+
+              return;
+            default: {
+              const unhandled: never = event;
+
+              return unhandled;
+            }
+          }
+        });
+
+        send({ type: 'wake', ...request });
+      });
+
+      waking.set(request.op, {
+        join: (next) => {
+          callers.push(next);
+
+          if (accepted) next.onAccepted?.(accepted);
+
+          return ended;
+        },
+      });
+      void ended.then(() => { waking.delete(request.op); });
 
       return ended;
     },

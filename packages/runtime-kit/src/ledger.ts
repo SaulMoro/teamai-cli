@@ -56,8 +56,8 @@ export interface OpLedger<TRun = unknown> {
   knows(op: OpId): boolean;
 }
 
-/** The events that end an operation: an open's `ready` or `failed`, an exec's or prompt's outcome. */
-const ENDS: ReadonlySet<string> = new Set(['ready', 'exited', 'finished', 'cancelled', 'failed']);
+/** The events that end an operation: an open's `ready` or `failed`, an exec's, prompt's or wake's outcome. */
+const ENDS: ReadonlySet<string> = new Set(['ready', 'exited', 'finished', 'woken', 'cancelled', 'failed']);
 
 /** The line that says how `ended`'s operation ended: an exec's stdout within protocol 1's bound. */
 function endLine(ended: OpEnd): RuntimeMessage {

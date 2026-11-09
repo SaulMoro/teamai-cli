@@ -95,6 +95,8 @@ export const FAILURE_CODES = [
   // resume, or carried in the message of an attempt that records runtime_failed.
   'driver_not_found', 'driver_invalid', 'driver_namespace_conflict', 'runtime_not_found', 'runtime_namespace_conflict', 'runtime_not_accepted',
   'bad_option', 'credential_missing', 'runtime_exited', 'runtime_not_sent', 'runtime_unanswered', 'runtime_protocol', 'runtime_gone', 'exec_failed',
+  // Why a step runtime could not wake a fleet member: it has no machine to wake one on.
+  'wake_unavailable',
 ] as const;
 
 export type FailureCode = (typeof FAILURE_CODES)[number];

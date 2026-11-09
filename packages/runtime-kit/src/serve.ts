@@ -12,8 +12,14 @@ import type { OpLedger } from './ledger.js';
 //  An operation ends once: a handler that wrote its op's end and then threw gets no second one.
 //
 
-/** What the runtime does for each request type: it answers the request itself, through the lines it writes. */
-export type RuntimeHandlers = { readonly [TType in RuntimeRequest['type']]: (request: Extract<RuntimeRequest, { type: TType }>) => Promise<void> };
+/** The answer a runtime gives one request type: it answers the request itself, through the lines it writes. */
+type Handler<TType extends RuntimeRequest['type']> = (request: Extract<RuntimeRequest, { type: TType }>) => Promise<void>;
+
+/**
+ * What the runtime does for each request type. `wake` only for a runtime that wakes fleet members, as its `init` says:
+ * without it, a `wake` fails `runtime_protocol`.
+ */
+export type RuntimeHandlers = { readonly [TType in Exclude<RuntimeRequest['type'], 'wake'>]: Handler<TType> } & { readonly wake?: Handler<'wake'> };
 
 export interface ServeRuntime {
   /** The runtime's name as its messages give it, such as `t3` in "Runtime t3 could not start". */
@@ -54,8 +60,8 @@ export function eachLine(input: NodeJS.ReadableStream, onLine: (text: string) =>
 /** What a line that is no protocol request may still name: the request it fails, which then gets its own failure. */
 const NamedSchema = z.object({ type: z.string().optional(), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional() });
 
-/** Runs `request` through its type's handler. */
-function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<void> {
+/** Runs `request` through its type's handler; `noWake` answers a `wake` the runtime has no handler for. */
+function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest, noWake: (request: Extract<RuntimeRequest, { type: 'wake' }>) => void): Promise<void> {
   switch (request.type) {
     case 'init':
       return handlers.init(request);
@@ -73,6 +79,11 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest): Promise<v
       return handlers.reattach(request);
     case 'close':
       return handlers.close(request);
+    case 'wake':
+      if (handlers.wake) return handlers.wake(request);
+      noWake(request);
+
+      return Promise.resolve();
     default: {
       const unhandled: never = request;
 
@@ -115,6 +126,7 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
       case 'open':
       case 'exec':
       case 'prompt':
+      case 'wake':
         return write({ op: request.op, event: 'failed', failure: { code: 'runtime_failed', message: `Runtime ${name} could not carry out ${request.type} of ${request.op}: ${why}` } });
       case 'cancel':
         return write({ op: request.op, event: 'failed', failure: { code: CANCEL_FAILED, message: `Runtime ${name} could not carry out the cancel of ${request.op}, so ${stopped} may still run: ${why.replace(/\.$/, '')}. Run teamai workflow cancel again.` } });
@@ -179,7 +191,7 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
 
     void (async () => {
       try {
-        await dispatch(handlers, request);
+        await dispatch(handlers, request, (wake) => write({ op: wake.op, event: 'failed', failure: { code: 'runtime_protocol', message: `Runtime ${name} wakes no fleet member, so it cannot carry out wake of ${wake.op}.` } }));
       } catch (error) {
         if ('op' in request && ledger.endsOf(request.op) !== endsBefore) {
           debug(`Runtime ${name} ended ${request.op} and then failed on its ${request.type}, which ends it no further: ${error instanceof Error ? error.message : String(error)}`);

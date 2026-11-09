@@ -1661,6 +1661,48 @@ describe('the stdio step runtime client', () => {
     expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: false, failure: { message: expect.stringContaining('"surplus"') } });
     await runtime.dispose();
   });
+
+  const WAKE = { pool: 'gpu', repository: 'https://example.com/acme/app.git', message: 'teamai workflow resume --pool gpu --next', title: 'Fleet member for gpu' };
+
+  it('wakes a fleet member on a runtime that offers it, and says where it launched it', async () => {
+    // A runtime that wakes a member on another machine: it accepts, shows the thread it launched, and says where.
+    const wakes = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') write({ type: 'init', ok: true, can: {}, wake: true });
+      if (request.type === 'wake') {
+        write({ op: request.op, event: 'accepted' });
+        write({ op: request.op, event: 'display', display: { label: request.title, url: 't3://thread/th-1' } });
+        write({ op: request.op, event: 'woken', where: 'studio-mac:' + request.pool });
+      }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'wakes', command: process.execPath, args: ['-e', wakes] });
+    const shown: RuntimeDisplay[] = [];
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
+      expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, { onDisplay: (display) => shown.push(display) })).toEqual({ kind: 'woken', where: 'studio-mac:gpu' });
+      expect(shown).toEqual([{ label: 'Fleet member for gpu', url: 't3://thread/th-1' }]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('ends a wake lost when the runtime stops after accepting it, since the member may still launch', async () => {
+    const acceptsThenExits = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      if (request.type === 'init') process.stdout.write(JSON.stringify({ type: 'init', ok: true, can: {}, wake: true }) + '\\n');
+      if (request.type === 'wake') process.stdout.write(JSON.stringify({ op: request.op, event: 'accepted' }) + '\\n', () => process.exit(1));
+    });`;
+    const runtime = stdioStepRuntime({ name: 'accepts-then-exits', command: process.execPath, args: ['-e', acceptsThenExits] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
+      expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, {})).toEqual({ kind: 'lost', failure: { code: 'runtime_exited', message: expect.stringContaining('Step runtime "accepts-then-exits" stopped: it exited with status 1.') } });
+    } finally {
+      await runtime.dispose();
+    }
+  });
 });
 
 /** A command step that runs until it is stopped. */

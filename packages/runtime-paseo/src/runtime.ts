@@ -347,6 +347,9 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
         await prompt(live, request);
 
         return;
+      // The kit answers a wake itself, since this runtime gives it no wake handler.
+      case 'wake':
+        return;
       default: {
         const unhandled: never = request;
         throw new Error(`Unknown request ${JSON.stringify(unhandled)}`);

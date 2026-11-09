@@ -19,6 +19,7 @@ export interface Answering {
 
 /** Counts each request of `handlers` from when it starts until its handler resolves or throws. */
 export function answering(handlers: RuntimeHandlers): Answering {
+  const { wake } = handlers;
   const inFlight = new Map<OpId, number>();
   const pending = new Set<Promise<void>>();
 
@@ -53,6 +54,7 @@ export function answering(handlers: RuntimeHandlers): Answering {
       collect: (request) => counted(request, () => handlers.collect(request)),
       reattach: (request) => counted(request, () => handlers.reattach(request)),
       close: (request) => counted(request, () => handlers.close(request)),
+      ...(wake && { wake: (request) => counted(request, () => wake(request)) }),
     },
     isAnswering: (op) => inFlight.has(op),
     async settled() {
