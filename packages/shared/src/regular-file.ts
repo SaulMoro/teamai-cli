@@ -14,7 +14,10 @@ import type { FileHandle } from 'node:fs/promises';
 const NONBLOCKING_READ = process.platform === 'win32' ? fs.constants.O_RDONLY : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
 
 /** What a path holds when it is not a regular file, in the words a person reads. */
-function kindOf(stats: fs.Stats): string {
+/** What stands at a path in place of a regular file, as an error names it. */
+export type NotRegularFileKind = 'a pipe' | 'a directory' | 'a device' | 'a socket' | 'a special file';
+
+function kindOf(stats: fs.Stats): NotRegularFileKind {
   if (stats.isFIFO()) return 'a pipe';
 
   if (stats.isDirectory()) return 'a directory';
@@ -30,7 +33,7 @@ function kindOf(stats: fs.Stats): string {
 export class NotRegularFileError extends Error {
   override name = 'NotRegularFileError';
   /** What is there instead, such as `a pipe`. */
-  readonly kind: string;
+  readonly kind: NotRegularFileKind;
 
   constructor(readonly file: string, stats: fs.Stats) {
     const kind = kindOf(stats);
