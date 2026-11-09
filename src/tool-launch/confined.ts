@@ -21,9 +21,8 @@ import { JsonValueSchema, type JsonValue } from '../types.js';
 import type { ConfinedUsage } from './confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
-import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { runTool, type ToolRun } from './run.js';
-import { toolStdout, type TokenUsage } from './stdout.js';
+import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
 
 /** A JSON line a tool prints; a field of the wrong type reads as absent. */
@@ -544,7 +543,7 @@ async function outcomeOf({ input, tmp }: LaunchContext, launch: Launch, run: Too
   // its kind (OpenCode 2.x); one without a kind, by its text.
   const toolError: ConfinedFailure | undefined = !reported
     ? undefined
-    : toolStdout(family, run.stdout)?.isUsageLimit ?? isUsageLimitText(reported)
+    : stoppedOnUsageLimit(toolStdout(family, run.stdout), reported)
       ? { ok: false, code: 'usage_limited', message: `${input.tool} hit its usage limit: ${reported}`, raw, reported, ...spent }
       : { ok: false, code: 'confined_failed', message: `${input.tool} reported an error: ${reported.replace(/\.?$/, '.')} Fix that, then retry or use another tool or driver.`, raw, reported, ...spent };
 

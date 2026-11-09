@@ -133,7 +133,7 @@ export type FleetResult = z.infer<typeof FleetResultSchema>;
 
 /**
  * The format of the attempt records this teamai writes and reads. 2: prompt leases, a prompt's session, whole
- * workflow leases and their gates. Every object of a record is strict, so a field this format does not name makes the record
+ * workflow leases and their gates, and an offer's `left`. Every object of a record is strict, so a field this format does not name makes the record
  * unreadable rather than read without it: a newer format bumps this, and a teamai that reads it refuses it by version.
  */
 const RECORD_VERSION = 2;

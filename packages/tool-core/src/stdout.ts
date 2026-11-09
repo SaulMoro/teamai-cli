@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { JsonValueSchema, type JsonValue } from './json.js';
+import { isUsageLimitText } from './usage-limit.js';
 
 export interface TokenUsage {
   input?: number;
@@ -21,10 +22,32 @@ export interface ToolReport {
   /** What the tool said went wrong, when its final result is an error: Claude's `result` text with `is_error`, Codex's and OpenCode's last `error`. */
   error?: string;
   /**
-   * Whether the kind of `error` says the tool stopped on a usage limit: OpenCode's `provider.rate-limit`, `provider.quota`
-   * and `provider.<plan>-limit`. Set only for an error with a kind, which then decides; without one, its text does.
+   * The kind of `error`, when the tool names one, which then decides whether it stopped on a usage limit: OpenCode's
+   * `provider.rate-limit`, `provider.quota` and `provider.<plan>-limit` are `usage_limit`. Unset, its text decides
+   * (`stoppedOnUsageLimit`).
    */
-  isUsageLimit?: boolean;
+  errorKind?: ErrorKind;
+}
+
+export type ErrorKind = 'usage_limit' | 'other';
+
+/** Whether the tool stopped on a usage limit: the kind of its error decides when `report` names one; without one, `text` does. */
+export function stoppedOnUsageLimit(report: ToolReport | null | undefined, text: string): boolean {
+  const kind = report?.errorKind;
+
+  switch (kind) {
+    case 'usage_limit':
+      return true;
+    case 'other':
+      return false;
+    case undefined:
+      return isUsageLimitText(text);
+    default: {
+      const unhandled: never = kind;
+
+      return unhandled;
+    }
+  }
 }
 
 /** A count a tool printed, or nothing when the field holds something else. */
@@ -444,7 +467,7 @@ function opencodeStdout(stdout: string): ToolReport | null {
 
   if (error === undefined) return report;
 
-  return { ...report, error: error.message, ...(error.kind !== undefined && { isUsageLimit: OPENCODE_LIMIT.test(error.kind) }) };
+  return { ...report, error: error.message, ...(error.kind !== undefined && { errorKind: OPENCODE_LIMIT.test(error.kind) ? 'usage_limit' : 'other' }) };
 }
 
 /** What stdout of a tool on this adapter reports. CodeBuddy prints Claude's result record. */
