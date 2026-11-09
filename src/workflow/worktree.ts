@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { stopProcess } from '../tool-launch/process-stop.js';
+import { stopProcess } from '@teamai/shared/process-group';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
 import { MAX_TIMER_MS } from '../utils/timer.js';

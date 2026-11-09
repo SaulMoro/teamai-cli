@@ -8,7 +8,8 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { resolveCliEntry } from '../../../builtin-hooks.js';
 import { stepEnvironment, withRunningCli } from '../../../env-exec.js';
-import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
+import { startGroupedCommand, type GroupedCommandExit } from '../../shell-command.js';
 import type { RunMode } from '../../../launch-context.js';
 import type { LocalConfig } from '../../../types.js';
 import { writeFileAtomic } from '../../../utils/fs.js';
@@ -440,7 +441,7 @@ async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prep
  * Runs the job's command in `dir`, outside the run lock, until it exits or a check finds its attempt stopped, which
  * stops it. Keeps its masked output in `output.log`, and answers with that masked `output`.
  */
-async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'run' }>): Promise<CommandExit> {
+async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'run' }>): Promise<GroupedCommandExit> {
   const command = context.runners.command({ run, attempt, command: stage.command, cwd: stage.dir, env: { ...stage.env, ...attemptEnv(context.config, run, attempt, stage.mode) } });
   const exited = (await whileOpen(context, run, attempt, { work: command.exit, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
   const output = redact(exited.output, { envSecrets: context.env.secrets, patterns: false });
@@ -476,7 +477,7 @@ async function confinedReport(context: SkillContext, lock: RunLock, attempt: Att
 }
 
 /** Under the lock: stores the report of the exited command (C8), or gives up a stopped attempt (C9), then sends it. */
-async function report(context: SkillContext, lock: RunLock, attempt: AttemptId, exited: CommandExit): Promise<Stage> {
+async function report(context: SkillContext, lock: RunLock, attempt: AttemptId, exited: GroupedCommandExit): Promise<Stage> {
   const state = await readState(context, lock);
   const open = state && openAttempt(state, attempt);
 

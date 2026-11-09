@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import { installedConfinedTools, runConfined, type ConfinedInput } from '../tool-launch/confined.js';
-import { stopRecordedGroup } from '../tool-launch/process-stop.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
 
 let root = '';
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); });

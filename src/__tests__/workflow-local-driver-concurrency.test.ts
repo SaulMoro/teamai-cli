@@ -13,7 +13,7 @@ import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
-import { recordGroup } from '../tool-launch/process-stop.js';
+import { recordGroup } from '@teamai/shared/process-group';
 
 _setDriverPollMs(20);
 

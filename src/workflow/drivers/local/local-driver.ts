@@ -36,7 +36,8 @@ import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDir
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../../tool-launch/member-tools.js';
-import { startGroupedCommand, stopRecordedGroup, type CommandExit } from '../../../tool-launch/process-stop.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
+import { startGroupedCommand, type GroupedCommandExit } from '../../shell-command.js';
 import { baseToolOf, instanceNames, isToolId } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
@@ -67,7 +68,7 @@ export function _setDriverPollMs(ms: number): void {
  * What a leased command came to: it ran, staging failed or its step runtime failed it, or it was stopped or its lease
  * ended before it could start.
  */
-type StagedResult = { kind: 'ran'; result: CommandExit } | { kind: 'unstaged'; failure: WorkflowFailure } | { kind: 'stopped' };
+type StagedResult = { kind: 'ran'; result: GroupedCommandExit } | { kind: 'unstaged'; failure: WorkflowFailure } | { kind: 'stopped' };
 
 
 interface StagedCommand {
@@ -334,7 +335,7 @@ async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { c
   return undefined;
 }
 
-async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: CommandExit, secrets: Record<string, string>): Promise<ReportBody> {
+async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: GroupedCommandExit, secrets: Record<string, string>): Promise<ReportBody> {
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
   const end = lease.workflow ? wholeReport(result) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
@@ -352,7 +353,7 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
  * outcome, end, outputs and failure of the workflow it ran. An exec that answered none, as one stopped early, ends as
  * the command it then was.
  */
-function wholeReport(result: CommandExit): Omit<ReportBody, 'attempt' | 'revision' | 'driver'> {
+function wholeReport(result: GroupedCommandExit): Omit<ReportBody, 'attempt' | 'revision' | 'driver'> {
   const parsed = WholeEndSchema.safeParse(commandOutputs(result.stdout));
 
   if (!parsed.success) return commandEnd(result);

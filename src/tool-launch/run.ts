@@ -1,6 +1,6 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnCommand } from '@teamai/tool-core/exec';
-import { recordGroup, stopProcess } from './process-stop.js';
+import { recordGroup, stopProcess } from '@teamai/shared/process-group';
 import { MAX_TIMER_MS } from '../utils/timer.js';
 
 export interface ToolRun {

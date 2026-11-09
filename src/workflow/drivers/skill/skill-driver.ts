@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { resolveCliEntry } from '../../../builtin-hooks.js';
 import type { WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, type RunMode } from '../../../launch-context.js';
-import type { CommandExit } from '../../../tool-launch/process-stop.js';
+import type { GroupedCommandExit } from '../../shell-command.js';
 import { isToolId, TOOL_ORDER } from '../../../tool-registry.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';
@@ -74,9 +74,9 @@ export interface RunnerJob {
 /** A step's command as its runner started it. */
 export interface CommandRun {
   /** Settles once the command exited and closed its output. `output` is stdout and stderr as they came, unmasked. */
-  exit: Promise<CommandExit>;
+  exit: Promise<GroupedCommandExit>;
   /** Stops the command and every process it started, and settles once they are gone. A second call changes nothing. */
-  stop(): Promise<CommandExit>;
+  stop(): Promise<GroupedCommandExit>;
 }
 
 /** How runners start, how a tick tells one is alive, how a runner runs its command, and how a call waits. */

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken } from '../workflow/fleet/record.js';
-import { startGroupedCommand } from '../tool-launch/process-stop.js';
+import { startGroupedCommand } from '../workflow/shell-command.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';

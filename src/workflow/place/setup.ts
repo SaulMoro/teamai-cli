@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { commandShell } from '../../command-shell.js';
-import { recordGroup, stopProcess } from '../../tool-launch/process-stop.js';
+import { recordGroup, stopProcess } from '@teamai/shared/process-group';
 import { redact } from '@teamai/shared/redact';
 import type { WorkflowFailure } from '../types.js';
 import { untrustedGit } from '../worktree.js';

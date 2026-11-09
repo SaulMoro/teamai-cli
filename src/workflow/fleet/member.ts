@@ -11,13 +11,13 @@ import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
 import { log } from '../../utils/logger.js';
-import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../tool-launch/process-stop.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
+import { shellArgv, startGroupedCommand, STOPPED_EXIT_CODE, type GroupedCommand, type GroupedCommandExit } from '../shell-command.js';
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
 import { stopCancelledAttempts, stopLeftAttempt } from '../runtimes/cancelled.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
-import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
@@ -904,9 +904,9 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
   let stderr = '';
   // A stop while the place opens finds no exec to cancel, so the exec is not sent.
   let isStopRequested = false;
-  const failed = (message: string): CommandExit => ({ exitCode: 1, stdout: '', stderr: `${stderr}${message} (step runtime "${place.use}")`, output });
+  const failed = (message: string): GroupedCommandExit => ({ exitCode: 1, stdout: '', stderr: `${stderr}${message} (step runtime "${place.use}")`, output });
 
-  const exit = (async (): Promise<CommandExit> => {
+  const exit = (async (): Promise<GroupedCommandExit> => {
     const result = path.dirname(attemptResultPath(config, run, attempt));
     const runDir = runScratchDir(config, run);
     await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
@@ -953,7 +953,7 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
     }
   })();
 
-  let stopping: Promise<CommandExit> | undefined;
+  let stopping: Promise<GroupedCommandExit> | undefined;
 
   return {
     exit,

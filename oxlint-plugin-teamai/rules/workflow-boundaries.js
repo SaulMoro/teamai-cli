@@ -49,7 +49,9 @@ const SKILL_IMPORTS = {
   // Equal values as equal text, so a kept end is compared with the engine's latest one.
   'src/utils/canonical-json.ts': {},
   'src/resources/agent-format.ts': {},
-  'src/tool-launch/process-stop.ts': {},
+  // How a setup or command runs in a process group, and how a stop reaches the groups a runner killed left.
+  'src/workflow/shell-command.ts': { names: ['startGroupedCommand', 'GroupedCommandExit'] },
+  '@teamai/shared/process-group': { names: ['stopRecordedGroup'] },
   // Whether the local driver launches the session's tool, so a local start or resume can name it.
   'src/tool-launch/tools.ts': { names: ['isLaunchTool', 'LAUNCH_ORDER', 'LaunchTool'] },
   'src/builtin-hooks.ts': { names: ['resolveCliEntry'] },

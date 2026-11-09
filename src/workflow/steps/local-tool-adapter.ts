@@ -8,7 +8,7 @@ import { opencodeMajorVersion } from '../../opencode-version.js';
 import { resolveCliPath, resolvePathCommand } from '../../utils/cli-path.js';
 import { log } from '../../utils/logger.js';
 import type { toolExtrasFor } from '../../resources/agent-format.js';
-import { stopProcess } from '../../tool-launch/process-stop.js';
+import { stopProcess } from '@teamai/shared/process-group';
 import { stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../tool-launch/stdout.js';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
 import { spawnCommand } from '@teamai/tool-core/exec';

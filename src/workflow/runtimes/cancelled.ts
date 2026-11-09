@@ -11,7 +11,7 @@ import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, releaseLog
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
-import { stopRecordedGroup } from '../../tool-launch/process-stop.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
 
 // ─── What cancelled attempts left on their step runtimes ─
 //

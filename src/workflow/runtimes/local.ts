@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { stopProcess } from '../../tool-launch/process-stop.js';
+import { stopProcess } from '@teamai/shared/process-group';
 import type { DriverCan } from '../requirements.js';
 import { boundedStdout, type OpId, type OpState } from '@teamai/runtime-protocol';
 import type { ExecEnd, Lost, StepRuntime } from '@teamai/runtime-protocol/step-runtime';

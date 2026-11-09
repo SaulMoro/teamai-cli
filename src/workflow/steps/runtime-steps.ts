@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { RunMode } from '../../launch-context.js';
-import type { CommandExit } from '../../tool-launch/process-stop.js';
+import { shellArgv, STOPPED_EXIT_CODE, type GroupedCommandExit } from '../shell-command.js';
 import { attemptEnv } from '../attempt-marker.js';
 import type { LeaseWire } from '../lease-wire.js';
 import type { AttemptRun } from '../runtimes/attempt.js';
@@ -9,7 +9,6 @@ import { type ExecEvents } from '@teamai/runtime-protocol/step-runtime';
 import { withRetry } from '../runtimes/retry-command.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../launch-context.js';
-import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
 import { AttemptResult } from '../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../store.js';
@@ -89,11 +88,11 @@ function stringEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 
 /** A started command: one here, or one on a step runtime, which may end with a failure instead of an exit. */
 export interface StartedCommand {
-  exit: Promise<CommandExit | WorkflowFailure>;
+  exit: Promise<GroupedCommandExit | WorkflowFailure>;
   /** Stops it and what it started, then settles with how it ended once they are gone. */
-  stop: () => Promise<CommandExit | WorkflowFailure>;
+  stop: () => Promise<GroupedCommandExit | WorkflowFailure>;
   /** Stops it because the run cancelled the step, for a command that runs elsewhere (the fleet) and passes that on. Absent: `stop`. */
-  cancel?: () => Promise<CommandExit | WorkflowFailure>;
+  cancel?: () => Promise<GroupedCommandExit | WorkflowFailure>;
 }
 
 /**
@@ -109,7 +108,7 @@ export function runtimeCommand(input: {
   let isStopRequested = false;
   const stopping = new AbortController();
 
-  const exit = (async (): Promise<CommandExit | WorkflowFailure> => {
+  const exit = (async (): Promise<GroupedCommandExit | WorkflowFailure> => {
     const view = await input.view();
     const opened = await run.open(view);
 
@@ -157,7 +156,7 @@ export function runtimeCommand(input: {
     }
   })();
 
-  const halt = (how: 'stop' | 'cancel') => async (): Promise<CommandExit | WorkflowFailure> => {
+  const halt = (how: 'stop' | 'cancel') => async (): Promise<GroupedCommandExit | WorkflowFailure> => {
     isStopRequested = true;
     stopping.abort();
     await (how === 'cancel' ? run.cancel() : run.stop());

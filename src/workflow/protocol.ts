@@ -8,7 +8,7 @@ import { driverIdentity, sameDriver } from '../driver-identity.js';
 import type { WorkflowEnv } from '../env-resolution.js';
 import { scoringUnavailable, startedByPasses, verifiedScorers } from '../scorers/engine-hooks.js';
 import { resolveRunMode, type RunMode } from '../launch-context.js';
-import { stopRecordedGroup } from '../tool-launch/process-stop.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
 import type { JsonValue, LocalConfig } from '../types.js';
 import { attemptEnv, nestedWorkflowError, type AgentEvidence } from './attempt-marker.js';
 import { loadCachedWorkflow, loadWorkflowTree } from './cache.js';

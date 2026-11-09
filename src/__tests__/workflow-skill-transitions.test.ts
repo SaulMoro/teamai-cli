@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { driverIdentity } from '../driver-identity.js';
 import { resolveWorkflowEnv } from '../env-resolution.js';
 import { publishRun } from '../workflow/handoff.js';
-import { recordGroup } from '../tool-launch/process-stop.js';
+import { recordGroup } from '@teamai/shared/process-group';
 import { reportsBranch } from '../utils/reports-branch.js';
 import { inProcessClient, type WorkflowClient } from '../workflow/protocol.js';
 import type { LocalConfig } from '../types.js';

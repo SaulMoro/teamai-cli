@@ -37,8 +37,8 @@ vi.mock('../workflow/worktree.js', async (importOriginal) => {
   };
 });
 // Setup's process runs on once the process that started it is killed, as it does when a runner is killed.
-vi.mock('../tool-launch/process-stop.js', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../tool-launch/process-stop.js')>();
+vi.mock('@teamai/shared/process-group', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@teamai/shared/process-group')>();
   return {
     ...real,
     recordGroup: (...args: Parameters<typeof real.recordGroup>) => {
