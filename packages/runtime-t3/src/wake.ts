@@ -46,11 +46,9 @@ export function repositoryKey(url: string): string | undefined {
   return host !== '' && trimmed !== '' ? `${host}/${trimmed}`.toLowerCase() : undefined;
 }
 
-/** Whether `project` is a checkout of the repository `key`, or of the one it was forked from. */
+/** Whether `project` is a checkout of the repository `key`. */
 function isOf(project: Project, key: string): boolean {
-  const identity = project.repositoryIdentity;
-
-  return !project.deletedAt && identity !== null && identity !== undefined && [identity.canonicalKey, identity.origin?.canonicalKey].some((one) => one?.toLowerCase() === key);
+  return !project.deletedAt && project.repositoryIdentity?.canonicalKey.toLowerCase() === key;
 }
 
 /** Whether `init` offers `wake`: T3 lists the environments linked to this one, which it refuses while Labs has them off. */
@@ -136,11 +134,11 @@ export function wakes({ serving }: { serving: Serving }) {
 
     if (!found.ok) return { kind: 'failed', failure: found.failure };
     const { link, project } = found;
-    const modelSelection = await memberModel(s.t3, link, project);
+    // Either fails the wake as a whole.
+    const [modelSelection, from] = await Promise.all([memberModel(s.t3, link, project), delegatedFrom(s)]);
 
     if (!modelSelection) return { kind: 'failed', failure: unavailable(`${link.label} runs no Claude or Codex provider instance a member can start on. Enable one in T3 Code there, under Settings → Providers.`) };
     const title = request.title.includes(request.pool) ? request.title : `${request.title} · ${request.pool}`;
-    const from = await delegatedFrom(s);
 
     if (waking.cancelled) return { kind: 'cancelled' };
     waking.launched = true;
