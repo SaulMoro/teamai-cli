@@ -8,6 +8,64 @@ const OWNER = scopedFiles(['packages/tool-core/src/exec.ts']);
 
 const MESSAGE = 'Start a process with spawnCommand or spawnCommandSync from @teamai/tool-core/exec, not cross-spawn: on Windows they run an npm .cmd shim under the system cmd.exe with its arguments escaped twice, and refuse arguments cmd.exe cannot carry, where cross-spawn escapes a shim outside node_modules/.bin once.';
 
+/** The modules `createRequire` comes from. */
+const MODULE = new Set(['module', 'node:module']);
+
+/**
+ * Whether `node` is `createRequire`, as node:module's export or a name it was imported as.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} node
+ */
+function isCreateRequire(sourceCode, node) {
+  if (node.type === 'MemberExpression') return !node.computed && node.property.type === 'Identifier' && node.property.name === 'createRequire';
+
+  if (node.type !== 'Identifier') return false;
+  const def = variableOf(sourceCode, node, node.name)?.defs[0];
+
+  if (def?.type !== 'ImportBinding') return node.name === 'createRequire';
+
+  return def.node.type === 'ImportSpecifier' && def.parent?.type === 'ImportDeclaration' && MODULE.has(String(def.parent.source.value))
+    && (def.node.imported.type === 'Identifier' ? def.node.imported.name : String(def.node.imported.value)) === 'createRequire';
+}
+
+/**
+ * The variable `name` resolves to where `node` uses it, from the innermost scope around `node` outwards.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} node
+ * @param {string} name
+ */
+function variableOf(sourceCode, node, name) {
+  /** @type {import('@oxlint/plugins').Scope | null} */
+  let scope = sourceCode.getScope(node);
+
+  for (; scope; scope = scope.upper) {
+    const variable = scope.set.get(name);
+
+    if (variable) return variable;
+  }
+
+  return undefined;
+}
+
+/**
+ * Whether calling `callee` loads a module: `require`, a `createRequire(…)` call, or a name bound to either.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} callee
+ */
+function isRequire(sourceCode, callee) {
+  if (callee.type === 'CallExpression') return isCreateRequire(sourceCode, callee.callee);
+
+  if (callee.type !== 'Identifier') return false;
+  const def = variableOf(sourceCode, callee, callee.name)?.defs[0];
+
+  if (def === undefined) return callee.name === 'require';
+
+  if (def.type !== 'Variable' || def.node.type !== 'VariableDeclarator' || !def.node.init) return false;
+  const { init } = def.node;
+
+  return (init.type === 'Identifier' && init.name === 'require') || (init.type === 'CallExpression' && isCreateRequire(sourceCode, init.callee));
+}
+
 export default defineRule({
   meta: {
     type: 'problem',
@@ -30,7 +88,7 @@ export default defineRule({
         if (stringLiteralValue(node.source) === 'cross-spawn') context.report({ node, message: MESSAGE });
       },
       CallExpression(node) {
-        if (node.callee.type === 'Identifier' && node.callee.name === 'require' && stringLiteralValue(node.arguments[0]) === 'cross-spawn') context.report({ node, message: MESSAGE });
+        if (stringLiteralValue(node.arguments[0]) === 'cross-spawn' && isRequire(context.sourceCode, node.callee)) context.report({ node, message: MESSAGE });
       },
     };
   },

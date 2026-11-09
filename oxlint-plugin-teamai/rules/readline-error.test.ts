@@ -90,3 +90,51 @@ export const first = (input: NodeJS.ReadableStream) => readline.createInterface(
 
 rule.valid('leaves a terminal\'s process input alone, where an error ends the command', `import { createInterface } from 'node:readline/promises';
 export const ask = () => createInterface({ input: process.stdin, output: process.stderr }).question('?');`);
+
+rule.invalid('rejects an interface made through an aliased import of createInterface', `import { createInterface as lineReader } from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream) => lineReader({ input: stream }).on('line', () => {});`, (output) => {
+  expect(output).toContain(MESSAGE);
+});
+
+rule.invalid('rejects an interface made with new readline.Interface', `import readline from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream) => new readline.Interface({ input: stream }).on('line', () => {});`);
+
+rule.invalid('rejects an interface in one block whose name an interface in another block handles', `import { createInterface } from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream, other: boolean) => {
+  if (other) {
+    const lines = createInterface({ input: stream });
+    lines.on('line', () => {});
+  } else {
+    const lines = createInterface({ input: stream });
+    lines.on('error', () => {});
+  }
+};`);
+
+rule.invalid('rejects an interface whose name only a parameter of the same name in an inner function handles', `import { createInterface } from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream) => {
+  const lines = createInterface({ input: stream });
+  const guard = (lines: NodeJS.EventEmitter) => lines.on('error', () => {});
+  return guard;
+};`);
+
+rule.invalid('rejects the second interface a variable takes after the first one got its error listener', `import { createInterface } from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream, next: NodeJS.ReadableStream) => {
+  let lines = createInterface({ input: stream });
+  lines.on('error', () => {});
+  lines = createInterface({ input: next });
+  lines.on('line', () => {});
+};`);
+
+rule.valid('allows an interface made through an aliased import that listens for errors', `import { createInterface as lineReader } from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream) => {
+  const lines = lineReader({ input: stream });
+  lines.on('error', () => {});
+};`);
+
+rule.valid('allows each interface a variable takes when each gets its error listener', `import { createInterface } from 'node:readline';
+export const read = (stream: NodeJS.ReadableStream, next: NodeJS.ReadableStream) => {
+  let lines = createInterface({ input: stream });
+  lines.on('error', () => {});
+  lines = createInterface({ input: next });
+  lines.on('error', () => {});
+};`);

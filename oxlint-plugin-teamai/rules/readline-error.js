@@ -22,25 +22,6 @@ function inputOf(first) {
   return input?.type === 'Property' ? input.value : undefined;
 }
 
-/** The node types that start a scope of their own for a name bound with `const` or `let` inside them. */
-const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
-
-/**
- * The functions `node` is in, innermost first, then the program: the scopes a name it uses may be bound in.
- * @param {ESTree.Node} node
- * @returns {ESTree.Node[]}
- */
-function scopesOf(node) {
-  /** @type {ESTree.Node[]} */
-  const scopes = [];
-
-  for (let current = node.parent; current; current = current.parent) {
-    if (FUNCTIONS.has(current.type) || current.type === 'Program') scopes.push(current);
-  }
-
-  return scopes;
-}
-
 /**
  * Whether `node` is `process.stdin`: a terminal's input, whose error ends the command as it should.
  * @param {ESTree.Node} node
@@ -49,14 +30,60 @@ function isProcessInput(node) {
   return node.type === 'MemberExpression' && !node.computed && node.object.type === 'Identifier' && node.object.name === 'process' && node.property.type === 'Identifier' && node.property.name === 'stdin';
 }
 
-/**
- * Whether `node` is a call to `createInterface`, as readline's export or a name it was imported as.
- * @param {ESTree.CallExpression} node
- */
-function isCreateInterface(node) {
-  const { callee } = node;
+/** The modules readline's interface comes from. */
+const READLINE = new Set(['readline', 'node:readline', 'readline/promises', 'node:readline/promises']);
 
-  return (callee.type === 'Identifier' && callee.name === 'createInterface') || (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' && callee.property.name === 'createInterface');
+/**
+ * What `name` names where `node` uses it: the variable it resolves to from the innermost scope around `node` outwards,
+ * or undefined for a name nothing in the file binds.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} node
+ * @param {string} name
+ */
+function variableOf(sourceCode, node, name) {
+  /** @type {import('@oxlint/plugins').Scope | null} */
+  let scope = sourceCode.getScope(node);
+
+  for (; scope; scope = scope.upper) {
+    const variable = scope.set.get(name);
+
+    if (variable) return variable;
+  }
+
+  return undefined;
+}
+
+/**
+ * The name `variable` imports from readline: `createInterface` or `Interface` for a named import, `*` for the module
+ * itself, as a default or namespace import gives it; undefined when it is no import of readline.
+ * @param {import('@oxlint/plugins').Variable | undefined} variable
+ */
+function readlineImport(variable) {
+  const def = variable?.defs[0];
+
+  if (def?.type !== 'ImportBinding' || def.parent?.type !== 'ImportDeclaration' || !READLINE.has(String(def.parent.source.value))) return undefined;
+  const { node } = def;
+
+  if (node.type !== 'ImportSpecifier') return '*';
+
+  return node.imported.type === 'Identifier' ? node.imported.name : String(node.imported.value);
+}
+
+/**
+ * Whether `node` makes a readline interface: `createInterface` as readline's export, a name it was imported as, or
+ * `new Interface`. A `createInterface` the file does not import from readline counts too, so a wrapper of it is checked.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.CallExpression | ESTree.NewExpression} node
+ */
+function makesInterface(sourceCode, node) {
+  const { callee } = node;
+  const wanted = node.type === 'NewExpression' ? 'Interface' : 'createInterface';
+
+  if (callee.type === 'Identifier') return (node.type === 'CallExpression' && callee.name === wanted) || readlineImport(variableOf(sourceCode, callee, callee.name)) === wanted;
+
+  if (callee.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier' || callee.property.name !== wanted) return false;
+
+  return node.type === 'CallExpression' || (callee.object.type === 'Identifier' && readlineImport(variableOf(sourceCode, callee.object, callee.object.name)) === '*');
 }
 
 /**
@@ -106,30 +133,27 @@ function isHandledWhereMade(node) {
 }
 
 /**
- * The name the interface `node` is bound to, as `const lines = createInterface(…)`, when it is bound to one.
+ * The variable the interface `node` is bound to, as `const lines = createInterface(…)` or `lines = createInterface(…)`,
+ * and where that write is; undefined when it is bound to none.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
  * @param {ESTree.Node} node
  */
-function boundName(node) {
+function boundVariable(sourceCode, node) {
   const { parent } = node;
 
-  if (parent?.type === 'VariableDeclarator' && parent.init === node && parent.id.type === 'Identifier') return parent.id.name;
+  if (parent?.type === 'VariableDeclarator' && parent.init === node && parent.id.type === 'Identifier') {
+    const [variable] = sourceCode.getDeclaredVariables(parent);
 
-  if (parent?.type === 'AssignmentExpression' && parent.right === node && parent.left.type === 'Identifier') return parent.left.name;
+    return variable && { variable, at: parent.id.range[0] };
+  }
+
+  if (parent?.type === 'AssignmentExpression' && parent.right === node && parent.left.type === 'Identifier') {
+    const variable = variableOf(sourceCode, parent.left, parent.left.name);
+
+    return variable && { variable, at: parent.left.range[0] };
+  }
 
   return undefined;
-}
-
-/**
- * The name a chain of calls and members starts from, as `lines` for `lines.on('line', f).on('error', g)`.
- * @param {ESTree.Node} node
- */
-function rootName(node) {
-  /** @type {ESTree.Node} */
-  let current = node;
-
-  while (current.type === 'MemberExpression' || current.type === 'CallExpression') current = current.type === 'MemberExpression' ? current.object : current.callee;
-
-  return current.type === 'Identifier' ? current.name : undefined;
 }
 
 export default defineRule({
@@ -138,57 +162,33 @@ export default defineRule({
     docs: { description: 'Listen for errors on every readline interface over a socket or stream: readline re-emits its input\'s errors there and throws them when nothing listens.' },
   },
   create(context) {
-    /** @type {Array<{ node: ESTree.Node; name: string; scope: ESTree.Node | undefined }>} */
-    const bound = [];
-    /**
-     * Where a name is handled: the name, and the scopes of the code that handles it, innermost first.
-     * @type {Array<{ name: string; scopes: ESTree.Node[] }>}
-     */
-    const handlers = [];
+    const { sourceCode } = context;
 
     /**
-     * @param {string | undefined} name
-     * @param {ESTree.Node} node
+     * Whether the interface made at `node` handles its errors: where it is made, or, bound to a variable, through a read
+     * of that variable before the next interface it takes.
+     * @param {ESTree.CallExpression | ESTree.NewExpression} node
      */
-    const handles = (name, node) => {
-      if (name !== undefined) handlers.push({ name, scopes: scopesOf(node) });
+    const isHandled = (node) => {
+      if (isHandledWhereMade(node)) return true;
+      const bound = boundVariable(sourceCode, node);
+
+      if (!bound) return false;
+      const writes = bound.variable.references.filter((reference) => reference.isWrite()).map((reference) => reference.identifier.range[0]);
+      const until = Math.min(...writes.filter((at) => at > bound.at), Number.POSITIVE_INFINITY);
+
+      return bound.variable.references.some(({ identifier }) => identifier.range[0] > bound.at && identifier.range[0] < until && isHandledWhereMade(identifier));
     };
 
-    return {
-      /** @param {ESTree.CallExpression} node */
-      CallExpression(node) {
-        if (listensForErrors(node) && node.callee.type === 'MemberExpression') handles(rootName(node.callee.object), node);
+    /** @param {ESTree.CallExpression | ESTree.NewExpression} node */
+    const check = (node) => {
+      if (!makesInterface(sourceCode, node)) return;
+      const input = inputOf(node.arguments[0]);
 
-        if (!isCreateInterface(node)) return;
-        const input = inputOf(node.arguments[0]);
-
-        if (input === undefined || isProcessInput(input) || isHandledWhereMade(node)) return;
-        const name = boundName(node);
-
-        if (name === undefined) context.report({ node, message: MESSAGE });
-        else bound.push({ node, name, scope: scopesOf(node)[0] });
-      },
-      /** @param {ESTree.ForOfStatement} node */
-      ForOfStatement(node) {
-        if (node.await && node.right.type === 'Identifier') handles(node.right.name, node);
-      },
-      /** @param {ESTree.MemberExpression} node */
-      MemberExpression(node) {
-        if (isAsyncIterator(node) && node.object.type === 'Identifier') handles(node.object.name, node);
-      },
-      'Program:exit'() {
-        // A handler reaches the interface bound to its name in the innermost scope around it that binds one, as the
-        // name itself resolves: an interface of the same name in another function is another interface.
-        const reached = new Set(handlers.flatMap(({ name, scopes }) => {
-          const scope = scopes.find((candidate) => bound.some((each) => each.name === name && each.scope === candidate));
-
-          return bound.filter((each) => each.name === name && each.scope === scope);
-        }));
-
-        for (const each of bound) {
-          if (!reached.has(each)) context.report({ node: each.node, message: MESSAGE });
-        }
-      },
+      if (input === undefined || isProcessInput(input) || isHandled(node)) return;
+      context.report({ node, message: MESSAGE });
     };
+
+    return { CallExpression: check, NewExpression: check };
   },
 });

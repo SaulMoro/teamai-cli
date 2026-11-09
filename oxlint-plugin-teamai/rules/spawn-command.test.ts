@@ -44,3 +44,20 @@ export { default as spawn } from 'cross-spawn';
 rule.invalid('rejects re-exporting all of cross-spawn', `
 export * from 'cross-spawn';
 `);
+
+rule.invalid('rejects loading cross-spawn through a require made with createRequire', `
+import { createRequire } from 'node:module';
+export const crossSpawn = createRequire(import.meta.url)('cross-spawn');
+`);
+
+rule.invalid('rejects loading cross-spawn through an aliased require', `
+import { createRequire as requireFrom } from 'node:module';
+const load = requireFrom(import.meta.url);
+export const crossSpawn = load('cross-spawn');
+`);
+
+rule.valid('allows a require made with createRequire to load something else', `
+import { createRequire } from 'node:module';
+const load = createRequire(import.meta.url);
+export const yaml = load('yaml');
+`);
