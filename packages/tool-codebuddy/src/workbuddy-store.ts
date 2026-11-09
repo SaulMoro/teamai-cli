@@ -23,6 +23,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** WorkBuddy's database, in the data root that holds its session store (`<root>/projects`). */
 function workBuddyDbPath(store: string): string {
@@ -107,7 +108,7 @@ function readUserId(dbPath: string): string | null {
 
    // 3) uuid in app/sessions.json
   try {
-    const raw = fs.readFileSync(path.join(home, 'app', 'sessions.json'), 'utf-8');
+    const raw = readRegularFileSync(path.join(home, 'app', 'sessions.json'), 'utf-8');
 
     for (const m of raw.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)) {
       return m[0];

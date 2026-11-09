@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import readline from 'node:readline';
+import { openRegularFile } from '@teamai/shared/regular-file';
 import type { JsonValue } from './json.js';
 import { log } from './log.js';
 
@@ -118,7 +120,17 @@ export async function forEachJsonLine(
     return;
   }
 
-  const lines = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf-8' }), crlfDelay: Infinity });
+  let handle: FileHandle;
+
+  try {
+    handle = await openRegularFile(file);
+  } catch (e) {
+    log.warn(`token-usage: could not read ${file}: ${e instanceof Error ? e.message : String(e)}`);
+
+    return;
+  }
+
+  const lines = readline.createInterface({ input: handle.createReadStream({ encoding: 'utf-8' }), crlfDelay: Infinity });
 
   try {
     for await (const line of lines) {
@@ -136,5 +148,7 @@ export async function forEachJsonLine(
   } catch (e) {
     // A transcript that cannot be read leaves usage unknown; the Stop is still recorded.
     log.warn(`token-usage: could not read ${file}: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    await handle.close();
   }
 }

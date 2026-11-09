@@ -5,6 +5,7 @@
   "description": "Helpers that are not about any one domain, such as secret masking, which src/, the tool packages and the runtimes share; bundled into teamai-cli.",
   "exports": {
     "./redact": "./src/redact.ts",
+    "./regular-file": "./src/regular-file.ts",
     "./type-of-service": "./src/type-of-service.ts"
   }
 }

@@ -3,7 +3,6 @@
  * confined prompts: on the first of its tools that resolves its model, with that directory as the tool's only readable
  * root, no team env, and no session saved.
  */
-import fs from 'node:fs/promises';
 import { CONFINED_LEVELS, type ConfinedLevel } from '@teamai/tool-core/launch';
 import type { ConfinedOffer } from '@teamai/runtime-protocol';
 import { confinedEnvNames, isConfinedTool, runConfined, type ConfinedResult, type ConfinedRun } from '../tool-launch/confined.js';
@@ -21,6 +20,7 @@ import type { WorkflowFailure } from './types.js';
 import type { ConfinedRunReport } from './step-state.js';
 import type { AttemptRun } from './runtimes/attempt.js';
 import { withRetry, type PromptEnd } from './runtimes/step-runtime.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** What a driver reports of a confined run, besides the attempt and itself. */
 export type ConfinedStepReport = Pick<ReportInput, 'outcome' | 'outputs' | 'tool' | 'model' | 'tokens' | 'cost' | 'durationMs' | 'confined' | 'message' | 'failure'>;
@@ -84,7 +84,7 @@ async function firstResolving<TTool extends string>({ config, lease }: Pick<Conf
 /** The reply schema the lease names, read again here, or why it can no longer be read. */
 async function replySchema(step: string, file: string): Promise<{ ok: true; schema: JsonValue } | { ok: false; failure: WorkflowFailure }> {
   try {
-    const parsed = JsonValueSchema.safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+    const parsed = JsonValueSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8')));
 
     if (parsed.success) return { ok: true, schema: parsed.data };
   } catch {

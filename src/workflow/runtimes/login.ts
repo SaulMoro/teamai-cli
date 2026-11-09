@@ -10,6 +10,7 @@ import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── A tool login teamai keeps for step runtimes ─────────
 //
@@ -76,7 +77,7 @@ async function readLock(tool: LoginTool): Promise<{ kind: 'free' } | { kind: 'he
   let body: string;
 
   try {
-    body = await fs.readFile(loginLockFile(tool), 'utf8');
+    body = await readRegularFile(loginLockFile(tool), 'utf8');
   } catch (error) {
     return errnoCode(error) === 'ENOENT' ? { kind: 'free' } : { kind: 'unreadable' };
   }
@@ -123,7 +124,7 @@ function sha256(body: Buffer): string {
 async function readRegular(file: string): Promise<Buffer | undefined> {
   const stat = await fs.lstat(file).catch(() => undefined);
 
-  return stat?.isFile() ? fs.readFile(file) : undefined;
+  return stat?.isFile() ? readRegularFile(file) : undefined;
 }
 
 /** The account a Codex login file is for, or undefined when it does not parse as one. */

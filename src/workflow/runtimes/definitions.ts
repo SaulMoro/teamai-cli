@@ -10,6 +10,7 @@ import { getKnowledgeDir, getTeamaiHomeDir, JsonValueSchema, type LocalConfig } 
 import { parseYaml } from '../../utils/yaml.js';
 import { parseDriver, type DriverName } from '../driver-name.js';
 import type { WorkflowFailure } from '../types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Driver definitions ──────────────────────────────────
 //
@@ -97,7 +98,7 @@ async function readText(file: string): Promise<string | undefined> {
   try {
     const stat = await fs.lstat(file);
 
-    return stat.isFile() ? await fs.readFile(file, 'utf8') : undefined;
+    return stat.isFile() ? await readRegularFile(file, 'utf8') : undefined;
   } catch {
     return undefined;
   }

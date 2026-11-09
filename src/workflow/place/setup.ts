@@ -14,6 +14,7 @@ import type { WorkflowFailure } from '../types.js';
 import { untrustedGit } from '../worktree.js';
 import { changedPaths, snapshotWorktree } from './worktree-snapshot.js';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export interface SetupRun {
   command: string;
@@ -121,7 +122,7 @@ async function checkedSetup({ command, dir, env, keys, signal, expiresAt, groupD
     const was = stamps.get(file);
 
     if (was && was.size === stamp.size && was.mtimeMs === stamp.mtimeMs) continue;
-    const content = await fs.readFile(path.join(dir, file)).catch(() => undefined);
+    const content = await readRegularFile(path.join(dir, file)).catch(() => undefined);
     const found = content && values.find(({ value }) => content.includes(value, 0, 'utf8'));
 
     if (found) {

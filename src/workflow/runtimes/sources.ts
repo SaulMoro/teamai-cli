@@ -24,6 +24,7 @@ import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
 import { launchAdapterOf } from '../../tool-launch/tools.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -104,7 +105,7 @@ export async function runtimeRevision(dir: string): Promise<string> {
     const stat = await fs.lstat(at);
 
     if (stat.isDirectory()) continue;
-    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await fs.readFile(at);
+    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await readRegularFile(at);
     hash.update(`${relative.split(path.sep).join('/')}\0${stat.mode & 0o111 ? 'x' : '-'}\0`).update(body).update('\0');
   }
 
@@ -119,7 +120,7 @@ function trustFile(): string {
 
 async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
   try {
-    return TrustFileSchema.parse(JSON.parse(await fs.readFile(trustFile(), 'utf8')));
+    return TrustFileSchema.parse(JSON.parse(await readRegularFile(trustFile(), 'utf8')));
   } catch {
     return { accepted: [] };
   }

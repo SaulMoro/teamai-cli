@@ -9,7 +9,7 @@ import {
   allowsSkillDirectory, CODEX_TOOL, describeSkippedSkillDirectory, findSkillDirectoryBlock, skillTargetsFor,
 } from '../../resources/skills.js';
 import { isAgentExcluded, scopedToolPaths, type LocalConfig, type TeamaiConfig } from '../../types.js';
-import { pathExists, readFileSafe, writeFileAtomic } from '../../utils/fs.js';
+import { pathExists, writeFileAtomic } from '../../utils/fs.js';
 import { warnOnce } from '../../utils/warn-once.js';
 import { DefaultWorkflows } from '../../default-workflows.js';
 import { SessionShare } from '../../session-share.js';
@@ -17,6 +17,7 @@ import { shareBlock } from '../../skill-content.js';
 import { listCachedWorkflows, loadWorkflowTree, startingAlias } from '../cache.js';
 import { generatedSkillAt, readGenerated } from './generated-marker.js';
 import { renderWorkflowSkill, type AdvertisedWorkflow } from './render.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Every runnable `invoke: allow` or `ask` workflow, a cached team file or teamai's default, each with its alias only when
@@ -149,7 +150,7 @@ async function place({ tool, workflow, skill, dir, guardBase, content }: Placeme
   }
 
   const file = path.join(dir, 'SKILL.md');
-  const existing = await readFileSafe(file);
+  const existing = await readRegularFile(file, 'utf8').catch(() => null);
   const generated = existing === null ? null : readGenerated(existing);
 
   if (generated?.kind === 'theirs' || (generated === null && await pathExists(dir))) {

@@ -29,6 +29,7 @@ import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTex
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { inlineReads, wholeInputs } from '../whole-workflow.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
 export const DEFAULT_FLEET_POOL = 'default';
@@ -669,7 +670,7 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
 
     for (const file of files) {
       if (!file.endsWith('.json')) continue;
-      const text = await fs.readFile(path.join(root, name, file), 'utf8').catch(() => '');
+      const text = await readRegularFile(path.join(root, name, file), 'utf8').catch(() => '');
       const parsed = parseRecord(text, name, file.slice(0, -'.json'.length));
 
       if (parsed.ok) records.push(parsed.value);
@@ -857,7 +858,7 @@ export function woken(marker: z.infer<typeof OfferedMarkerSchema> | undefined): 
 
 /** What this install noted when it offered attempt `attempt`: its pool, the exec that offered it, its stale_after and its wake; undefined when it offered it to none. */
 export async function readOfferedMarker(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<z.infer<typeof OfferedMarkerSchema> | undefined> {
-  const text = await fs.readFile(offeredMarker(config, run, attempt), 'utf8').catch(() => undefined);
+  const text = await readRegularFile(offeredMarker(config, run, attempt), 'utf8').catch(() => undefined);
   const parsed = text === undefined ? undefined : OfferedMarkerSchema.safeParse(jsonOf(text));
 
   return parsed?.success ? parsed.data : undefined;

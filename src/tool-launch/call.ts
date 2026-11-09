@@ -15,6 +15,7 @@ import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { CallLaunch } from '@teamai/tool-core/launch';
 import type { z } from 'zod';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 
@@ -182,7 +183,7 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
           throw new CallError('call_failed', `AI call printed nothing for ${(idleTimeout ?? 0) / 1000}s, longer than its idle limit (tool: ${tool}). Raise the idle limit if this tool works silently for longer.`);
         }
 
-        const lastMessage = await fs.readFile(lastMessageFile, 'utf8').catch(() => undefined);
+        const lastMessage = await readRegularFile(lastMessageFile, 'utf8').catch(() => undefined);
         const reading = call.read({ stdout: run.stdout, lastMessage });
 
         if (run.code !== 0 || !reading.ok) {

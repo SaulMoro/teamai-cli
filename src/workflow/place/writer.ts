@@ -7,6 +7,7 @@ import type { StepChanges } from '../workspace.js';
 import { commitPathsOf, mergeStagedPathsOf } from './worktree-snapshot.js';
 import { commitWork, hostGitEnv, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git, type MemberConfig } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Merges each of `merge` into the copy `dir` of a writer. A conflict stops the merging: a command fails
@@ -74,7 +75,7 @@ export async function rememberConflicts(dir: string, run: Git): Promise<Record<s
   let saved = new Map<string, string>();
 
   try {
-    const parsed = z.record(z.string(), z.unknown()).safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+    const parsed = z.record(z.string(), z.unknown()).safeParse(JSON.parse(await readRegularFile(file, 'utf8')));
 
     if (parsed.success) {
       saved = new Map(Object.entries(parsed.data).flatMap<[string, string]>(([relative, note]) => {
@@ -111,7 +112,7 @@ async function conflictContents(dir: string, run: Git): Promise<Map<string, stri
 
   for (const file of await unmergedPaths(dir, run)) {
     try {
-      contents.set(file, await fs.readFile(path.join(dir, file), 'utf8'));
+      contents.set(file, await readRegularFile(path.join(dir, file), 'utf8'));
     } catch {
       contents.set(file, '');
     }
@@ -123,7 +124,7 @@ async function conflictContents(dir: string, run: Git): Promise<Map<string, stri
 async function unresolvedConflicts(dir: string, before: Record<string, string>, run: Git): Promise<string[]> {
   const textOf = async (file: string): Promise<string> => {
     try {
-      return await fs.readFile(path.join(dir, file), 'utf8');
+      return await readRegularFile(path.join(dir, file), 'utf8');
     } catch {
       return '';
     }
@@ -245,7 +246,7 @@ export async function recordMergePreparation(dir: string, git: Git): Promise<str
 /** Paths among `dirty` that still match the merge `recordMergePreparation` stored. A missing record matches nothing. */
 async function unchangedMergePreparation(dir: string, dirty: readonly string[], run: Git): Promise<{ paths: ReadonlySet<string> } | { error: string }> {
   const file = await mergePreparedPath(dir, run);
-  const text = await fs.readFile(file, 'utf8').catch(() => undefined);
+  const text = await readRegularFile(file, 'utf8').catch(() => undefined);
 
   if (text === undefined) return { paths: new Set() };
 

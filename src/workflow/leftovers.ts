@@ -22,6 +22,7 @@ import { AttemptIdSchema, attemptsDir, installOwner, readRun, readRuns, RunIdSch
 import type { KeptBranchReason, RunLeftovers, RunState } from './types.js';
 import { runBranchPrefix, runCopyToMerge } from './workspace.js';
 import { fetchMissingCommits, git, removeWorktree, worktreeCheckout } from './worktree.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Where each branch of a run points: in the checkout, and on `origin`, which is absent when the checkout has none. */
 interface Tips {
@@ -466,7 +467,7 @@ async function recordFiles(config: LocalConfig): Promise<{ files: RecordFile[] }
     return { files: await Promise.all(listed.names.filter((name) => name.endsWith('.json')).map(async (name): Promise<RecordFile> => {
       const at = path.join(dir, name);
 
-      return fs.readFile(at, 'utf8').then((text) => ({ at, text }), (cause: unknown) => ({ at, error: causeText(cause) }));
+      return readRegularFile(at, 'utf8').then((text) => ({ at, text }), (cause: unknown) => ({ at, error: causeText(cause) }));
     })) };
   }
 

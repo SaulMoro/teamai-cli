@@ -720,25 +720,35 @@ it('keeps a replacement end queued when its producer starts after the dequeue re
     delivered = true;
     return { status: 'published' };
   });
-  const readFile = fsp.readFile.bind(fsp);
   let producer: Promise<void> | undefined;
-  vi.spyOn(fsp, 'readFile').mockImplementation(async (...args) => {
-    const contents = await readFile(...args);
+  /** Starts the producer of the replacement right after the dequeue read of the queued end. */
+  const startProducer = async (): Promise<void> => {
+    const held = await acquireLock(lock);
+    producer = (async () => {
+      if (!held) {
+        while (!await acquireLock(lock)) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      try {
+        await enqueueRecord(config, replacement, {});
+      } finally {
+        await releaseLock(lock);
+      }
+    })();
+    if (held) await producer;
+  };
+  // The queue reads a file through a handle it opens, so the read of the queued end is that handle's.
+  const open = fsp.open.bind(fsp);
+  vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
     if (delivered && !producer && String(args[0]).endsWith(`${old.run}.end.json`)) {
-      const held = await acquireLock(lock);
-      producer = (async () => {
-        if (!held) {
-          while (!await acquireLock(lock)) await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        try {
-          await enqueueRecord(config, replacement, {});
-        } finally {
-          await releaseLock(lock);
-        }
-      })();
-      if (held) await producer;
+      const readFile = handle.readFile.bind(handle);
+      vi.spyOn(handle, 'readFile').mockImplementation(async (...readArgs) => {
+        const contents = await readFile(...readArgs);
+        if (!producer) await startProducer();
+        return contents;
+      });
     }
-    return contents;
+    return handle;
   });
   await publishPendingRecords(config);
   expect(producer).toBeDefined();

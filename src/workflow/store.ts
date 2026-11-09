@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { DriverSchema } from '../driver-identity.js';
-import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { resolveReal } from '../utils/path-safety.js';
 import { redactJson } from '@teamai/shared/redact';
 import { getDataHome, type JsonValue, type LocalConfig } from '../types.js';
@@ -12,6 +12,7 @@ import { ArchivedPassSchema, FailureSchema, ReleasedTokensSchema, SessionContinu
 import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
 import type { DriveOptions, RunState } from './types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Run ids: `r` + 16 hex digits. Records are a team-wide key on the reports
@@ -148,7 +149,7 @@ export async function appendAttemptOutcome(config: LocalConfig, marker: string, 
 
   if (!run.success || !attempt.success || rest.length > 0) return 'bad_marker';
 
-  if (await readFileSafe(runFilePath(config, run.data)) === null) return 'unknown_run';
+  if (await readRegularFile(runFilePath(config, run.data), 'utf8').catch(() => null) === null) return 'unknown_run';
   const file = attemptOutcomesPath(config, run.data, attempt.data);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.appendFile(file, `${JSON.stringify(outcome)}\n`, 'utf8');
@@ -162,7 +163,7 @@ export async function readAttemptOutcomes(config: LocalConfig, run: string, atte
   const attemptId = AttemptIdSchema.safeParse(attempt);
 
   if (!runId.success || !attemptId.success) return [];
-  const text = await readFileSafe(attemptOutcomesPath(config, runId.data, attemptId.data));
+  const text = await readRegularFile(attemptOutcomesPath(config, runId.data, attemptId.data), 'utf8').catch(() => null);
 
   return uniqueOutcomes((text ?? '').split('\n').flatMap((line) => {
     const parsed = WorkOutcomeSchema.safeParse(parsedJson(line));
@@ -199,7 +200,7 @@ export async function takeRunLock<T>(config: LocalConfig, run: RunId, body: (loc
 
   while (!await acquireLock(lock)) {
     if (Date.now() >= until) {
-      const owner = LockOwnerSchema.safeParse(parsedJson(await readFileSafe(lock)));
+      const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
 
       return { kind: 'busy', error: { code: 'driver_running', message: owner.success
         ? `Run ${run} is already driven by process ${owner.data.pid} on this machine. Stop that driver, or wait for it.`
@@ -305,7 +306,7 @@ const RunProgressSchema = z.object({
 });
 
 export async function readRun(config: LocalConfig, runId: string): Promise<RunState | 'missing' | 'corrupt'> {
-  const raw = await readFileSafe(runFilePath(config, runId));
+  const raw = await readRegularFile(runFilePath(config, runId), 'utf8').catch(() => null);
 
   if (raw === null) return 'missing';
 
@@ -392,7 +393,7 @@ export async function updateRun<T>(
 /** The install this data home belongs to. Its id is created once, by whichever process gets there first. */
 export async function installOwner(config: LocalConfig): Promise<HandoffOwner> {
   const file = path.join(getDataHome(config), 'workflows', 'owner.json');
-  let id = ownerId(await readFileSafe(file));
+  let id = ownerId(await readRegularFile(file, 'utf8').catch(() => null));
 
   if (id === undefined) {
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -408,7 +409,7 @@ export async function installOwner(config: LocalConfig): Promise<HandoffOwner> {
       await fs.rm(draft, { force: true });
     }
 
-    id = ownerId(await readFileSafe(file));
+    id = ownerId(await readRegularFile(file, 'utf8').catch(() => null));
   }
 
   if (id === undefined) throw new Error(`${file} does not hold an install id. Move it aside and try again.`);

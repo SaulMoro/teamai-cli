@@ -4,12 +4,12 @@ import { parseYaml } from '../utils/yaml.js';
 import { loadLocalConfigForScope, readConfigFrom } from '../config.js';
 import { ATTEMPT_ENV } from '../launch-context.js';
 import { LocalConfigSchema, getDataHome, type LocalConfig } from '../types.js';
-import { readFileSafe } from '../utils/fs.js';
 import { memberHome } from '../utils/home.js';
 import { projectsRootDir } from '../utils/partition.js';
 import type { LeasedStep } from './step-state.js';
 import { isRunId, readRun } from './store.js';
 import type { RunState, WorkflowFailure } from './types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Each project partition of this machine, with the config stored in it: enough to read the partition's local state.
@@ -26,7 +26,7 @@ export async function projectPartitions(): Promise<LocalConfig[]> {
   for (const entry of dirs) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const dir = path.join(root, entry.name);
-    const raw = await readFileSafe(path.join(dir, 'config.yaml'));
+    const raw = await readRegularFile(path.join(dir, 'config.yaml'), 'utf8').catch(() => null);
 
     if (!raw) continue;
 

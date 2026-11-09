@@ -16,8 +16,8 @@ import {
 import { isAgentToolId } from '../tool-registry.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { isLaunchTool, launchAdapterIdOf } from '../tool-launch/tools.js';
-import { readFileSafe } from '../utils/fs.js';
 import type { WorkflowFailure } from './types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * The model a prompt step's tool runs on, with the reasoning effort it takes. A step's `model` in this form is exact:
@@ -150,7 +150,7 @@ export async function loadDeployedAgent(input: {
 
   if (agents === undefined) return null;
   const file = path.join(agents, `${name}${agentFileExtensionForTool(tool)}`);
-  const content = await readFileSafe(file);
+  const content = await readRegularFile(file, 'utf8').catch(() => null);
 
   if (content === null) return null;
   const reversed = reverseByTool(tool, file, content);

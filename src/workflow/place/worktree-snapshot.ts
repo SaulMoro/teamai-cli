@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { git, type Git } from '../worktree.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Every tracked or non-ignored path that differs from HEAD, with its content and mode, and where HEAD is. */
 export interface WorktreeSnapshot {
@@ -97,7 +98,7 @@ async function hashPath(workspace: string, relative: string): Promise<string> {
 
   try {
     const stats = await fs.lstat(full);
-    const bytes = stats.isSymbolicLink() ? await fs.readlink(full) : await fs.readFile(full);
+    const bytes = stats.isSymbolicLink() ? await fs.readlink(full) : await readRegularFile(full);
 
     return createHash('sha256').update(bytes).digest('hex');
   } catch {

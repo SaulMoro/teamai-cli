@@ -6,7 +6,7 @@ import { RunModeSchema } from '../../../launch-context.js';
 import { isToolId } from '../../../tool-registry.js';
 import type { LocalConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';
-import { readFileSafe, writeJsonAtomic } from '../../../utils/fs.js';
+import { writeJsonAtomic } from '../../../utils/fs.js';
 import { redactJson } from '@teamai/shared/redact';
 import type { HostPlaceRequest, RunVersion } from '../../protocol.js';
 import { ConfinedRunReportSchema, FailureSchema, TokenUsageSchema } from '../../step-state.js';
@@ -16,6 +16,7 @@ import { HOST_CHOICES } from './host-profiles.js';
 import { INVOCATIONS } from './literals.js';
 import { HITL_MODES } from './preflight.js';
 import type { JudgedBy } from './transitions.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 
 /** A report as the runner sends it, kept before it is sent so a crash between the two loses nothing. */
@@ -320,7 +321,7 @@ export function drivesRun(state: SkillState | undefined, session: string | undef
 }
 
 export async function readSkillState(config: LocalConfig, run: RunId): Promise<{ kind: 'found'; state: SkillState } | { kind: 'missing' } | { kind: 'unreadable'; reason: string }> {
-  const raw = await readFileSafe(skillStatePath(config, run));
+  const raw = await readRegularFile(skillStatePath(config, run), 'utf8').catch(() => null);
 
   if (raw === null) return { kind: 'missing' };
 

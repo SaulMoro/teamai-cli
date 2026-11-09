@@ -9,12 +9,13 @@ import os from 'node:os';
 import path from 'node:path';
 import type { z } from 'zod';
 import { getBusinessRoot, getKnowledgeDir, isSelfMode, type LocalConfig } from '../types.js';
-import { isSameRealPath, readFileSafe, writeFileAtomic } from '../utils/fs.js';
+import { isSameRealPath, writeFileAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { withTeamRevision } from './cache.js';
 import { runsDir, TeamPinSchema } from './store.js';
 import type { RunState } from './types.js';
 import { boundedGit, git } from './worktree.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export type TeamPin = z.infer<typeof TeamPinSchema>;
 
@@ -111,7 +112,7 @@ export const TeamPin = {
     const { teamPin } = run;
 
     if (teamPin === undefined) return { ok: true, value: await use(config) };
-    const patch = teamPin.patch === undefined ? undefined : await readFileSafe(patchPath(config, run.id)) ?? '';
+    const patch = teamPin.patch === undefined ? undefined : await readRegularFile(patchPath(config, run.id), 'utf8').catch(() => null) ?? '';
 
     if (patch !== undefined && sha256(patch) !== teamPin.patch) {
       return { ok: false, failed: `the changes run ${run.id} started from beyond team commit ${teamPin.revision.slice(0, 7)} are not on this machine` };

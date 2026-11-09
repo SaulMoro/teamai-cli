@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { closeSync, constants, openSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,7 +65,7 @@ function claudeStream(model: string | undefined, result: Record<string, unknown>
 }
 
 afterEach(async () => {
-  await Promise.all(files.splice(0).map((file) => fs.rm(file, { force: true })));
+  await Promise.all(files.splice(0).map((file) => fs.rm(file, { recursive: true, force: true })));
 });
 
 describe('local tool adapter', () => {
@@ -83,6 +84,21 @@ describe('local tool adapter', () => {
 
     expect(result).toMatchObject({ started: true, exitCode: 0, output });
     expect(result.failure).toEqual(failure);
+  });
+
+  it.skipIf(process.platform === 'win32')('fails the step at once when the tool left a FIFO at its result path', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-workflow-fifo-'));
+    files.push(dir);
+    const resultPath = path.join(dir, 'result.json');
+    execFileSync('mkfifo', [resultPath]);
+    const adapter = createLocalToolAdapter(() => child(claudeStream('claude-sonnet', { result: 'Done.' })) as ReturnType<ToolSpawn>, () => 'claude');
+    const late = new Promise<'still waiting'>((resolve) => { setTimeout(() => resolve('still waiting'), 2_000).unref(); });
+
+    const settled = await Promise.race([adapter.run('claude', { prompt: 'Review.', cwd: os.tmpdir(), resultPath, secrets: {} }), late]);
+
+    // A read the FIFO still holds ends once a writer opens it and closes, so a failing run leaves no stuck read.
+    if (settled === 'still waiting') closeSync(openSync(resultPath, constants.O_WRONLY | constants.O_NONBLOCK));
+    expect(settled).toMatchObject({ started: true, failure: { code: 'tool_failed', message: `claude left a pipe at its result path, ${resultPath}, not a regular file, so teamai did not read it` } });
   });
 
   it('asks the tool to leave failure out of the result file unless the step failed', async () => {

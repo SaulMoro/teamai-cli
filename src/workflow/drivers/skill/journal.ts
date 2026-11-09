@@ -8,13 +8,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { readFileSafe } from '../../../utils/fs.js';
 import { redactJson } from '@teamai/shared/redact';
 import { AttemptIdSchema, skillStatePath, type RunId } from '../../store.js';
 import type { SkillCall, SkillContext } from './skill-driver.js';
 import { readSkillState } from './skill-state.js';
 import { TICK_LOCK_WAIT_MS } from './tick.js';
 import type { Action, SkillAnswer } from './turn.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 const CallLineSchema = z.object({
   at: z.string(),
@@ -125,7 +125,7 @@ function callLine(call: SkillCall, answer: SkillAnswer, input: Pick<CallLine, 'a
 async function askedKeys(file: string): Promise<Set<string>> {
   const keys = new Set<string>();
 
-  for (const text of (await readFileSafe(file))?.split('\n') ?? []) {
+  for (const text of (await readRegularFile(file, 'utf8').catch(() => null))?.split('\n') ?? []) {
     if (text.trim() === '') continue;
 
     try {

@@ -25,6 +25,7 @@ import type { JsonValue } from '@teamai/tool-core/json';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import type { ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Paths and helpers
@@ -82,7 +83,7 @@ export function resolveCursorWorkspaceId(cwd: string): { id: string; uri: Cursor
     let raw: string;
 
     try {
-      raw = fs.readFileSync(wj, 'utf-8');
+      raw = readRegularFileSync(wj, 'utf-8');
     } catch {
       continue;
     }

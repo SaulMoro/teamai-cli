@@ -39,6 +39,7 @@ import {
 } from '@teamai/tool-core/formats/ide-history';
 import { cutTitle, isInjectedText, titleFromCandidates } from '@teamai/tool-core/sessions/title';
 import { deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,7 +120,7 @@ function parseImageBlock(block: IdeBlock, convDir: string): ImageBlock | null {
   let data: string | undefined;
 
   try {
-    data = fs.readFileSync(filePath).toString('base64');
+    data = readRegularFileSync(filePath).toString('base64');
   } catch {
     data = undefined; // File missing (cleaned up / another machine): keep the pointer; the write side degrades
   }

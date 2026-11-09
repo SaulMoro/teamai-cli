@@ -95,6 +95,8 @@
     "teamai/spawn-command": "error",
     // readline re-emits a socket's or stream's errors on its interface, and throws them when nothing listens there.
     "teamai/readline-error": "error",
+    // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
+    "teamai/regular-file-reads": "error",
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
     "teamai/home-env": "error",
     "teamai/learnings-root": "error",

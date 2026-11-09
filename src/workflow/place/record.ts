@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { DATA_BRANCHES, type LocalConfig } from '../../types.js';
-import { readFileSafe, writeJsonAtomic } from '../../utils/fs.js';
+import { writeJsonAtomic } from '../../utils/fs.js';
 import { LeaseSetupSchema } from '../requirements.js';
 import { ChangesSchema, FailureSchema, ReadSchema } from '../step-state.js';
 import { AttemptIdSchema, placeRecordPath, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { CopyContractSchema, TeamContractSchema } from '../workspace.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** A lease without a workspace contract, in the checkout itself: what it changes there fails it, unless it is interactive and may write. */
 const CheckoutRoleSchema = z.object({ role: z.literal('checkout') });
@@ -143,7 +144,7 @@ export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;
 
 /** The place an attempt was prepared in, from `attempts/<a>/place.json`. */
 export async function readPlaceRecord(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<{ kind: 'found'; record: PlaceRecord } | { kind: 'missing' } | { kind: 'unreadable'; reason: string }> {
-  const raw = await readFileSafe(placeRecordPath(config, run, attempt));
+  const raw = await readRegularFile(placeRecordPath(config, run, attempt), 'utf8').catch(() => null);
 
   if (raw === null) return { kind: 'missing' };
 

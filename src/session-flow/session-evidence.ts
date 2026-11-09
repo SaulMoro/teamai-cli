@@ -4,11 +4,11 @@
  * type, size and hash only, since media cannot be masked for secrets, so its content never leaves the machine.
  */
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { errnoCode } from '../utils/fs.js';
+import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 
 /** Text kinds whose content is archived, masked, by extension, with the media type the judge is told. */
 const TEXT_TYPES = new Map(Object.entries({
@@ -99,8 +99,13 @@ function utf8(bytes: Uint8Array): string | undefined {
 
 async function sha256Of(file: string): Promise<string> {
   const hash = createHash('sha256');
+  const handle = await openRegularFile(file);
 
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  try {
+    for await (const chunk of handle.createReadStream()) hash.update(chunk);
+  } finally {
+    await handle.close();
+  }
 
   return hash.digest('hex');
 }
@@ -132,7 +137,7 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
     const textType = TEXT_TYPES.get(extension);
     const { size } = await fs.stat(file);
 
-    const text = textType === undefined || size > TEXT_READ_MAX_BYTES ? undefined : utf8(await fs.readFile(file));
+    const text = textType === undefined || size > TEXT_READ_MAX_BYTES ? undefined : utf8(await readRegularFile(file));
 
     if (textType !== undefined && text !== undefined) {
       const kept = cutAt(mask(text), Math.min(FILE_MAX_BYTES, left));

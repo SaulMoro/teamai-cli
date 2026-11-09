@@ -64,6 +64,7 @@ import {
   TextOrBlocksSchema,
 } from '../sessions/fs.js';
 import type { JsonlRecord } from '../json.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -232,7 +233,7 @@ function formatFilenameTimestamp(isoStr: string): string {
 function readCodexModelProvider(configPath: string): string {
   try {
     if (!fileExists(configPath)) return 'openai';
-    const raw = fs.readFileSync(configPath, 'utf-8');
+    const raw = readRegularFileSync(configPath, 'utf-8');
     const m = raw.match(/^[ \t]*model_provider[ \t]*=[ \t]*["']([^"']+)["']/m);
 
     return m?.[1]?.trim() || 'openai';

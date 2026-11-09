@@ -43,6 +43,7 @@ import { cleanTitleText, cutTitle, fallbackTitle, isInjectedText, titleFromCandi
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { registerWorkBuddySession, unregisterWorkBuddySession } from './workbuddy-store.js';
 import { log } from '@teamai/tool-core/log';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -181,7 +182,7 @@ function readMeta(jsonlPath: string): WorkBuddyMeta {
   try {
     if (!fileExists(metaPath)) return {};
 
-    return WorkBuddyMetaSchema.parse(JSON.parse(fs.readFileSync(metaPath, 'utf-8')));
+    return WorkBuddyMetaSchema.parse(JSON.parse(readRegularFileSync(metaPath, 'utf-8')));
   } catch {
     return {};
   }

@@ -24,6 +24,7 @@ import { extractReply } from '@teamai/tool-core/reply';
 import { runTool, type ToolRun } from './run.js';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** A JSON line a tool prints; a field of the wrong type reads as absent. */
 const RecordSchema = z.looseObject({
@@ -187,7 +188,7 @@ function confinedEnv(tool: ConfinedTool): NodeJS.ProcessEnv {
 }
 
 async function optionalFile(file: string): Promise<string | undefined> {
-  try { return await fs.readFile(file, 'utf8'); }
+  try { return await readRegularFile(file, 'utf8'); }
   catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined; throw error; }
 }
 

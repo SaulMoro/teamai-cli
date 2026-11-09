@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { runsDir, type RunId } from '../store.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Steps a driver's runtimes hold back ─────────────────
 //
@@ -28,7 +29,7 @@ function heldFile(config: LocalConfig, run: RunId): string {
 
 export async function readHeldSteps(config: LocalConfig, run: RunId): Promise<HeldSteps | undefined> {
   try {
-    return HeldStepsSchema.parse(JSON.parse(await fs.readFile(heldFile(config, run), 'utf8')));
+    return HeldStepsSchema.parse(JSON.parse(await readRegularFile(heldFile(config, run), 'utf8')));
   } catch {
     return undefined;
   }

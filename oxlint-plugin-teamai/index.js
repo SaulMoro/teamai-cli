@@ -27,6 +27,7 @@ import untrustedFinishGit from './rules/untrusted-finish-git.js';
 import gitExitCode from './rules/git-exit-code.js';
 import readlineError from './rules/readline-error.js';
 import spawnCommand from './rules/spawn-command.js';
+import regularFileReads from './rules/regular-file-reads.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -64,6 +65,7 @@ export default definePlugin({
     'git-exit-code': gitExitCode,
     'readline-error': readlineError,
     'spawn-command': spawnCommand,
+    'regular-file-reads': regularFileReads,
     ...antiSlopRules,
   },
 });

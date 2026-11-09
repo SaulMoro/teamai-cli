@@ -11,6 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
+import { openRegularFileSync } from '@teamai/shared/regular-file';
 import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '../json.js';
 import type { Session } from './ir.js';
 
@@ -206,8 +207,9 @@ export function* readJsonlHead(filePath: string, maxLines: number): Generator<Js
   }
 }
 
+/** The lines of a transcript, which must be a regular file: a FIFO a step left at its path would stall the process. */
 function* jsonlLines(filePath: string): Generator<string> {
-  const fd = fs.openSync(filePath, 'r');
+  const fd = openRegularFileSync(filePath);
 
   try {
     const decoder = new StringDecoder('utf8');

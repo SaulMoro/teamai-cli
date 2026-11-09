@@ -38,6 +38,7 @@ import { isFailureCode, type FailureCode } from './failure-codes.js';
 import type { DriverIdentity, RunState, RunStatus, WorkflowFailure } from './types.js';
 import { definedFields } from '../utils/defined-fields.js';
 import { parseYaml } from '../utils/yaml.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 function hasTeamaiCode(failure: WorkflowFailure | undefined): failure is WorkflowFailure & { code: FailureCode } {
   return failure !== undefined && isFailureCode(failure.code);
@@ -454,7 +455,7 @@ async function pendingBenchmarks(config: LocalConfig): Promise<Array<{ file: str
   const files = (await fs.readdir(dir).catch((): string[] => [])).filter((file) => file.endsWith('.json')).sort();
 
   const read = await Promise.all(files.map(async (file) => {
-    const text = await fs.readFile(path.join(dir, file), 'utf-8').catch(() => undefined);
+    const text = await readRegularFile(path.join(dir, file), 'utf-8').catch(() => undefined);
     const parsed = text === undefined ? undefined : QueuedBenchmarkSchema.safeParse(jsonOrUndefined(text));
 
     return text !== undefined && parsed?.success ? [{ file: path.join(dir, file), text, record: parsed.data }] : [];
@@ -505,7 +506,7 @@ export async function pendingRecords(config: LocalConfig): Promise<WorkflowRunRe
 
     try {
       // SAFETY: only enqueueRecord writes this directory, and it writes each file from a WorkflowRunRecord.
-      records.push(JSON.parse(await fs.readFile(path.join(dir, file), 'utf-8')) as WorkflowRunRecord);
+      records.push(JSON.parse(await readRegularFile(path.join(dir, file), 'utf-8')) as WorkflowRunRecord);
     } catch {
       // A corrupt queue entry must not wedge the whole queue: the next enqueue
       // of the same run+phase overwrites it.
@@ -526,7 +527,7 @@ async function dequeue(config: LocalConfig, record: WorkflowRunRecord): Promise<
 
     try {
       // SAFETY: only enqueueRecord writes the queue, and it writes each file from a WorkflowRunRecord.
-      current = JSON.parse(await fs.readFile(target, 'utf-8')) as WorkflowRunRecord;
+      current = JSON.parse(await readRegularFile(target, 'utf-8')) as WorkflowRunRecord;
     } catch {
       return;
     }
@@ -539,7 +540,7 @@ async function dequeue(config: LocalConfig, record: WorkflowRunRecord): Promise<
 
 /** Removes a delivered benchmark record from the queue, unless it was queued again with other content meanwhile. */
 async function dequeueBenchmark({ file, text }: { file: string; text: string }): Promise<void> {
-  if (await fs.readFile(file, 'utf-8').catch(() => undefined) === text) await fs.rm(file, { force: true });
+  if (await readRegularFile(file, 'utf-8').catch(() => undefined) === text) await fs.rm(file, { force: true });
 }
 
 /** Whether a drain delivered the records it took, and when it did not, why they are still queued. */

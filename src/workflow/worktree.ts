@@ -13,6 +13,7 @@ import { stopProcess } from '../tool-launch/process-stop.js';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
 import { MAX_TIMER_MS } from '../utils/timer.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */
 export const AGENT_PATHS: readonly string[] = agentConfigPaths();
@@ -527,7 +528,7 @@ async function hideTeamaiWorktrees(main: string): Promise<void> {
 
   if (!exclude) return;
   const marker = '# teamai workflow worktrees';
-  const current = await fs.readFile(exclude, 'utf8').catch(() => '');
+  const current = await readRegularFile(exclude, 'utf8').catch(() => '');
 
   if (current.includes(marker)) return;
   await fs.mkdir(path.dirname(exclude), { recursive: true });
@@ -789,7 +790,7 @@ export async function applyBaseConfig(
   if (present.code !== 0) return { ok: false, message: unreadBase(dir, commit, present.stderr) };
   // A failed checkout still stages the base copy, so the index is put back with the files.
   const indexFile = await gitPath(dir, 'index', options.run);
-  const index = indexFile === undefined ? undefined : await fs.readFile(indexFile).catch(() => undefined);
+  const index = indexFile === undefined ? undefined : await readRegularFile(indexFile).catch(() => undefined);
 
   if (indexFile === undefined || index === undefined) {
     return { ok: false, message: `Agent configuration in ${dir} could not be reset to the run's base commit ${commit}, because its git index could not be read, so the step did not run. Check that git status works in ${dir}, then retry the step.` };
@@ -814,7 +815,7 @@ export async function applyBaseConfig(
   }
 
   // Read back, so a resumed prepare puts back the conflicts the branch had, which the base checkout cleared.
-  const conflicts = await fs.readFile(path.join(saved, '_conflicts'), 'utf8');
+  const conflicts = await readRegularFile(path.join(saved, '_conflicts'), 'utf8');
 
   for (const relative of AGENT_PATHS) await fs.rm(path.join(dir, relative), { recursive: true, force: true });
   const refused = await checkoutBaseConfig(dir, commit, present.paths, options.run);
@@ -906,7 +907,7 @@ async function linkedParent(dir: string, relative: string): Promise<string | und
 
 /** Puts saved conflict stages back after the base checkout cleared them, before the step runs. */
 export async function reopenConfigConflicts(dir: string, saved: string, runGit: Git): Promise<void> {
-  const conflicts = await fs.readFile(path.join(saved, '_conflicts'), 'utf8').catch(() => '');
+  const conflicts = await readRegularFile(path.join(saved, '_conflicts'), 'utf8').catch(() => '');
   const paths = conflictPaths(conflicts);
 
   if (paths.length > 0) await restoreConflictStages(dir, conflicts, paths, runGit);
@@ -917,7 +918,7 @@ const SAVED_PATHS = '_paths.json';
 
 /** The paths `saved` holds the agent configuration of: AGENT_PATHS, unless `saveConfig` was given others. */
 export async function savedConfigPaths(saved: string): Promise<readonly string[]> {
-  const listed = z.array(z.string().min(1)).safeParse(JSON.parse(await fs.readFile(path.join(saved, SAVED_PATHS), 'utf8').catch(() => 'null')));
+  const listed = z.array(z.string().min(1)).safeParse(JSON.parse(await readRegularFile(path.join(saved, SAVED_PATHS), 'utf8').catch(() => 'null')));
 
   return listed.success ? listed.data : AGENT_PATHS;
 }
@@ -1010,7 +1011,7 @@ export async function unchangedOverlayPaths(dir: string, saved: string, dirty: r
   let raw: unknown;
 
   try {
-    raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    raw = JSON.parse(await readRegularFile(file, 'utf8'));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
 
@@ -1048,11 +1049,11 @@ export async function restoreUneditedConfig(dir: string, _commit: string, saved:
     return `git could not list the files in ${dir} (${unlisted.stderr.trim() || 'no message'}); the branch's agent files are still in ${saved}`;
   }
 
-  const overlay = z.record(z.string(), z.string()).parse(JSON.parse(await fs.readFile(path.join(saved, '_overlay.json'), 'utf8')));
+  const overlay = z.record(z.string(), z.string()).parse(JSON.parse(await readRegularFile(path.join(saved, '_overlay.json'), 'utf8')));
   const current = await fileManifest(dir, paths);
   const branch = await fileManifest(saved, paths);
-  const conflicts = await fs.readFile(path.join(saved, '_conflicts'), 'utf8').catch(() => '');
-  const dirs = z.array(z.string()).parse(JSON.parse(await fs.readFile(path.join(saved, '_dirs.json'), 'utf8').catch(() => '[]')));
+  const conflicts = await readRegularFile(path.join(saved, '_conflicts'), 'utf8').catch(() => '');
+  const dirs = z.array(z.string()).parse(JSON.parse(await readRegularFile(path.join(saved, '_dirs.json'), 'utf8').catch(() => '[]')));
   const marked = await markedConflicts(dir, conflictPaths(conflicts));
   // Staging a conflict without leaving markers is a resolution, even when the text matches the overlay.
   // An unstaged file that still matches the overlay is not.
@@ -1209,7 +1210,7 @@ async function fileManifest(root: string, paths: readonly string[]): Promise<Rec
       return;
     }
 
-    if (stats.isFile()) files[relative] = `file:${(stats.mode & 0o777).toString(8)}:${(await fs.readFile(current)).toString('base64')}`;
+    if (stats.isFile()) files[relative] = `file:${(stats.mode & 0o777).toString(8)}:${(await readRegularFile(current)).toString('base64')}`;
   };
 
   for (const relative of paths) await walk(relative);
@@ -1422,7 +1423,7 @@ async function markedConflicts(dir: string, paths: string[]): Promise<string[]> 
 
   for (const relative of paths) {
     try {
-      if ((await fs.readFile(path.join(dir, relative), 'utf8')).includes('<<<<<<<')) marked.push(relative);
+      if ((await readRegularFile(path.join(dir, relative), 'utf8')).includes('<<<<<<<')) marked.push(relative);
     } catch {
       // The step removed the conflicted file.
     }
@@ -1589,7 +1590,7 @@ export async function unrestoredCopy(dir: string): Promise<
   let raw: unknown;
 
   try {
-    raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    raw = JSON.parse(await readRegularFile(file, 'utf8'));
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
 

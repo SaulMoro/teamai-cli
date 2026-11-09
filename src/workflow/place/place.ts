@@ -31,6 +31,7 @@ import { finishTeamClone, openTeamClone, removeTeamClone, teamKeyOf } from './te
 import { finishDataCheckout, openDataCheckout, removeDataCheckout } from './data.js';
 import { commitPathsOf } from './worktree-snapshot.js';
 import { finishWriter, mergeBranches, recordMergePreparation, rememberConflicts, unreportedChangesMessage, withUnpushed } from './writer.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * The checkout a driver working from `cwd` makes its places in: `checkout`, the one the run started from, unless `cwd`
@@ -549,7 +550,7 @@ function keptConfigPath(config: LocalConfig, run: RunId): string {
 
 async function readKeptConfig(config: LocalConfig, run: RunId): Promise<z.infer<typeof KeptConfigSchema>> {
   try {
-    const parsed = KeptConfigSchema.safeParse(parseJson(await fs.readFile(keptConfigPath(config, run), 'utf8')));
+    const parsed = KeptConfigSchema.safeParse(parseJson(await readRegularFile(keptConfigPath(config, run), 'utf8')));
 
     if (parsed.success) return parsed.data;
   } catch {

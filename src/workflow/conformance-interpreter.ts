@@ -14,6 +14,7 @@ import { callerProvenance } from './run-controls.js';
 import { AttemptIdSchema } from './store.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from './types.js';
 import { git } from './worktree.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export const PARALLEL_ROOTS = `schemaVersion: v1alpha1
 name: build
@@ -326,7 +327,7 @@ async function readOrNull(file: string): Promise<string | null> {
 
   if (!stat) return null;
 
-  return stat.isDirectory() ? '' : fs.readFile(file, 'utf8');
+  return stat.isDirectory() ? '' : readRegularFile(file, 'utf8');
 }
 
 /** Whether an operation's `as` stands for the driver under test. */

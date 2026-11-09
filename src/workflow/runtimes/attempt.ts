@@ -20,6 +20,7 @@ import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { credentialSecrets, isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -107,7 +108,7 @@ export function attemptRuntimePath(config: LocalConfig, run: RunId, attempt: Att
 
 export async function readAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptRuntimeRecord | undefined> {
   try {
-    return AttemptRuntimeRecordSchema.parse(JSON.parse(await fs.readFile(attemptRuntimePath(config, run, attempt), 'utf8')));
+    return AttemptRuntimeRecordSchema.parse(JSON.parse(await readRegularFile(attemptRuntimePath(config, run, attempt), 'utf8')));
   } catch {
     return undefined;
   }
@@ -347,7 +348,7 @@ export async function seedMemberModel({ tool, dir, memberHome }: { tool: ExecRun
   const target = path.join(dir, choices.file);
 
   if (await fs.access(target).then(() => true, () => false)) return;
-  const text = await fs.readFile(path.join(memberHome, choices.file), 'utf8').catch(() => undefined);
+  const text = await readRegularFile(path.join(memberHome, choices.file), 'utf8').catch(() => undefined);
 
   if (text === undefined) return;
   let parsed: unknown;

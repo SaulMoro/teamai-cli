@@ -5,7 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { loadLocalConfigForScope } from '../config.js';
 import { log } from '../utils/logger.js';
-import { pathExists, readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
+import { pathExists, remove, writeJsonAtomic } from '../utils/fs.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { roleDeclaration, type ResourceNamespaces } from '../roles.js';
@@ -30,6 +30,7 @@ import { git as gitAt } from './worktree.js';
 import {
   remotelyReachableRevision, revisionHoldsSources, withoutStaleTeamRevision, type ReachableRevision,
 } from '../utils/team-revision.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export interface SyncWorkflowOptions {
   scopeLabel?: string;
@@ -99,7 +100,7 @@ function isCachedWorkflow(value: unknown, name: string): value is CachedWorkflow
 }
 
 async function readCache(config: LocalConfig, name: string): Promise<CachedWorkflow | null> {
-  const raw = await readFileSafe(cachePath(config, name));
+  const raw = await readRegularFile(cachePath(config, name), 'utf8').catch(() => null);
 
   if (raw === null) return null;
 
@@ -119,7 +120,7 @@ async function readCache(config: LocalConfig, name: string): Promise<CachedWorkf
 const NamespaceConflictSchema = z.object({ conflict: z.string() });
 
 async function readConflict(config: LocalConfig, name: string): Promise<string | undefined> {
-  const raw = await readFileSafe(cachePath(config, name));
+  const raw = await readRegularFile(cachePath(config, name), 'utf8').catch(() => null);
 
   if (raw === null) return undefined;
 
@@ -408,7 +409,7 @@ export async function syncWorkflowDefinitions(config: LocalConfig, options: Sync
 
     // A symlink is not a workflow file, even when the target is a YAML file outside this directory.
     if (stat.isSymbolicLink() || !stat.isFile()) continue;
-    const content = await readFileSafe(full);
+    const content = await readRegularFile(full, 'utf8').catch(() => null);
 
     if (content === null) {
       checked.push({ stem, relativePath, diagnostics: [{ file: relativePath, line: 1, column: 1, field: '(root)', message: 'workflow file could not be read' }] });
@@ -1178,7 +1179,7 @@ async function resolvePromptFiles(
 
         if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('not a regular file');
         assertSafePath(target, [root]);
-        prompt = await readFileSafe(target);
+        prompt = await readRegularFile(target, 'utf8').catch(() => null);
 
         if (prompt === null) throw new Error('unreadable');
       } catch {

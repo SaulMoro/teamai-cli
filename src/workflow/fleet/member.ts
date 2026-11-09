@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
-import { readFileIfExists } from '../../utils/fs.js';
+import { errnoCode } from '../../utils/fs.js';
 import { log } from '../../utils/logger.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../tool-launch/process-stop.js';
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
@@ -52,6 +52,7 @@ import { AgentSession } from '../../session-flow/agent-session.js';
 import { JsonValueSchema, type JsonValue } from '../../utils/json.js';
 import { isJsonObject } from '../../types.js';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
 const CANCEL_READ_MS = 30_000;
@@ -845,9 +846,10 @@ async function endLeftNestedRun(config: LocalConfig, run: RunId, attempt: Attemp
   let text: string | null;
 
   try {
-    text = await readFileIfExists(file);
+    text = await readRegularFile(file, 'utf8');
   } catch (error) {
-    return { kind: 'running', message: `The nested run of the whole workflow it ran may still run: its id in ${file} could not be read (${error instanceof Error ? error.message : String(error)}). Make the file readable, then run the step again.` };
+    if (errnoCode(error) === 'ENOENT') text = null;
+    else return { kind: 'running', message: `The nested run of the whole workflow it ran may still run: its id in ${file} could not be read (${error instanceof Error ? error.message : String(error)}). Make the file readable, then run the step again.` };
   }
 
   if (text === null) return { kind: 'ended' };

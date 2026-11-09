@@ -14,6 +14,7 @@ import { ConfinedLevelSchema } from '@teamai/runtime-protocol';
 import type { DriverCan, Held } from './requirements.js';
 import { chooseStepModel, type StepModel } from './step-model.js';
 import type { WorkflowFailure } from './types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export const CONFINED_FILE = 'confined.json';
 
@@ -72,7 +73,7 @@ async function jsonFile(file: string): Promise<{ ok: true; value: unknown } | { 
   if (!stat?.isFile()) return { ok: false, reason: stat ? 'is not a regular file' : 'does not exist' };
 
   try {
-    return { ok: true, value: JSON.parse(await fs.readFile(file, 'utf8')) };
+    return { ok: true, value: JSON.parse(await readRegularFile(file, 'utf8')) };
   } catch (error) {
     return { ok: false, reason: `is not JSON: ${error instanceof Error ? error.message : String(error)}` };
   }

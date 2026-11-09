@@ -3,12 +3,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LocalConfig } from '../../../types.js';
-import { readFileSafe, writeFileAtomic } from '../../../utils/fs.js';
+import { writeFileAtomic } from '../../../utils/fs.js';
 import { redact } from '@teamai/shared/redact';
 import { expectedOutput } from '../../output.js';
 import { attemptDir, attemptResultPath, type AttemptId, type RunId } from '../../store.js';
 import type { OutputSchema } from '../../types.js';
 import type { Literal } from './literals.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** A path the child reported changing: a leading `./` is stripped, and an absolute path or one that climbs with `..` counts as unreported. */
 function reportedPath(raw: string): string | undefined {
@@ -126,7 +127,7 @@ export async function writeChildBrief(input: {
 /** The result the child of `attempt` wrote. A missing or unreadable one is a `tool_failed` failure. */
 export async function readChildResult(input: { config: LocalConfig; run: RunId; attempt: AttemptId }): Promise<ChildResult> {
   const file = attemptResultPath(input.config, input.run, input.attempt);
-  const raw = await readFileSafe(file);
+  const raw = await readRegularFile(file, 'utf8').catch(() => null);
 
   if (raw === null) {
     return { kind: 'failure', failure: { code: 'tool_failed', message: `The child of attempt ${input.attempt} wrote no ${file}, so the step has no result.` }, changed: [] };

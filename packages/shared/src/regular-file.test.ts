@@ -1,0 +1,79 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { NotRegularFileError, openRegularFile, readRegularFile, readRegularFileSync } from './regular-file.js';
+
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function scratch(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-regular-file-'));
+  dirs.push(dir);
+
+  return dir;
+}
+
+/** A FIFO in a scratch folder: a step can leave one where teamai later reads a file it wrote. */
+function fifo(): string {
+  const at = path.join(scratch(), 'result.json');
+  execFileSync('mkfifo', [at]);
+
+  return at;
+}
+
+/**
+ * What `read` settles to within two seconds, or `still waiting`. A read a FIFO still holds is let go by opening the FIFO
+ * for writing and closing it, so a failing test leaves no stuck read behind.
+ */
+async function settledSoon<TValue>(at: string, read: () => Promise<TValue>): Promise<TValue | 'still waiting' | { rejected: unknown }> {
+  const late = new Promise<'still waiting'>((resolve) => { setTimeout(() => resolve('still waiting'), 2_000).unref(); });
+  const settled = await Promise.race([read().catch((error: unknown) => ({ rejected: error })), late]);
+
+  if (settled === 'still waiting') fs.closeSync(fs.openSync(at, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK));
+
+  return settled;
+}
+
+describe.skipIf(process.platform === 'win32')('reading a file a step may have replaced', () => {
+  it('reads a regular file as text or as bytes', async () => {
+    const at = path.join(scratch(), 'result.json');
+    fs.writeFileSync(at, '{"output":"é"}');
+
+    expect(await readRegularFile(at, 'utf8')).toBe('{"output":"é"}');
+    expect((await readRegularFile(at)).equals(Buffer.from('{"output":"é"}'))).toBe(true);
+    expect(readRegularFileSync(at, 'utf8')).toBe('{"output":"é"}');
+  });
+
+  it('refuses a FIFO at once, saying what is there, instead of waiting for a writer', async () => {
+    const at = fifo();
+
+    const settled = await settledSoon(at, () => readRegularFile(at, 'utf8'));
+
+    expect(settled).toEqual({ rejected: expect.objectContaining({ name: 'NotRegularFileError', message: expect.stringContaining(`${at} is a pipe, not a regular file`) }) });
+  });
+
+  it('refuses a FIFO opened as a handle, as a streaming read opens it', async () => {
+    const at = fifo();
+
+    expect(await settledSoon(at, () => openRegularFile(at))).toEqual({ rejected: expect.any(NotRegularFileError) });
+  });
+
+  it('refuses a FIFO in a synchronous read too, which would otherwise stall the whole process', () => {
+    const at = fifo();
+
+    expect(() => readRegularFileSync(at, 'utf8')).toThrow(NotRegularFileError);
+  });
+
+  it('refuses a directory and a device, and passes a missing file\'s own error on', async () => {
+    const dir = scratch();
+
+    await expect(readRegularFile(dir, 'utf8')).rejects.toThrow(`${dir} is a directory, not a regular file`);
+    await expect(readRegularFile('/dev/zero')).rejects.toThrow('/dev/zero is a device, not a regular file');
+    await expect(readRegularFile(path.join(dir, 'missing.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});

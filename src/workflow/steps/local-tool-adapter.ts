@@ -18,6 +18,7 @@ import { budgeted } from '../limits.js';
 import { expectedOutput } from '../output.js';
 import type { Limit } from '../requirements.js';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
+import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
 import type { StepModel } from '../step-model.js';
 import type { OutputSchema, WorkflowFailure } from '../types.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
@@ -208,13 +209,16 @@ const ResultFileSchema = z.object({
   failure: z.object({ code: z.string(), message: z.string() }).nullish().transform((failure) => failure ?? undefined),
 });
 
-async function readResultFile(resultPath: string): Promise<ResultFile | null> {
-  try {
-    const result = ResultFileSchema.safeParse(JSON.parse(await fs.readFile(resultPath, 'utf8')));
+/** The result file a tool wrote, none when it wrote no valid one, or what it left there instead of a file, which is never read. */
+type ResultRead = { kind: 'read'; result: ResultFile | null } | { kind: 'not_a_file'; error: NotRegularFileError };
 
-    return result.success ? result.data : null;
-  } catch {
-    return null;
+async function readResultFile(resultPath: string): Promise<ResultRead> {
+  try {
+    const result = ResultFileSchema.safeParse(JSON.parse(await readRegularFile(resultPath, 'utf8')));
+
+    return { kind: 'read', result: result.success ? result.data : null };
+  } catch (error) {
+    return error instanceof NotRegularFileError ? { kind: 'not_a_file', error } : { kind: 'read', result: null };
   }
 }
 
@@ -516,7 +520,8 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         return failed;
       }
 
-      const fileResult = await readResultFile(input.resultPath);
+      const read = await readResultFile(input.resultPath);
+      const fileResult = read.kind === 'read' ? read.result : null;
       const printed = toolStdout(launchAdapterIdOf(tool), completed.stdout);
       // Only a tool stopped at a limit may end before its result: one that ended there on its own wrote none.
       const stated = printed?.unfinished && !stopped ? null : printed;
@@ -525,6 +530,10 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
       const result = combineResults(fileResult, reported) ?? (interactive ? {} : null);
       const stoppedBy: Limit | undefined = stopped ?? (stated?.reachedMaxTurns ? 'max_turns' : undefined);
       const ended = stoppedBy ? { stoppedBy } : {};
+
+      if (read.kind === 'not_a_file') {
+        return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: { code: 'tool_failed', message: `${tool} left ${read.error.kind} at its result path, ${input.resultPath}, not a regular file, so teamai did not read it` } };
+      }
 
       // OpenCode 1.x exits 0 on a provider's error, a spent limit among them, and writes no result.
       if (!fileResult && isUsageLimit(printed)) return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: usageLimited(tool, printed.error, input) };

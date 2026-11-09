@@ -1,13 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { readFileSafe, writeJsonAtomic } from '../../utils/fs.js';
+import { writeJsonAtomic } from '../../utils/fs.js';
 import type { StepRead } from '../step-state.js';
 import type { WorkflowFailure } from '../types.js';
 import { keptSentence, putBackCopy, type Git, type KeptChanges } from '../worktree.js';
 import { restoreOverlay } from './overlay.js';
 import { changedPaths, snapshotWorktree, type WorktreeSnapshot } from './worktree-snapshot.js';
 import { Writes } from '../writes.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 const SnapshotSchema = z.object({
   ok: z.boolean(),
@@ -27,7 +28,7 @@ export async function stageReader(dir: string, file: string, run: Git): Promise<
 
 /** The snapshot `stageReader` saved in `file`, undefined when it is missing or unreadable. */
 export async function readSnapshot(file: string): Promise<WorktreeSnapshot | undefined> {
-  const saved = SnapshotSchema.safeParse(JSON.parse(await readFileSafe(file) ?? 'null'));
+  const saved = SnapshotSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8').catch(() => null) ?? 'null'));
 
   return saved.success ? { ...saved.data, files: new Map(saved.data.files) } : undefined;
 }
