@@ -2,7 +2,7 @@ import type { OpId, RuntimeFailure, RuntimeMessage, WakeRequest } from '@teamai/
 import { threadLink } from './conversation.js';
 import type { Serving, Session } from './runtime.js';
 import { DRIVER_NAMES } from './sessions.js';
-import type { EnvironmentLink, Launch, Project, T3 } from './t3.js';
+import { T3Error, type EnvironmentLink, type Launch, type Project, type T3 } from './t3.js';
 
 // ─── Waking a fleet member ───
 //
@@ -18,6 +18,10 @@ export const END_OF_WAKE = 'When that one attempt is done, or nothing is left to
 
 /** What the person adds so a wake finds a machine. */
 const NEXT_STEP = 'Link a machine in T3 Code, and add the repository there as a project.';
+
+/** What the person does while T3 Code has linked environments off, which they are until turned on in its Labs settings. */
+const TURN_ON = 'Turn on Linked environments in T3 Code\'s Labs settings, link the machine, and add the repository there as a project.';
+
 
 /**
  * The repository a git remote URL names, as T3 keys a project's repository: `host/path`, lowercased, with no scheme,
@@ -51,9 +55,18 @@ function isOf(project: Project, key: string): boolean {
   return !project.deletedAt && project.repositoryIdentity?.canonicalKey.toLowerCase() === key;
 }
 
-/** Whether `init` offers `wake`: T3 lists the environments linked to this one, which it refuses while Labs has them off. */
+/**
+ * Whether `init` offers `wake`: this T3 Code has linked environments, on or off in its Labs settings. With them off, a
+ * wake fails saying how to turn them on, when the person uses it.
+ */
 export async function canWake(t3: T3): Promise<boolean> {
-  return t3.environmentLinks().then(() => true, () => false);
+  try {
+    await t3.environmentLinks();
+
+    return true;
+  } catch (error) {
+    return error instanceof T3Error && error.linkedEnvironmentsOff;
+  }
 }
 
 /** The model a member starts on in `project` of `link`: the project's default, else the first model of a tool this runtime runs. */
@@ -96,7 +109,9 @@ export function wakes({ serving }: { serving: Serving }) {
     try {
       links = await t3.environmentLinks();
     } catch (error) {
-      return { ok: false, failure: unavailable(`T3 Code lists no machine linked to it (${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}). Turn on Linked environments in T3 Code under Settings → Labs, then: ${NEXT_STEP}`) };
+      if (error instanceof T3Error && error.linkedEnvironmentsOff) return { ok: false, failure: unavailable(`Linked environments is off in T3 Code, so it reaches no other machine. ${TURN_ON}`) };
+
+      return { ok: false, failure: unavailable(`T3 Code did not list the machines linked to it (${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}). ${NEXT_STEP}`) };
     }
 
     const checked: string[] = [];

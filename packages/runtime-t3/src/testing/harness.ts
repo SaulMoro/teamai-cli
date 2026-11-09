@@ -138,6 +138,8 @@ export interface FakeT3Config {
   unlistedOnce?: string[];
   /** The environments linked to this one, as T3 lists them. Unset: linked environments are off in T3's Labs settings. */
   links?: Array<{ environmentId: string; label: string; status: string }>;
+  /** T3 Code has no linked environments at all, as before they came, rather than having them off. */
+  noLinkedEnvironments?: boolean;
   /** What each linked environment has, by its id: one not here does not answer. */
   environments?: Record<string, { projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null; repositoryIdentity?: { canonicalKey: string } | null; defaultModelSelection?: { instanceId: string; model: string } | null }>; providers: FakeProvider[] }>;
   /** How long a send answers after it started the thread's turn, in ms. */

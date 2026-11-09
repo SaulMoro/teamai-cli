@@ -383,7 +383,10 @@ const TOOLS = {
   },
   // As T3 lists the machines linked to it; it refuses while linked environments are off in its Labs settings.
   t3_environment_links: () => {
-    const { links } = config();
+    const { links, noLinkedEnvironments } = config();
+
+    // A T3 Code before linked environments has no such tool.
+    if (noLinkedEnvironments) return fail('Unknown tool t3_environment_links.');
 
     if (!links) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'capability_denied', message: 'Linked environments is off on this machine, so no tool can act on another machine.' }));
 

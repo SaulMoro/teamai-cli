@@ -19,7 +19,7 @@ describe('teamai-runtime-t3', () => {
 
       expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
       expect(reply).toEqual({
-        type: 'init', ok: true, prompt: true, confinedPrompt: true,
+        type: 'init', ok: true, prompt: true, confinedPrompt: true, wake: true,
         can: {
           exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false,
           workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude', 'codex'],

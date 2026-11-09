@@ -370,7 +370,7 @@ teamai workflow cancel r70d31098c8884803
 
 设置方法：
 
-1. 在 T3 Code 的 Settings → Labs 中打开 Linked environments。
+1. 在 T3 Code 的 Settings → Labs 中打开 Linked environments。在你打开之前它是关闭的，这时唤醒会失败并提示：`Linked environments is off in T3 Code, so it reaches no other machine. Turn on Linked environments in T3 Code's Labs settings, link the machine, and add the repository there as a project.`
 2. 把另一台机器关联到这个 T3 Code。
 3. 在那台机器上，把仓库的一个检出添加为 T3 项目。T3 按 git remote 指向的仓库来匹配，所以只有本地 remote 的检出不算。那台机器需要装好 teamai 并设置好团队，和任何 fleet 成员一样。
 

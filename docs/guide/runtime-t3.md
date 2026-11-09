@@ -370,7 +370,7 @@ A [fleet](workflow-advanced.md#run-steps-on-other-members-machines-fleet) entry 
 
 To set it up:
 
-1. In T3 Code, turn on Linked environments under Settings → Labs.
+1. In T3 Code, turn on Linked environments under Settings → Labs. It is off until you do, and a wake then fails with `Linked environments is off in T3 Code, so it reaches no other machine. Turn on Linked environments in T3 Code's Labs settings, link the machine, and add the repository there as a project.`
 2. Link the other machine to this T3 Code.
 3. On that machine, add a checkout of the repository as a T3 project. T3 matches it by the repository its git remote names, so a checkout with only a local remote does not count. The machine needs teamai and the team set up, as any fleet member does.
 
