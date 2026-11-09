@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { CLAUDE_SESSIONS, CLI, fakeTool } from '../helpers/step-runtime-e2e.js';
+import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 
 const URL = 'https://github.com/acme/business.git';
 
@@ -163,6 +164,9 @@ const TOKEN_FLEET = { schemaVersion: 'v1alpha1', name: 'token-fleet', runtimes: 
 
 const FAN_FLEET = { schemaVersion: 'v1alpha1', name: 'fan-fleet', runtimes: [{ use: 'fleet', options: { max_parallel: 2 } }, { use: 'local' }] };
 
+/** Pool `wake`, whose offers the toy wakes a member for; the toy's options come from the owner's own config. */
+const WAKE_FLEET = { schemaVersion: 'v1alpha1', name: 'wake-fleet', runtimes: [{ use: 'fleet', options: { pool: 'wake', wake: { use: 'toy' } } }, { use: 'local' }] };
+
 interface Envelope { data?: Record<string, unknown>; error?: { code: string; message: string } }
 
 interface RunResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; envelope: () => Envelope }
@@ -176,6 +180,8 @@ const workOf = (member: string): string => path.join(homeOf(member), 'work');
 /** Each member's PATH starts with a fake Claude Code, which writes each launch to `launches`. */
 const binOf = (member: string): string => path.join(homeOf(member), 'bin');
 const launchesOf = (member: string): string => path.join(homeOf(member), 'launches.jsonl');
+/** Each wake the toy runtime on Alice's machine was sent, one JSON line each. */
+const wakeLog = (): string => path.join(homeOf('alice'), 'wakes.jsonl');
 
 function envOf(member: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -423,6 +429,7 @@ describe('the fleet', () => {
       'workflows/holdone.yaml': HOLD_ONE,
       'drivers/build-fleet.yaml': stringify(FLEET),
       'drivers/fan-fleet.yaml': stringify(FAN_FLEET),
+      'drivers/wake-fleet.yaml': stringify(WAKE_FLEET),
     };
 
     for (const [file, text] of Object.entries(files)) {
@@ -438,7 +445,12 @@ describe('the fleet', () => {
     await join('carol');
     // Alice runs steps beside the ones the fleet holds; the fleet's own max_parallel is the lower cap.
     const config = path.join(dataHomeOf('alice'), 'config.yaml');
-    fs.writeFileSync(config, `${fs.readFileSync(config, 'utf8')}workflows:\n  max_parallel: 4\n`);
+    // The toy that wakes members for wake-fleet is a runtime of Alice's own, with options only her config gives it.
+    fs.writeFileSync(config, `${fs.readFileSync(config, 'utf8')}workflows:\n  max_parallel: 4\n  drivers:\n    wake-fleet:\n      runtimes:\n        toy:\n          state: ${path.join(homeOf('alice'), 'toy-state')}\n          wake_log: ${wakeLog()}\n`);
+    const toy = path.join(homeOf('alice'), '.teamai', 'runtimes', 'toy');
+    fs.mkdirSync(toy, { recursive: true });
+    fs.copyFileSync(TOY_RUNTIME, path.join(toy, 'runtime'));
+    fs.chmodSync(path.join(toy, 'runtime'), 0o755);
   }, 180_000);
 
   afterEach(async () => {
@@ -548,6 +560,30 @@ describe('the fleet', () => {
     expect(answers.filter((answer) => answer.data?.idle !== undefined)).toEqual([{ data: { idle: { offered: 0 } } }]);
     const done = await started;
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  }, 180_000);
+
+  it('wakes a member for an offer no member claimed through the runtime the fleet entry names, and the member it started takes the step', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    const wakes = (): Array<{ type: string; pool: string; repository: string; message: string; title: string }> => (fs.existsSync(wakeLog()) ? fs.readFileSync(wakeLog(), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as ReturnType<typeof wakes>[number]) : []);
+    const started = teamai('alice', ['workflow', 'start', 'one', '--driver', 'wake-fleet'], (pid) => { alicePid = pid; });
+    await waitOn(() => fresh() !== undefined && wakes().length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    const [wake] = wakes();
+    expect(wake).toMatchObject({ type: 'wake', pool: 'wake', repository: git(workOf('alice'), ['remote', 'get-url', 'origin'], envOf('alice')), message: 'teamai workflow resume --next --pool wake' });
+    expect(wake?.title).toContain('build');
+
+    // The owner's listing says where the member was woken.
+    const listed = await teamai('alice', ['workflow', 'resume']);
+    expect(listed.stdout.split('\n').find((line) => line.startsWith(run) && line.includes(' wake ')), said(listed)).toMatch(/ offered .* toy\s*$/);
+
+    // The member the wake started runs what its message says, in a checkout of the repository it names.
+    const taken = await teamai('bob', (wake?.message ?? '').split(' ').slice(1));
+    expect(taken.envelope(), said(taken)).toMatchObject({ data: { ran: { run, step: 'build', exit_code: 0 } } });
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(wakes()).toHaveLength(1);
   }, 180_000);
 
   it('writes progress without committing in the step\'s copy while the step runs, and takes the step\'s work at its end', async () => {

@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { OpIdSchema, type OpId } from '@teamai/runtime-protocol';
+import { OpIdSchema, RuntimeDisplaySchema, type OpId, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getReportsDir, type LocalConfig } from '../../types.js';
 import { gitRoot } from '../../utils/branch-worktree.js';
@@ -814,9 +814,37 @@ async function isClaimedHere(config: LocalConfig, run: RunId, attempt: AttemptId
   return fs.access(claimedMarker(config, run, attempt)).then(() => true, () => false);
 }
 
-const OfferedMarkerSchema = z.object({ pool: z.string().min(1), op: OpIdSchema.optional(), staleAfterMs: z.number().int().positive().optional() });
+/**
+ * The wake an owner sent for an offer: its op, noted before it is sent, so a restarted owner sends none again; and once
+ * the runtime launched a member, where, with what it shows of it.
+ */
+const WakeNoteSchema = z.object({ op: OpIdSchema, where: z.string().optional(), display: RuntimeDisplaySchema.optional() }).strict();
 
-/** What this install noted when it offered attempt `attempt`: its pool, the exec that offered it and its stale_after; undefined when it offered it to none. */
+export type WakeNote = z.infer<typeof WakeNoteSchema>;
+
+const OfferedMarkerSchema = z.object({ pool: z.string().min(1), op: OpIdSchema.optional(), staleAfterMs: z.number().int().positive().optional(), wake: WakeNoteSchema.optional() });
+
+/**
+ * Notes on the offer of attempt `attempt` the wake its owner sent: `wake.op` before it sends it, then where it launched a
+ * member. An attempt this install did not offer gets none.
+ */
+export async function noteWake(config: LocalConfig, run: RunId, attempt: AttemptId, wake: WakeNote): Promise<void> {
+  const marker = await readOfferedMarker(config, run, attempt);
+
+  if (marker === undefined) return;
+  await fs.writeFile(offeredMarker(config, run, attempt), `${JSON.stringify({ ...marker, wake })}\n`, 'utf8');
+}
+
+/** The member a wake launched for an offer, as the attempt listing names it: what the runtime shows of it, else where; undefined when none was woken. */
+export function woken(marker: z.infer<typeof OfferedMarkerSchema> | undefined): string | undefined {
+  const display: RuntimeDisplay | undefined = marker?.wake?.display;
+
+  if (display) return display.url === undefined ? display.label : `${display.label} (${display.url})`;
+
+  return marker?.wake?.where;
+}
+
+/** What this install noted when it offered attempt `attempt`: its pool, the exec that offered it, its stale_after and its wake; undefined when it offered it to none. */
 export async function readOfferedMarker(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<z.infer<typeof OfferedMarkerSchema> | undefined> {
   const text = await fs.readFile(offeredMarker(config, run, attempt), 'utf8').catch(() => undefined);
   const parsed = text === undefined ? undefined : OfferedMarkerSchema.safeParse(jsonOf(text));

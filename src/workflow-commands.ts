@@ -17,7 +17,7 @@ import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { memberPlace, takeFleetAttempt } from './workflow/fleet/member.js';
-import { DEFAULT_FLEET_POOL, listOpenAttempts, type OpenAttempt } from './workflow/fleet/record.js';
+import { DEFAULT_FLEET_POOL, listOpenAttempts, readOfferedMarker, woken, type OpenAttempt } from './workflow/fleet/record.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
@@ -1808,14 +1808,18 @@ async function listResumable({ config, env }: Ready, taker: Taker): Promise<void
 
   if (attempts.length === 0) return;
   process.stdout.write(`\nAttempts out on a fleet (teamai workflow resume --next --pool <pool> takes an offered one):\n`);
-  process.stdout.write(table([['RUN', 'ATTEMPT', 'STEP', 'POOL', 'STATE', 'MEMBER', 'CLAIMED', 'LAST PROGRESS'], ...attempts.map(attemptRow)]));
+  const rows = await Promise.all(attempts.map(async (attempt) => attemptRow(attempt, woken(await readOfferedMarker(config, attempt.run, attempt.attempt)))));
+  process.stdout.write(table([['RUN', 'ATTEMPT', 'STEP', 'POOL', 'STATE', 'MEMBER', 'CLAIMED', 'LAST PROGRESS', 'WOKEN'], ...rows]));
 }
 
-/** An attempt out on a fleet, as a row: who claimed it, when, and when it last wrote progress. */
-function attemptRow(attempt: OpenAttempt): string[] {
+/**
+ * An attempt out on a fleet, as a row: who claimed it, when, and when it last wrote progress, and `woke`: where the
+ * runtime its fleet entry's `wake` names launched a member for it, which only the install that offered it knows.
+ */
+function attemptRow(attempt: OpenAttempt, woke: string | undefined): string[] {
   const claimed = attempt.state === 'offered' ? undefined : attempt;
 
-  return [attempt.run, attempt.attempt, attempt.lease.step, attempt.pool, attempt.state, claimed ? ownerText(claimed.member) : '-', claimed?.claimedAt ?? '-', claimed?.progressAt ?? '-'];
+  return [attempt.run, attempt.attempt, attempt.lease.step, attempt.pool, attempt.state, claimed ? ownerText(claimed.member) : '-', claimed?.claimedAt ?? '-', claimed?.progressAt ?? '-', woke === undefined ? '-' : safeText(woke)];
 }
 
 function ownerText(owner: HandoffOwner): string {
