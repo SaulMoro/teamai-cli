@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
@@ -299,6 +300,8 @@ async function toRelease(config: LocalConfig, run: RunId, continued?: readonly C
 /** The places held open for a conversation a later step continues (`heldFor`), and the moves between their states. */
 export const HeldPlace = { conversationOf, hold, holdsOn, toRelease } as const;
 
+const isCopied = (stats: Stats): boolean => stats.isFile() || stats.isDirectory() || stats.isSymbolicLink();
+
 /**
  * The session a prompt on a step runtime resumes: the first of `sessions` (the lease's, then each earlier one it
  * continued) that an earlier attempt of run `run` kept in its tool home for `tool`. That home is copied into the home of
@@ -316,7 +319,8 @@ export async function seedToolHome({ config, run, attempt, tool, sessions }: { c
     const login = loginFileOf(tool);
     const kept = login === undefined ? undefined : path.join(holding.home, login);
 
-    if (holding.attempt !== attempt) await fs.cp(holding.home, attemptToolHome(config, run, attempt, tool), { recursive: true, force: false, filter: (source) => source !== kept });
+    // Only files, directories and links are copied: a FIFO or socket the earlier step left there is no part of its session.
+    if (holding.attempt !== attempt) await fs.cp(holding.home, attemptToolHome(config, run, attempt, tool), { recursive: true, force: false, filter: async (source) => source !== kept && isCopied(await fs.lstat(source)) });
 
     return session;
   }

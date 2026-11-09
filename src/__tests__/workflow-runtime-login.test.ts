@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -390,6 +390,24 @@ describe('a tool home seeded from the attempt whose session a step resumes', () 
     expect(seeded).toEqual({ tool: 'codex', id: session });
     expect(fs.existsSync(path.join(next, 'sessions', '2026', '11', '04', `rollout-2026-11-04T10-00-00-${session}.jsonl`))).toBe(true);
     expect(fs.existsSync(path.join(next, 'auth.json'))).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('leaves out a FIFO the earlier step left in that home, and still resumes its session', async () => {
+    const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
+    const session = '019a0000-0000-7000-8000-000000000002';
+    const home = attemptToolHome(config, RUN, FIRST, 'codex');
+    const day = path.join(home, 'sessions', '2026', '11', '04');
+    fs.mkdirSync(day, { recursive: true });
+    fs.writeFileSync(path.join(day, `rollout-2026-11-04T10-00-00-${session}.jsonl`), `${JSON.stringify({ timestamp: '2026-11-04T10:00:01.000Z', type: 'session_meta', payload: { id: session, timestamp: '2026-11-04T10:00:00.000Z', cwd: root, originator: 'codex_cli_rs', cli_version: '0.163.0' } })}\n`);
+    execFileSync('mkfifo', [path.join(home, 'left.fifo')]);
+    fs.writeFileSync(path.join(attemptDir(config, RUN, FIRST), 'runtime.json'), JSON.stringify({ runtime: 'toy', driver: 'd', phase: 'closed', open: { op: newOpId(), handle: 'h1' }, toolHome: { tool: 'codex', dir: home } }));
+
+    const seeded = await seedToolHome({ config, run: RUN, attempt: SECOND, tool: 'codex', sessions: [{ tool: 'codex', id: session }] });
+
+    const next = attemptToolHome(config, RUN, SECOND, 'codex');
+    expect(seeded).toEqual({ tool: 'codex', id: session });
+    expect(fs.existsSync(path.join(next, 'sessions', '2026', '11', '04', `rollout-2026-11-04T10-00-00-${session}.jsonl`))).toBe(true);
+    expect(fs.existsSync(path.join(next, 'left.fifo'))).toBe(false);
   });
 });
 
