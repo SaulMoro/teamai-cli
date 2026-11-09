@@ -25,7 +25,7 @@ import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
-import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
+import { claimAttempt, leaveOffer, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
 import { acquireLock, releaseLock } from '../update.js';
@@ -2381,7 +2381,14 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
 
     const shown = `Fleet member ${bob.user} left step "work" of run ${owner.run} for another member of pool default: ${why}. The step waits for a member that can run it; to stop waiting, run teamai workflow cancel ${owner.run}.`;
     expect(await until(() => warns.mock.calls.some(([message]) => message === shown), 10_000)).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    // Another member leaves the offer for another reason: the wait shows it from a later read of the offer, which still
+    // holds bob's reason, and shows bob's no more.
+    const offered = await owner.record();
+    if (offered.state !== 'offered') throw new Error(`the offer moved: ${offered.state}`);
+    const carol = { id: `${bob.id}-carol`, user: 'carol' };
+    expect(await leaveOffer(owner.bob.config, offered, { member: carol, why: 'its step requires a GPU', secrets: {} })).toEqual({ ok: true, value: undefined });
+    const later = `Fleet member carol left step "work" of run ${owner.run} for another member of pool default: its step requires a GPU. The step waits for a member that can run it; to stop waiting, run teamai workflow cancel ${owner.run}.`;
+    expect(await until(() => warns.mock.calls.some(([message]) => message === later), 10_000)).toBe(true);
     expect(warns.mock.calls.filter(([message]) => message === shown)).toHaveLength(1);
   }, 60_000);
 
