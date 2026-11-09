@@ -459,6 +459,11 @@ interface PromptSubject {
   unjournaledEnd?: string;
   /** Stops what the subject's fakes run for `state` beside the runtime, such as an app's server, before the leak check. */
   stop?(state: string): Promise<void>;
+  /**
+   * Deletes the conversation prompt `op` launched, as the person deletes its thread or agent in the app. Absent: the
+   * subject does not continue a conversation yet, and the scenarios of `continue` do not run for it.
+   */
+  forget?(state: string, op: OpId): void | Promise<void>;
 }
 
 const T3 = await t3OnFakeServer();
@@ -470,6 +475,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
     options: (state, agent) => ({ state, agent }),
     journal: (state) => [path.join(state, 'ops')],
+    forget: (state, op) => fs.rmSync(path.join(state, 'ops', `${op}.json`)),
   },
   {
     name: 't3 over stdio, on a fake T3 Code server',
@@ -715,6 +721,106 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const reconnected = second.prompt(request, {});
     fs.writeFileSync(release, '');
     expect(await reconnected).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
+  });
+
+  describe.runIf(subject.forget !== undefined)('a prompt that continues an earlier conversation, over stdio', () => {
+    /** The place of a later attempt, in `at`. */
+    const openedAt = async (runtime: StepRuntime, at: string): Promise<string> => {
+      fs.mkdirSync(at, { recursive: true });
+      const place = await runtime.open({
+        op: newOpId(), run: 'r0123abcd', attempt: 'a4567cdef', credentials: {},
+        view: { worktree: at, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
+      }, async () => {});
+
+      if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
+
+      return place.handle;
+    };
+
+    /** The first step's prompt, finished, and the place it ran in, which teamai keeps open. */
+    const earlier = async (runtime: StepRuntime): Promise<{ handle: string; request: PromptRequest; session: { tool: string; id: string } }> => {
+      const handle = await opened(runtime);
+      const request = promptRequest(handle);
+      const end = await runtime.prompt(request, {});
+
+      if (end.kind !== 'finished') throw new Error(`not finished: ${JSON.stringify(end)}`);
+
+      return { handle, request, session: { tool: end.session.tool, id: end.session.id } };
+    };
+
+    /** The later step's prompt in its own place `handle`, which continues `first`'s conversation and resumes its session. */
+    const continuing = (handle: string, first: Awaited<ReturnType<typeof earlier>>, cwd = worktree): PromptRequest => {
+      const request = promptRequest(handle);
+
+      return { ...request, cwd, lease: { ...request.lease, resume: first.session.id, continue: { handle: first.handle, op: first.request.op } } };
+    };
+
+    const noticesFor = (warned: { mock: { calls: unknown[][] } }, op: string): unknown[] => warned.mock.calls.filter(([line]) => typeof line === 'string' && line.includes(`operation ${op}`));
+
+    it('continues it as a new turn of the same session while it still holds it, and says resumed', async () => {
+      const warned = vi.spyOn(log, 'warn');
+      const runtime = await start({ output: { verdict: 'approve' } });
+      const first = await earlier(runtime);
+      const request = continuing(await openedAt(runtime, worktree), first);
+
+      const end = await runtime.prompt(request, {});
+
+      expect(end).toMatchObject({ kind: 'finished', session: first.session, resumed: true });
+      expect(noticesFor(warned, request.op)).toEqual([]);
+    });
+
+    it('starts a new conversation, with one notice and no resumed, once the person deleted it', async () => {
+      const warned = vi.spyOn(log, 'warn');
+      const runtime = await start({ output: { verdict: 'approve' } });
+      const first = await earlier(runtime);
+      await subject.forget?.(state, first.request.op);
+      const request = continuing(await openedAt(runtime, worktree), first);
+
+      const end = await runtime.prompt(request, {});
+
+      expect(end).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
+      expect(end.kind === 'finished' && end.session.id).not.toBe(first.session.id);
+      expect(end.kind === 'finished' ? end.resumed : 'not finished').not.toBe(true);
+      expect(noticesFor(warned, request.op)).toHaveLength(1);
+    });
+
+    it('starts a new conversation, with one notice, for a prompt that works in another directory', async () => {
+      const warned = vi.spyOn(log, 'warn');
+      const runtime = await start({ output: { verdict: 'approve' } });
+      const first = await earlier(runtime);
+      const elsewhere = path.join(dir, 'other-worktree');
+      const request = continuing(await openedAt(runtime, elsewhere), first, elsewhere);
+
+      const end = await runtime.prompt(request, {});
+
+      expect(end.kind === 'finished' && end.session.id).not.toBe(first.session.id);
+      expect(end.kind === 'finished' ? end.resumed : 'not finished').not.toBe(true);
+      expect(noticesFor(warned, request.op)).toHaveLength(1);
+    });
+
+    it('starts a new conversation, with one notice, once the earlier place closed', async () => {
+      const warned = vi.spyOn(log, 'warn');
+      const runtime = await start({ output: { verdict: 'approve' } });
+      const first = await earlier(runtime);
+      expect(await runtime.close(first.handle)).toEqual({ ok: true });
+      const request = continuing(await openedAt(runtime, worktree), first);
+
+      const end = await runtime.prompt(request, {});
+
+      expect(end.kind === 'finished' && end.session.id).not.toBe(first.session.id);
+      expect(end.kind === 'finished' ? end.resumed : 'not finished').not.toBe(true);
+      expect(noticesFor(warned, request.op)).toHaveLength(1);
+    });
+
+    it('continues it after its own restart between the two prompts', async () => {
+      const first = await start({ output: { verdict: 'approve' } });
+      const before = await earlier(first);
+      await first.dispose();
+      const second = await start({ output: { verdict: 'approve' } });
+      const request = continuing(await openedAt(second, worktree), before);
+
+      expect(await second.prompt(request, {})).toMatchObject({ kind: 'finished', session: before.session, resumed: true });
+    });
   });
 });
 

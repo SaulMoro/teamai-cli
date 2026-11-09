@@ -11,6 +11,10 @@
 // `release` names exists, then writes `output` (or the whole `result`) to the lease's result file and finishes with a
 // session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
 // `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
+// a lease's `continue`, it keeps a conversation per prompt op until that prompt's place closes, and a prompt that names
+// one it still holds, finished, on the same tool and working directory, is a new turn of it (the same session,
+// `resumed: true`); any other is a new conversation with a new session, one notice saying why, and no `resumed`. A
+// person who deletes the conversation is the test removing that op's record from `ops/` in its state. With
 // `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
 // machine does; with `home` too, in that Claude home instead, which `finished` reports as the session's `home`, as a
 // T3 provider instance with its own home does. Each open records the tool its attempt's prompt runs (`open.tool`) and
@@ -416,8 +420,11 @@ function agentOutcome(record) {
   fs.writeFileSync(record.lease.result, JSON.stringify(result));
   const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
 
-  const resumes = record.lease.resume !== undefined && options.agent.resumes !== false;
-  const session = { tool: record.lease.tool, id: resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}`, ...(options.agent.home !== undefined && { home: options.agent.home }) };
+  // A lease that names a conversation is a turn of it, as the prompt's first send found it, or else a new one.
+  const continues = record.lease.continue !== undefined;
+  const resumes = continues ? record.continued !== undefined : record.lease.resume !== undefined && options.agent.resumes !== false;
+  const id = continues ? record.continued ?? `toy-session-${record.op.slice(3)}` : resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}`;
+  const session = { tool: record.lease.tool, id, ...(options.agent.home !== undefined && { home: options.agent.home }) };
 
   if (options.agent.transcript) {
     const project = path.join(options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', encodeCwdClaude(record.cwd));
@@ -426,8 +433,30 @@ function agentOutcome(record) {
     fs.appendFileSync(path.join(project, `${session.id}.jsonl`), `${JSON.stringify(line)}\n`);
   }
 
-  // A fresh session where the lease named one to continue says so, as `resumed: false`.
+  // A fresh session where the lease named one to continue says so, as `resumed: false`; one that names a conversation
+  // it did not continue says nothing of `resumed`, its notice said why.
+  if (continues) return { state: 'finished', session, result, ...usage, ...(resumes && { resumed: true }) };
+
   return { state: 'finished', session, result, ...usage, ...(record.lease.resume !== undefined && { resumed: resumes }) };
+}
+
+/**
+ * The conversation the lease of `request` names, when this toy still holds it for this prompt: `{ session }`, its
+ * session; else `{ notice }`, why this prompt starts a new conversation.
+ */
+function conversationFor(request) {
+  const { handle, op } = request.lease.continue;
+  const earlier = known(handle) ? readOp(op) : undefined;
+
+  if (earlier?.kind !== 'prompt' || earlier.handle !== handle) return { notice: `The toy holds no conversation ${op} in place ${handle} any more, so this prompt starts a new one.` };
+
+  if (earlier.outcome?.state !== 'finished') return { notice: `Conversation ${op} has no finished turn to continue, so this prompt starts a new one.` };
+
+  if (earlier.lease.tool !== request.lease.tool) return { notice: `Conversation ${op} runs ${earlier.lease.tool}, not ${request.lease.tool}, so this prompt starts a new one.` };
+
+  if (earlier.cwd !== request.cwd) return { notice: `Conversation ${op} works in ${earlier.cwd}, not ${request.cwd}, so this prompt starts a new one.` };
+
+  return { session: earlier.outcome.session.id };
 }
 
 function promptEnded(op, outcome) {
@@ -550,7 +579,13 @@ function prompt(request) {
   // The names of its env, never a value, and which of them the team provides.
   fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease, env: Object.keys(request.env).sort(), provided: request.provided })}\n`);
 
-  if (!record) writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, cwd: request.cwd, startedAt: Date.now() });
+  if (!record) {
+    const conversation = request.lease.continue === undefined ? undefined : conversationFor(request);
+
+    if (conversation?.notice !== undefined) send({ event: 'notice', op: request.op, message: conversation.notice });
+    writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, cwd: request.cwd, startedAt: Date.now(), ...(conversation?.session !== undefined && { continued: conversation.session }) });
+  }
+
   settlePrompt(request.op);
 }
 
