@@ -40,7 +40,7 @@ function ranIn(run: RunState, pass: StepPass): string | undefined {
 export function evidencePlan(run: RunState, subject: RunSubject, settling?: RunPass) {
   const definitionOf = stepDefinitions(run);
   const all = runPasses(run, agentPassOf);
-  const own = settling ?? all.find((pass) => pass.step === subject.step && pass.pass === subject.pass);
+  const own = settling ?? all.findLast((pass) => pass.step === subject.step && pass.pass === subject.pass);
   const workflow = definitionOf(subject.step)?.workflow !== undefined;
   const gaps: EvidenceGap[] = [];
   const under = isUnder(subject.step);

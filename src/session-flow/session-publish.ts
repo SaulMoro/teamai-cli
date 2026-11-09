@@ -236,16 +236,14 @@ async function steps(config: LocalConfig, mode: RunMode, now: string): Promise<S
     const checkout = run.checkout ?? SessionWork.scopeCwd(config);
     const toolRoots = recordedToolRoots(checkout);
     const refs = new Map<string, ArchiveSessionRef>();
-    // When a loop ran a session again, its latest pass's out/ goes with it: the passes come archived ones last.
-    const ended = new Map<string, string>();
+    // When a loop ran a session again, its latest pass's out/ goes with it: the passes come oldest first.
     const unread: Array<UnrecordedPass & { failure: ReadFailure }> = [];
 
     for (const { pass, key, storeDir } of passes) {
       const failure = await readFailure(key, () => toolRoots, storeDir);
 
       if (failure !== undefined) unread.push({ pass, key, storeDir, failure });
-      else if (key.kind === 'platform' && (pass.end ?? '\uffff') >= (ended.get(sessionKey(key)) ?? '')) {
-        ended.set(sessionKey(key), pass.end ?? '\uffff');
+      else if (key.kind === 'platform') {
         const ref: ArchiveSessionRef = { platform: key.platform, sessionId: key.sessionId };
         const evidenceDir = passOutDir(config, run.id, pass.attempt);
 
