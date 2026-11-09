@@ -36,8 +36,8 @@ const MOVED = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CONFIG', 'GIT_
 /**
  * Every file `read` depends on, or undefined when one of them cannot be named, so its result is never reused: an
  * environment that moves the repository or adds config, a checkout without its own `.git`, an entry from anywhere but a
- * file, an include path relative to nothing, an include that depends on the branch checked out, or an index git could
- * not read.
+ * file, an include path relative to nothing or under a user's home by name, an include that depends on the branch
+ * checked out, or an index git could not read.
  */
 async function inputsOf(read: ConfigRead, env: NodeJS.ProcessEnv): Promise<string[] | undefined> {
   if (read.unread || MOVED.some((name) => env[name] !== undefined)) return undefined;
@@ -113,7 +113,8 @@ function originFile(dir: string, origin: string): string | undefined {
 
 /**
  * The file an include entry of `file` names, undefined when `entry` is no include, null when it cannot be named or its
- * condition reads the branch checked out, which no file here holds.
+ * condition reads the branch checked out, which no file here holds. A path under a user's home by name (`~user/`) is
+ * one git finds in the system's user database, so it cannot be named here.
  */
 function includedFile(file: string, entry: OriginEntry, env: NodeJS.ProcessEnv): string | undefined | null {
   const condition = /^includeif\.(.+)\.path$/.exec(entry.key)?.[1];
@@ -122,7 +123,7 @@ function includedFile(file: string, entry: OriginEntry, env: NodeJS.ProcessEnv):
 
   if (condition?.startsWith('onbranch:')) return null;
 
-  if (entry.value.startsWith('~/')) return env.HOME ? path.join(env.HOME, entry.value.slice(2)) : null;
+  if (entry.value.startsWith('~')) return entry.value.startsWith('~/') && env.HOME ? path.join(env.HOME, entry.value.slice(2)) : null;
 
   if (entry.value.startsWith('%(prefix)') || entry.value === '') return null;
 
