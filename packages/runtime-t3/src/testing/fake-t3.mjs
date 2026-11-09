@@ -21,6 +21,8 @@
 //                               addedInstanceConstraints: the constraints T3 reports for a provider instance the settings add
 //                               providersFailOnceAdded: the provider list fails once, the first time the settings hold this instance
 //                               unlistedOnce: provider instance ids the first provider list leaves out, as T3 before it reloads its settings
+//                               sendMs: a send answers this long after it started the turn; turnStartsLateMs: a send's turn starts this
+//                               long after T3 answered it
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -409,16 +411,39 @@ const TOOLS = {
       items, nextPosition: items.at(-1)?.position ?? null, hasMore: false,
     });
   },
-  t3_thread_send: (args) => {
+  // As T3 answers a send: a repeated clientRequestId starts nothing more; a thread whose run ended, settled or not,
+  // starts a new turn of the same conversation, and leaves the Settled group.
+  t3_thread_send: async (args) => {
     const thread = readThread(args.threadId);
 
     if (!thread) return notFound(args.threadId);
 
-    if (thread.runCount > 0) return ok({ threadId: args.threadId, status: 'queued' });
-    update(args.threadId, () => ({ message: args.message, status: 'starting', runCount: 1 }));
-    void play(args.threadId);
+    if ((thread.sends ?? []).includes(args.clientRequestId)) return ok({ threadId: args.threadId, status: thread.status });
+
+    if (thread.status !== 'idle' && !TERMINAL.has(thread.status)) return ok({ threadId: args.threadId, status: 'queued' });
+
+    const startTurn = () => {
+      update(args.threadId, (now) => ({ message: args.message, status: 'starting', settled: false, runCount: (now.runCount ?? 0) + 1, sends: [...(now.sends ?? []), args.clientRequestId] }));
+      void play(args.threadId);
+    };
+
+    // As T3 may: the send is answered before the turn's run shows, so the thread still reads as its earlier run ended.
+    if (config().turnStartsLateMs) setTimeout(startTurn, config().turnStartsLateMs);
+    else startTurn();
+    await sleep(config().sendMs ?? 0);
 
     return ok({ threadId: args.threadId, status: 'starting' });
+  },
+  // As T3 sets a thread's model: its next runs use it, on the provider instance the thread runs on.
+  t3_thread_configure: (args) => {
+    const thread = readThread(args.threadId);
+
+    if (!thread) return notFound(args.threadId);
+
+    if (args.modelSelection.instanceId !== thread.instanceId) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'invalid_request', message: `Thread ${args.threadId} runs on ${thread.instanceId}.` }));
+    update(args.threadId, () => ({ model: args.modelSelection.model }));
+
+    return ok({ threadId: args.threadId });
   },
   t3_thread_interrupt: async (args) => {
     await sleep(config().interruptMs ?? 0);

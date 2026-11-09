@@ -18,6 +18,9 @@ import { STEP_MODES } from './t3.js';
 //    ops/<op>.json               the op: its place, its state, and the thread it launched
 //
 
+/** The model a launch names: none, T3 picks the member's default model, as it does for a thread the member starts. */
+const ModelSelectionSchema = z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.union([z.string(), z.boolean()]) })).optional() });
+
 /** The T3 thread a prompt launched: what reconnecting to it, showing it and settling it need. */
 const ThreadSchema = z.object({
   threadId: z.string().min(1),
@@ -29,6 +32,18 @@ const ThreadSchema = z.object({
   launchedAt: z.number(),
   /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
   copy: z.string().optional(),
+  /**
+   * A step's: what a later prompt that continues the thread's conversation shares with it, the folder its tool works in
+   * and the model selection its launch named. Absent from a record before it was kept: such a thread is not continued.
+   */
+  conversation: z.object({ cwd: z.string(), modelSelection: ModelSelectionSchema.optional() }).optional(),
+  /**
+   * This op's turn of the conversation an earlier prompt launched the thread for: that prompt's place and op, how many
+   * runs the thread had before the turn was sent, so a run that ended before it is not taken for the turn's, and the
+   * model selection set on the thread before the send when the turn asks for another model of its provider instance.
+   * The thread stays the earlier place's to settle while that place is open.
+   */
+  turnOf: z.object({ handle: RuntimeHandleSchema, op: z.string(), runsBefore: z.number().int().nonnegative(), configure: ModelSelectionSchema.optional() }).optional(),
   /**
    * The runtime saw the thread's run, and the work it delegated, settle, or a stop it asked for take effect. Until then
    * the thread is the runtime's to stop, whatever ended its op and whichever runtime process launched it: close stops it
@@ -51,8 +66,7 @@ export type ThreadRecord = z.infer<typeof ThreadSchema>;
  */
 const LaunchSchema = z.object({
   title: z.string(),
-  /** None: T3 picks the member's default model, as it does for a thread the member starts. */
-  modelSelection: z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.union([z.string(), z.boolean()]) })).optional() }).optional(),
+  modelSelection: ModelSelectionSchema.optional(),
   runtimeMode: z.enum(STEP_MODES),
   tool: z.string(),
   launchedAt: z.number(),
@@ -144,7 +158,10 @@ export interface Journal {
    * An op record, or its place's, that cannot be read may hold the op's thread, so the answer is unreadable then.
    */
   placeOf(op: string): PlaceRead;
-  /** `op`'s record as kept, whether or not its place is still there. */
+  /**
+   * `op`'s record as kept, by the op alone: the conversation a prompt launched, which a later prompt that continues it
+   * names by that op.
+   */
   conversation(op: string): RecordRead<KeptOp>;
   /** Writes the place's own record; its operations' records are written by `update`. */
   open(place: PlaceRecord): void;
@@ -154,11 +171,8 @@ export interface Journal {
    * rejects.
    */
   update(at: { handle: string; op: string }, change: (record: OpRecord | undefined) => OpRecord | undefined): Promise<void>;
-  /**
-   * Forgets the place and its operations, but the records of `keep`'s: conversations a later step continues, which a
-   * prompt that names them finds again by op.
-   */
-  remove(handle: string, options?: { keep?: ReadonlySet<string> }): void;
+  /** Forgets the place and its operations. */
+  remove(handle: string): void;
   /** The file that holds the place's record, which the person deletes once they stopped what it may still run. */
   file(handle: string): string;
   /** The file that holds `op`'s record. */
@@ -226,12 +240,10 @@ export function journal(dir: string): Journal {
       });
     },
     // The operations first: a place whose removal stopped halfway is still there, and a later close removes the rest.
-    remove(handle, { keep = new Set() } = {}) {
+    remove(handle) {
       const listed = keysIn(indexOf(handle), indexDir(handle));
 
-      for (const op of listed.kind === 'listed' ? listed.keys : []) {
-        if (!keep.has(op)) ops.remove(op);
-      }
+      for (const op of listed.kind === 'listed' ? listed.keys : []) ops.remove(op);
 
       fs.rmSync(indexDir(handle), { recursive: true, force: true });
       places.remove(handle);

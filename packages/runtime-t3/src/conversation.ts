@@ -40,6 +40,9 @@ export const STOP_WAIT_MS = 10_000;
 /** How often an interactive step's thread is checked once it is idle without a result: the person may still be in it. */
 const IDLE_POLL_MS = 2_000;
 
+/** How often a turn sent to a thread whose earlier run had ended is checked until T3 shows the turn's own run. */
+const TURN_POLL_MS = 250;
+
 /**
  * The refusals of a repeated launch that prove T3 launched nothing for its clientRequestId: the checks a new launch runs
  * (the project, the worktree, the provider instance, the mode the sign-in allows), which T3 skips for a launch it accepted.
@@ -144,6 +147,11 @@ function modelSelection({ provider, lease, defaultModel, appliedByT3 }: {
   if (!option) return { ok: false, failure: { code: 'model_unavailable', message: `${where} runs ${model.id} with no effort "${effort}".` } };
 
   return { ok: true, selection: { instanceId: provider.providerInstanceId, model: model.id, options: [{ id: option.id, value: effort }] } };
+}
+
+/** Whether two launches name the same model selection: the same model and options, or both the member's default. */
+function sameSelection(left: Launch['modelSelection'], right: Launch['modelSelection']): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
 /** Where a step's thread is bound in its place: the attempt's worktree of the project, or the project's own folder. */
@@ -381,6 +389,53 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
   };
 
   /**
+   * Sends the step's prompt as a new turn of `turn`'s thread, under the op as its clientRequestId, on the model selection
+   * the turn asks for, and returns it.
+   */
+  const sendTurn = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, turn: ThreadRecord): Promise<ThreadRecord> => {
+    if (turn.turnOf?.configure) await s.t3.configure(turn.threadId, turn.turnOf.configure);
+    await s.t3.send(turn.threadId, firstMessage(opened, request.lease, options.startedFrom && threadMention(s.environment, options.startedFrom)), request.op);
+
+    return turn;
+  };
+
+  /**
+   * The earlier prompt's thread this prompt continues as a new turn, or why it cannot: the runtime holds that thread, its
+   * prompt ended, it works in this prompt's folder on the same provider instance, and T3 still has it. A turn that asks
+   * for another model selection than the thread's sets it on the thread first.
+   */
+  const continuable = async ({ s, request, instanceId, selection }: { s: Session; request: PromptRequest; instanceId: string; selection: Launch['modelSelection'] }): Promise<{ ok: true; thread: ThreadRecord; runs: number; configure?: NonNullable<Launch['modelSelection']> } | { ok: false; why: string }> => {
+    const earlier = request.lease.continue;
+
+    if (!earlier) return { ok: false, why: 'no earlier prompt named' };
+    // The conversation is found by the op that launched it, in the earlier place, which holds it while it is open.
+    const kept = journal.conversation(earlier.op);
+    const thread = kept.kind === 'found' && kept.record.handle === earlier.handle && journal.read(earlier.handle).kind === 'found' ? kept.record.thread : undefined;
+
+    if (kept.kind !== 'found' || !thread) return { ok: false, why: `runtime t3 holds no T3 thread of ${earlier.op} in ${earlier.handle}` };
+    const where = `the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") of ${earlier.op}`;
+
+    if (ledger.running(earlier.op) || kept.record.state.state === 'running') return { ok: false, why: `${where} still runs that prompt` };
+
+    if (!thread.conversation) return { ok: false, why: `${where} was launched before runtime t3 kept what a later step needs to continue it` };
+
+    if (thread.conversation.cwd !== request.cwd) return { ok: false, why: `${where} works in ${thread.conversation.cwd}, not in this step's folder ${request.cwd}` };
+
+    // T3 runs a later turn on another model of the same provider instance once the thread is set to it, in the same
+    // conversation; a thread cannot move to another instance.
+    if (thread.instanceId !== instanceId) return { ok: false, why: `${where} runs on T3 Code provider instance "${thread.instanceId ?? thread.tool}", and this step asks for "${instanceId}"` };
+    const configure = selection && !sameSelection(thread.conversation.modelSelection, selection) ? selection : undefined;
+
+    try {
+      return { ok: true, thread, runs: (await s.t3.thread(thread.threadId)).runCount, ...(configure && { configure }) };
+    } catch (error) {
+      if (error instanceof T3Error && error.threadGone) return { ok: false, why: `${where} is no longer in T3 Code` };
+
+      return { ok: false, why: `T3 Code did not say whether it still has ${where}: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}` };
+    }
+  };
+
+  /**
    * Waits for the thread until the step is done, stopped or failed, and returns how it ended, and whether the runtime
    * saw the thread stop on the way: only then does the thread end with the op.
    */
@@ -420,6 +475,12 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
       // A run that ended while the work it delegated still goes has not ended the step.
       const ended = settledStatus(waited);
+
+      // A turn sent to a thread whose earlier run ended has ended only once T3 shows a run of its own.
+      if (ended !== undefined && thread.turnOf && (await s.t3.thread(thread.threadId)).runCount <= thread.turnOf.runsBefore) {
+        await sleep(TURN_POLL_MS);
+        continue;
+      }
 
       if (ended === undefined || ended === 'idle') {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
@@ -476,7 +537,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
       const kept = { tool: thread.tool, id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
 
-      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) });
+      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }), ...(thread.turnOf && { resumed: true }) });
     }
   };
 
@@ -640,6 +701,28 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       return;
     }
 
+    // A turn of an earlier prompt's conversation is journaled before it is sent, so a restarted runtime finds its thread
+    // by op, and sends it again under the same clientRequestId, which T3 answers without a second turn.
+    if (!thread && !pending && work.kind === 'step' && lease.continue) {
+      const earlier = lease.continue;
+      const continuing = await continuable({ s, request, instanceId: instance.providerInstanceId, selection: selection.selection });
+
+      if (continuing.ok) {
+        const { ended: _ended, ...continued } = continuing.thread;
+        const { configure } = continuing;
+
+        const turn: ThreadRecord = {
+          ...continued, ...(configure && { model: configure.model, conversation: { cwd: request.cwd, modelSelection: configure } }),
+          turnOf: { handle: earlier.handle, op: earlier.op, runsBefore: continuing.runs, ...(configure && { configure }) },
+        };
+
+        await journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, () => ({ state: { op: request.op, state: 'running' }, thread: turn }));
+        thread = turn;
+      } else {
+        notice(`Runtime t3 starts a new T3 thread for step "${lease.step}" rather than continue the conversation of ${earlier.op}: ${continuing.why}.`, { op: request.op, handle: request.handle });
+      }
+    }
+
     // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
     // so a repeat in another mode would not find the thread it launched.
     const launch: LaunchRecord = pending ?? {
@@ -668,7 +751,11 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = async (threadId: string, copy: string | undefined, model: string | undefined): Promise<ThreadRecord> => {
-        const launched: ThreadRecord = { threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }) };
+        const launched: ThreadRecord = {
+          threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }),
+          ...(work.kind === 'step' && { conversation: { cwd: request.cwd, ...(launch.modelSelection && { modelSelection: launch.modelSelection }) } }),
+        };
+
         // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
         await journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, (conversation) => ({ state: conversation?.state ?? { op: request.op, state: 'running' }, thread: launched }));
 
@@ -686,13 +773,15 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // A close that comes meanwhile waits for the launch, so it stops the thread the launch started.
       thread = await places.track(request.handle, work.kind === 'judge'
         ? launchJudge({ t3: s.t3, request, confined: work.confined, opened, journalThread, thread: newThread, known, isReleased: () => places.isReleased(request.handle) })
-        : known ? Promise.resolve(known) : launchStep(s, request, work.place, newThread).then(({ threadId, model }) => journalThread(threadId, undefined, model)));
+        : known ? (known.turnOf ? sendTurn(s, request, work.place, known) : Promise.resolve(known)) : launchStep(s, request, work.place, newThread).then(({ threadId, model }) => journalThread(threadId, undefined, model)));
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       // Only a check a new launch runs proves T3 launched nothing; a judge's copy fails before its idle thread is briefed.
       const refused = !state.thread && error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code) ? error.refusal : undefined;
 
-      if (error instanceof JudgeCopyFailed) await finish({ op: request.op, state: 'failed', failure: { code: 'judge_copy_failed', message: why } });
+      if (error instanceof T3Error && error.threadGone && state.thread?.turnOf) {
+        await finish({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `The T3 thread ${threadLink(s.environment, state.thread.threadId)} ("${state.thread.title}"), whose conversation this step continues, left T3 Code while teamai sent it the step. Run the step again; it starts a new thread.` } }, true);
+      } else if (error instanceof JudgeCopyFailed) await finish({ op: request.op, state: 'failed', failure: { code: 'judge_copy_failed', message: why } });
       else if (error instanceof JudgeReleased) await finish({ op: request.op, state: 'failed', failure: { code: 'released', message: why } });
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       else if (refused?.code === 'runtime_mode_escalation_denied') {

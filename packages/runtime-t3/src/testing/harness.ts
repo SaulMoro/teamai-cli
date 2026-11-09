@@ -134,6 +134,10 @@ export interface FakeT3Config {
   providersFailOnceAdded?: string;
   /** Provider instance ids the first provider list leaves out, as T3 does before it reloads its settings. */
   unlistedOnce?: string[];
+  /** How long a send answers after it started the thread's turn, in ms. */
+  sendMs?: number;
+  /** How long after T3 answered a send the thread's turn starts, in ms: until then the thread reads as its earlier run ended. */
+  turnStartsLateMs?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
@@ -143,6 +147,8 @@ export type FakeCall = z.infer<typeof CallSchema>;
 const ThreadSchema = z.object({
   threadId: z.string(), title: z.string(), message: z.string().optional(), worktreePath: z.string().optional(), projectId: z.string().optional(),
   provider: z.string(), model: z.string().optional(), runtimeMode: z.string().optional(), status: z.string(), settled: z.boolean(),
+  /** How many runs the thread had: one per turn a message started. */
+  runCount: z.number().optional(),
   /** The thread that delegated this one's task, for a delegated task's thread. */
   parentThreadId: z.string().optional(),
   /** What the thread binds: the project's own folder, one of its worktrees, or a scratch folder. */

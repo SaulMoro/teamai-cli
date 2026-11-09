@@ -311,9 +311,15 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   };
 
   /**
-   * Settles each thread of `handle` that ended and that T3 holds no run of, once, with the tasks it delegated: a thread
-   * the runtime has not seen stop, or one the person started again, stays. A settle T3 refuses is said once, in a
-   * notice, and fails nothing.
+   * Whether close settles `thread`: it ended and was not settled yet, and it is no turn of a conversation whose earlier
+   * place is still open, which settles it when it closes.
+   */
+  const toSettle = (thread: ThreadRecord): boolean => thread.ended !== undefined && !thread.ended.settlement && !(thread.turnOf && journal.read(thread.turnOf.handle).kind !== 'missing');
+
+  /**
+   * Settles each thread of `handle` that close settles and that T3 holds no run of, once, with the tasks it delegated:
+   * a thread the runtime has not seen stop, or one the person started again, stays. A settle T3 refuses is said once, in
+   * a notice, and fails nothing.
    */
   const settleEnded = async (handle: string, s: Reached): Promise<void> => {
     const known = journal.writable(handle);
@@ -322,7 +328,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
     const script = known.kind === 'worktree' ? known.settleScript : undefined;
 
     for (const [op, thread] of Object.entries(known.threads)) {
-      if (!thread.ended || thread.ended.settlement) continue;
+      if (!toSettle(thread)) continue;
       let outcome: NonNullable<NonNullable<ThreadRecord['ended']>['settlement']>;
 
       if (script !== undefined) {
@@ -480,7 +486,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
       }
 
       // Every thread of the place has ended now. Without T3 Code, they stay unsettled.
-      if (Object.values(journal.writable(handle)?.threads ?? {}).some((thread) => thread.ended && !thread.ended.settlement)) {
+      if (Object.values(journal.writable(handle)?.threads ?? {}).some(toSettle)) {
         const reaching = await within(serving.reach(), left());
         const settling = reaching.answered && reaching.value.ok ? await within(settleEnded(handle, reaching.value.reached), left()) : undefined;
 
