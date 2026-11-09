@@ -173,11 +173,11 @@ import {
   CLAUDE_TOOL_ID,
   detectToolRoot,
   isAgentExcluded,
-  isOutsideUserHome,
   RELOCATABLE_TOOLS,
   resolveHookScope,
   scopedToolPaths,
   toolRootRejection,
+  toolRootRejectionText,
   warnSessionsOnlyToolRoot,
   type TeamaiConfig,
   getTeamaiHomeDir,
@@ -284,7 +284,15 @@ function recordToolRoots(localConfig: LocalConfig): void {
     const rejection = toolRootRejection(root);
 
     // Session lookups read a root anywhere; the sync addresses only roots in the home directory.
-    if (rejection && isOutsideUserHome(root)) {
+    if (rejection?.kind === 'outside_home') {
+      const kept = localConfig.toolRoots?.[tool];
+
+      // A recorded root the sync writes to is not given up for one that only holds sessions.
+      if (kept !== undefined && kept !== root && toolRootRejection(kept) === null) {
+        log.warn(`${envVar} (${root}) is outside the home directory, so teamai kept toolRoots.${tool} (${kept}), which it syncs ${label} to. To read ${label} sessions at ${root} instead, remove toolRoots.${tool} from the config and re-run teamai init.`);
+        continue;
+      }
+
       localConfig.toolRoots = { ...localConfig.toolRoots, [tool]: root };
       log.info(`Recorded ${envVar} as the ${label} root: ${root}`);
       warnSessionsOnlyToolRoot(tool, root);
@@ -292,7 +300,7 @@ function recordToolRoots(localConfig: LocalConfig): void {
     }
 
     if (rejection) {
-      log.warn(`${envVar} (${root}) was not recorded: ${rejection}.`);
+      log.warn(`${envVar} (${root}) was not recorded: ${toolRootRejectionText(rejection)}.`);
       continue;
     }
 

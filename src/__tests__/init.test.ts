@@ -1476,6 +1476,22 @@ describe('init', () => {
       expect(await savedConfig()).toMatchObject({ toolRoots: { claude: relocated } });
     });
 
+    it('keeps a recorded root the sync writes to when a re-init finds the variable outside the home directory, and says how to switch', async () => {
+      vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+        repo: { localPath: localPath, remote: 'https://git.woa.com/HyperAI/teamai-test.git' },
+        username: 'testuser',
+        scope: 'user',
+        additionalRoles: [],
+        toolRoots: { claude: relocated },
+      } as never);
+      process.env.CLAUDE_CONFIG_DIR = '/opt/claude-config';
+
+      expect(await savedConfig()).toMatchObject({ toolRoots: { claude: relocated } });
+      const { log } = await import('../utils/logger.js');
+      const said = vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).filter((m) => m.includes('/opt/claude-config'));
+      expect(said).toEqual([expect.stringContaining(`kept toolRoots.claude (${relocated})`)]);
+    });
+
     describe('re-init that moves the root', () => {
       beforeEach(async () => {
         // The previous root is derived from the team's toolPaths, so a team

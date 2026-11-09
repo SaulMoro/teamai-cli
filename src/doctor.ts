@@ -21,6 +21,7 @@ import {
   detectToolRoot,
   resolveToolRootDir,
   toolRootRejection,
+  toolRootRejectionText,
   resolveHookScope,
   legacyManagedHooksPath,
   resolveBaseDir,
@@ -366,7 +367,7 @@ function buildToolRootChecks(localConfig: LocalConfig, teamConfig: TeamaiConfig 
         applyToolRoots({ [tool]: declared }, localConfig.toolRoots)[tool],
       ),
       fix: rejection
-        ? `${envVar} is ${detected}, which teamai cannot sync to (${rejection}); `
+        ? `${envVar} is ${detected}, which teamai cannot sync to (${toolRootRejectionText(rejection)}); `
           + `this config syncs ${label} to ${effective}. Point ${envVar} at a directory `
           + 'in your home, or anywhere under a `~/.config/<name>`, and re-run `teamai init`.'
         : `${envVar} is ${detected}; this config syncs ${label} to ${effective}`

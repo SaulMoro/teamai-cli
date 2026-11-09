@@ -3075,26 +3075,47 @@ export const RELOCATABLE_TOOLS: RelocatableToolTable = {
 };
 
 /**
- * Why `dir` cannot serve as a tool root, as a sentence fragment for a warning —
- * or null when it can. One place decides, so `teamai init` refuses to record
- * exactly the roots `applyToolRoots` would refuse to apply.
+ * Why a directory cannot serve as a tool root the sync writes to: it is outside the home directory, where a recorded
+ * root holds only the tool's sessions for teamai; it is the home directory itself; or its shape is one the
+ * "is this tool installed?" check cannot tell apart from an unrelated directory.
  */
-export function toolRootRejection(dir: string, at: HomePaths = processHomePaths()): string | null {
+export type ToolRootRejection =
+  | { kind: 'outside_home'; home: string }
+  | { kind: 'home_itself'; home: string }
+  | { kind: 'not_addressable' };
+
+/**
+ * Why `dir` cannot serve as a tool root the sync writes to, or null when it can. One place decides, so `teamai init`
+ * refuses to record exactly the roots `applyToolRoots` would refuse to apply.
+ */
+export function toolRootRejection(dir: string, at: HomePaths = processHomePaths()): ToolRootRejection | null {
   const resolved = at.path.resolve(expandHomeAt(dir, at));
 
-  if (!isUnderUserHome(resolved, at)) {
-    return `it is outside the home directory ${at.home}, and every tool path is resolved relative to it`;
-  }
+  if (isOutsideUserHome(resolved, at)) return { kind: 'outside_home', home: at.home };
 
+  if (!isUnderUserHome(resolved, at)) return { kind: 'home_itself', home: at.home };
   const segment = at.path.relative(at.home, resolved).split(at.path.sep).join('/');
 
-  if (!isAddressableRootSegment(segment)) {
-    return 'a tool root has to be a directory in the home directory other than '
-      + '~/.config itself (~/.claude-work), or a directory under a ~/.config/<name> one, '
-      + 'so the "is this tool installed?" check can tell it apart from an unrelated directory';
-  }
+  return isAddressableRootSegment(segment) ? null : { kind: 'not_addressable' };
+}
 
-  return null;
+/** `rejection` as a sentence fragment for a warning. */
+export function toolRootRejectionText(rejection: ToolRootRejection): string {
+  switch (rejection.kind) {
+    case 'outside_home':
+      return `it is outside the home directory ${rejection.home}, and every tool path is resolved relative to it`;
+    case 'home_itself':
+      return `it is the home directory ${rejection.home} itself, and a tool root has to be a directory in it`;
+    case 'not_addressable':
+      return 'a tool root has to be a directory in the home directory other than '
+        + '~/.config itself (~/.claude-work), or a directory under a ~/.config/<name> one, '
+        + 'so the "is this tool installed?" check can tell it apart from an unrelated directory';
+    default: {
+      const unhandled: never = rejection;
+
+      return unhandled;
+    }
+  }
 }
 
 /**
@@ -3235,8 +3256,17 @@ const TOOL_ROOT_FIELDS = ['skills', 'rules', 'settings', 'hooks', 'claudemd', 'a
 /** `userScope` path fields, which carry the same resources at a user-scope root. */
 const USER_SCOPE_ROOT_FIELDS = ['skills', 'rules', 'agents', 'hooks', 'claudemd'] as const;
 
-/** Warned roots, so one bad entry does not repeat on every scoped lookup of a pull. */
+/** Warned roots, by `toolRootWarning`'s key, so one bad entry does not repeat on every scoped lookup of a pull. */
 const warnedToolRoots = new Set<string>();
+
+/** Logs `message` once per process for `tool`'s root `root`, or for `tool` itself when the warning names no root. */
+function warnToolRootOnce(tool: string, root: string | undefined, message: string): void {
+  const key = `${tool}\u0000${root ?? ''}`;
+
+  if (warnedToolRoots.has(key)) return;
+  warnedToolRoots.add(key);
+  log.warn(message);
+}
 
 /**
  * Says, once per process, that `tool`'s recorded root `resolved`, outside the home directory, holds only its sessions
@@ -3244,12 +3274,10 @@ const warnedToolRoots = new Set<string>();
  */
 export function warnSessionsOnlyToolRoot(tool: string, resolved: string, at: HomePaths = processHomePaths()): void {
   const spec = RELOCATABLE_TOOLS[tool];
-  const key = `${tool}:${resolved}`;
 
-  if (!spec || warnedToolRoots.has(key)) return;
-  warnedToolRoots.add(key);
+  if (!spec) return;
   const syncedTo = at.path.join(at.home, ...spec.defaultRoot.split('/'));
-  log.warn(`toolRoots.${tool} (${resolved}) is outside the home directory ${at.home}: teamai reads ${spec.label} sessions there, and keeps syncing ${spec.label} to ${syncedTo}, since every tool path is resolved relative to the home directory.`);
+  warnToolRootOnce(tool, resolved, `toolRoots.${tool} (${resolved}) is outside the home directory ${at.home}: teamai reads ${spec.label} sessions there, and keeps syncing ${spec.label} to ${syncedTo}, since every tool path is resolved relative to the home directory.`);
 }
 
 /**
@@ -3261,35 +3289,28 @@ export function warnSessionsOnlyToolRoot(tool: string, resolved: string, at: Hom
  */
 function toolRootSegment(tool: string, configured: string, at: HomePaths = processHomePaths()): string | null {
   if (!(tool in RELOCATABLE_TOOLS)) {
-    if (!warnedToolRoots.has(tool)) {
-      warnedToolRoots.add(tool);
-      log.warn(
-        `Ignoring toolRoots.${tool}: toolRoots currently supports ${Object.keys(RELOCATABLE_TOOLS).join(', ')} only — `
+    warnToolRootOnce(
+      tool,
+      undefined,
+      `Ignoring toolRoots.${tool}: toolRoots currently supports ${Object.keys(RELOCATABLE_TOOLS).join(', ')} only — `
         + `${tool} has writes teamai does not resolve through toolPaths.`
         + (tool === COPILOT_TOOL_ID ? ' Copilot CLI is relocated with COPILOT_HOME instead.' : ''),
-      );
-    }
+    );
 
     return null;
   }
 
   const resolved = at.path.resolve(expandHomeAt(configured, at));
+  const rejection = toolRootRejection(resolved, at);
 
-  if (isOutsideUserHome(resolved, at)) {
+  if (rejection?.kind === 'outside_home') {
     warnSessionsOnlyToolRoot(tool, resolved, at);
 
     return null;
   }
 
-  const rejection = toolRootRejection(resolved, at);
-
   if (rejection) {
-    const key = `${tool}:${resolved}`;
-
-    if (!warnedToolRoots.has(key)) {
-      warnedToolRoots.add(key);
-      log.warn(`Ignoring toolRoots.${tool} (${resolved}): ${rejection}.`);
-    }
+    warnToolRootOnce(tool, resolved, `Ignoring toolRoots.${tool} (${resolved}): ${toolRootRejectionText(rejection)}.`);
 
     return null;
   }
