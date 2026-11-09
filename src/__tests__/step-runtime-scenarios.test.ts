@@ -1679,6 +1679,30 @@ steps:
     budget: { tokens: 1 }
 `;
 
+/** As BUDGETED, with the budget on the run around the step rather than on the step. */
+const RUN_BUDGETED = `schemaVersion: v1alpha1
+name: slow
+description: Reviews twice, on a budget of the run.
+budget: { tokens: 1 }
+steps:
+  - id: work
+    workspace: new
+    workflow: reviews
+`;
+
+/** As BUDGETED, per item of a for_each step whose budget covers all its items. */
+const ITEMS_BUDGETED = `schemaVersion: v1alpha1
+name: slow
+description: Reviews twice per item, on a budget of all the items.
+inputs: { items: [string] }
+steps:
+  - id: work
+    workspace: new
+    for_each: { items: inputs.items }
+    workflow: reviews
+    budget: { tokens: 1 }
+`;
+
 /** A whole workflow step whose two reviews run on claude. */
 const REVIEWED = `schemaVersion: v1alpha1
 name: slow
@@ -1795,7 +1819,7 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 }
 
 /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install then runs. */
-async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, isMeasured = false, isMemberEnv = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, string>; isWhole?: boolean; isPromptless?: boolean; isMeasured?: boolean; isMemberEnv?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
+async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels, workflows = {}, files = {}, isSandbox = false, inputs, isWhole = false, isPromptless = false, isMeasured = false, isMemberEnv = false, beforeStart }: { workflow?: string; command?: string; tools?: string[]; labels?: string[]; workflows?: Record<string, string>; files?: Record<string, string>; isSandbox?: boolean; inputs?: Record<string, JsonValue>; isWhole?: boolean; isPromptless?: boolean; isMeasured?: boolean; isMemberEnv?: boolean; beforeStart?: (alice: Member) => Promise<void> } = {}) {
   const acme = team({ slow: workflow, ...workflows }, files);
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await beforeStart?.(alice);
@@ -2283,6 +2307,36 @@ done`);
       expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 1 } } });
       const end = await ended;
       expect(end.kind === 'exited' && JSON.parse(end.stdout)).toMatchObject({ outcome: 'failed', failure: { code: 'budget_exceeded' }, tokens: { input: expect.any(Number) } });
+      expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work first.')]) })]);
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
+  }, 90_000);
+
+  it.each([
+    ['the budget of the run around it', RUN_BUDGETED, undefined],
+    ['the budget of its for_each step, which covers all its items', ITEMS_BUDGETED, { items: ['one'] }],
+  ])('stops a member\'s whole workflow once its steps spent more than %s, as the owner would between them', async (_budget, workflow, inputs) => {
+    const owner = await ownerOf({ workflow, workflows: { reviews: REVIEWS }, tools: ['claude'], isWhole: true, isMeasured: true, ...(inputs && { inputs }) });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}' });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+
+    try {
+      const ended = exec(newOpId(), 'workflow');
+      await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+      await readableReportsWorktree(owner.bob.config);
+
+      await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+      const end = await ended;
+      expect(end.kind === 'exited' && JSON.parse(end.stdout)).toMatchObject({ outcome: 'failed', failure: { code: 'budget_exceeded' } });
       expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work first.')]) })]);
     } finally {
       vi.unstubAllEnvs();

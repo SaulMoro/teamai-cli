@@ -16,7 +16,7 @@ import { readableReportsWorktree } from '../../utils/reports-branch.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { durationMs } from '../parse.js';
-import { leaseContext } from '../engine.js';
+import { budgetLeft, leaseContext } from '../engine.js';
 import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
@@ -444,7 +444,10 @@ async function leasedStep(config: LocalConfig, { run, attempt }: FleetPlace): Pr
     if (child === undefined) return { error: `Run ${run} step "${step.id}" runs a workflow this run did not keep.`, isFatal: true };
     const inputs = leaseInputs(leased.step, child, values.values, run);
 
-    return 'error' in inputs ? { error: `Step "${step.id}" ${inputs.error}`, isFatal: true } : { kind: 'workflow', step: step.id, inputs: inputs.inputs, env: {} };
+    if ('error' in inputs) return { error: `Step "${step.id}" ${inputs.error}`, isFatal: true };
+    const tokens = budgetLeft(state, step.id);
+
+    return { kind: 'workflow', step: step.id, inputs: inputs.inputs, env: {}, ...(tokens !== undefined && { budget: { tokens } }) };
   }
 
   const env = leaseEnv(leased.step, values.values, run);

@@ -260,6 +260,39 @@ export function locateStep(run: RunState, path: string): { scope: Scope; step: W
   return undefined;
 }
 
+/**
+ * The tokens the budgets around the step instance at `path` have left, each as the engine checks it while the steps
+ * under it settle: the budget of each workflow the step is in, and of each `for_each` step whose item it is in, which
+ * covers all its items. Undefined when none of them has a budget. A runtime that runs the step whole stops its steps
+ * past it, as the engine stops them between steps it runs here. The step's own budget is not counted.
+ */
+export function budgetLeft(run: RunState, path: string): number | undefined {
+  const segments = parseStepPath(path);
+  let scope = run.definition.finally?.some((step) => step.id === segments[0]?.id) ? finallyScope(run) : topScope(run);
+  const left: number[] = [];
+
+  for (const segment of segments) {
+    if (scope.budget !== undefined) left.push(scope.budget - budgetSpent(run, scope));
+    const step = scope.definition.steps.find((item) => item.id === segment.id);
+
+    if (!step) return undefined;
+    const fanned = run.steps.find((item) => item.id === `${scope.prefix}${segment.id}`);
+
+    if (segment.index !== undefined && step.budget !== undefined && step.onLimit !== 'end_turn' && fanned) left.push(step.budget.tokens - itemsSpent(run, fanned));
+    const instance = `${scope.prefix}${segment.id}${segment.index === undefined ? '' : `[${segment.index}]`}`;
+    const states = statesIn(run, scope);
+    // statesIn holds no for_each item.
+    const state = (segment.index === undefined ? states : run.steps).find((item) => item.id === instance);
+    const child = state && segment !== segments.at(-1) ? childScope(run, scope, states, state, step) : undefined;
+
+    if (segment !== segments.at(-1) && !child) return undefined;
+
+    if (child) scope = child;
+  }
+
+  return left.length === 0 ? undefined : Math.max(0, Math.min(...left));
+}
+
 /** The step instance at `path` and what its lease's templates read, or undefined when the run holds no such instance. */
 export function leaseContext(run: RunState, path: string): { step: WorkflowStep; context: TemplateContext; requires: InEffect } | undefined {
   const located = locateStep(run, path);

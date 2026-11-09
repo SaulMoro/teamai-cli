@@ -62,13 +62,15 @@ const PromptLeaseSchema = z.strictObject({
 /**
  * A `workflow:` step leased whole: the inputs its workflow starts with, as the owner rendered them from the step's `with`,
  * which the member renders again from its own copy of the step and the offer's values. The sub-graph is the member's
- * own: the record names none of its steps.
+ * own: the record names none of its steps. `budget` is what the budgets around the step had left when it was offered,
+ * past which the member stops its steps, as the owner stops the steps it runs.
  */
 const WorkflowLeaseSchema = z.strictObject({
   kind: z.literal('workflow'),
   step: z.string().min(1),
   inputs: JsonValueSchema,
   env: z.record(z.string(), z.string()),
+  budget: z.strictObject({ tokens: z.number().int().min(0) }).optional(),
 });
 
 /** What a member runs, told apart by `kind`: a command step, a prompt step, or a `workflow:` step whole. */
