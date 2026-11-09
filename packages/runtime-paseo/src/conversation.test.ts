@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { OpIdSchema, type PromptLeaseSchema, type RuntimeMessage } from '@teamai/runtime-protocol';
@@ -1005,6 +1006,19 @@ describe('teamai-runtime-paseo', () => {
     behave({});
     runtime.send(promptRequest(handle, 'op-0000000c'));
     expect(await runtime.next(isEnd('op-0000000c'))).toEqual({ op: 'op-0000000c', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
+  });
+
+  it.skipIf(process.platform === 'win32')('fails at once a step whose agent left a FIFO at the result file, rather than waiting on it', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const result = path.join(dir, 'out', 'result.json');
+    fs.mkdirSync(path.dirname(result), { recursive: true });
+    execFileSync('mkfifo', [result]);
+    behave({});
+    runtime.send(promptRequest(handle, 'op-0000fe11'));
+
+    expect(await runtime.next(isEnd('op-0000fe11'))).toEqual({ op: 'op-0000fe11', event: 'failed', failure: { code: 'tool_failed', message: `claude left a pipe at the result file ${result}, not a regular file, so teamai did not read it` } });
   });
 
   it.each([

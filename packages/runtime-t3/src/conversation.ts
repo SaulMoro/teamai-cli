@@ -5,6 +5,7 @@ import {
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
+import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
 import type { InstanceAdder } from './instances.js';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
 import { JUDGE_KEPT, JudgeCopyFailed, JudgeReleased, judged, launchJudge } from './judge.js';
@@ -196,8 +197,10 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
   let text: string;
 
   try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch {
+    text = readRegularFileSync(file, 'utf8');
+  } catch (error) {
+    if (error instanceof NotRegularFileError) return { ok: false, why: `left ${error.kind} at the result file ${file}, not a regular file, so teamai did not read it` };
+
     return { ok: false, why: `ended without writing the result file ${file}` };
   }
 

@@ -7,6 +7,7 @@ import {
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { registerThrough, type Registration } from '@teamai/runtime-kit/outer';
+import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -143,14 +144,14 @@ function usageLimitedReply(tool: string, said: string | null | undefined): Runti
   return said?.trim().includes('\n') ? undefined : usageLimited(tool, said);
 }
 
-/** The result the agent wrote, or undefined when it wrote none teamai can read. */
-function readResult(file: string): PromptResult | undefined {
+/** The result the agent wrote; what it left there instead of a file; or undefined when it wrote none teamai can read. */
+function readResult(file: string): PromptResult | NotRegularFileError | undefined {
   try {
-    const parsed = PromptResultSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const parsed = PromptResultSchema.safeParse(JSON.parse(readRegularFileSync(file, 'utf8')));
 
     return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
+  } catch (error) {
+    return error instanceof NotRegularFileError ? error : undefined;
   }
 }
 
@@ -908,9 +909,11 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
             return;
           }
 
-          const result = readResult(record.answer.file);
+          const read = readResult(record.answer.file);
+          const notAFile = read instanceof NotRegularFileError ? read : undefined;
+          const result = read instanceof NotRegularFileError ? undefined : read;
 
-          if (end.final?.status === 'closed' && !result) {
+          if (end.final?.status === 'closed' && read === undefined) {
             settle(op, {
               op, state: 'failed',
               failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent worked, before it wrote a workflow result. Its work is kept in the worktree.` },
@@ -928,7 +931,11 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
           if (!result) {
             // A tool that stopped on its usage limit says so in its last message, and writes no result.
-            settle(op, { op, state: 'failed', failure: usageLimitedReply(record.tool, end.lastMessage) ?? { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } }, following);
+            const failure = notAFile
+              ? { code: 'tool_failed' as const, message: `${record.tool} left ${notAFile.kind} at the result file ${record.answer.file}, not a regular file, so teamai did not read it` }
+              : usageLimitedReply(record.tool, end.lastMessage) ?? { code: 'tool_failed' as const, message: `${record.tool} did not write a valid workflow result` };
+
+            settle(op, { op, state: 'failed', failure }, following);
 
             return;
           }

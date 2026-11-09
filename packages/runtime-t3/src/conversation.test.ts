@@ -565,6 +565,16 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000011')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`ended without writing the result file ${result}.`) } });
     });
 
+    it.skipIf(process.platform === 'win32')('fails at once a thread that left a FIFO at the result file, rather than waiting on it', async () => {
+      t3.config({ agent: {} });
+      const { runtime, handle } = await opened();
+      execFileSync('mkfifo', [result]);
+
+      runtime.send(prompt(handle, 'op-0000fe10'));
+
+      expect(await ended(runtime, 'op-0000fe10')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`left a pipe at the result file ${result}, not a regular file, so teamai did not read it.`) } });
+    });
+
     it('fails a thread whose tool kept no session, since the step could not be scored', async () => {
       t3.config({ agent: { output: { verdict: 'approve' }, noSession: true } });
       const { runtime, handle } = await opened();
