@@ -5,7 +5,7 @@ import { attemptEnv } from '../workflow/attempt-marker.js';
 import { parseSkillCall } from '../workflow/drivers/skill/skill-driver.js';
 import { AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 import {
-  ackLiteral, adoptLiteral, chooseHostLiteral, describeLiteral, generatedStartPatterns, INVOCATIONS, localStartLiteral, nextLiteral, personRespondLiteral, pollLiteral,
+  ackLiteral, adoptLiteral, chooseSessionHostLiteral, describeLiteral, generatedStartPatterns, INVOCATIONS, localStartLiteral, nextLiteral, personRespondLiteral, pollLiteral,
   reportLiteral, respondLiteral, resumeLiteral, runnerArgs, skillResumeLiteral, startLiteral, takeoverLiteral, unavailableLiteral, type Invocation,
 } from '../workflow/drivers/skill/literals.js';
 import { loadCommandTable } from '../../scripts/command-table.js';
@@ -69,7 +69,7 @@ describe.each(INVOCATIONS)('skill driver literals run as %s', (invocation) => {
     expect(skillCall(takeoverLiteral(invocation, RUN, { confirmed: true }), invocation)).toEqual({ kind: 'takeover', run: RUN, confirmed: true });
     expect(skillCall(reportLiteral(invocation, RUN, ATTEMPT), invocation)).toEqual({ kind: 'report', run: RUN, attempt: ATTEMPT, role: 'agent', modelUnavailable: false });
     expect(skillCall(unavailableLiteral(invocation, RUN, ATTEMPT), invocation)).toEqual({ kind: 'report', run: RUN, attempt: ATTEMPT, role: 'agent', modelUnavailable: true });
-    expect(skillCall(chooseHostLiteral(invocation, RUN, 'h2'), invocation)).toEqual({ kind: 'choose', run: RUN, choice: 'h2' });
+    expect(skillCall(chooseSessionHostLiteral(invocation, RUN, 'h2'), invocation)).toEqual({ kind: 'choose', run: RUN, choice: 'h2' });
     expect(skillCall(ackLiteral(invocation, RUN, ATTEMPT), invocation)).toEqual({ kind: 'ack', run: RUN, attempt: ATTEMPT });
     const adopt = adoptLiteral(invocation, RUN, ATTEMPT).replace('{dir}', '/hosts/the place');
     expect(adopt).not.toBe(adoptLiteral(invocation, RUN, ATTEMPT));

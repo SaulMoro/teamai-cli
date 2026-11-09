@@ -20,7 +20,7 @@ import { STALE_WINDOW_MS } from '../../handoff.js';
 import { commandEnd, continuedAttempt, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
 import { attemptDir, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
-import { HOST_PROFILES } from './host-profiles.js';
+import { SESSION_HOST_PROFILES } from './session-host-profiles.js';
 import { childTitle, writeSkillState, readSkillState, type AttemptState, type Dispatch, type ReportBody, type SkillState } from './skill-state.js';
 import { pickChildModel } from './child-model.js';
 import { writeChildBrief } from './child-brief.js';
@@ -206,7 +206,7 @@ async function fail(context: SkillContext, lock: RunLock, input: { state: SkillS
  * child: a conversation takes one step at a time, as a runtime starts a new one for a turn it cannot take.
  */
 async function continuedChild(config: LocalConfig, state: SkillState, step: string): Promise<{ title: string } | undefined> {
-  if (state.host.kind !== 'chosen' || !HOST_PROFILES[state.host.id].startsChildAgent) return undefined;
+  if (state.host.kind !== 'chosen' || !SESSION_HOST_PROFILES[state.host.id].startsChildAgent) return undefined;
   const earlier = await continuedAttempt(config, state.run, step);
 
   if (!earlier || !state.settled.includes(earlier.attempt)) return undefined;
@@ -335,7 +335,7 @@ async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, p
 
   // A child of a confined step works in its directory, which holds everything it may read.
   const workDir = confined ? confined.dir : dir;
-  const by = interactive ? 'person' : state.host.kind === 'chosen' && !HOST_PROFILES[state.host.id].startsChildAgent ? 'self' : 'child';
+  const by = interactive ? 'person' : state.host.kind === 'chosen' && !SESSION_HOST_PROFILES[state.host.id].startsChildAgent ? 'self' : 'child';
 
   const brief = await writeChildBrief({
     config: context.config, run: lock.run, attempt, step: open.step, dir: workDir, prompt: prepared.prompt ?? lease.prompt,

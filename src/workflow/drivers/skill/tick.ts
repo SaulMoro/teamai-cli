@@ -13,10 +13,10 @@ import { UsageLimits } from '../../usage-limits.js';
 import type { WorkflowFailure } from '../../types.js';
 import { readChildResult } from './child-brief.js';
 import { engineReply, reportReply, respondReply, startedOf } from './engine-replies.js';
-import { canFor, confinedCan, HOST_PROFILES, sessionJudgeTool, sessionOffers, sessionToolJudge, type ConfinedJudge, type HostChoice } from './host-profiles.js';
+import { canFor, confinedCan, SESSION_HOST_PROFILES, sessionJudgeTool, sessionOffers, sessionToolJudge, type ConfinedJudge, type SessionHostChoice } from './session-host-profiles.js';
 import { writeJob } from './job.js';
 import {
-  ackLiteral, adoptLiteral, chooseHostLiteral, nextLiteral, pollLiteral, reportLiteral, respondLiteral, resumeLiteral, skillResumeLiteral, skillResumeNextLiteral, takeoverLiteral, unavailableLiteral, type Invocation,
+  ackLiteral, adoptLiteral, chooseSessionHostLiteral, nextLiteral, pollLiteral, reportLiteral, respondLiteral, resumeLiteral, skillResumeLiteral, skillResumeNextLiteral, takeoverLiteral, unavailableLiteral, type Invocation,
   type Literal,
 } from './literals.js';
 import { attendedReason, ceilingOf, localPromptTool, localReason, needsTool } from './preflight.js';
@@ -515,7 +515,7 @@ export type ForegroundCall =
   | { kind: 'next' }
   | { kind: 'takeover'; confirmed: boolean }
   | ({ kind: 'resume' } & Resume)
-  | { kind: 'choose'; choice: HostChoice }
+  | { kind: 'choose'; choice: SessionHostChoice }
   | { kind: 'ack'; attempt: AttemptId }
   | { kind: 'adopt'; attempt: AttemptId; dir: string }
   | { kind: 'respond'; step: string; pass: number; choice: string };
@@ -545,7 +545,7 @@ function literalOf(invocation: Invocation, run: RunId, call: ForegroundCall): Li
     }
 
     case 'choose':
-      return chooseHostLiteral(invocation, run, call.choice);
+      return chooseSessionHostLiteral(invocation, run, call.choice);
     case 'ack':
       return ackLiteral(invocation, run, call.attempt);
     case 'adopt':
@@ -568,7 +568,7 @@ async function callRowOf(context: SkillContext, state: SkillState, call: Foregro
     case 'resume':
       return undefined;
     case 'choose':
-      return chooseRow(state, { choice: call.choice, profile: HOST_PROFILES[call.choice], judgeTool: sessionJudgeTool(state), judge: await sessionJudgeOn(state, call.choice) });
+      return chooseRow(state, { choice: call.choice, profile: SESSION_HOST_PROFILES[call.choice], judgeTool: sessionJudgeTool(state), judge: await sessionJudgeOn(state, call.choice) });
     case 'ack':
       return ackRow(state, call.attempt);
     case 'adopt':
@@ -588,10 +588,10 @@ async function callRowOf(context: SkillContext, state: SkillState, call: Foregro
 }
 
 /** The confined judge of the session's tool, probed only when `choice` is a host that starts no child agent for a session judge. */
-async function sessionJudgeOn(state: SkillState, choice: HostChoice): Promise<ConfinedJudge | undefined> {
+async function sessionJudgeOn(state: SkillState, choice: SessionHostChoice): Promise<ConfinedJudge | undefined> {
   const tool = sessionJudgeTool(state);
 
-  return HOST_PROFILES[choice].startsChildAgent || tool === undefined ? undefined : sessionToolJudge(tool);
+  return SESSION_HOST_PROFILES[choice].startsChildAgent || tool === undefined ? undefined : sessionToolJudge(tool);
 }
 
 /**
