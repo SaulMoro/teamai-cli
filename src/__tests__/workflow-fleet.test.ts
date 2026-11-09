@@ -1318,8 +1318,16 @@ describe('waking a fleet member for an offer no member claimed', () => {
     await ownerReadAgain(bob, { run, attempt });
 
     expect(lines(wakeLog)).toHaveLength(1);
-    expect(sent).toMatchObject({ type: 'wake', pool: 'gpu', repository: git(alice.checkout, 'remote', 'get-url', 'origin'), message: 'teamai workflow resume --next --pool gpu' });
+    const repository = git(alice.checkout, 'remote', 'get-url', 'origin');
+    expect(sent).toMatchObject({ type: 'wake', pool: 'gpu', repository });
+    // The member's first message: the command that takes one attempt, where, and to end after it.
+    expect(String(sent?.message)).toContain('`teamai workflow resume --next --pool gpu`');
+    expect(String(sent?.message)).toContain(repository);
+    expect(String(sent?.message)).toContain('then end');
+    // A title the person recognises on the machine woken: the step, the run and the pool.
     expect(String(sent?.title)).toContain('work');
+    expect(String(sent?.title)).toContain(run);
+    expect(String(sent?.title)).toContain('gpu');
     expect(await readOfferedMarker(alice.config, run, attempt)).toMatchObject({ wake: { op: sent?.op, where: 'toy' } });
     await runtime.cancel(op);
     await ended;
