@@ -808,7 +808,8 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
         return;
       }
 
-      const origin = await git(root, ['remote', 'get-url', 'origin']);
+      // The URL as configured, which the machine woken knows the repository by: no insteadOf rewrites it into one of this machine's.
+      const origin = await git(root, ['config', '--get', 'remote.origin.url']);
       const repository = sanitizeGitUrl(origin.stdout.trim());
       const op = newOpId();
       const note: WakeNote = { op };
