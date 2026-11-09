@@ -2,7 +2,7 @@
  * git in a copy a step controlled (`untrustedGit`) starts no program the copy's own config names, whatever command a
  * finishing path runs there, while the programs the member's own config names still run.
  */
-import { ChildProcess, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -222,7 +222,9 @@ describe('untrustedGit in a copy a step controlled', () => {
   });
 });
 
-describe('untrustedGit reading the config of a copy once for several git calls', () => {
+// A step's processes can still run between two git calls teamai makes in its copy: whatever one writes there before a
+// call is turned off at that call, as if no call came before it.
+describe('untrustedGit over several git calls in a copy a process still writes', () => {
   /** `at` with submodule `s` checked out at `s`, which has submodule `inner` checked out in it. */
   function nested(at: Repo): { s: string; inner: string } {
     const commitIn = (dir: string, file: string): void => {
@@ -242,40 +244,6 @@ describe('untrustedGit reading the config of a copy once for several git calls',
 
     return { s: path.join(at.dir, 's'), inner: path.join(at.dir, 's', 'inner') };
   }
-
-  /** The git processes `run` spawns, counted where every child process of this one starts, as a `--require` preload would. */
-  async function gitSpawns(run: () => Promise<void>): Promise<number> {
-    const prototype: object = ChildProcess.prototype;
-    const original: unknown = Reflect.get(prototype, 'spawn');
-    if (typeof original !== 'function') throw new Error('ChildProcess has no spawn to count');
-    let count = 0;
-    Reflect.set(prototype, 'spawn', function (this: unknown, options: unknown) {
-      if (typeof options === 'object' && options !== null && 'file' in options && options.file === 'git') count += 1;
-
-      return Reflect.apply(original, this, [options]);
-    });
-
-    try {
-      await run();
-    } finally {
-      Reflect.set(prototype, 'spawn', original);
-    }
-
-    return count;
-  }
-
-  it('spawns no git to read the config of a copy with nested submodules again when nothing it depends on changed', async () => {
-    const at = repo();
-    nested(at);
-    const copyGit = untrustedGit(at.env);
-
-    const spawns = await gitSpawns(async () => {
-      for (let call = 0; call < 10; call += 1) expect((await copyGit(at.dir, ['rev-parse', 'HEAD'])).code).toBe(0);
-    });
-
-    // Ten calls, and the config and index of each of the three repositories read at most twice, not ten times.
-    expect(spawns).toBeLessThanOrEqual(10 + 2 * 3 * 2);
-  });
 
   it('turns off a program a process writes into the copy\'s config between two git calls', async () => {
     const at = repo();
