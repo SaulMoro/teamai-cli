@@ -6,7 +6,7 @@ import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim,
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
-import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
@@ -1287,18 +1287,35 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   const owner = (wake: () => Promise<{ runtime: StepRuntime; wakes: boolean }>) => ownerOffering(opened, wake);
 
+  /**
+   * `member` leaves the offer of `attempt` with a reason of its own, and answers once the owner's wait printed it: the
+   * owner read the record, still offered, again since anything the test saw before.
+   */
+  async function ownerReadAgain(member: Member, { run, attempt }: { run: RunId; attempt: AttemptId }): Promise<void> {
+    const warned = vi.spyOn(log, 'warn');
+    const why = `it declares no label ${newOpId()}`;
+    const offered = await eventually(async () => {
+      await readableReportsWorktree(member.config);
+      const read = await readAttemptRecord(member.config, run, attempt);
+
+      return read.ok && read.value !== 'absent' && read.value.state === 'offered' ? read.value : undefined;
+    });
+    const said = await leaveOffer(member.config, offered, { member: await installOwner(member.config), why, secrets: {} });
+    if (!said.ok) throw new Error(said.error.message);
+    await eventually(async () => (warned.mock.calls.some(([message]) => String(message).includes(why)) ? true : undefined));
+  }
+
   const lines = (file: string): Array<Record<string, unknown>> => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []);
 
   it('sends one wake, naming the pool, the business repository and the command that takes the attempt', async () => {
     const wakeLog = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wake-log-')), 'wakes.jsonl');
-    const { alice, run, attempt, open } = await owner(async () => toyWaker(wakeLog));
+    const { alice, bob, run, attempt, open } = await owner(async () => toyWaker(wakeLog));
     const { runtime, exec } = await open();
     const op = newOpId();
     const ended = exec(op);
 
     const [sent] = await eventually(async () => (lines(wakeLog).length > 0 ? lines(wakeLog) : undefined));
-    // Two more polls of the record: still one wake.
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    await ownerReadAgain(bob, { run, attempt });
 
     expect(lines(wakeLog)).toHaveLength(1);
     expect(sent).toMatchObject({ type: 'wake', pool: 'gpu', repository: git(alice.checkout, 'remote', 'get-url', 'origin'), message: 'teamai workflow resume --next --pool gpu' });
@@ -1310,7 +1327,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('wakes no member again from a restarted owner that sent the wake before', async () => {
     const wakeLog = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wake-log-')), 'wakes.jsonl');
-    const { open } = await owner(async () => toyWaker(wakeLog));
+    const { bob, run, attempt, open } = await owner(async () => toyWaker(wakeLog));
     const op = newOpId();
     const first = await open();
     const ended = first.exec(op);
@@ -1320,7 +1337,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
     const restarted = await open();
     const again = restarted.exec(op);
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    await ownerReadAgain(bob, { run, attempt });
 
     expect(lines(wakeLog)).toHaveLength(1);
     await restarted.runtime.cancel(op);
@@ -1331,12 +1348,12 @@ describe('waking a fleet member for an offer no member claimed', () => {
     const warned = vi.spyOn(log, 'warn');
     const local = localStepRuntime();
     const unavailable: StepRuntime = { ...local, name: 'nowhere', wake: async () => ({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Link a machine in T3 Code, and add the repository there as a project.' } }) };
-    const { alice, run, attempt, open } = await owner(async () => ({ runtime: unavailable, wakes: true }));
+    const { alice, bob, run, attempt, open } = await owner(async () => ({ runtime: unavailable, wakes: true }));
     const { runtime, exec } = await open();
     const op = newOpId();
     const ended = exec(op);
     await eventually(async () => (warned.mock.calls.some(([message]) => String(message).includes('Link a machine')) ? true : undefined));
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    await ownerReadAgain(bob, { run, attempt });
 
     expect(warned.mock.calls.filter(([message]) => String(message).includes('Link a machine'))).toHaveLength(1);
     expect(String(warned.mock.calls.find(([message]) => String(message).includes('Link a machine'))?.[0])).toContain('teamai workflow resume --next --pool gpu');
