@@ -571,7 +571,7 @@ describe('the fleet', () => {
     await waitOn(() => fresh() !== undefined && wakes().length > 0, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
     const [wake] = wakes();
-    expect(wake).toMatchObject({ type: 'wake', pool: 'wake', repository: git(workOf('alice'), ['remote', 'get-url', 'origin'], envOf('alice')), message: 'teamai workflow resume --next --pool wake' });
+    expect(wake).toMatchObject({ type: 'wake', pool: 'wake', repository: URL, message: 'teamai workflow resume --next --pool wake' });
     expect(wake?.title).toContain('build');
 
     // The owner's listing says where the member was woken.
