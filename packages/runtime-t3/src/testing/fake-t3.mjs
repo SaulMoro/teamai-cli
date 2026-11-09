@@ -40,6 +40,7 @@ import path from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
 const STATE = process.env.FAKE_T3_STATE;
 const T3_HOME = process.env.T3CODE_HOME;
@@ -242,7 +243,7 @@ function writeTranscript(thread) {
     return;
   }
 
-  const dir = path.join(toolHomeOf(thread), 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  const dir = path.join(toolHomeOf(thread), 'projects', encodeCwdClaude(cwd));
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
     JSON.stringify({ type: 'user', sessionId, cwd, timestamp: at, uuid: randomUUID(), message: { role: 'user', content: thread.message } }),

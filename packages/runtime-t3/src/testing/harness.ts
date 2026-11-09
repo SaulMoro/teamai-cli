@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -15,8 +16,17 @@ import type { StepMode } from '../t3.js';
 //
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const FAKE_T3 = path.join(HERE, 'fake-t3.mjs');
+const FAKE_T3 = path.join(HERE, 'fake-t3.mjs');
 const ENTRY = path.join(HERE, '..', 'main.ts');
+
+/** fake-t3.mjs built once per test file with the packages it imports inside, as teamai's own session code names a project. */
+let fakeT3Built: Promise<string> | undefined;
+
+function builtFakeT3(): Promise<string> {
+  fakeT3Built ??= bundleRuntimeAt({ entry: FAKE_T3, outfile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fake-t3-')), 'fake-t3.mjs') });
+
+  return fakeT3Built;
+}
 
 /** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
 export async function bundleRuntime(dir: string): Promise<string> {
@@ -245,7 +255,8 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
     deleteThread: (threadId) => fs.rmSync(path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`)),
     async start() {
       fs.rmSync(runtimeFile, { force: true });
-      server = spawn(process.execPath, [FAKE_T3], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });
+      // The command line names the state, so a leak check of the test's directory sees the server.
+      server = spawn(process.execPath, [await builtFakeT3(), state], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });
       const deadline = Date.now() + 10_000;
 
       while (!fs.existsSync(runtimeFile)) {

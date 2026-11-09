@@ -55,6 +55,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
 const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls']);
 
@@ -414,7 +415,7 @@ function agentOutcome(record) {
   const session = { tool: record.lease.tool, id: resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}`, ...(options.agent.home !== undefined && { home: options.agent.home }) };
 
   if (options.agent.transcript) {
-    const project = path.join(options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', record.cwd.replace(/[^A-Za-z0-9]/g, '-'));
+    const project = path.join(options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', encodeCwdClaude(record.cwd));
     fs.mkdirSync(project, { recursive: true });
     const line = { type: 'user', sessionId: session.id, cwd: record.cwd, timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } };
     fs.appendFileSync(path.join(project, `${session.id}.jsonl`), `${JSON.stringify(line)}\n`);

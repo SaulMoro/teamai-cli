@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeProjectDirName } from '@teamai/tool-core/sessions/fs';
 import type { StepState } from '../../workflow/step-state.js';
 import type { WorkflowEnvelope } from '../../workflow/types.js';
 
@@ -46,7 +47,7 @@ export interface SessionLayout { readonly project: string; readonly record: stri
 // Claude Code names a project after its cwd, each other character a `-`; a name over 200 characters is cut to 200 and
 // gets `-` and its 32-bit string hash of the whole cwd in base 36, as a deep cwd such as a nested run's has.
 export const CLAUDE_SESSIONS: SessionLayout = {
-  project: "((name) => name.length <= 200 ? name : name.slice(0, 200) + '-' + Math.abs(process.cwd().split('').reduce((hash, unit) => (Math.imul(31, hash) + unit.charCodeAt(0)) | 0, 0)).toString(36))(process.cwd().replace(/[^A-Za-z0-9]/g, '-'))",
+  project: `(${String(claudeProjectDirName)})(process.cwd())`,
   record: "{ type: 'user', sessionId: session, cwd: process.cwd(), timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } }",
 };
 // CodeBuddy 2.173.0's encodeCwd for a short POSIX path, and its message record.

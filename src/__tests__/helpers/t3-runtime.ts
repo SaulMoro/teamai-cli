@@ -39,13 +39,15 @@ export async function t3OnFakeServer(): Promise<{
   const executable = path.join(dir, 'teamai-runtime-t3.mjs');
 
   await bundleRuntime({ entry: path.join(PACKAGE, 'main.ts'), outfile: executable });
+  // The fake too, with the packages it imports inside, as teamai's own session code names a project.
+  const fake = await bundleRuntime({ entry: FAKE_T3, outfile: path.join(dir, 'fake-t3.mjs') });
 
   const servers = new Map<string, Promise<void>>();
   const exits = new Map<string, { stop: () => void; exited: Promise<void> }>();
 
   const serve = async (state: string): Promise<void> => {
     const runtimeFile = path.join(state, 't3-home', 'userdata', 'server-runtime.json');
-    const server = spawn(process.execPath, [FAKE_T3, path.join(state, 't3-state')], {
+    const server = spawn(process.execPath, [fake, path.join(state, 't3-state')], {
       env: { ...process.env, FAKE_T3_STATE: path.join(state, 't3-state'), T3CODE_HOME: path.join(state, 't3-home'), FAKE_T3_HOME: path.join(state, 'home') },
       stdio: 'ignore', detached: false,
     });

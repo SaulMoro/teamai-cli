@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { claudeProjectDirName } from '@teamai/tool-core/sessions/fs';
 
 const recorded = (name: string): string => fs.readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8').trim();
 
@@ -33,12 +34,7 @@ export const claudeFake = {
   if (streams) await say(JSON.stringify({ type: 'assistant', session_id: sessionId, message: { model, content: [{ type: 'text', text: result.result }] } }));
   if (!args.includes('--no-session-persistence')) {
     const cwd = fs.realpathSync(process.cwd());
-    let dir = cwd.replace(/[^A-Za-z0-9]/g, '-');
-    if (dir.length > 200) {
-      let hash = 0;
-      for (let at = 0; at < cwd.length; at++) hash = (Math.imul(31, hash) + cwd.charCodeAt(at)) | 0;
-      dir = dir.slice(0, 200) + '-' + Math.abs(hash).toString(36);
-    }
+    const dir = (${String(claudeProjectDirName)})(cwd);
     const project = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '', '.claude'), 'projects', dir);
     const fill = (text) => text.replaceAll('{{cwd}}', cwd).replaceAll('{{sessionId}}', sessionId);
     fs.mkdirSync(project, { recursive: true });

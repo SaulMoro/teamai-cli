@@ -37,29 +37,28 @@ export function resolveRealCwd(cwd: string): string {
   }
 }
 
-/** The longest project directory name Claude Code writes before it cuts the name and adds a hash. */
-const CLAUDE_MAX_PROJECT_DIR = 200;
-
-/** Claude Code's 32-bit string hash over UTF-16 code units, in base 36, which it appends to a cut name. */
-function claudePathHash(value: string): string {
-  let hash = 0;
-
-  for (let at = 0; at < value.length; at++) hash = (Math.imul(31, hash) + value.charCodeAt(at)) | 0;
-
-  return Math.abs(hash).toString(36);
-}
-
 /**
- * Claude Code cwd encoding: every non-alphanumeric character → `-`, with a leading `-`. A name over 200 characters is
- * cut to 200 and gets `-<hash of the whole cwd>`, as Claude Code names it.
+ * The project directory Claude Code names after `realCwd`, a cwd with its links resolved: every non-alphanumeric
+ * character `-`, so a leading `-`. A name over 200 characters is cut to 200 and gets `-` and Claude Code's 32-bit
+ * string hash of the whole cwd over UTF-16 code units, in base 36. It names nothing outside its body: a fake Claude
+ * written as a script carries its source (`String(claudeProjectDirName)`), so every copy names a project alike.
  * Example: `/home/user/project` → `-home-user-project`
  *          `/Users/foo/my project` → `-Users-foo-my-project`
  */
-export function encodeCwdClaude(cwd: string): string {
-  const real = resolveRealCwd(cwd);
-  const encoded = real.replace(/[^a-zA-Z0-9]/g, '-');
+export function claudeProjectDirName(realCwd: string): string {
+  const encoded = realCwd.replace(/[^a-zA-Z0-9]/g, '-');
 
-  return encoded.length <= CLAUDE_MAX_PROJECT_DIR ? encoded : `${encoded.slice(0, CLAUDE_MAX_PROJECT_DIR)}-${claudePathHash(real)}`;
+  if (encoded.length <= 200) return encoded;
+  let hash = 0;
+
+  for (let at = 0; at < realCwd.length; at++) hash = (Math.imul(31, hash) + realCwd.charCodeAt(at)) | 0;
+
+  return `${encoded.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
+}
+
+/** Claude Code's project directory name for `cwd`, as {@link claudeProjectDirName} names its resolved path. */
+export function encodeCwdClaude(cwd: string): string {
+  return claudeProjectDirName(resolveRealCwd(cwd));
 }
 
 /**
