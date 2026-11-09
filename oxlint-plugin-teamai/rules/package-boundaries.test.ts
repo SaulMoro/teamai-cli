@@ -218,3 +218,37 @@ rule.invalid('rejects src/ production code importing the runtime test kit', `imp
 rule.invalid('rejects src/ test support importing the kit', `import { opLedger } from '@teamai/runtime-kit/ledger';`, (output) => {
   expect(output).toContain('src/ never imports a runtime package');
 }, inWorkspace('src/__tests__/engine.test.ts'));
+
+const launchLibrary = { 'packages/tool-launch/package.json': JSON.stringify({ name: '@teamai/tool-launch', private: true }), 'packages/tool-launch/src/run-step-launch.ts': 'export const run = 1;' };
+
+rule.valid('reads the launch library as no tool family, so src/ imports it', `import { run } from '@teamai/tool-launch/run-step-launch';
+export const launched = run;`, inWorkspace('src/workflow/steps/local-tool-adapter.ts', launchLibrary));
+
+rule.valid('allows the launch library the tool contract', `import type { StepLaunch } from '@teamai/tool-core/launch';
+export type Step = StepLaunch;`, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
+
+rule.invalid('rejects the launch library starting a process', `import { spawn } from 'node:child_process';
+export const start = () => spawn('claude');`, (output) => {
+  expect(output).toContain('@teamai/tool-launch starts no process');
+  expect(output).toContain('packages/tool-launch/src/step.ts -> node:child_process');
+}, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
+
+rule.valid('allows the launch library\'s tests to start a process', `import { execFileSync } from 'node:child_process';
+export const fifo = () => execFileSync('mkfifo', ['x']);`, inWorkspace('packages/tool-launch/src/step.test.ts', launchLibrary));
+
+rule.invalid('rejects the launch library importing a runtime package', `import { serveRuntime } from '@teamai/runtime-kit/serve';
+export const serve = serveRuntime;`, (output) => {
+  expect(output).toContain('@teamai/tool-launch imports no runtime package');
+}, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
+
+rule.invalid('rejects the launch library importing src/', `import { locate } from '../../../src/locate.js';
+export const found = locate;`, (output) => {
+  expect(output).toContain('packages/tool-launch/src/step.ts -> src/locate.js');
+}, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
+
+rule.invalid('covers a module added in a new folder of the launch library, with no rule edit', `import { runtime } from '@teamai/runtime-sandbox';
+import { fork } from 'child_process';
+export const start = [runtime, fork];`, (output) => {
+  expect(output).toContain('packages/tool-launch/src/hosts/start.ts -> @teamai/runtime-sandbox');
+  expect(output).toContain('packages/tool-launch/src/hosts/start.ts -> child_process');
+}, inWorkspace('packages/tool-launch/src/hosts/start.ts', launchLibrary));

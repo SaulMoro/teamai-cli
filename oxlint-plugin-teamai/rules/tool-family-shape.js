@@ -1,0 +1,125 @@
+/** @import { ESTree } from '@oxlint/plugins' */
+import fs from 'node:fs';
+
+import { defineRule } from '@oxlint/plugins';
+import { z } from 'zod';
+
+import { importVisitors } from '../imports.js';
+import { FAMILY, lintedPath } from '../utils.js';
+
+/** The modules that start a process. */
+const PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
+
+/** The workspace modules whose spawn helpers start a process, and those helpers. */
+const SPAWN_HELPERS = new Map([['@teamai/tool-core/exec', new Set(['spawnCommand', 'spawnCommandSync'])], ['@teamai/shared/exec', new Set(['spawnCommand', 'spawnCommandSync'])]]);
+
+/** The rule's option, as `meta.schema` lets it be written; unset lists nothing. */
+const OptionsSchema = z.tuple([z.object({ stillSpawns: z.array(z.string()) })]).or(z.tuple([]));
+
+/**
+ * The linted file as `{ relative, root, src, index }` when it is a tool family's production source, else undefined:
+ * `relative` from the repository root, `root` the repository's directory, `src` the family's source directory from it,
+ * and `index` whether it is the family's entry. Tests and `src/testing/` are out of scope.
+ * @param {string} file
+ */
+export function familySource(file) {
+  const match = /(?:^|\/)(packages\/([^/]+)\/src\/(.+\.[cm]?[jt]sx?))$/.exec(file);
+
+  if (!match) return undefined;
+  const [, relative = '', folder = '', rest = ''] = match;
+
+  if (!FAMILY.test(folder) || rest.startsWith('testing/') || /\.test\.[cm]?[jt]sx?$/.test(rest)) return undefined;
+
+  return { relative, root: file.slice(0, file.length - relative.length), src: `packages/${folder}/src/`, index: /^index\.[cm]?[jt]sx?$/.test(rest) };
+}
+
+/**
+ * The names an export declaration makes public.
+ * @param {ESTree.ExportNamedDeclaration} node
+ * @returns {string[]}
+ */
+function exportedNames(node) {
+  const { declaration } = node;
+
+  if (declaration === null || declaration === undefined) {
+    return node.specifiers.map((specifier) => (specifier.exported.type === 'Identifier' ? specifier.exported.name : String(specifier.exported.value)));
+  }
+
+  if (declaration.type === 'VariableDeclaration') {
+    return declaration.declarations.map((declarator) => (declarator.id.type === 'Identifier' ? declarator.id.name : '(a destructured binding)'));
+  }
+
+  return 'id' in declaration && declaration.id?.type === 'Identifier' ? [declaration.id.name] : ['(an unnamed declaration)'];
+}
+
+export default defineRule({
+  meta: {
+    type: 'problem',
+    docs: { description: 'Keep a tool family to data and readers: it builds argv and never starts a process, and its index.ts exports only `family`.' },
+    // `stillSpawns`: family files, from the repository root, that still start a process to read the tool's sessions,
+    // until that read moves behind a port the core gives. A new file starts no process; the list only shrinks: an entry
+    // that no longer starts one, or whose file is gone, fails until it is removed.
+    schema: [{ type: 'object', properties: { stillSpawns: { type: 'array', items: { type: 'string' } } }, required: ['stillSpawns'], additionalProperties: false }],
+  },
+  create(context) {
+    const source = familySource(lintedPath(context));
+
+    if (source === undefined) return {};
+    const listed = OptionsSchema.parse(context.options)[0]?.stillSpawns ?? [];
+    const isListed = listed.includes(source.relative);
+    // Each source of a family checks its entries, so a renamed or removed file fails lint instead of staying listed.
+    const gone = listed.filter((file) => file.startsWith(source.src) && !fs.existsSync(`${source.root}${file}`));
+    let spawns = false;
+
+    /** @param {ESTree.Node} node @param {string} what */
+    const starts = (node, what) => {
+      spawns = true;
+
+      if (!isListed) {
+        context.report({ node, message: `A tool family builds argv and reads output, and never starts a process: ${source.relative} ${what}. Return the argv from the family's launch profile and let @teamai/tool-launch run it through the port its caller gives.` });
+      }
+    };
+
+    const imports = importVisitors(({ node, specifier, typeOnly, names }) => {
+      if (typeOnly) return;
+
+      if (PROCESS_MODULES.has(specifier)) starts(node, `imports ${specifier}`);
+      const helpers = SPAWN_HELPERS.get(specifier);
+      const used = helpers === undefined ? [] : names.filter((name) => name === '*' || helpers.has(name));
+
+      if (used.length > 0) starts(node, `imports ${used.join(', ')} from ${specifier}`);
+    });
+
+    /** @param {ESTree.Node} node @param {string} what */
+    const exportsMore = (node, what) => {
+      context.report({ node, message: `A tool family's index.ts exports only \`family\`, which the app reads through @teamai/tool-definitions: ${source.relative} ${what}. Make it a field of \`family\`, or keep it inside the package.` });
+    };
+
+    return {
+      ...imports,
+      /** @param {ESTree.ExportNamedDeclaration} node */
+      ExportNamedDeclaration(node) {
+        imports.ExportNamedDeclaration(node);
+
+        if (!source.index || node.exportKind === 'type') return;
+        const extra = exportedNames(node).filter((name) => name !== 'family');
+
+        if (extra.length > 0) exportsMore(node, `also exports ${extra.join(', ')}`);
+      },
+      /** @param {ESTree.ExportAllDeclaration} node */
+      ExportAllDeclaration(node) {
+        imports.ExportAllDeclaration(node);
+
+        if (source.index && node.exportKind !== 'type') exportsMore(node, 'has an export *');
+      },
+      ExportDefaultDeclaration(/** @type {ESTree.ExportDefaultDeclaration} */ node) {
+        if (source.index) exportsMore(node, 'has an export default');
+      },
+      'Program:exit'(/** @type {ESTree.Program} */ node) {
+        for (const file of gone) context.report({ node, message: `${file} is listed in stillSpawns but does not exist. Remove it from the teamai/tool-family-shape option.` });
+
+        if (isListed && !spawns) context.report({ node, message: `${source.relative} no longer starts a process. Remove it from stillSpawns in the teamai/tool-family-shape option.` });
+      },
+    };
+  },
+});

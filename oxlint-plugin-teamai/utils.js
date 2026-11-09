@@ -4,6 +4,12 @@ import path from 'node:path';
 import { z } from 'zod';
 
 /**
+ * A tool family's folder under `packages/`: every `tool-*` package but the contract, the test kit, the list of families
+ * and the launch library. A new `tool-<name>` package is a family with no rule edit.
+ */
+export const FAMILY = /^tool-(?!(?:core|testing|definitions|launch)$)/;
+
+/**
  * The linted file's path with `/` separators, so a rule can scope itself on any platform.
  * @param {Context} context
  * @returns {string}

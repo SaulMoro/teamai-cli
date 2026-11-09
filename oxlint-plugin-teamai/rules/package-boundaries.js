@@ -4,7 +4,7 @@ import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
 
 import { importVisitors } from '../imports.js';
-import { isTestSupportPath, lintedPath, manifest, workspaceRoot } from '../utils.js';
+import { FAMILY, isTestSupportPath, lintedPath, manifest, workspaceRoot } from '../utils.js';
 
 /** @type {Map<string, Map<string, string>>} */
 const packageNames = new Map();
@@ -33,14 +33,17 @@ function packagesByName(root) {
   return names;
 }
 
-/** A tool family's folder: every `tool-*` package but the contract, the test kit, the list of families and the launch library. */
-const FAMILY = /^tool-(?!(?:core|testing|definitions|launch)$)/;
-
 /** The one package that imports the families. */
 const DEFINITIONS = 'tool-definitions';
 
 /** The conformance kit families test with. */
 const TEST_KIT = 'tool-testing';
+
+/** The launch library: it runs a tool's launch over a process port it is given, so it starts no process and knows no runtime. */
+const LAUNCH_LIBRARY = 'tool-launch';
+
+/** The modules that start a process. */
+const PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
 
 /** The runtime protocol, which teamai and every runtime parse with: the one runtime package src/ imports. */
 const RUNTIME_PROTOCOL = 'runtime-protocol';
@@ -126,6 +129,10 @@ export default defineRule({
           context.report({ node, message: `src/ imports values only from Node, the workspace packages and the dependencies in package.json, since tsup bundles whatever src/ loads into dist/: ${from} -> ${specifier}. Import only its types (import type), or add it to dependencies if teamai-cli ships it.` });
         }
 
+        if (own === LAUNCH_LIBRARY && !isTestSupport && !typeOnly && PROCESS_MODULES.has(specifier)) {
+          context.report({ node, message: `@teamai/tool-launch starts no process: it runs a launch through the port its caller gives, the host's spawn or a sandbox's exec. ${from} -> ${specifier}.` });
+        }
+
         if (specifier.startsWith('.')) {
           const to = path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier));
           const target = packageFolder(to);
@@ -179,6 +186,10 @@ export default defineRule({
 
           if (own === RUNTIME_PROTOCOL && !PROTOCOL_IMPORTS.has(specifier)) {
             context.report({ node, message: `@teamai/runtime-protocol imports only ${[...PROTOCOL_IMPORTS].join(', ')}, so the contract teamai and every runtime parse with carries no tool's or runtime's facts. ${from} -> ${specifier}.` });
+          }
+
+          if (own === LAUNCH_LIBRARY && folder.startsWith('runtime-')) {
+            context.report({ node, message: `@teamai/tool-launch imports no runtime package: the host and every runtime that launches a tool use it, so it stays below them all. ${from} -> ${specifier}.` });
           }
 
           if (own === RUNTIME_KIT && !KIT_IMPORTS.has(folder)) {
