@@ -363,6 +363,16 @@ describe('a member taking a prompt attempt', () => {
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, outputs: { ok: true }, tool: 'claude' } });
   });
 
+  it('writes usage_limited, with what its tool said, when its tool stops on its usage limit', async () => {
+    claudeOnPath('{"ok":true}', `process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 3pm (Europe/Madrid)" }) + '\\n'); process.exit(1);`);
+
+    const { record } = await takeForged((forged) => {
+      forged.lease = { kind: 'prompt', step: 'write', prompt: 'Write made.txt.', env: {} };
+    }, useClaude, PROMPTED);
+
+    expect(record).toMatchObject({ state: 'finished', result: { tool: 'claude', failure: { code: 'usage_limited', message: expect.stringContaining('claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)') } } });
+  });
+
   it('runs on the tool\'s own default model when the step\'s model renders empty, as the owner\'s driver would, not on the defaults\' model', async () => {
     const claude = claudeOnPath('{"ok":true}');
     const modelled = PROMPTED.replace('inputs: { mark: string }', 'inputs: { mark: string, model: string }\ndefaults: { model: opus }').replace('    prompt: "Write', '    model: "{{ inputs.model }}"\n    prompt: "Write');

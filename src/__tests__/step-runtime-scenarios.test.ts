@@ -2543,6 +2543,31 @@ done`);
     }
   }, 60_000);
 
+  it('ends a prompt step usage_limited, with what the member\'s tool said, when the member\'s tool stops on its usage limit', async () => {
+    const owner = await ownerOf({ workflow: PROMPTED, tools: ['claude'] });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}', before: `process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 3pm (Europe/Madrid)" }) + '\\n'); process.exit(1);` });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { prompt } = await owner.open(place);
+
+    try {
+      const ended = prompt(newOpId());
+      await owner.record();
+      await readableReportsWorktree(owner.bob.config);
+
+      await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } });
+
+      expect(await ended).toMatchObject({ kind: 'finished', session: { tool: 'claude' }, result: { failure: { code: 'usage_limited', message: expect.stringContaining('claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)') } } });
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
+  }, 60_000);
+
   it('leaves a whole workflow step one of whose prompt steps runs on a tool this member does not have, rather than claiming and failing it', async () => {
     const owner = await ownerOf({ workflow: REVIEWED, workflows: { reviews: REVIEWS }, tools: ['claude'], isWhole: true });
     const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
