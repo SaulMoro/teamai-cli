@@ -620,10 +620,29 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       if (record.state === 'offered' || isHeld(record)) {
         const written = await cancelAttempt(config, record);
 
-        if (!written.ok && written.error.code !== 'state_moved') return failed(fleetFailure(written.error));
-        // Another write landed first, such as the member's progress: the cancel is written over what is read next.
-        isCancelWritten = written.ok;
-        continue;
+        if (written.ok) {
+          isCancelWritten = true;
+          continue;
+        }
+
+        const { error } = written;
+
+        switch (error.code) {
+          // Another write landed first, such as the member's progress: the cancel is written over what is read next.
+          case 'state_moved': continue;
+          // teamai-reports is busy, as with this install's own publish, or out of reach: the cancel is written at the
+          // next poll, so the offer does not stay out for a member to take.
+          case 'reports_failed':
+          case 'reports_unreachable': break;
+          case 'fleet_unpublishable':
+          case 'fleet_record_unreadable':
+          case 'fleet_record_newer': return failed(fleetFailure(error));
+          default: {
+            const unhandled: never = error;
+
+            return unhandled;
+          }
+        }
       }
     }
 
