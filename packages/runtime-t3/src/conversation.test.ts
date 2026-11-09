@@ -1942,6 +1942,34 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.runCount).toBe(2);
     });
 
+    // The earlier run's end, which T3 still shows right after the send, is not the turn's stop.
+    it('stops the turn\'s own run when teamai cancels it before T3 shows that run, and only then ends it cancelled', async () => {
+      const { runtime, handle, later } = await finishedFirst();
+      t3.config({ turnStartsLateMs: 1_500, agent: { hold: true, output: {} } });
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      await runtime.next((line) => line['op'] === 'op-000000b2' && line['event'] === 'display');
+      await expect.poll(() => t3.calls().filter((call) => call.tool === 't3_thread_send')).toHaveLength(1);
+
+      runtime.send({ type: 'cancel', op: 'op-000000b2' });
+
+      expect(await ended(runtime, 'op-000000b2')).toEqual({ op: 'op-000000b2', event: 'cancelled' });
+      expect(t3.threads()[0]).toMatchObject({ runCount: 2, status: 'interrupted' });
+    });
+
+    it('fails the cancel, never ends it cancelled, when T3 shows no run of the turn within 10 s', async () => {
+      const { runtime, handle, later } = await finishedFirst();
+      t3.config({ turnStartsLateMs: 60_000 });
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+      await runtime.next((line) => line['op'] === 'op-000000b2' && line['event'] === 'display');
+      await expect.poll(() => t3.calls().filter((call) => call.tool === 't3_thread_send')).toHaveLength(1);
+
+      runtime.send({ type: 'cancel', op: 'op-000000b2' });
+
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({
+        event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('T3 Code showed no run of the turn teamai sent within 10 s') },
+      });
+    }, 20_000);
+
     it('sends the turn once, after a restart between its send and T3\'s answer, and follows it to the end', async () => {
       const { runtime, handle, first, later } = await finishedFirst();
       t3.config({ sendMs: 5_000 });
