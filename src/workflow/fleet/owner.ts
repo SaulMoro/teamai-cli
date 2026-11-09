@@ -10,14 +10,15 @@
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { CanSchema, ISOLATION_LEVELS, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getRepoIdentity } from '../../session-flow/sync.js';
 import { readableReportsWorktree } from '../../utils/reports-branch.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { durationMs } from '../parse.js';
 import { budgetLeft, leaseContext } from '../engine.js';
-import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult } from './record.js';
+import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, noteWake, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult, type WakeNote } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { workflowRunBy, type WorkflowFailure } from '../types.js';
@@ -27,7 +28,7 @@ import { isJsonObject } from '../../types.js';
 import { copyGit, placeEditsOf } from '../place/place.js';
 import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
-import type { ExecAnswer, ExecEnd, ExecEvents, ExecQuestion, PromptEnd, StepRuntime } from '../runtimes/step-runtime.js';
+import { newOpId, type ExecAnswer, type ExecEnd, type ExecEvents, type ExecQuestion, type PromptEnd, type StepRuntime, type WakeEnd } from '../runtimes/step-runtime.js';
 import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
 import { DRIVER_ENV_REACH, DriverEnvSchema, LabelSchema } from '../requirements.js';
 
@@ -51,9 +52,11 @@ const FleetOptionsSchema = z.object({
   can: CanSchema.extend({ env: DriverEnvSchema.optional() }).optional(),
   /** What the pool's machines declare in their `workflows.labels`: a step that requires them goes to this entry. */
   labels: z.array(LabelSchema).optional(),
+  /** The runtime that launches a member of the pool on another machine for an offer no member claimed, with its options. */
+  wake: z.object({ use: z.string().min(1), options: RuntimeOptionsSchema.optional() }).strict().optional(),
 }).strict();
 
-/** The options of the `fleet` runtime, as `init` checks a runtime's own: its pool, `stale_after` in milliseconds, `can` and `labels`. */
+/** The options of the `fleet` runtime, as `init` checks a runtime's own: its pool, `stale_after` in milliseconds, `can`, `labels` and `wake`. */
 export function parseFleetOptions(options: RuntimeOptions): { ok: true; value: z.infer<typeof FleetOptionsSchema> } | { ok: false; failure: { key: string; message: string } } {
   const parsed = FleetOptionsSchema.safeParse(options);
 
@@ -121,6 +124,15 @@ type Waited =
   | { kind: 'cancelled'; message: string; tokens?: TokenUsage }
   | { kind: 'failed'; failure: WorkflowFailure }
   | { kind: 'left' };
+
+/**
+ * Opens the runtime a fleet entry's `options.wake` names, on its own and never through another, as the driver opens its
+ * runtimes: `wakes` when its `init` offered `wake`.
+ */
+export type OpenWake = (entry: { use: string; options: RuntimeOptions }) => Promise<{ ok: true; runtime: StepRuntime; wakes: boolean } | { ok: false; failure: WorkflowFailure }>;
+
+/** The runtime a fleet entry wakes members through, by the name its entry gave. */
+type Waker = { use: string; runtime: StepRuntime };
 
 /** The place of an attempt on the fleet: its handle names the run and the attempt, so a restarted teamai reads it again. */
 type FleetPlace = { run: RunId; attempt: AttemptId };
@@ -229,16 +241,17 @@ function promptEnded(result: FleetResult, attempt: AttemptId): Extract<PromptEnd
 
 /**
  * The `fleet` runtime of this install: each step's command or prompt it takes is offered to the members of its pool. `masks`
- * holds the values an offer may not carry, which the drive adds to as it resolves the team's secrets.
+ * holds the values an offer may not carry, which the drive adds to as it resolves the team's secrets. `openWake` opens
+ * the runtime an entry's `options.wake` names: without it, an entry that sets one fails `init`.
  */
-export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks: Record<string, string> }): StepRuntime {
+export function fleetStepRuntime({ config, masks, openWake }: { config: LocalConfig; masks: Record<string, string>; openWake?: OpenWake }): StepRuntime {
   const local = localStepRuntime();
   const disposing = new AbortController();
   // The wait of each exec this teamai sent, by its id, so a repeated id reconnects to it and a cancel reaches it.
   const waits = new Map<OpId, { place: FleetPlace; cancel: AbortController; end: Promise<Waited>; isWhole: boolean }>();
   // The exec of each place a restarted teamai read, so a cancel of it with no wait here reaches its record.
   const seen = new Map<OpId, FleetPlace>();
-  let settings: { pool: string; staleAfterMs: number; root: string } | undefined;
+  let settings: { pool: string; staleAfterMs: number; root: string; waker?: Waker } | undefined;
 
   // A whole workflow's exec answers how its nested run ended on stdout (`WholeEndSchema`).
   const ended = (waited: Waited, events: ExecEvents, isWhole = false): ExecEnd => {
@@ -298,13 +311,17 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
     isExecReconnected: true,
     isToolPickedThere: true,
 
-    async init({ options, checkout }) {
+    async init({ options, mode, checkout }) {
       const parsed = parseFleetOptions(options);
 
       if (!parsed.ok) return { ok: false, failure: { code: 'bad_option', ...parsed.failure } };
       // No person sits at a member's tool, whatever the entry promises, so no interactive step goes to the fleet.
-      const { pool, stale_after: staleAfterMs, can: { hitl: _hitl, ...can } = {}, labels } = parsed.value;
-      settings = { pool, staleAfterMs, root: checkout ?? process.cwd() };
+      const { pool, stale_after: staleAfterMs, can: { hitl: _hitl, ...can } = {}, labels, wake } = parsed.value;
+      // Opened only to stop and close what it ran, it offers nothing, so it wakes no one.
+      const waking = wake === undefined || mode === 'recover' ? undefined : await openWaker(wake, openWake);
+
+      if (waking !== undefined && 'failure' in waking) return { ok: false, failure: waking.failure };
+      settings = { pool, staleAfterMs, root: checkout ?? process.cwd(), ...(waking && { waker: waking.waker }) };
 
       // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
       // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has. A
@@ -424,7 +441,7 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
     async dispose() {
       disposing.abort();
       await Promise.all([...waits.values()].map(async (wait) => wait.end));
-      await local.dispose();
+      await Promise.all([local.dispose(), settings?.waker?.runtime.dispose()]);
     },
   };
 }
@@ -482,6 +499,8 @@ async function offeredExec(config: LocalConfig, place: FleetPlace): Promise<OpId
 type WaitInput = {
   config: LocalConfig; run: RunId; attempt: AttemptId; pool: string; staleAfterMs: number; lease: FleetLease; root: string; dir: string;
   secrets: Record<string, string>; op: OpId;
+  /** Wakes a member of the pool for the offer while no member claimed it. */
+  waker?: Waker;
   /** Asks this driver's person a gate the member's whole workflow reached. Absent: nobody answers here. */
   ask?: ExecEvents['ask'];
 };
@@ -493,7 +512,18 @@ type WaitInput = {
  * values the offer may not carry. `cancel`: the run cancelled the step, which the owner writes into the record and waits
  * for the member to answer. `leave`: this teamai stops, and the attempt stays out for a later `workflow resume <run>`.
  */
-async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: AbortSignal; leave: AbortSignal }): Promise<Waited> {
+async function offerAndWait(input: WaitInput, signals: { cancel: AbortSignal; leave: AbortSignal }): Promise<Waited> {
+  const wake = input.waker && wakeOnOffer({ config: input.config, run: input.run, attempt: input.attempt, root: input.root, waker: input.waker });
+
+  try {
+    return await waitOnOffer(input, signals, wake);
+  } finally {
+    await wake?.stop();
+  }
+}
+
+/** `offerAndWait`, which shows `wake` each record it reads. */
+async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortSignal; leave: AbortSignal }, wake: WakeOnOffer | undefined): Promise<Waited> {
   const { config, run, attempt, lease, root, dir, secrets, op, ask } = input;
   const { step } = lease;
   const failed = (failure: WorkflowFailure): Waited => ({ kind: 'failed', failure });
@@ -553,6 +583,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
   for (;;) {
     if (leave.aborted) return { kind: 'left' };
     const read = await readAttemptRecord(config, run, attempt);
+
+    if (read.ok) await wake?.seen(read.value);
 
     if (!read.ok && (read.error.code === 'fleet_record_unreadable' || read.error.code === 'fleet_record_newer')) return failed(fleetFailure(read.error));
     const record = read.ok && read.value !== 'absent' ? read.value : undefined;
@@ -691,6 +723,123 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
+}
+
+/**
+ * The runtime `wake` names, opened through `openWake`, or why the entry fails: it cannot be opened here, or its `init`
+ * offers no wake, which would leave every offer unwoken.
+ */
+async function openWaker(wake: { use: string; options?: RuntimeOptions | undefined }, openWake: OpenWake | undefined): Promise<{ waker: Waker } | { failure: { code: 'bad_option'; key: string; message: string } }> {
+  const refused = (message: string) => ({ failure: { code: 'bad_option' as const, key: 'wake', message } });
+
+  if (wake.use === 'fleet' || wake.use === 'local') return refused(`${wake.use} wakes no fleet member: name a runtime that does, such as t3`);
+
+  if (openWake === undefined) return refused(`this teamai cannot open runtime "${wake.use}" to wake fleet members`);
+  const opened = await openWake({ use: wake.use, options: wake.options ?? {} });
+
+  if (!opened.ok) return refused(`runtime "${wake.use}" did not open: ${opened.failure.message}`);
+
+  if (!opened.wakes) {
+    await opened.runtime.dispose();
+
+    return refused(`runtime "${wake.use}" wakes no fleet member: its init does not offer wake. Remove options.wake, or name a runtime that wakes members`);
+  }
+
+  return { waker: { use: wake.use, runtime: opened.runtime } };
+}
+
+/** The wake of one offer: shown each record the owner reads, and stopped once the owner stops waiting. */
+type WakeOnOffer = { seen(record: FleetRecord | 'absent'): Promise<void>; stop(): Promise<void> };
+
+/**
+ * Wakes a member of the offer's pool through `waker` once, the first time the owner reads the attempt offered and no
+ * member's claim on it: the op is noted on the offer before it is sent, so a restarted owner that finds it there sends
+ * none again. Where the member was launched is noted there too, for the attempt listing. A wake that fails is said once,
+ * and the offer waits for a member someone starts. A wake still on its way when the offer is no longer offered, or the
+ * owner stops waiting, is cancelled.
+ */
+function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfig; run: RunId; attempt: AttemptId; root: string; waker: Waker }): WakeOnOffer {
+  let sent: { op: OpId; settled: Promise<void>; isSettled: boolean } | undefined;
+  let isDone = false;
+
+  const settle = async (end: WakeEnd, { pool, step, repository }: { pool: string; step: string; repository: string }): Promise<void> => {
+    const take = `teamai workflow resume --next --pool ${pool}, in a checkout of ${repository}`;
+
+    switch (end.kind) {
+      case 'woken': {
+        if (sent) await noteWake(config, run, attempt, { op: sent.op, where: end.where, ...(end.display && { display: end.display }) });
+        log.info(`Fleet pool ${pool}: ${waker.use} woke a member on ${end.where} for step "${step}" of run ${run}.`);
+
+        return;
+      }
+
+      case 'failed':
+      case 'lost':
+        // The owner stopped it: the offer was taken, or the wait ended.
+        if (end.kind === 'failed' && end.failure.code === 'cancelled') return;
+        log.warn(`Fleet pool ${pool} could not wake a member for step "${step}" of run ${run} through ${waker.use} (${end.failure.code}): ${end.failure.message} The step waits for a member someone starts: ${take}.`);
+
+        return;
+      default: {
+        const unhandled: never = end;
+
+        return unhandled;
+      }
+    }
+  };
+
+  return {
+    async seen(record) {
+      if (isDone || record === 'absent' || record.state !== 'offered') {
+        if (record !== 'absent') await this.stop();
+
+        return;
+      }
+
+      if (sent) return;
+      // Sent before, by this owner or one a restart replaced.
+      const noted = (await readOfferedMarker(config, run, attempt))?.wake;
+
+      if (noted) {
+        isDone = true;
+
+        return;
+      }
+
+      const origin = await git(root, ['remote', 'get-url', 'origin']);
+      const repository = sanitizeGitUrl(origin.stdout.trim());
+      const op = newOpId();
+      const note: WakeNote = { op };
+
+      await noteWake(config, run, attempt, note);
+      const { pool, lease: { step } } = record;
+
+      const end = waker.runtime.wake?.({ op, pool, repository, message: `teamai workflow resume --next --pool ${pool}`, title: `teamai: step ${step} of run ${run}` }, {})
+        ?? Promise.resolve<WakeEnd>({ kind: 'failed', failure: { code: 'wake_unavailable', message: `Runtime "${waker.use}" wakes no fleet member.` } });
+
+      const current = { op, settled: Promise.resolve(), isSettled: false };
+
+      current.settled = (async () => {
+        const ended = await end;
+
+        current.isSettled = true;
+
+        try {
+          await settle(ended, { pool, step, repository });
+        } catch (error) {
+          log.warn(`Fleet pool ${pool}: the wake through ${waker.use} for step "${step}" of run ${run} ended, but teamai could not note it: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      })();
+      sent = current;
+    },
+    async stop() {
+      isDone = true;
+
+      if (!sent || sent.isSettled) return;
+      await waker.runtime.cancel(sent.op);
+      await sent.settled;
+    },
+  };
 }
 
 /** A gate put to this driver's person: the question as the record holds it, closed once the record no longer asks it, and the answer once given. */

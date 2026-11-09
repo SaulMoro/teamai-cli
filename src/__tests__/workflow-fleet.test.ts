@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -13,10 +13,13 @@ import { fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.
 import { RuntimeOptionsSchema } from '@teamai/runtime-protocol';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { newOpId, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
+import { TOY_RUNTIME } from './helpers/toy-runtime.js';
+import type { OpId } from '@teamai/runtime-protocol';
 import { attemptRuntimePath } from '../workflow/runtimes/attempt.js';
 import { readableReportsWorktree, updateReports } from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
-import { dirs, git, start, team, type Member } from './helpers/workflow-handoff-fixture.js';
+import { dirs, git, start, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
 import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import os from 'node:os';
@@ -1158,5 +1161,150 @@ describe('where a member runs an attempt', () => {
 
   it('refuses a driver whose runtimes run neither commands nor prompts', async () => {
     expect(memberPlace(await driverOf([{ use: 'box', can: { exec: false, prompt: false } }]))).toMatchObject({ refused: expect.stringContaining('no runtime that runs command or prompt steps') });
+  });
+});
+
+describe('waking a fleet member for an offer no member claimed', () => {
+  const opened: StepRuntime[] = [];
+
+  afterEach(async () => {
+    await Promise.all(opened.splice(0).map(async (runtime) => runtime.dispose()));
+  });
+
+  /** The toy runtime over stdio, as a definition opens it, waking into `wakeLog` when given one. */
+  async function toyWaker(wakeLog?: string): Promise<{ runtime: StepRuntime; wakes: boolean }> {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    opened.push(runtime);
+    const ready = await runtime.init({ options: { state: fs.mkdtempSync(path.join(os.tmpdir(), 'toy-wake-')), ...(wakeLog !== undefined && { wake_log: wakeLog }) }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+
+    return { runtime, wakes: ready.wakes === true };
+  }
+
+  /** Alice starts workflow `slow` and leases its step, which the fleet runtime of her install offers with `wake` as given. */
+  async function owner(wake: () => Promise<{ runtime: StepRuntime; wakes: boolean }>) {
+    const acme = team({ slow: SLOW });
+    const alice = await acme.member('alice');
+    const run = RunIdSchema.parse(await startIn(alice, 'slow'));
+    const next = await leaseNext(alice.config, run, alice.driver, { can: { workspace: [...WORKSPACES] } });
+    if (!('data' in next) || !next.data.lease) throw new Error(`no lease: ${JSON.stringify(next)}`);
+    const attempt = AttemptIdSchema.parse((next.data.lease as { attempt: string }).attempt);
+    const open = async () => {
+      const runtime = fleetStepRuntime({ config: alice.config, masks: {}, openWake: async () => ({ ok: true, ...(await wake()) }) });
+      opened.push(runtime);
+      const ready = await runtime.init({ options: { stale_after: '60s', pool: 'gpu', wake: { use: 'toy' } }, mode: 'unattended', checkout: alice.checkout });
+      const place = ready.ok ? await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined) : undefined;
+      const exec = (op: OpId) => {
+        if (place?.kind !== 'ready') throw new Error('the fleet runtime opened no place');
+
+        return runtime.exec({ op, handle: place.handle, argv: ['sh', '-c', 'echo begun > begun.txt; sleep 60'], env: {}, unset: [], credentials: {}, cwd: alice.checkout }, {}, 'command');
+      };
+
+      return { runtime, ready, exec };
+    };
+
+    return { alice, run, attempt, open };
+  }
+
+  const lines = (file: string): Array<Record<string, unknown>> => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []);
+
+  it('sends one wake, naming the pool, the business repository and the command that takes the attempt', async () => {
+    const wakeLog = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wake-log-')), 'wakes.jsonl');
+    const { alice, run, attempt, open } = await owner(async () => toyWaker(wakeLog));
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+
+    const [sent] = await eventually(async () => (lines(wakeLog).length > 0 ? lines(wakeLog) : undefined));
+    // Two more polls of the record: still one wake.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+    expect(lines(wakeLog)).toHaveLength(1);
+    expect(sent).toMatchObject({ type: 'wake', pool: 'gpu', repository: git(alice.checkout, 'remote', 'get-url', 'origin'), message: 'teamai workflow resume --next --pool gpu' });
+    expect(String(sent?.title)).toContain('work');
+    expect(await readOfferedMarker(alice.config, run, attempt)).toMatchObject({ wake: { op: sent?.op, where: 'toy' } });
+    await runtime.cancel(op);
+    await ended;
+  });
+
+  it('wakes no member again from a restarted owner that sent the wake before', async () => {
+    const wakeLog = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wake-log-')), 'wakes.jsonl');
+    const { open } = await owner(async () => toyWaker(wakeLog));
+    const op = newOpId();
+    const first = await open();
+    const ended = first.exec(op);
+    await eventually(async () => (lines(wakeLog).length > 0 ? true : undefined));
+    await first.runtime.dispose();
+    await ended;
+
+    const restarted = await open();
+    const again = restarted.exec(op);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+    expect(lines(wakeLog)).toHaveLength(1);
+    await restarted.runtime.cancel(op);
+    await again;
+  });
+
+  it('warns once with the runtime\'s message when it has no machine to wake on, and the offer still waits for a member', async () => {
+    const warned = vi.spyOn(log, 'warn');
+    const local = localStepRuntime();
+    const unavailable: StepRuntime = { ...local, name: 'nowhere', wake: async () => ({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Link a machine in T3 Code, and add the repository there as a project.' } }) };
+    const { alice, run, attempt, open } = await owner(async () => ({ runtime: unavailable, wakes: true }));
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await eventually(async () => (warned.mock.calls.some(([message]) => String(message).includes('Link a machine')) ? true : undefined));
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+    expect(warned.mock.calls.filter(([message]) => String(message).includes('Link a machine'))).toHaveLength(1);
+    expect(String(warned.mock.calls.find(([message]) => String(message).includes('Link a machine'))?.[0])).toContain('teamai workflow resume --next --pool gpu');
+    const record = await readAttemptRecord(alice.config, run, attempt);
+
+    expect(record.ok && record.value !== 'absent' && record.value.state).toBe('offered');
+    await runtime.cancel(op);
+    await ended;
+    warned.mockRestore();
+  });
+
+  it('keeps what the runtime shows of the member it woke, for the attempt listing', async () => {
+    const local = localStepRuntime();
+    const display = { label: 'T3 thread on studio-mac', url: 't3code://thread/abc' };
+    const showing: StepRuntime = { ...local, name: 'shows', wake: async (_request, events) => { events.onDisplay?.(display); return { kind: 'woken', where: 'studio-mac', display }; } };
+    const { alice, run, attempt, open } = await owner(async () => ({ runtime: showing, wakes: true }));
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+
+    expect(await eventually(async () => (await readOfferedMarker(alice.config, run, attempt))?.wake?.display)).toEqual(display);
+    expect(woken(await readOfferedMarker(alice.config, run, attempt))).toBe('T3 thread on studio-mac (t3code://thread/abc)');
+    await runtime.cancel(op);
+    await ended;
+  });
+
+  it('refuses a wake runtime whose init offers no wake, rather than leaving the offer unwoken', async () => {
+    const { open } = await owner(async () => toyWaker());
+
+    expect((await open()).ready).toMatchObject({ ok: false, failure: { code: 'bad_option', key: 'wake' } });
+  });
+
+  it('refuses a wake option when this teamai cannot open the runtime it names', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
+    opened.push(runtime);
+
+    expect(await runtime.init({ options: { pool: 'gpu', wake: { use: 't3' } }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: false, failure: { code: 'bad_option', key: 'wake' } });
+  });
+
+  it('opens no wake runtime to stop or close what it ran', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    let asked = 0;
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {}, openWake: async () => { asked += 1; return toyWaker().then((waker) => ({ ok: true as const, ...waker })); } });
+    opened.push(runtime);
+
+    expect(await runtime.init({ options: { pool: 'gpu', wake: { use: 'toy' } }, mode: 'recover', checkout: alice.checkout })).toMatchObject({ ok: true });
+    expect(asked).toBe(0);
   });
 });

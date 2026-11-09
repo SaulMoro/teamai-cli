@@ -12,7 +12,7 @@ import type { WorkflowFailure } from '../types.js';
 import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
-import { fleetStepRuntime, shadowedFleetEntries } from '../fleet/owner.js';
+import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '../../utils/logger.js';
 import { stdioStepRuntime } from './stdio.js';
 import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
@@ -319,8 +319,9 @@ export type OpenedRuntime =
    * `found`: the names among `credentials` teamai found in the member's environment rather than the definition declared,
    * which go only to the tool each signs in (`credentialsForTool`). `unavailable`: the tools it cannot run now, with why.
    * `optionsFrom`: where its options were set, for the person: the definition's file, and the member's config when it sets them too.
+   * `wakes`: its init offered to wake fleet members, which a fleet entry's `wake` names it for.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true }
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true }
 ;
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
@@ -385,13 +386,26 @@ async function runnableInstances(): Promise<InitInstance[]> {
 /**
  * The built-in `fleet` runtime of `driver`: each command or prompt step it takes is offered to the members of its pool on
  * teamai-reports, and one of them runs it with its own driver (`fleet/owner.ts`). Its `can` is what the definition
- * promises the members' drivers give: nothing checks it here.
+ * promises the members' drivers give: nothing checks it here. The runtime its `wake` option names is opened on its own,
+ * never through another, with that entry's options under the member's config for it, as a runtime of the definition is.
  */
-async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof engineOptions>, { ok: true }>, { mode, checkout }: { mode: RunMode; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof engineOptions>, { ok: true }>, how: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   if (split.credentials.length > 0 || split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, 'fleet', 'credentials', 'each member runs a step with its own driver, so fleet brings no credential') };
   const masks: Record<string, string> = {};
-  const runtime = fleetStepRuntime({ config: driver.config, masks });
-  const ready = await runtime.init({ options: split.runtime, mode, checkout });
+
+  const openWake: OpenWake = async ({ use, options }) => {
+    const opened = await openRuntime(driver, use, entryOptions(driver, use, options), how);
+
+    if (!opened.ok) return opened;
+
+    if (opened.opened.kind !== 'external') return { ok: false, failure: { code: 'bad_option', message: `${use} runs in teamai's own process and wakes no fleet member` } };
+
+    return { ok: true, runtime: opened.opened.runtime, wakes: opened.opened.wakes === true };
+  };
+
+  const runtime = fleetStepRuntime({ config: driver.config, masks, openWake });
+  const mode = how.purpose === 'stop' ? 'recover' : how.purpose === 'check' ? 'check' : how.mode;
+  const ready = await runtime.init({ options: split.runtime, mode, checkout: how.checkout });
 
   if (!ready.ok) return { ok: false, failure: badOption(driver, 'fleet', ready.failure.key ?? 'pool', ready.failure.message) };
 
@@ -404,7 +418,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
 
-  if (use === 'fleet') return fleetRuntime(driver, split, { mode, checkout });
+  if (use === 'fleet') return fleetRuntime(driver, split, { mode, canAsk, purpose, checkout });
   const located = await locateRuntime(driver, use);
 
   if (!located.ok) return located;
@@ -500,7 +514,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const declared = isMemberRoute ? notOwnLogin(values.values) : values.values;
     const given = isKeepingFound ? { ...declared, ...foundHere } : declared;
 
-    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), ...(ready.unavailable && { unavailable: ready.unavailable }) } };
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }) } };
   }
 
   await runtime.dispose();
