@@ -1320,8 +1320,8 @@ describe('waking a fleet member for an offer no member claimed', () => {
     expect(lines(wakeLog)).toHaveLength(1);
     const repository = git(alice.checkout, 'remote', 'get-url', 'origin');
     expect(sent).toMatchObject({ type: 'wake', pool: 'gpu', repository });
-    // The member's first message: the command that takes one attempt, where, and to end after it.
-    expect(String(sent?.message)).toContain('`teamai workflow resume --next --pool gpu`');
+    // The member's first message: the command that takes one attempt, alone on its first line, then where, and to end after it.
+    expect(String(sent?.message).split('\n')[0]).toBe('teamai workflow resume --next --pool gpu');
     expect(String(sent?.message)).toContain(repository);
     expect(String(sent?.message)).toContain('then end');
     // A title the person recognises on the machine woken: the step, the run and the pool.
@@ -1370,6 +1370,29 @@ describe('waking a fleet member for an offer no member claimed', () => {
     expect(record.ok && record.value !== 'absent' && record.value.state).toBe('offered');
     await runtime.cancel(op);
     await ended;
+    warned.mockRestore();
+  });
+
+  it('says nothing of a wake it stopped waiting for when the runtime never confirms the cancel', async () => {
+    const warned = vi.spyOn(log, 'warn');
+    const local = localStepRuntime();
+    let unconfirmed: (() => void) | undefined;
+    const silent: StepRuntime = {
+      ...local,
+      name: 'silent',
+      wake: async () => new Promise((resolve) => { unconfirmed = () => resolve({ kind: 'lost', failure: { code: 'runtime_unanswered', message: 'The runtime did not confirm the cancel.' } }); }),
+      cancel: async (op) => { unconfirmed?.(); return local.cancel(op); },
+    };
+    const { open } = await owner(async () => ({ runtime: silent, wakes: true }));
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await eventually(async () => unconfirmed && true);
+
+    await runtime.cancel(op);
+    await ended;
+
+    expect(warned.mock.calls.filter(([message]) => String(message).includes('could not wake'))).toEqual([]);
     warned.mockRestore();
   });
 
