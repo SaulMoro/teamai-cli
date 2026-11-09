@@ -1695,7 +1695,8 @@ runtimes:
       pool: gpu
       wake:
         use: t3            # the runtime that starts the member
-        options: {}        # optional; your workflows.drivers.gpu-fleet.runtimes.t3 goes over them
+        options:           # its options, as a driver gives them; your workflows.drivers.gpu-fleet.runtimes.t3 goes over them
+          environment: local
   - use: local
 ```
 

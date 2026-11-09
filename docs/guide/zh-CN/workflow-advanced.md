@@ -1689,7 +1689,8 @@ runtimes:
       pool: gpu
       wake:
         use: t3            # 启动成员的运行时
-        options: {}        # 可选；你的 workflows.drivers.gpu-fleet.runtimes.t3 会覆盖它们
+        options:           # 它的选项，与驱动中给它的一样；你的 workflows.drivers.gpu-fleet.runtimes.t3 会覆盖它们
+          environment: local
   - use: local
 ```
 
