@@ -1122,6 +1122,26 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     ]);
   });
 
+  it('allows no write that a link in the result directory leads outside it, and the step fails on the request instead', async () => {
+    behave({ output: { verdict: 'request-changes' }, asks_outside_grant: true });
+    const runtime = start();
+    await ready(runtime, { mode: 'unattended' });
+    const { review } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+    // An earlier step left the result file's name as a link to a file outside every grant, which does not exist yet.
+    const outside = path.join(dir, 'elsewhere', 'planted');
+    fs.mkdirSync(path.dirname(outside));
+    fs.mkdirSync(path.join(dir, 'out-fix'), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'out-fix', 'result.json'));
+
+    behave({ output: { fixed: true }, asks_outside_grant: true });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('asked for permission (Write)') } });
+    expect(received().filter((request) => request.type === 'agent_permission_response')).toEqual([]);
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
   it('starts a new agent, and says why, when Paseo no longer shows the earlier agent, as when the person deleted it', async () => {
     behave({ output: { verdict: 'request-changes' } });
     const runtime = start();
@@ -1197,6 +1217,47 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     expect(noticesOf(runtime, 'op-0000000d')).toEqual([{
       op: 'op-0000000d', event: 'notice',
       message: `teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-0000000b: agent ${agent} runs claude/claude-opus-5-5, and this step runs claude/claude-sonnet-5-5.`,
+    }]);
+  });
+
+  it('imports the session the lease resumes when it cannot continue the earlier agent, saying why it did not continue', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true }, provider_sessions: ['session-of-another-driver'] });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b', { model: { name: 'claude-sonnet-5-5' }, resume: 'session-of-another-driver' }));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', session: { tool: 'claude', id: 'session-of-another-driver' }, resumed: true });
+    expect(creates()).toHaveLength(1);
+    expect(received().filter((request) => request.type === 'import_agent_request')).toHaveLength(1);
+    expect(noticesOf(runtime, 'op-0000000d')).toEqual([{
+      op: 'op-0000000d', event: 'notice',
+      message: `teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-0000000b: agent ${agent} runs claude/claude-opus-5-5, and this step runs claude/claude-sonnet-5-5.`,
+    }]);
+  });
+
+  it('sends one turn at a time to a conversation: a second prompt that continues it meanwhile starts a new agent, and says why', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+    const other = await opened(runtime, { attempt: 'a0123abcf', op: 'op-0000000e' });
+
+    behave({ output: { fixed: true }, hold_ms: 1500 });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    runtime.send(fixing(other, 'op-0000000f', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', resumed: true });
+    expect(await runtime.next(isEnd('op-0000000f'))).toMatchObject({ event: 'finished' });
+    expect(runtime.lines.find(isEnd('op-0000000f'))).not.toHaveProperty('resumed');
+    expect(received().filter((request) => request.type === 'send_agent_message_request' && request.agentId === agent)).toHaveLength(1);
+    expect(noticesOf(runtime, 'op-0000000f')).toEqual([{
+      op: 'op-0000000f', event: 'notice',
+      message: `teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-0000000b: agent ${agent} runs the turn of op-0000000d.`,
     }]);
   });
 
