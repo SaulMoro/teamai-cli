@@ -2024,6 +2024,24 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(fs.readFileSync(path.join(place, 'done.txt'), 'utf8')).toBe('done\n');
   }, 60_000);
 
+  it('gives the member the files the place holds uncommitted, as a step here would find them, and takes its work over them', async () => {
+    const command = 'cat half.txt > seen.txt && echo \'{"made":1}\'';
+    const owner = await ownerOf({ workflow: SLOW.replace(SLOW_COMMAND, command), command });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    // What an earlier attempt of the step left there, as in a place it kept when its tool hit a usage limit.
+    fs.writeFileSync(path.join(place, 'half.txt'), 'half');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+
+    await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } });
+
+    expect(await ended).toEqual({ kind: 'exited', code: 0, stdout: '{"made":1}' });
+    expect(fs.readFileSync(path.join(place, 'seen.txt'), 'utf8')).toBe('half');
+  }, 60_000);
+
   it('leaves an attempt whose step requires a label to a member that declares it where it would run the step, as its own copy of the workflow says', async () => {
     const owner = await ownerOf({ workflow: LABELLED, command: 'echo rendered', labels: ['gpu'] });
     const { exec } = await owner.open();

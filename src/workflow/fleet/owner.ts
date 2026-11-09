@@ -521,7 +521,10 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     const resumed = await goOnFromGoneWork({ config, run, root, dir, step });
 
     if (resumed) return failed(resumed);
-    const start = (await git(dir, ['rev-parse', '--verify', 'HEAD'])).stdout.trim();
+    const started = await startOf({ config, run, root, dir, step });
+
+    if ('code' in started) return failed(started);
+    const { start } = started;
     // The checkout's own git pushes: the copy shares its objects, and a step may have written the copy's config.
     const pushed = await git(root, ['push', '--quiet', 'origin', `${start}:${ref}`]);
 
@@ -748,6 +751,31 @@ async function goOnFromGoneWork({ config, run, root, dir, step }: { config: Loca
   if (merged.code !== 0) return { code: 'workspace_base', message: `Step "${step}" goes on from the work attempt ${earlier.attempt} pushed (${earlier.pushed}), which its place could not take: ${merged.stderr.trim()}` };
 
   return undefined;
+}
+
+/**
+ * The commit a member starts step `step` from: HEAD of place `dir`, with what the place holds uncommitted, such as the
+ * work of an earlier attempt it kept on a usage limit, committed over it as a member commits its own work, so the member
+ * finds the place as the step would here. The place moves to that commit, which the member's work then fast-forwards.
+ */
+async function startOf({ config, run, root, dir, step }: { config: LocalConfig; run: RunId; root: string; dir: string; step: string }): Promise<{ start: string } | WorkflowFailure> {
+  // A step with no workspace runs in the checkout, whose files are the person's.
+  if (dir !== root) {
+    // A step ran in the copy before, so its config may name programs.
+    const placeGit = await copyGit(config, { run, root });
+    const added = await placeGit(dir, ['add', '-A']);
+
+    // `diff --quiet` exits 1 when something is staged.
+    const staged = added.code === 0 ? await placeGit(dir, ['diff', '--cached', '--quiet']) : undefined;
+
+    const committed = staged?.code === 1
+      ? await placeGit(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '--quiet', '--no-verify', '-m', `Work step "${step}" left uncommitted in its place`])
+      : staged ?? added;
+
+    if (committed.code !== 0) return { code: 'workspace_base', message: `Step "${step}" could not commit what its place ${dir} holds uncommitted, so no fleet member can start from it: ${committed.stderr.trim()}` };
+  }
+
+  return { start: (await git(dir, ['rev-parse', '--verify', 'HEAD'])).stdout.trim() };
 }
 
 /** Fails a claim given up as stale, once the place took the last commit its member pushed, which a retry goes on from. */
