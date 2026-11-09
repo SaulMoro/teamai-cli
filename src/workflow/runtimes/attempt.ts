@@ -74,7 +74,7 @@ export const AttemptRuntimeRecordSchema = z.object({
    * Set once the attempt reported, on a runtime that launches agents its own way: the place stays open for the
    * conversation its prompt launched, whose session is `conversation`, since a step that has not settled continues it
    * in `workspace`, the one the attempt's step shares with it. The local driver closes it as soon as none does
-   * (`continuedConversations`), at the run's end, on a cancel or a release.
+   * (`continuedConversations`), at the run's end, on a cancel or a release. A closed record holds none (`closedRecord`).
    */
   heldFor: z.object({ conversation: z.object({ tool: z.string(), id: z.string() }), workspace: z.string() }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
@@ -126,7 +126,12 @@ function isSetupLeftRunning(record: AttemptRuntimeRecord): boolean {
  * checked that nothing of it still runs. Why the runtime could not close it stays in the record.
  */
 export async function releaseAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId, record: AttemptRuntimeRecord): Promise<void> {
-  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...record, phase: 'closed' });
+  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), closedRecord(record));
+}
+
+/** `record` closed: a closed place holds no conversation open, so it drops `heldFor` with its phase. */
+function closedRecord({ heldFor: _released, ...record }: AttemptRuntimeRecord): AttemptRuntimeRecord {
+  return { ...record, phase: 'closed' };
 }
 
 /** Masks the result file of every attempt of `run` with `secrets`, so one that ended without a report, on a signal or a killed driver too, keeps no secret. */
@@ -238,7 +243,7 @@ async function heldIn(config: LocalConfig, run: RunId): Promise<Held[]> {
     const attempt = AttemptIdSchema.safeParse(name);
     const record = attempt.success ? await readAttemptRuntime(config, run, attempt.data) : undefined;
 
-    if (attempt.success && record?.heldFor && record.phase !== 'closed') held.push({ attempt: attempt.data, record: { ...record, heldFor: record.heldFor } });
+    if (attempt.success && record?.heldFor) held.push({ attempt: attempt.data, record: { ...record, heldFor: record.heldFor } });
   }
 
   return held;
@@ -633,7 +638,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
         // The runtime answered the first open of this op with a failure before it accepted a place, so it holds none.
         // One that did not answer, or an op a killed teamai sent before, may hold a place no handle names: the record
         // stays open, so a close says so.
-        else if (now && !before && !isUnansweredFailure(opened.failure)) await save({ ...now, phase: 'closed' });
+        else if (now && !before && !isUnansweredFailure(opened.failure)) await save(closedRecord(now));
 
         return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${opened.failure.code}): ${opened.failure.message}`) };
       }
@@ -851,7 +856,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       }
 
       const { closeFailed: _earlier, ...kept } = before;
-      await save({ ...kept, phase: 'closed' });
+      await save(closedRecord(kept));
 
       return undefined;
     },

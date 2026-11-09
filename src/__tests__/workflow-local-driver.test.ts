@@ -15,7 +15,8 @@ import { log } from '../utils/logger.js';
 import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/steps/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
-import { readRun } from '../workflow/store.js';
+import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
+import { readAttemptRuntime } from '../workflow/runtimes/attempt.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
@@ -1069,6 +1070,21 @@ steps:
     if (typeof run !== 'object') throw new Error('run was not stored');
     const sessionOf = (id: string) => { const step = run.steps.find((item) => item.id === id); return step && 'session' in step ? step.session : undefined; };
     expect(run.steps.find((step) => step.id === 'change.two')).toMatchObject({ resumed: { tool: 'claude', id: sessionOf('change.one') } });
+  }, 30_000);
+
+  it('records a held place it closed as closed, held for no conversation any more', async () => {
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
+    const toy = await toyDriver(path.dirname(workspace));
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run was not stored');
+    const one = run.steps.find((step) => step.id === 'change.one');
+    const attempt = AttemptIdSchema.parse(one && 'attempt' in one ? one.attempt : undefined);
+    const record = await readAttemptRuntime(config, RunIdSchema.parse(runId), attempt);
+    expect(record?.phase).toBe('closed');
+    expect(record).not.toHaveProperty('heldFor');
   }, 30_000);
 
   it('names the conversation\'s first step in the lease of every later step of a chain', async () => {
