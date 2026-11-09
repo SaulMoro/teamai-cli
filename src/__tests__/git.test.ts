@@ -43,8 +43,10 @@ vi.mock('fs-extra', () => ({
   },
 }));
 
-vi.mock('node:fs', () => ({
+// The real constants stay: a module this one imports opens files with their flags.
+vi.mock('node:fs', async (importOriginal) => ({
   default: {
+    constants: (await importOriginal<typeof import('node:fs')>()).constants,
     existsSync: vi.fn(() => true),
     writeFileSync: vi.fn(),
   },
