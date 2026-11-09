@@ -472,7 +472,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
         const stops = await Promise.all(owned.map(async ({ op, thread }) => {
           const live = ledger.running(op);
           // A prompt still running here ends cancelled once its thread stopped, and is followed on while it did not.
-          const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false, deadline }) : await whyNotStopped(s.t3, thread.threadId, deadline);
+          const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false, deadline }) : await whyNotStopped(s.t3, thread, deadline);
 
           if (why !== undefined) return { thread, why };
           await journalOp({ handle, op }, (conversation) => conversation && endedIn(conversation));

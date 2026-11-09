@@ -221,10 +221,32 @@ export function endedIn(conversation: OpRecord): OpRecord {
  * Stops a step's thread as its Stop button does, and waits until `deadline` for its run, and the work it delegated, to
  * settle. Answers why it did not stop, logged, while the thread may still run.
  */
-export async function whyNotStopped(t3: T3, threadId: string, deadline: number): Promise<string | undefined> {
+export async function whyNotStopped(t3: T3, thread: Pick<ThreadRecord, 'threadId' | 'turnOf'>, deadline: number): Promise<string | undefined> {
+  const { threadId } = thread;
   let why: string;
 
   try {
+    // A turn has stopped only once T3 showed its own run and that run ended: right after the send, T3 may still show
+    // the earlier run, ended, which is no stop of the turn.
+    if (thread.turnOf) {
+      const { runsBefore } = thread.turnOf;
+
+      for (;;) {
+        const shell = await within(t3.thread(threadId), Math.max(deadline - Date.now(), 0));
+
+        if (shell.answered && shell.value.runCount > runsBefore) break;
+
+        if (Date.now() + TURN_POLL_MS >= deadline) {
+          why = `T3 Code showed no run of the turn teamai sent within ${STOP_WAIT_MS / 1_000} s, so teamai could not stop it`;
+          process.stderr.write(`Could not stop ${threadId}: ${why}\n`);
+
+          return why;
+        }
+
+        await sleep(TURN_POLL_MS);
+      }
+    }
+
     const stopped = await within(t3.stop(threadId), Math.max(deadline - Date.now(), 0));
 
     if (stopped.answered) {
@@ -370,7 +392,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
    * cancel T3 did not carry out ends it cancel_failed, while its thread may still run; a close leaves it followed.
    */
   const stopRunning = async ({ s, state, op, thread, cancelling, deadline }: { s: Reached; state: Running; op: OpId; thread: ThreadRecord; cancelling: boolean; deadline: number }): Promise<string | undefined> => {
-    const stopping = whyNotStopped(s.t3, thread.threadId, deadline);
+    const stopping = whyNotStopped(s.t3, thread, deadline);
     state.stopping = stopping;
     const why = await stopping;
 
@@ -510,7 +532,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
         const asking = s.mode === 'unattended' ? (waited.status === 'waiting' ? { by: 'thread' } : await asksForApproval(s.t3, thread.threadId)) : undefined;
 
         if (asking) {
-          const why = await whyNotStopped(s.t3, thread.threadId, Date.now() + STOP_WAIT_MS);
+          const why = await whyNotStopped(s.t3, thread, Date.now() + STOP_WAIT_MS);
 
           const asked = asking.by === 'task'
             ? `${where} delegated a task that asked for an approval, and nobody is there to give it in an unattended run.`
