@@ -1,4 +1,22 @@
-import { readClaudeResult, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { readClaudeResult, resultDirRule, type LaunchAdapter, type StepArgsHow, type StepArgsInput } from '@teamai/tool-core/launch';
+
+const UNATTENDED = ['--permission-mode', 'bypassPermissions'] as const;
+
+/** A Claude step: `-p` with stream-json headless, the prompt last for a person. */
+function stepArgs(input: StepArgsInput, { interactive }: StepArgsHow): string[] {
+  const unattended = input.unattended ? UNATTENDED : [];
+  const agent = input.agent && !input.agent.inPrompt ? ['--agent', input.agent.name] : [];
+  const model = input.model ? ['--model', input.model] : [];
+  const effort = input.effort ? ['--effort', input.effort] : [];
+  const resume = input.resume ? ['--resume', input.resume] : [];
+  const result = resultDirRule(input.resultDir);
+
+  if (interactive) return [...unattended, result, ...agent, ...model, ...effort, ...resume, input.prompt];
+  const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
+
+  // Only partial messages state each message's final usage as it ends, which the budget meter counts.
+  return ['-p', input.prompt, '--output-format', 'stream-json', '--verbose', ...(input.streamsUsage ? ['--include-partial-messages'] : []), ...unattended, result, ...turns, ...agent, ...model, ...effort, ...resume];
+}
 
 /** How teamai launches Claude Code and its variants headless; each variant starts its own command. */
 export const launch = {
@@ -16,7 +34,7 @@ export const launch = {
       streams: { evidence: 'verified', args: () => ['-p', '--output-format', 'stream-json', '--verbose'] },
     },
     // Claude Code 2.1.312 ran a strict-sandbox benchmark trial in this mode (2026-10-30, `teamai benchmark run --sandbox`).
-    step: { evidence: 'verified', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'verified' } },
+    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'verified' }, args: stepArgs },
     confined: {
       evidence: 'verified',
       env: ['CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'],

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter, type StepArgsHow, type StepArgsInput } from '@teamai/tool-core/launch';
 import { readToolMetadata } from '@teamai/tool-core/stdout';
 
 const CodexError = z.union([
@@ -24,13 +24,27 @@ function readCodexExec({ stdout, lastMessage }: CallOutput): CallReading {
   return answered(text, readToolMetadata(stdout)?.tokens);
 }
 
+const UNATTENDED = ['--dangerously-bypass-approvals-and-sandbox'] as const;
+
+/** A Codex step: `exec --json` headless, which also takes the definition's own model; the definition always goes in the prompt. */
+function stepArgs(input: StepArgsInput, { interactive }: StepArgsHow): string[] {
+  const unattended = input.unattended ? UNATTENDED : [];
+  const resume = input.resume ? ['resume', input.resume] : [];
+  const effort = input.effort ? ['-c', `model_reasoning_effort=${input.effort}`] : [];
+
+  if (interactive) return [...resume, ...unattended, ...(input.model ? ['--model', input.model] : []), ...effort, input.prompt];
+  const model = input.model ?? input.agent?.model;
+
+  return ['exec', ...resume, '--json', ...unattended, ...(model ? ['--model', model] : []), ...effort, input.prompt];
+}
+
 /** How teamai launches Codex and its variants headless; each variant starts its own command. */
 export const launch = {
   codex: {
     signIn: { variables: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
     call: { evidence: 'verified', prompt: 'stdin', args: ({ lastMessageFile }) => ['exec', '--json', '--skip-git-repo-check', '-o', lastMessageFile, '-'], read: readCodexExec, streams: { evidence: 'docs' } },
     // `codex exec --help` of codex-cli 0.165.0: "Intended solely for running in environments that are externally sandboxed".
-    step: { evidence: 'verified', unattended: { args: ['--dangerously-bypass-approvals-and-sandbox'], evidence: 'docs' } },
+    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'docs' }, args: stepArgs },
     // Codex also signs in with CODEX_API_KEY ("run codex login or set CODEX_API_KEY").
     confined: { evidence: 'verified', env: ['CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY'], homeEnv: 'CODEX_HOME', verified: /^codex-cli 0\.163\.0$/, access: 'read' },
   },

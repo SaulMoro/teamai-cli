@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter, type StepArgsHow, type StepArgsInput } from '@teamai/tool-core/launch';
 import { readToolMetadata } from '@teamai/tool-core/stdout';
 
 
@@ -32,6 +32,27 @@ function readOpenCodeRun({ stdout }: CallOutput): CallReading {
   return answered(text, readToolMetadata(stdout)?.tokens, session);
 }
 
+const UNATTENDED = ['--auto'] as const;
+
+/** OpenCode's model arguments: OpenCode 2 has no `--variant` and reads the effort from `--model provider/model#variant`. */
+function modelArgs(model: string | undefined, effort: string | undefined, major: number): string[] {
+  if (model === undefined) return [];
+
+  if (effort === undefined) return ['--model', model];
+
+  return major >= 2 ? ['--model', `${model}#${effort}`] : ['--model', model, '--variant', effort];
+}
+
+/** An OpenCode step: `run --format json` headless, the TUI with `--prompt` for a person. */
+function stepArgs(input: StepArgsInput, { interactive, opencodeMajor }: StepArgsHow): string[] {
+  const unattended = input.unattended ? UNATTENDED : [];
+  const agent = input.agent && !input.agent.inPrompt ? ['--agent', input.agent.name] : [];
+
+  if (interactive) return [...unattended, ...agent, ...(input.model ? ['--model', input.model] : []), '--prompt', input.prompt];
+
+  return ['run', '--format', 'json', ...unattended, input.prompt, ...agent, ...modelArgs(input.model, input.effort, opencodeMajor)];
+}
+
 /** How teamai launches OpenCode headless. */
 export const launch = {
   opencode: {
@@ -46,7 +67,7 @@ export const launch = {
       streams: { evidence: 'verified' },
     },
     // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
-    step: { evidence: 'verified', unattended: { args: ['--auto'], evidence: 'docs' } },
+    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'docs' }, args: stepArgs },
     confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
   },
 } as const satisfies Record<string, LaunchAdapter>;

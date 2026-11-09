@@ -57,10 +57,51 @@ export interface CallLaunch {
  */
 export type UnattendedLaunch = { readonly args: readonly string[]; readonly evidence: Evidence } | 'none';
 
-/** A workflow step: a session the adapter starts and resumes, in `local-tool-adapter.ts`. */
+/** What a workflow step's argv says, as teamai settled it before the family builds the argv. */
+export interface StepArgsInput {
+  /** The prompt, with the result instruction applied, and the definition's instructions when `agent.inPrompt`. */
+  readonly prompt: string;
+  /** The directory the step writes its result file in: a tool that asks before a write is allowed to edit only there. */
+  readonly resultDir: string;
+  /** A session id from the same tool, to resume. */
+  readonly resume?: string;
+  /** The most agent turns the tool may take, for a tool that has such a flag. */
+  readonly maxTurns?: number;
+  readonly model?: string;
+  readonly effort?: string;
+  /** The definition the step runs as: its name, its own model, and whether its instructions went in the prompt, so no flag names it. */
+  readonly agent?: { readonly name: string; readonly model?: string; readonly inPrompt: boolean };
+  /** Launch in the family's own unattended mode (`StepLaunch.unattended`). */
+  readonly unattended?: true;
+  /** The run meters usage as the tool prints it, so a tool that states each message's usage only on request is asked to. */
+  readonly streamsUsage: boolean;
+}
+
+/** How the step launches: headless, or for a person at the terminal, and the OpenCode major version on PATH. */
+export interface StepArgsHow {
+  readonly interactive: boolean;
+  readonly opencodeMajor: number;
+}
+
+/** A workflow step: a session the tool starts and resumes, launched with the argv `args` builds. */
 export interface StepLaunch {
   readonly evidence: Evidence;
   readonly unattended: UnattendedLaunch;
+  args(input: StepArgsInput, how: StepArgsHow): string[];
+}
+
+/**
+ * The rule that lets Claude and CodeBuddy, whose default mode asks before any write, edit only the result file's
+ * directory, the attempt's out/: the step writes its result there, and the evidence archived with its session. One
+ * argument: the flag is variadic, and would take a prompt after it as a rule too. The path follows the `/` that marks a
+ * rule absolute; on Windows in the POSIX form Claude matches, so `C:\a\b` is `/c/a/b`.
+ */
+export function resultDirRule(resultDir: string): string {
+  const rulePath = process.platform === 'win32'
+    ? resultDir.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replaceAll('\\', '/')
+    : resultDir;
+
+  return `--allowedTools=Edit(/${rulePath}/**)`;
 }
 
 /** A run confined to one directory, in `src/tool-launch/confined.ts`: what judges a scorer. */

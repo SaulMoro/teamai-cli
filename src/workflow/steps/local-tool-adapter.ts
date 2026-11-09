@@ -10,9 +10,9 @@ import { log } from '../../utils/logger.js';
 import type { toolExtrasFor } from '../../resources/agent-format.js';
 import { stopProcess } from '@teamai/shared/process-group';
 import { stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../tool-launch/stdout.js';
-import type { LaunchAdapter } from '@teamai/tool-core/launch';
+import type { LaunchAdapter, StepLaunch } from '@teamai/tool-core/launch';
 import { spawnCommand } from '@teamai/tool-core/exec';
-import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../tool-launch/tools.js';
+import { executableOf, launchAdapterIdOf, launchAdapterOf, type LaunchTool } from '../../tool-launch/tools.js';
 import { AttemptResult } from '../attempt-result.js';
 import { budgeted } from '../limits.js';
 import { expectedOutput } from '../output.js';
@@ -132,75 +132,22 @@ function unattendedArgs(tool: LaunchTool): readonly string[] | 'none' {
   return unattended === 'none' ? 'none' : unattended.args;
 }
 
-/**
- * An absolute path as a Claude or CodeBuddy permission rule matches it, after the `/` that marks a rule absolute: as it
- * is, and on Windows in the POSIX form Claude matches, so `C:\a\b` is `/c/a/b`.
- */
-function permissionRulePath(file: string): string {
-  if (process.platform !== 'win32') return file;
+/** The argv that launches `tool` for one step, which its family builds: the prompt with its result instruction, then the flags the step's lease sets. */
+function stepArgv(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
+  const step: StepLaunch = launchAdapterOf(tool).step;
+  const inPrompt = promptHandoff(tool, input, opencodeMajor);
 
-  return file.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replaceAll('\\', '/');
-}
-
-/** The argv that launches `tool` for one step: the prompt with its result instruction, then the flags the step's lease sets. */
-export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
-  const family = launchAdapterIdOf(tool);
-  const modeArgs = input.unattended ? unattendedArgs(tool) : [];
-  const unattended = modeArgs === 'none' ? [] : modeArgs;
-  const viaPrompt = promptHandoff(tool, input, opencodeMajor);
-
-  const prompt = resultInstruction(input, viaPrompt ? withInstructions(input) : input.prompt);
-  const agent = input.agent && !viaPrompt ? ['--agent', input.agent.name] : [];
-  const model = input.model ? ['--model', input.model.name] : [];
-  const effort = input.model?.effort;
-  const resume = input.resume ? ['--resume', input.resume] : [];
-  const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
-
-  // Claude's and CodeBuddy's default mode asks before any write, so the result file's directory, the attempt's out/,
-  // and only it, is allowed: the step writes its result there, and the evidence archived with its session. The mode
-  // stays as it is. One argument: the flag is variadic, and would take a prompt after it as a rule too.
-  const result = `--allowedTools=Edit(/${permissionRulePath(path.dirname(input.resultPath))}/**)`;
-
-  switch (family) {
-    case 'claude': {
-      if (interactive) return [...unattended, result, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
-
-      // Only partial messages state each message's final usage as it ends, which the budget meter counts.
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...unattended, result, ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
-    }
-
-    case 'codebuddy':
-      // Claude's flags, with no --effort.
-      if (interactive) return [...unattended, result, ...agent, ...model, ...resume, prompt];
-
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...unattended, result, ...turns, ...agent, ...model, ...resume];
-    case 'codex': {
-      if (interactive) return [...(input.resume ? ['resume', input.resume] : []), ...unattended, ...model, ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
-      const codexModel = input.model?.name ?? input.agent?.model;
-      const codexResume = input.resume ? ['resume', input.resume] : [];
-
-      return ['exec', ...codexResume, '--json', ...unattended, ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
-    }
-
-    case 'opencode':
-      if (interactive) return [...unattended, ...agent, ...model, '--prompt', prompt];
-
-      return ['run', '--format', 'json', ...unattended, prompt, ...agent, ...opencodeModelArgs(input.model, opencodeMajor)];
-    case 'agy': {
-      const conversation = input.resume ? ['--conversation', input.resume] : [];
-      const agyEffort = effort ? ['--effort', effort] : [];
-
-      if (interactive) return [...unattended, ...agent, ...model, ...agyEffort, ...conversation, '--prompt-interactive', prompt];
-
-      // `--print=` keeps the prompt attached: a bare `-p` takes its next argument as the prompt, even a flag.
-      return ['--output-format=stream-json', ...unattended, ...agent, ...model, ...agyEffort, ...conversation, `--print=${prompt}`];
-    }
-
-    default: {
-      const unhandled: never = family;
-      throw new Error(`No workflow step profile for adapter ${String(unhandled)}`);
-    }
-  }
+  return step.args({
+    prompt: resultInstruction(input, inPrompt ? withInstructions(input) : input.prompt),
+    resultDir: path.dirname(input.resultPath),
+    resume: input.resume,
+    maxTurns: input.maxTurns,
+    model: input.model?.name,
+    effort: input.model?.effort,
+    agent: input.agent && { name: input.agent.name, model: input.agent.model, inPrompt },
+    unattended: input.unattended,
+    streamsUsage: input.budget !== undefined,
+  }, { interactive, opencodeMajor });
 }
 
 /** The result file a tool writes: its output, when it wrote one, and a failure with a code and a message. A null failure is none. */
@@ -353,7 +300,7 @@ export function createLocalToolAdapter(
 
 /**
  * The adapter over `launcher`: everything teamai does around a tool's launch, whatever starts its process. It builds
- * the argv with `invocation()`, meters the budget from stdout and stops the tool at its limits, reads the result file,
+ * the argv with the family's `step.args`, meters the budget from stdout and stops the tool at its limits, reads the result file,
  * and parses stdout for the session, tokens and cost. `resolveTool` finds the executable, and `resolveInstanceCommand` a tool instance's command, or says it is missing.
  */
 export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, resolveInstanceCommand: ToolResolve): LocalToolAdapter {
@@ -411,7 +358,7 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         }
       }
 
-      const args = invocation(tool, input, opencodeMajor, interactive);
+      const args = stepArgv(tool, input, opencodeMajor, interactive);
       const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
       const meter = input.budget !== undefined ? tokenMeter(launchAdapterIdOf(tool)) : undefined;
       let metered: TokenUsage | undefined;
