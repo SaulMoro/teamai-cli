@@ -101,7 +101,12 @@ const ThreadShellSchema = z.object({
 export type ThreadShell = z.infer<typeof ThreadShellSchema>;
 
 /** The statuses of a thread whose run still goes, as `t3_thread_list` filters on them. */
-const ACTIVE_STATUSES = ['preparing', 'queued', 'starting', 'running', 'waiting'] as const;
+export const ACTIVE_STATUSES = ['preparing', 'queued', 'starting', 'running', 'waiting'] as const;
+
+/** Whether a thread at `status` has a run that still goes. */
+export function isActive(status: string | null): boolean {
+  return ACTIVE_STATUSES.some((one) => one === status);
+}
 
 /**
  * A thread `t3_thread_list` lists: a delegated task's thread names the thread that delegated it. T3 lists threads by
