@@ -1,5 +1,5 @@
 import { defineRule } from '@oxlint/plugins';
-import { inProductionSource, isOneOf, lintedPath, stringLiteralValue } from '../utils.js';
+import { inProductionSource, inTestSupport, isOneOf, lintedPath, stringLiteralValue } from '../utils.js';
 
 const LAUNCH_CONTEXT = 'Import RUN_MODE_ENV, LAUNCHED_BY_ENV or ATTEMPT_ENV from launch-context.ts instead of repeating launch variable names.';
 const RUNTIME_PROTOCOL = 'Import RUN_DIR_ENV from @teamai/runtime-protocol instead of repeating launch variable names.';
@@ -20,7 +20,8 @@ const OWNERS = new Map([
 export default defineRule({
   meta: { type: 'problem', docs: { description: 'Keep launch environment variable spellings in the module that owns each, and out of runtime packages.' } },
   create(context) {
-    if (!inProductionSource(context)) return {};
+    // Test support builds the env a test launches with, as a test does.
+    if (!inProductionSource(context) || inTestSupport(context)) return {};
     // A runtime package fails closed: it reads every teamai variable through the protocol, so a new one is caught too.
     const inRuntime = RUNTIME_SOURCE.test(lintedPath(context));
 

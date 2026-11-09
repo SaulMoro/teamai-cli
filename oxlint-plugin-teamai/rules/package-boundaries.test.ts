@@ -93,6 +93,18 @@ rule.invalid("rejects production code importing a family's test-only recordings"
   expect(output).toContain("@teamai/tool-claude/testing is test-only");
 }, inWorkspace('src/tools.ts'));
 
+rule.invalid("rejects a family's own product code importing its test-only recordings", `import { claudeFake } from '@teamai/tool-claude/testing';`, (output) => {
+  expect(output).toContain('@teamai/tool-claude/testing is test-only');
+}, inWorkspace('packages/tool-claude/src/index.ts'));
+
+rule.invalid("rejects a package's product code importing its own src/testing/", `import { suite } from './testing/suite.js';`, (output) => {
+  expect(output).toContain('packages/runtime-t3/src/testing/suite.js is test support');
+}, inWorkspace('packages/runtime-t3/src/runtime.ts'));
+
+rule.valid("allows a package's test importing its own src/testing/", `import { suite } from './testing/suite.js';`, inWorkspace('packages/runtime-t3/src/runtime.test.ts'));
+
+rule.valid("allows a package's src/testing/ importing more of its own test support", `import { suite } from './suite.js';`, inWorkspace('packages/runtime-t3/src/testing/harness.ts'));
+
 rule.invalid("rejects a family's test importing another family's recordings", `import { codexFake } from '@teamai/tool-codex/testing';`, undefined, inWorkspace('packages/tool-claude/src/testing/fake-agent.test.ts'));
 
 rule.invalid('still rejects a test importing the rest of a family', `import { family } from '@teamai/tool-claude';`, undefined, inWorkspace('src/__tests__/e2e/codebase-enrich-workflow.test.ts'));

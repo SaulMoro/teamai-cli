@@ -124,7 +124,6 @@ export const worktreeWorkspace = (): string | undefined => DaemonStateSchema.par
 
 /** A prompt as teamai sends one, with the step env it sets, none of which the runtime passes on. */
 export const promptRequest = (handle: string, op: string, lease: Partial<z.input<typeof PromptLeaseSchema>> = {}): z.input<typeof PromptRequestSchema> => ({
-  // oxlint-disable-next-line teamai/launch-env -- the name teamai's own step env carries, which the runtime must not pass on to the agent
   type: 'prompt', op, handle, env: { TEAMAI_WORKFLOW_RESULT: path.join(dir, 'out', 'result.json'), STEP_TOKEN: 'from-teamai' }, unset: [], cwd: worktree,
   lease: {
     step: 'review', tool: 'claude', model: { name: 'claude-opus-5-5' }, permissions: 'approval-required', interactive: false,

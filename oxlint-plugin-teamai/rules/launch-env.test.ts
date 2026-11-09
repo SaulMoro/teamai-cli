@@ -25,3 +25,5 @@ rule.invalid('rejects a launch variable as an object key', 'const env = { TEAMAI
 rule.invalid('rejects destructuring a launch variable', 'const { TEAMAI_LAUNCHED_BY: launcher } = env;');
 rule.invalid('rejects any teamai variable a runtime package reads from its request', 'const kept = request.env.TEAMAI_NEXT_THING;', undefined, unlisted);
 rule.valid('allows an unrelated property of an env object', 'const home = request.env.HOME;');
+rule.valid('allows a runtime package\'s test support under src/testing/ to spell a teamai variable', `const name = 'TEAMAI_WORKFLOW_RESULT';`, { filename: 'packages/runtime-unlisted/src/testing/harness.ts' });
+rule.valid('allows test support under src/testing/ to spell a launch variable', `const env = { TEAMAI_MODE: 'attended' };`, { filename: 'packages/tool-claude/src/testing/index.ts' });

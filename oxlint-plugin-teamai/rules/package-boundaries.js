@@ -88,6 +88,9 @@ function shipsWithTeamai(root, specifier) {
   return dependencies !== undefined && Object.hasOwn(dependencies, name);
 }
 
+/** A package's test support, or src/'s: the harness its tests run, which nothing that ships may load. */
+const TEST_SUPPORT = /^(?:packages\/[^/]+\/)?src\/testing\//;
+
 /**
  * The `packages/<folder>` a path relative to the workspace root sits in, if any.
  * @param {string} relative
@@ -111,7 +114,7 @@ export default defineRule({
     const inApp = from.startsWith('src/');
     const isTest = from.startsWith('src/__tests__/') || /\.test\.[cm]?[jt]sx?$/.test(from);
     // A package's src/testing/ holds the harness its tests run, which nothing that ships loads.
-    const isTestSupport = isTest || /^packages\/[^/]+\/src\/testing\//.test(from);
+    const isTestSupport = isTest || TEST_SUPPORT.test(from);
 
     if (own === undefined && !inApp) return {};
 
@@ -129,6 +132,10 @@ export default defineRule({
         if (specifier.startsWith('.')) {
           const to = path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier));
           const target = packageFolder(to);
+
+          if (!isTestSupport && TEST_SUPPORT.test(to)) {
+            context.report({ node, message: `${to} is test support: import it from a *.test.ts file or from src/testing/, so nothing that ships loads it. ${from} -> ${to}.` });
+          }
 
           if (target === own) return;
 
@@ -153,7 +160,7 @@ export default defineRule({
           // another family's tests stay off it, as a family depends on tool-core alone.
           const familyTesting = FAMILY.test(folder) && specifier === `${name}/testing`;
 
-          if (familyTesting && !isTest && own !== folder) {
+          if (familyTesting && !isTest && !(own === folder && isTestSupport)) {
             context.report({ node, message: `${specifier} is test-only: import it from a *.test.ts file, so a family's recordings never ship in teamai-cli. ${from} -> ${specifier}.` });
           }
 

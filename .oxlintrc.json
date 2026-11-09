@@ -176,6 +176,14 @@
       }
     },
     {
+      // A package's src/testing/ is test support, which teamai/package-boundaries keeps everything that ships from
+      // importing, so it builds the loose records tests build.
+      "files": ["src/testing/**", "packages/*/src/testing/**"],
+      "rules": {
+        "teamai/no-unsafe-dictionary-type": "off"
+      }
+    },
+    {
       // Paseo is a prerequisite the member installs: teamai-runtime-paseo loads its client from that install
       // (daemon/client.ts), so shipped code imports only its types, and the bundle holds none of its code.
       "files": ["packages/runtime-paseo/src/**"],

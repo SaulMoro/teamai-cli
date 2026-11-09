@@ -86,6 +86,16 @@ export function sourcePath(context) {
 }
 
 /**
+ * Whether the linted file is test support: under `src/testing/` of its package or of a `packages/<name>/` folder, which
+ * `teamai/package-boundaries` keeps everything that ships from importing.
+ * @param {Context} context
+ * @returns {boolean}
+ */
+export function inTestSupport(context) {
+  return sourcePath(context).replace(/^packages\/[^/]+\//, '').startsWith('src/testing/');
+}
+
+/**
  * Whether the linted file is production source: under `src/` of its package or of a `packages/<name>/` folder, outside `src/__tests__/`, and not a test beside its source.
  * @param {Context} context
  * @returns {boolean}
