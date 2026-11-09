@@ -988,6 +988,20 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return undefined;
   };
 
+  /**
+   * Ends attempt `lease`, which the run stopped, once its command `ended`. A whole workflow answers what its steps spent
+   * before it stopped: the report the run refuses still counts that against the budgets around the step, and leaves the
+   * place as abandoning it does. Any other attempt is abandoned.
+   */
+  const endStopped = async (lease: StagedLease, ended: StagedResult): Promise<WorkflowEnvelope | undefined> => {
+    const spent = lease.workflow && ended.kind === 'ran' ? await commandReport(config, lock, driver, lease, ended.result, await maskedValues()) : undefined;
+
+    if (spent?.tokens !== undefined) return report(spent, lease);
+    await abandon(lease.attempt);
+
+    return undefined;
+  };
+
   const unstaged = (lease: StagedLease, failure: WorkflowFailure): ReportBody => ({ attempt: lease.attempt, revision: lease.revision, driver, ...failureReport(failure) });
   // Why a confined step this driver was leased has no tool here that resolves its model. It hands that lease back and
   // takes no other, so it does not lease the step again in this process.
@@ -1093,6 +1107,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const body = await exit;
           const failed = body && await report(body, lease);
           prompts.delete(attempt);
+
+          if (failed) return failed;
+        }
+
+        // A whole workflow the run stopped is waited on too, for what its steps spent; any other command is left to stop below.
+        for (const [attempt, { lease, command }] of dying) {
+          if (!lease.workflow) continue;
+          const failed = await endStopped(lease, await command.exit);
+          dying.delete(attempt);
 
           if (failed) return failed;
         }
@@ -1351,7 +1374,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const exited = await Promise.race([
         ...[...inFlight.values()].map(({ lease, command }) => command.exit.then((result) => ({ kind: 'command' as const, attempt: lease.attempt, lease, result }))),
         // cancel() already stopped each one, with why: another stop here would turn a fleet cancel into a driver stop.
-        ...[...dying].map(([attempt, { command }]) => command.exit.then(() => ({ kind: 'stopped' as const, attempt }))),
+        ...[...dying].map(([attempt, { command }]) => command.exit.then((result) => ({ kind: 'stopped' as const, attempt, result }))),
         ...[...prompts].map(([attempt, { exit }]) => exit.then((body) => ({ kind: 'prompt' as const, attempt, body }))),
         ...(question ? [question.exit] : []),
         new Promise<undefined>((resolve) => {
@@ -1410,7 +1433,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         if (!isParallel) handle([]);
 
-        if (stopping) await abandon(stopping.lease.attempt);
+        const failed = stopping && await endStopped(stopping.lease, exited.result);
+
+        if (failed) return failed;
         continue;
       }
 

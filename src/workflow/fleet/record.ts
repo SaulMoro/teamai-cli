@@ -20,6 +20,7 @@ import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
 import { TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
+import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
@@ -202,8 +203,11 @@ const AnsweredSchema = AskingSchema.extend({ state: z.literal('answered'), answe
 /** A claim the owner asked its member to stop, which the member answers with `cancelled` once its step stopped. */
 const CancellingSchema = ClaimedSchema.extend({ state: z.literal('cancelling'), cancelAt: z.string() });
 
-/** A cancelled claim: the member stopped its step and pushed its work up to `pushed`, which a retry goes on from. */
-const CancelledSchema = CancellingSchema.extend({ state: z.literal('cancelled'), cancelledAt: z.string() });
+/**
+ * A cancelled claim: the member stopped its step and pushed its work up to `pushed`, which a retry goes on from, and
+ * `tokens`, what its step spent before it stopped, which the budgets around the step count.
+ */
+const CancelledSchema = CancellingSchema.extend({ state: z.literal('cancelled'), cancelledAt: z.string(), tokens: TokenUsageSchema.optional() });
 
 export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, AskingSchema, AnsweredSchema, FinishedSchema, ExpiredSchema, WithdrawnSchema, CancellingSchema, CancelledSchema]);
 
@@ -518,8 +522,8 @@ export async function answerQuestion(config: LocalConfig, asking: Asking, answer
 }
 
 /** Answers the cancel of claim `cancelling`: its member stopped the step, whose work up to `pushed` is on the attempt's ref. */
-export async function answerCancel(config: LocalConfig, cancelling: Cancelling, pushed: string): Promise<Written<Extract<FleetRecord, { state: 'cancelled' }>>> {
-  const cancelled: Extract<FleetRecord, { state: 'cancelled' }> = { ...cancelling, write: randomUUID(), state: 'cancelled', cancelledAt: new Date().toISOString(), pushed };
+export async function answerCancel(config: LocalConfig, cancelling: Cancelling, pushed: string, tokens?: TokenUsage): Promise<Written<Extract<FleetRecord, { state: 'cancelled' }>>> {
+  const cancelled: Extract<FleetRecord, { state: 'cancelled' }> = { ...cancelling, write: randomUUID(), state: 'cancelled', cancelledAt: new Date().toISOString(), pushed, ...(tokens && { tokens }) };
   const written = await writeRecord(config, cancelled, { replaces: cancelling.write, message: `[teamai] Cancelled attempt ${cancelling.attempt} of run ${cancelling.run}` });
 
   return written.ok ? { ok: true, value: cancelled } : written;

@@ -74,11 +74,12 @@ export function isUnansweredFailure(failure: RuntimeFailure): boolean {
 export type Lost = { kind: 'lost'; failure: RuntimeFailure };
 
 /**
- * How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. A `failed` with
- * `isStepOutcome` is how the step itself ended, under its own code, such as a fleet member gone, rather than a runtime
- * that could not run it.
+ * How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. A `cancelled`
+ * carries what the exec answered before it stopped, if anything, such as what a whole workflow's steps spent. A `failed`
+ * with `isStepOutcome` is how the step itself ended, under its own code, such as a fleet member gone, rather than a
+ * runtime that could not run it.
  */
-export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure; isStepOutcome?: true } | Lost;
+export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled'; stdout?: string } | { kind: 'failed'; failure: RuntimeFailure; isStepOutcome?: true } | Lost;
 
 /**
  * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage, whether it continued the
