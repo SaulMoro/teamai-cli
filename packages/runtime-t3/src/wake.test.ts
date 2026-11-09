@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WAKE_COMMAND } from '@teamai/runtime-protocol';
 import { CLAUDE, CODEX, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
 import { start, t3, useT3Runtime } from './testing/suite.js';
-import { END_OF_WAKE, repositoryKey } from './wake.js';
+import { END_OF_WAKE } from './wake.js';
 
 // A wake launches a fleet member's thread on a machine linked to this T3 Code that has the run's repository as a
 // project, and forgets it.
@@ -220,18 +220,6 @@ describe('teamai-runtime-t3', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 2_000));
       expect(runtime.lines.filter((line) => line['op'] === 'op-000000e8').map((line) => line['event'])).toEqual(['accepted', 'cancelled']);
-    });
-  });
-
-  describe('the repository a remote names', () => {
-    it.each([
-      ['https://github.com/acme/acme-app.git', 'github.com/acme/acme-app'],
-      ['git@github.com:Acme/Acme-App.git', 'github.com/acme/acme-app'],
-      ['ssh://git@gitlab.example.com:2222/team/sub/app.git', 'gitlab.example.com/team/sub/app'],
-      ['https://github.com/acme/acme-app/', 'github.com/acme/acme-app'],
-      ['not a url', undefined],
-    ])('%s is %s', (url, key) => {
-      expect(repositoryKey(url)).toBe(key);
     });
   });
 });

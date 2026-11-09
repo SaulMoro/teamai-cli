@@ -3,6 +3,7 @@ import { threadLink } from './conversation.js';
 import type { Serving, Session } from './runtime.js';
 import { DRIVER_NAMES } from './sessions.js';
 import { T3Error, type EnvironmentLink, type Launch, type Project, type StepMode, type T3 } from './t3.js';
+import { repositoryKey } from '@teamai/runtime-kit/repository';
 
 // ─── Waking a fleet member ───
 //
@@ -52,33 +53,6 @@ function memberMode(mode: StepMode | undefined): MemberMode {
 
 function asksFirst(label: string): string {
   return `This thread runs in ${label} mode, so it asks before it runs teamai's command below: approve that command, or allow it on this machine with the permission rule ${RESUME_ALLOW_RULE} in this checkout's .claude/settings.local.json.`;
-}
-
-/**
- * The repository a git remote URL names, as T3 keys a project's repository: `host/path`, lowercased, with no scheme,
- * user, port or `.git`. Undefined for a URL it cannot read.
- */
-export function repositoryKey(url: string): string | undefined {
-  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(url);
-  let host: string;
-  let repoPath: string;
-
-  if (scp?.[1] !== undefined && scp[2] !== undefined) {
-    host = scp[1];
-    repoPath = scp[2];
-  } else {
-    try {
-      const parsed = new URL(url);
-      host = parsed.hostname;
-      repoPath = parsed.pathname;
-    } catch {
-      return undefined;
-    }
-  }
-
-  const trimmed = repoPath.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
-
-  return host !== '' && trimmed !== '' ? `${host}/${trimmed}`.toLowerCase() : undefined;
 }
 
 /** Whether `project` is a checkout of the repository `key`. */

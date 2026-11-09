@@ -5,6 +5,7 @@ import type { Daemon } from './daemon/connect.js';
 import type { Host } from './daemon/host.js';
 import type { ProcessState } from './process-state.js';
 import type { PaseoTool } from './providers.js';
+import { repositoryKey } from '@teamai/runtime-kit/repository';
 
 // ─── Waking a fleet member ───────────────────────────────
 //
@@ -33,33 +34,6 @@ const approveFirst = (pool: string): string => `teamai woke this agent to take o
 
 /** What the person adds so a wake finds a machine. */
 const NEXT_STEP = 'Add the machine with `paseo host add <host:port>`, and open a checkout of the repository in Paseo there.';
-
-/**
- * The repository a git remote URL names: `host/path`, lowercased, with no scheme, user, port or `.git`. Undefined for a
- * URL it cannot read.
- */
-export function repositoryKey(url: string): string | undefined {
-  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(url);
-  let host: string;
-  let repoPath: string;
-
-  if (scp?.[1] !== undefined && scp[2] !== undefined) {
-    host = scp[1];
-    repoPath = scp[2];
-  } else {
-    try {
-      const parsed = new URL(url);
-      host = parsed.hostname;
-      repoPath = parsed.pathname;
-    } catch {
-      return undefined;
-    }
-  }
-
-  const trimmed = repoPath.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
-
-  return host !== '' && trimmed !== '' ? `${host}/${trimmed}`.toLowerCase() : undefined;
-}
 
 /** How a wake ended: its agent started, why not, or cancelled by teamai before the start went out. */
 type Ended = { kind: 'woken'; message: Extract<RuntimeMessage, { event: 'woken' }> } | { kind: 'failed'; failure: RuntimeFailure } | { kind: 'cancelled' };

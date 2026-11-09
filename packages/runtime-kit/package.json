@@ -9,6 +9,7 @@
     "./ledger": "./src/ledger.ts",
     "./outer": "./src/outer.ts",
     "./places": "./src/places.ts",
+    "./repository": "./src/repository.ts",
     "./serve": "./src/serve.ts"
   }
 }
