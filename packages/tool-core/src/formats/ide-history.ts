@@ -22,6 +22,7 @@
  */
 
 import { assertSafeSessionFileId } from '../sessions/ids.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -521,13 +522,13 @@ function readIndex(historyDir: string): IdeIndex {
   if (!fs.existsSync(idxPath)) return { conversations: [] };
 
   try {
-    return IdeIndexSchema.parse(JSON.parse(fs.readFileSync(idxPath, 'utf-8')));
+    return IdeIndexSchema.parse(JSON.parse(readRegularFileSync(idxPath, 'utf-8')));
   } catch {
     // When index.json is corrupt, try to restore from the backup
     const bakPath = path.join(historyDir, '.index_bak.json');
 
     try {
-      return IdeIndexSchema.parse(JSON.parse(fs.readFileSync(bakPath, 'utf-8')));
+      return IdeIndexSchema.parse(JSON.parse(readRegularFileSync(bakPath, 'utf-8')));
     } catch {
       return { conversations: [] };
     }
@@ -1061,7 +1062,7 @@ function parseIdeMessageFile(file: string): IdeMessageParsed | null {
   let parsedRaw;
 
   try {
-    parsedRaw = IdeMessageFileReadSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf-8')));
+    parsedRaw = IdeMessageFileReadSchema.safeParse(JSON.parse(readRegularFileSync(file, 'utf-8')));
   } catch {
     return null;
   }
@@ -1125,7 +1126,7 @@ export function readIdeConversation(convDir: string, limit?: number): IdeMessage
   let order: string[] = [];
 
   try {
-    const idx = IdeMessageOrderSchema.parse(JSON.parse(fs.readFileSync(path.join(convDir, 'index.json'), 'utf-8')));
+    const idx = IdeMessageOrderSchema.parse(JSON.parse(readRegularFileSync(path.join(convDir, 'index.json'), 'utf-8')));
 
     if (idx.messages !== undefined) {
       order = idx.messages.map((m) => String(entryId(m) ?? '')).filter(Boolean);
