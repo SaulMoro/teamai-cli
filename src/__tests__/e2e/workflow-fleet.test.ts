@@ -639,10 +639,12 @@ describe('the fleet', () => {
     await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
 
+    // Bob's Claude reports 4 input and 2 output tokens: 6, past the run's 5, which the offer carries, so bob's nested
+    // run stops there and returns what it spent.
     const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
-    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 0 } } });
+    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 1 } } });
+    expect(records(run)[0]?.result).toMatchObject({ failure: { code: 'budget_exceeded' }, tokens: { input: 4, output: 2 } });
     const done = await started;
-    // Bob's Claude reports 4 input and 2 output tokens: 6, past the run's 5.
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'budget_exceeded' } } } });
   }, 240_000);
 
