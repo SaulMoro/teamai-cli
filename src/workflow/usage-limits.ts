@@ -111,8 +111,16 @@ function memberZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
+/**
+ * Whose account a limit is on: this machine's (`here`), which every runtime of the driver launches the tool with, or the
+ * fleet's, whose members sign in with their own.
+ */
+export type LimitedOn = 'here' | 'fleet';
+
 /** One tool's limit: since when it holds, when the tool said it resets, when the driver tries it again, and what a person answered. */
 interface Limit {
+  tool: string;
+  on: LimitedOn;
   since: number;
   /** The last time a step on the tool stopped on it. */
   hitAt: number;
@@ -131,14 +139,14 @@ export type WhenIdle =
 
 /** The usage limits one drive of a run has met, by the tool or instance a step launches. */
 export interface UsageLimitBook {
-  /** A step on `tool` stopped on its usage limit, saying `message`: the tool is held until the limit resets. */
-  hit(input: { tool: string; message: string; now: number }): void;
-  /** A step on `tool` launched at `startedAt` ended without its usage limit: the limit is over, if it launched after the last hit. */
-  ran(tool: string, startedAt: number): void;
-  /** The tools held at `now`, each with why. */
+  /** A step on `tool`, here or on the fleet, stopped on its usage limit, saying `message`: the tool is held there until the limit resets. */
+  hit(input: { tool: string; message: string; now: number; on?: LimitedOn }): void;
+  /** A step on `tool` launched at `startedAt` ended without its usage limit: the limit is over there, if it launched after the last hit. */
+  ran(tool: string, startedAt: number, on?: LimitedOn): void;
+  /** The tools held at `now` on this machine's runtimes, each with why: a fleet member's limit holds none of them. */
   held(now: number): Record<string, string>;
-  /** The tools held at `now` whose wait is within the cap: the ones a fleet member is not offered yet. */
-  heldWithinCap(now: number): Record<string, string>;
+  /** The tools held at `now` on the fleet, by a limit a member met or one met here, while its wait is within the cap: past it, a member is offered the step. */
+  heldOnFleet(now: number): Record<string, string>;
   /**
    * What to do once nothing runs and the limits of `tools` hold the steps left: wait, ask a person, or move on.
    * Undefined when no limit of this drive holds any of them.
@@ -175,36 +183,43 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
 
   const isPastCap = (limit: Limit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
 
-  const heldBy = (now: number, keep: (limit: Limit) => boolean): Record<string, string> => Object.fromEntries(
-    [...limits].flatMap(([tool, limit]) => (limit.tryAt > now && keep(limit) ? [[tool, reasonOf(tool, limit, now)] as const] : [])),
-  );
+  // A tool held both here and on the fleet is named by the limit it waits for longest.
+  const heldBy = (now: number, keep: (limit: Limit) => boolean): Record<string, string> => {
+    const longest = new Map<string, Limit>();
+
+    for (const limit of limits.values()) {
+      const other = longest.get(limit.tool);
+
+      if (limit.tryAt > now && keep(limit) && (other === undefined || limit.tryAt > other.tryAt)) longest.set(limit.tool, limit);
+    }
+
+    return Object.fromEntries([...longest].map(([tool, limit]) => [tool, reasonOf(tool, limit, now)]));
+  };
+
+  const keyOf = (tool: string, on: LimitedOn): string => `${on} ${tool}`;
 
   return {
-    hit({ tool, message, now }) {
-      const earlier = limits.get(tool);
+    hit({ tool, message, now, on = 'here' }) {
+      const earlier = limits.get(keyOf(tool, on));
       const resetsAt = resetOf(message, { now, zone });
       const tries = resetsAt === undefined ? (earlier?.tries ?? -1) + 1 : 0;
       const tryAt = resetsAt ?? now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
 
-      limits.set(tool, { since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: earlier?.isWaitChosen ?? false, ...(resetsAt !== undefined && { resetsAt }) });
+      limits.set(keyOf(tool, on), { tool, on, since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: earlier?.isWaitChosen ?? false, ...(resetsAt !== undefined && { resetsAt }) });
     },
-    ran(tool, startedAt) {
-      const limit = limits.get(tool);
+    ran(tool, startedAt, on = 'here') {
+      const limit = limits.get(keyOf(tool, on));
 
-      if (limit && startedAt > limit.hitAt) limits.delete(tool);
+      if (limit && startedAt > limit.hitAt) limits.delete(keyOf(tool, on));
     },
     held(now) {
-      return heldBy(now, () => true);
+      return heldBy(now, (limit) => limit.on === 'here');
     },
-    heldWithinCap(now) {
+    heldOnFleet(now) {
       return heldBy(now, (limit) => !isPastCap(limit, now));
     },
     whenIdle(now, tools, { attended = false } = {}) {
-      const holding = tools.flatMap((tool) => {
-        const limit = limits.get(tool);
-
-        return limit ? [{ tool, limit }] : [];
-      });
+      const holding = [...limits.values()].flatMap((limit) => (tools.includes(limit.tool) ? [{ tool: limit.tool, limit }] : []));
 
       const [first] = holding.sort((one, other) => one.limit.tryAt - other.limit.tryAt);
 
@@ -225,9 +240,7 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
       return { kind: 'wait', tool: first.tool, until: first.limit.tryAt, reason: reasonOf(first.tool, first.limit, now) };
     },
     choseWait(tool) {
-      const limit = limits.get(tool);
-
-      if (limit) limit.isWaitChosen = true;
+      for (const limit of limits.values()) if (limit.tool === tool) limit.isWaitChosen = true;
     },
   };
 }

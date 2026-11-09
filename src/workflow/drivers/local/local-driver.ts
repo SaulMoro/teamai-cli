@@ -961,8 +961,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // Nobody answers here, so the driver offers the run to a person; once it could not, the steps only a person can take fail.
   // A run goes to a person only when no runtime of the driver asks one.
   let handoff: PersonHandoff | undefined = slots.some((slot) => slot.can.hitl === true) ? undefined : { kind: 'offers' };
-  // The usage limits this drive met. Every runtime of the driver launches a tool with the member's sign-in, so a limit
-  // holds the tool on each of them; a fleet member signs in with its own, and is offered the step once the wait passes its cap.
+  // The usage limits this drive met. Every runtime of the driver launches a tool with the member's sign-in, so a limit met
+  // here holds the tool on each of them, and on the fleet until the wait passes its cap. A fleet member signs in with its
+  // own: a limit it met holds the tool on the fleet only.
   const limits = UsageLimits.open();
   // The reset the driver last said it waits for, so it says each once.
   let waitSaid: string | undefined;
@@ -979,8 +980,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       ? undefined
       : lease.tool ?? toolForOn(slotOf.get(lease.attempt)?.can.default_tool)({ agent: lease.agent, tool: lease.tool }));
 
-  /** The tools held on `slot` now: a fleet member signs in with its own account, so it is held only within the cap. */
-  const limitedOn = (slot: RuntimeSlot | undefined): Record<string, string> => (slot?.use === 'fleet' ? limits.heldWithinCap(Date.now()) : limits.held(Date.now()));
+  /** The tools held on `slot` now. */
+  const limitedOn = (slot: RuntimeSlot | undefined): Record<string, string> => (slot?.use === 'fleet' ? limits.heldOnFleet(Date.now()) : limits.held(Date.now()));
 
   const releasedReport = (lease: StagedLease): ReportBody => ({ attempt: lease.attempt, revision: lease.revision, driver, outcome: 'released' });
 
@@ -992,19 +993,22 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const afterUsage = (body: ReportBody, { lease, startedAt }: { lease: StagedLease; startedAt: number }): ReportBody => {
     // An answer step's call says which tool it ran on.
     const tool = lease.answer === true ? body.tool : launchedTool(lease);
+    const on = slotOf.get(lease.attempt)?.use === 'fleet' ? 'fleet' : 'here';
 
     if (tool === undefined || body.outcome === 'released') return body;
 
     if (body.failure?.code !== 'usage_limited') {
-      limits.ran(tool, startedAt);
+      limits.ran(tool, startedAt, on);
 
       return body;
     }
 
     // The step does not fail, so the retry a failed step's message ends with does not apply.
     const said = body.failure.message.replace(` Then run: ${retryCommand({ run: runId, step: lease.step })}`, '').replace(/\.?\s*$/u, '');
-    limits.hit({ tool, message: said, now: Date.now() });
-    log.warn(`Step "${lease.step}" stopped: ${said}. teamai launches no more steps on ${tool} until its limit resets, then runs the step again.`);
+    limits.hit({ tool, message: said, now: Date.now(), on });
+    log.warn(on === 'fleet'
+      ? `Step "${lease.step}" stopped on a fleet member: ${said}. teamai offers no more steps on ${tool} to the fleet until its limit resets; a runtime here may run the step meanwhile.`
+      : `Step "${lease.step}" stopped: ${said}. teamai launches no more steps on ${tool} until its limit resets, then runs the step again.`);
 
     return { ...releasedReport(lease), launched: true, ...(body.tokens && { tokens: body.tokens }) };
   };

@@ -60,6 +60,22 @@ describe('usage limits of one drive', () => {
     expect(limits.whenIdle(now + 6 * hour, ['claude'])).toEqual({ kind: 'past_cap', tool: 'claude', reason: 'claude hit its usage limit at 13:30 (Europe/Madrid) and gave no reset time, and it held for the 6 hours an unattended run waits for it' });
   });
 
+  it('holds a tool a fleet member met the limit of on the fleet only, where a limit met here holds it on the fleet within the cap', () => {
+    const limits = UsageLimits.open({ capMs: 6 * hour, zone });
+    limits.hit({ tool: 'claude', message: 'claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)', now, on: 'fleet' });
+
+    // The member signed in with its own account: this machine's claude is not held.
+    expect(limits.held(now)).toEqual({});
+    expect(limits.heldOnFleet(now)).toEqual({ claude: 'claude hit its usage limit, which resets at 15:00 (Europe/Madrid)' });
+    expect(limits.whenIdle(now, ['claude'])).toMatchObject({ kind: 'wait', tool: 'claude', until: Date.parse('2026-11-08T14:00:00Z') });
+    limits.ran('claude', now + 1000, 'fleet');
+    expect(limits.heldOnFleet(now + 2000)).toEqual({});
+
+    limits.hit({ tool: 'codex', message: 'You\'ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), or try again at 3:04 PM.', now });
+    expect(limits.held(now)).toEqual({ codex: 'codex hit its usage limit, which resets at 15:04 (Europe/Madrid)' });
+    expect(limits.heldOnFleet(now)).toEqual({ codex: 'codex hit its usage limit, which resets at 15:04 (Europe/Madrid)' });
+  });
+
   it('keeps a limit when a step that launched before it hit ends well', () => {
     const limits = UsageLimits.open({ capMs: hour, zone });
     limits.hit({ tool: 'claude', message: 'You\'ve hit your limit · resets 3pm (Europe/Madrid)', now });
