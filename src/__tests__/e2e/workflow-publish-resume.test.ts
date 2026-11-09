@@ -313,7 +313,7 @@ describe('workflow publish and resume across members', () => {
     expect(stopped.signal, said(stopped)).toBe('SIGINT');
     fs.rmSync(hold);
     expect(stopped.stdout, said(stopped)).toBe('');
-    const printed = /Run (r[0-9a-f]{16}) started\. .*teamai workflow resume \1$/m.exec(stopped.stderr);
+    const printed = /Run (r[0-9a-f]{16}) started\. .*teamai workflow resume \1, or hand it to another machine with: teamai workflow publish \1$/m.exec(stopped.stderr);
     expect(printed, said(stopped)).not.toBeNull();
     shipRun = printed?.[1] ?? '';
     expect(originGit(teamOrigin, 'ls-tree', '--name-only', 'teamai-reports', 'workflows/runs/').split('\n')).toEqual([`workflows/runs/${shipRun}.json`]);
