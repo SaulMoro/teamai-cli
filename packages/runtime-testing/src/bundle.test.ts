@@ -56,7 +56,7 @@ describe('bundleRuntime', () => {
 });
 
 describe('bundleOnce', () => {
-  it('bundles an entry once per process, and gives every later call the same file', async () => {
+  it('bundles an entry once, and gives every later call the same file', async () => {
     const entry = path.join(dir, 'fake.ts');
     fs.writeFileSync(entry, "export const said: string = 'first';\n");
 

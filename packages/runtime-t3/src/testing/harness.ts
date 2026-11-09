@@ -15,13 +15,12 @@ import type { StepMode } from '../t3.js';
 //
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** The fake T3 app, bundled by `bundleOnce` with the packages it imports inside, as teamai's own session code names a project. */
 const FAKE_T3 = path.join(HERE, 'fake-t3.mjs');
+
 const ENTRY = path.join(HERE, '..', 'main.ts');
 
-/** fake-t3.mjs built once per process with the packages it imports inside, as teamai's own session code names a project. */
-function builtFakeT3(): Promise<string> {
-  return bundleOnce(FAKE_T3);
-}
 
 /** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */
 export async function bundleRuntime(dir: string): Promise<string> {
@@ -274,7 +273,7 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
     async start() {
       fs.rmSync(runtimeFile, { force: true });
       // The command line names the state, so a leak check of the test's directory sees the server.
-      server = spawn(process.execPath, [await builtFakeT3(), state], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });
+      server = spawn(process.execPath, [await bundleOnce(FAKE_T3), state], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });
       const deadline = Date.now() + 10_000;
 
       while (!fs.existsSync(runtimeFile)) {

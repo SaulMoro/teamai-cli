@@ -30,12 +30,13 @@ export async function bundleRuntime({ entry, outfile, alias, plugins }: { entry:
   return outfile;
 }
 
-/** The bundles this process built with `bundleOnce`, by entry. */
+/** The bundles this module instance built with `bundleOnce`, by entry. */
 const bundledOnce = new Map<string, Promise<string>>();
 
 /**
- * Bundles `entry` as `bundleRuntime` does, once per process, and returns the file's path: a fake app that both a
- * runtime package's tests and the scenario suite start is built once for every test of the process. The file sits in a
+ * Bundles `entry` as `bundleRuntime` does, once per module instance, and returns the file's path: a fake app that
+ * both a runtime package's tests and the scenario suite start is built once for every test of a file, since Vitest
+ * loads this module afresh for each test file it isolates. The file sits in a
  * directory of its own under the temporary directory, named after the entry (`fake-t3.mjs` for `fake-t3.mjs`), which
  * is removed when the process exits. A build that failed is not kept, so the next call builds again.
  */
