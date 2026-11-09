@@ -71,6 +71,16 @@ describe('an exec that ends', () => {
   });
 });
 
+describe('a prompt that ends', () => {
+  it('says the limit the runtime stopped its tool at, with what else it finished with', () => {
+    const { written, ledger } = ledgerWritten();
+
+    ledger.end({ ...FINISHED, usage: { input: 10, output: 5 }, resumed: true, stopped: 'timeout' });
+
+    expect(written).toEqual([{ op: OP, event: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { verdict: 'approve' } }, usage: { input: 10, output: 5 }, resumed: true, stopped: 'timeout' }]);
+  });
+});
+
 describe('an operation this process runs', () => {
   it('ends once, with the first end any of its sources gives, and is no longer running then', async () => {
     const { written, ledger } = ledgerWritten();

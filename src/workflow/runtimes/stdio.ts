@@ -7,6 +7,7 @@ import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { Accepted, ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from '@teamai/runtime-protocol/step-runtime';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
+import type { DriverCan } from '../requirements.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
@@ -135,12 +136,12 @@ function offered(can: Can, answersConfined: boolean): Can {
  * `notice` answers nothing: it is shown as a warning, with `secrets`, the values of the credentials the runtime gets,
  * masked.
  */
-export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }: { name: string; command: string; args?: string[]; cwd?: string; secrets?: Record<string, string> }): StepRuntime {
+export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }: { name: string; command: string; args?: string[]; cwd?: string; secrets?: Record<string, string> }): StepRuntime<DriverCan> {
   let child: ChildProcess | undefined;
   let dead: RuntimeFailure | undefined;
   let stderrTail = '';
   let exited: Promise<void> = Promise.resolve();
-  let onInit: ((reply: Initialized) => void) | undefined;
+  let onInit: ((reply: Initialized<DriverCan>) => void) | undefined;
   const ops = new Map<string, OpWaiter>();
   const handles = new Map<string, HandleWaiter[]>();
   // The deadline each place was opened with, by handle, which bounds the end of what runs there and its collect.
@@ -380,8 +381,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       stderr.setEncoding('utf8').on('data', (data: string) => { stderrTail = `${stderrTail}${data}`.slice(-4000); });
       readline.createInterface({ input: stdout }).on('line', receive).on('error', (error) => die(`its output could not be read (${error.message})`));
 
-      return new Promise<Initialized>((resolve) => {
-        const settle = (reply: Initialized): void => {
+      return new Promise<Initialized<DriverCan>>((resolve) => {
+        const settle = (reply: Initialized<DriverCan>): void => {
           clearTimeout(timer);
           offersWake = reply.ok && reply.wakes === true && mode !== 'recover';
           resolve(reply);

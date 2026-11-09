@@ -75,9 +75,9 @@ export const AttemptRuntimeRecordSchema = z.object({
    */
   prompt: z.object({ op: OpIdSchema, continues: z.object({ handle: z.string(), op: OpIdSchema }).optional() }).optional(),
   /**
-   * Set once the attempt reported, on a runtime that launches agents its own way: the place stays open for the
-   * conversation its prompt launched, whose session is `conversation`, since a step that has not settled continues it
-   * in `workspace`, the one the attempt's step shares with it. The local driver closes it as soon as none does
+   * Set once the attempt reported, on a runtime that keeps conversations (`HeldPlace.holdsOn`): the place stays open
+   * for the conversation its prompt launched, whose session is `conversation`, since a step that has not settled
+   * continues it in `workspace`, the one the attempt's step shares with it. The local driver closes it as soon as none does
    * (`continuedConversations`), at the run's end, on a cancel or a release. A closed record holds none (`closedRecord`).
    */
   heldFor: z.object({ conversation: z.object({ tool: z.string(), id: z.string() }), workspace: z.string() }).optional(),

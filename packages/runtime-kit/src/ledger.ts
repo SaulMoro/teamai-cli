@@ -68,6 +68,7 @@ function endLine(ended: OpEnd): RuntimeMessage {
       return {
         op, event: 'finished', session: ended.session, result: ended.result,
         ...(ended.usage && { usage: ended.usage }), ...(ended.confined && { confined: ended.confined }), ...(ended.resumed !== undefined && { resumed: ended.resumed }),
+        ...(ended.stopped && { stopped: ended.stopped }),
       };
     case 'cancelled':
       return { op, event: 'cancelled' };
