@@ -144,6 +144,23 @@ describe('teamai-runtime-t3', () => {
         expect(noticesOf(runtime).filter((line) => String(line['message']).startsWith('Added')).map((line) => line['op'])).toEqual(['op-00000041', 'op-00000042']);
       });
 
+      // teamai accepts a prompt before the runtime asks T3 anything slow, so a cancel then finds the op it ends.
+      it('ends a prompt cancelled while T3 lists the instances it added, launching nothing', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const { runtime } = await initOn();
+        expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
+        t3.config({ providersMs: 3_000 });
+
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-00000051', { tool: 'acme-claude' }));
+        await runtime.next((line) => line['op'] === 'op-00000051' && line['event'] === 'accepted', 1_000);
+        runtime.send({ type: 'cancel', op: 'op-00000051' });
+
+        expect(await runtime.next((line) => line['op'] === 'op-00000051' && line['event'] !== 'accepted' && !isNotice(line), 2_000)).toEqual({ op: 'op-00000051', event: 'cancelled' });
+        await new Promise((resolve) => setTimeout(resolve, 3_500));
+        expect(runtime.lines.filter((line) => line['op'] === 'op-00000051' && !isNotice(line)).map((line) => line['event'])).toEqual(['accepted', 'cancelled']);
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+      });
+
       it('does not offer it, naming what to do, when T3 already has a provider instance of that name that runs another command', async () => {
         signIn(t3, undefined, undefined, FULL);
         const taken = { ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': { driver: 'claudeAgent', config: { binaryPath: '/opt/old/claude-old' } } } };
