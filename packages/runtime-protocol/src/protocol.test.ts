@@ -67,3 +67,37 @@ describe('a runtime that wakes fleet members', () => {
     expect(RuntimeMessageSchema.safeParse({ op: OP, event: 'woken' }).success).toBe(false);
   });
 });
+
+describe('a prompt the host slot answers, and the limits a runtime stops its tool at', () => {
+  const lease = { step: 'fix', tool: 'claude', prompt: 'Fix it.', result: '/w/result.json', permissions: 'approval-required', interactive: false } as const;
+  const OP = 'op-0123abcd';
+
+  it('reads an answer lease', () => {
+    expect(PromptLeaseSchema.parse({ ...lease, answer: true })).toEqual({ ...lease, answer: true });
+  });
+
+  it('reads the limits as teamai sends them', () => {
+    const limits = { budget: { tokens: 20_000 }, timeoutMs: 600_000, idleMs: 120_000 };
+
+    expect(PromptLeaseSchema.parse({ ...lease, limits })).toEqual({ ...lease, limits });
+  });
+
+  it('refuses a limit it does not know, naming it', () => {
+    const parsed = PromptLeaseSchema.safeParse({ ...lease, limits: { timeoutMs: 600_000, turns: 3 } });
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues).toEqual([expect.objectContaining({ code: 'unrecognized_keys', keys: ['turns'], path: ['limits'] })]);
+  });
+
+  it('reads a finished prompt with the limit its tool was stopped at, live and on reattach', () => {
+    const finished = { session: { tool: 'claude', id: 'session-1' }, result: { output: {} }, stopped: 'budget' };
+
+    expect(RuntimeMessageSchema.safeParse({ op: OP, event: 'finished', ...finished }).success).toBe(true);
+    expect(RuntimeMessageSchema.safeParse({ event: 'alive', handle: 'toy-1', ops: [{ op: OP, state: 'finished', ...finished }] }).success).toBe(true);
+    expect(RuntimeMessageSchema.safeParse({ op: OP, event: 'finished', ...finished, stopped: 'turns' }).success).toBe(false);
+  });
+
+  it('reads an init reply that says it runs tools in the attempt\'s tool home and keeps conversations', () => {
+    expect(RuntimeMessageSchema.safeParse({ type: 'init', ok: true, can: {}, prompt: true, toolHome: true, conversations: true }).success).toBe(true);
+  });
+});

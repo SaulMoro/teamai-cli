@@ -60,8 +60,11 @@ export function eachLine(input: NodeJS.ReadableStream, onLine: (text: string) =>
 /** What a line that is no protocol request may still name: the request it fails, which then gets its own failure. */
 const NamedSchema = z.object({ type: z.string().optional(), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional() });
 
-/** Runs `request` through its type's handler; `noWake` answers a `wake` the runtime has no handler for. */
-function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest, noWake: (request: Extract<RuntimeRequest, { type: 'wake' }>) => void): Promise<void> {
+/**
+ * Runs `request` through its type's handler. `refuse` answers what no handler is given: a `wake` the runtime has no
+ * handler for, and an answer step, which teamai answers on its host slot and never sends a runtime.
+ */
+function dispatch({ name, handlers, request, refuse }: { name: string; handlers: RuntimeHandlers; request: RuntimeRequest; refuse: (op: OpId, message: string) => void }): Promise<void> {
   switch (request.type) {
     case 'init':
       return handlers.init(request);
@@ -70,7 +73,10 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest, noWake: (r
     case 'exec':
       return handlers.exec(request);
     case 'prompt':
-      return handlers.prompt(request);
+      if (request.lease.answer !== true) return handlers.prompt(request);
+      refuse(request.op, `Runtime ${name} is never sent an answer step, so it cannot carry out prompt of ${request.op}: teamai answers step ${request.lease.step} on its host slot.`);
+
+      return Promise.resolve();
     case 'cancel':
       return handlers.cancel(request);
     case 'collect':
@@ -81,7 +87,7 @@ function dispatch(handlers: RuntimeHandlers, request: RuntimeRequest, noWake: (r
       return handlers.close(request);
     case 'wake':
       if (handlers.wake) return handlers.wake(request);
-      noWake(request);
+      refuse(request.op, `Runtime ${name} wakes no fleet member, so it cannot carry out wake of ${request.op}.`);
 
       return Promise.resolve();
     default: {
@@ -191,7 +197,7 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
 
     void (async () => {
       try {
-        await dispatch(handlers, request, (wake) => write({ op: wake.op, event: 'failed', failure: { code: 'runtime_protocol', message: `Runtime ${name} wakes no fleet member, so it cannot carry out wake of ${wake.op}.` } }));
+        await dispatch({ name, handlers, request, refuse: (op, message) => write({ op, event: 'failed', failure: { code: 'runtime_protocol', message } }) });
       } catch (error) {
         if ('op' in request && ledger.endsOf(request.op) !== endsBefore) {
           debug(`Runtime ${name} ended ${request.op} and then failed on its ${request.type}, which ends it no further: ${error instanceof Error ? error.message : String(error)}`);

@@ -59,12 +59,15 @@ export type Lost = { kind: 'lost'; failure: RuntimeFailure };
  */
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled'; stdout?: string } | { kind: 'failed'; failure: RuntimeFailure; isStepOutcome?: true } | Lost;
 
+/** The limit of a prompt lease's `limits` at which the runtime stopped the tool. */
+export type PromptStopped = NonNullable<Extract<OpState, { state: 'finished' }>['stopped']>;
+
 /**
  * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage, whether it continued the
  * session the lease asked to resume and, for a confined prompt, what the runtime kept; cancelled; or failed.
  */
 export type PromptEnd =
-  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; confined?: ConfinedKept; resumed?: true }
+  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; confined?: ConfinedKept; resumed?: true; stopped?: PromptStopped }
   | { kind: 'cancelled' }
   | { kind: 'failed'; failure: RuntimeFailure }
   | Lost;
@@ -108,7 +111,11 @@ export interface ExecEvents {
 /** `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step. */
 /** `ownLogins`: the tools whose login the runtime's provider keeps: teamai copies none of their logins, nor sends the sign-ins it found for them. */
 /** `wakes`: it launches a fleet member on another machine it reaches, through `StepRuntime.wake`. */
-export type Initialized<TCan = Can> = { ok: true; can: TCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[]; wakes?: true } | { ok: false; failure: RuntimeFailure };
+/** `runsOnToolHome`: it runs each tool in the attempt's tool home, which teamai seeds, copies a login into and reads sessions in. */
+/** `keepsConversations`: a prompt's conversation outlives the prompt in its place, so teamai holds the place for a later prompt. */
+export type Initialized<TCan = Can> =
+  | { ok: true; can: TCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[]; wakes?: true; runsOnToolHome?: true; keepsConversations?: true }
+  | { ok: false; failure: RuntimeFailure };
 
 /**
  * One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in

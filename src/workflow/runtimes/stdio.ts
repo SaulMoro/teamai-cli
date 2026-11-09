@@ -224,6 +224,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       onInit?.(message.ok
         ? {
           ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }), ...(message.ownLogins && { ownLogins: message.ownLogins }), ...(message.wake === true && { wakes: true }),
+          ...(message.toolHome === true && { runsOnToolHome: true }), ...(message.conversations === true && { keepsConversations: true }),
           can: { ...offered(message.can, message.confinedPrompt === true), ...(message.permissions && { fullAccess: Object.keys(message.permissions) }) },
         }
         : { ok: false, failure: message.error });
@@ -564,6 +565,11 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     prompt(request, events) {
       if (dead) return Promise.resolve<PromptEnd>({ kind: 'failed', failure: dead });
 
+      // An answer step runs on the member's tool in teamai's process: no runtime over stdio is sent one.
+      if (request.lease.answer === true) {
+        return Promise.resolve<PromptEnd>({ kind: 'failed', failure: { code: 'runtime_protocol', message: `Step runtime "${name}" is never sent an answer step: teamai answers step ${request.lease.step} on its host slot.` } });
+      }
+
       return joinable({ inFlight: prompting, op: request.op, events, run: (callers, accept) => new Promise<PromptEnd>((resolve) => {
         const settle = (end: PromptEnd): void => {
           ops.delete(request.op);
@@ -596,6 +602,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
               if (event.confined) end.confined = event.confined;
 
               if (event.resumed === true) end.resumed = true;
+
+              if (event.stopped) end.stopped = event.stopped;
               settle(end);
 
               return;

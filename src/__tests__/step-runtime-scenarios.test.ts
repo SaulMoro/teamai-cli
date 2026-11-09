@@ -1932,6 +1932,96 @@ describe('the stdio step runtime client', () => {
       await runtime.dispose();
     }
   });
+
+  /** A place and a prompt on it, in a fresh directory, for a runtime that launches agents. */
+  const promptPlace = (dir: string) => {
+    const worktree = path.join(dir, 'worktree');
+    fs.mkdirSync(worktree);
+    const open: OpenRequest = { op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } };
+    const prompt = (handle: string, lease: Partial<PromptRequest['lease']> = {}): PromptRequest => ({
+      op: newOpId(), handle, env: {}, unset: [], credentials: {}, cwd: worktree,
+      lease: { step: 'review', tool: 'claude', permissions: 'approval-required', interactive: false, prompt: 'Review the change.', result: path.join(dir, 'out', 'result.json'), ...lease },
+    });
+
+    return { open, prompt };
+  };
+
+  it('never sends an answer lease, which only the host slot answers, and fails it runtime_protocol', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stdio-answer-'));
+    const received = path.join(dir, 'received.jsonl');
+    // A runtime that records every line it reads, and accepts any open.
+    const recording = `const fs = require('fs'); const file = process.argv.at(-1);
+    require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      fs.appendFileSync(file, line + '\\n');
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') write({ type: 'init', ok: true, prompt: true, can: { exec: false } });
+      if (request.type === 'open') { write({ op: request.op, event: 'accepted', handle: 'h1' }); write({ op: request.op, event: 'ready' }); }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'recording', command: process.execPath, args: ['-e', recording, received] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true });
+      const place = promptPlace(dir);
+      expect(await runtime.open(place.open, async () => {})).toMatchObject({ kind: 'ready', handle: 'h1' });
+
+      expect(await runtime.prompt(place.prompt('h1', { answer: true }), {})).toEqual({
+        kind: 'failed', failure: { code: 'runtime_protocol', message: expect.stringContaining('Step runtime "recording" is never sent an answer step') },
+      });
+      const types = fs.readFileSync(received, 'utf8').trim().split('\n').map((line) => z.object({ type: z.string() }).parse(JSON.parse(line)).type);
+      expect(types).toEqual(['init', 'open']);
+    } finally {
+      await runtime.dispose();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sends a prompt\'s limits to the runtime as the lease gives them', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stdio-limits-'));
+    const state = path.join(dir, 'state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    const limits = { budget: { tokens: 20_000 }, timeoutMs: 600_000, idleMs: 120_000 };
+
+    try {
+      expect(await runtime.init({ options: { state, agent: { output: { ok: true } } }, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true });
+      const place = promptPlace(dir);
+      const opened = await runtime.open(place.open, async () => {});
+      if (opened.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(opened)}`);
+      const request = place.prompt(opened.handle, { limits });
+
+      expect(await runtime.prompt(request, {})).toMatchObject({ kind: 'finished' });
+      const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n')
+        .map((line) => z.object({ op: z.string(), sent: z.object({ limits: z.unknown().optional() }).optional() }).parse(JSON.parse(line)))
+        .find((line) => line.op === request.op && line.sent !== undefined);
+      expect(sent?.sent?.limits).toEqual(limits);
+    } finally {
+      await runtime.dispose();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the tool home and conversations a runtime offers, and the limit a prompt was stopped at', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stdio-stopped-'));
+    const stopping = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') write({ type: 'init', ok: true, prompt: true, toolHome: true, conversations: true, can: { exec: false } });
+      if (request.type === 'open') { write({ op: request.op, event: 'accepted', handle: 'h1' }); write({ op: request.op, event: 'ready' }); }
+      if (request.type === 'prompt') { write({ op: request.op, event: 'accepted' }); write({ op: request.op, event: 'finished', session: { tool: 'claude', id: 's1' }, result: {}, stopped: 'budget' }); }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'stopping', command: process.execPath, args: ['-e', stopping] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true, runsOnToolHome: true, keepsConversations: true });
+      const place = promptPlace(dir);
+      await runtime.open(place.open, async () => {});
+
+      expect(await runtime.prompt(place.prompt('h1'), {})).toEqual({ kind: 'finished', session: { tool: 'claude', id: 's1' }, result: {}, stopped: 'budget' });
+    } finally {
+      await runtime.dispose();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 /** A command step that runs until it is stopped. */

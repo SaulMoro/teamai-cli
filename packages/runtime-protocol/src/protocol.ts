@@ -273,6 +273,22 @@ export const PromptLeaseSchema = z.object({
   interactive: z.boolean(),
   /** The most agent turns the tool may take, when the runtime's offer says it caps them (`can.max_turns`). */
   maxTurns: z.number().int().positive().optional(),
+  /**
+   * An answer lease: the step's question, answered by the member's tool on its `call` profile on this machine. Only the
+   * host slot in teamai's process receives one; the stdio client never sends one, and a runtime that receives one
+   * answers `failed` `runtime_protocol`.
+   */
+  answer: z.literal(true).optional(),
+  /**
+   * The limits the runtime stops the tool at, when it runs the tool on a process it starts and offers `can.end_turn`:
+   * the step's budget lowered to what the run's budget leaves, its timeout, and the idle limit. A runtime that cannot keep
+   * them ignores them, and teamai checks the budget once the prompt ends.
+   */
+  limits: z.object({
+    budget: z.object({ tokens: z.number().int().positive() }).strict().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    idleMs: z.number().int().positive().optional(),
+  }).strict().optional(),
 });
 
 export type PromptLease = z.infer<typeof PromptLeaseSchema>;
@@ -553,6 +569,8 @@ const finishedPrompt = {
    * new one, so teamai links no session to the one the step asked to resume.
    */
   resumed: z.boolean().optional(),
+  /** The limit of the lease's `limits` at which the runtime stopped the tool. Absent: the tool ended on its own. */
+  stopped: z.enum(['budget', 'timeout', 'idle']).optional(),
 };
 
 /** What a runtime retains of one operation of a handle, which `reattach` reports. */
@@ -580,12 +598,17 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * `confinedPrompt: true` says it answers a `prompt` with `confined`; without it, teamai drops `can.confined`.
    * `wake: true` says it launches a fleet member on another machine it reaches (a `wake` request). It is not a `can` key:
    * `can` is what a step can require, and no step requires a wake.
+   * `toolHome: true` says it runs each tool in the attempt's tool home (`open.view.toolHome`), as an exec runtime's tool
+   * does: teamai seeds it, copies a `login` into it and reads sessions there.
+   * `conversations: true` says a prompt's conversation outlives the prompt in its place, so a later prompt can continue
+   * it, and teamai holds the place for it. Absent: teamai holds no place of the runtime for a later prompt.
    * Read strictly, as every reply is: a key teamai does not know fails the start. Protocol 1 has not been released, and
    * teamai ships its runtimes with the engine, so a new key lands with the teamai that reads it and the protocol stays 1.
    */
   const InitReply = z.discriminatedUnion('ok', [
     z.object({
       type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(), wake: z.boolean().optional(),
+      toolHome: z.boolean().optional(), conversations: z.boolean().optional(),
       // The tools it cannot run now, each with why and what the person does about it; it still offers the rest.
       unavailable: z.record(z.string().min(1), z.string().min(1).max(UNAVAILABLE_REASON_MAX)).optional(),
       // The tools it runs without permission prompts, because an option of its definition or of the member set that.

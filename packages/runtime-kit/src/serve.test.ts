@@ -136,6 +136,23 @@ describe('a wake', () => {
   });
 });
 
+describe('an answer step', () => {
+  const answer: RuntimeRequest = {
+    type: 'prompt', op: OP, handle: 'h-1', env: {}, unset: [], credentials: {}, cwd: '/w',
+    lease: { step: 'triage', tool: 'claude', prompt: 'Which label fits?', result: '/w/result.json', permissions: 'approval-required', interactive: false, answer: true },
+  };
+
+  it('never reaches the runtime\'s prompt handler, and fails runtime_protocol, since only teamai\'s host slot answers one', async () => {
+    const seen: string[] = [];
+    const runtime = served(() => ({ prompt: async (request) => { seen.push(`prompt ${request.op}`); } }));
+
+    await runtime.send(answer);
+
+    expect(seen).toEqual([]);
+    expect(runtime.written).toEqual([{ op: OP, event: 'failed', failure: { code: 'runtime_protocol', message: 'Runtime fake is never sent an answer step, so it cannot carry out prompt of op-0123abcd: teamai answers step triage on its host slot.' } }]);
+  });
+});
+
 describe('a runtime process teamai did not start', () => {
   it('reads no request, says why on stderr, and ends with status 2', async () => {
     const runtime = served(() => ({}), {});
