@@ -206,8 +206,8 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 
 // ─── A place held open for a conversation ───────────────
 //
-//  A prompt on a runtime that launches agents its own way launches a conversation (a T3 thread, a Paseo agent) in its
-//  attempt's place. Once the attempt reported, the place is held open (`heldFor`) while a step that has not settled
+//  A prompt on a runtime that keeps conversations (its init answered `conversations`) launches a conversation (a T3
+//  thread, a Paseo agent) in its attempt's place. Once the attempt reported, the place is held open (`heldFor`) while a step that has not settled
 //  continues that conversation in the workspace the attempt's step worked in, so that step's prompt is a new turn of it
 //  (`PromptLease.continue`). A step with a place of its own, such as a top-level step, starts a new conversation, so no
 //  place is held for it. The record is the one owner of that state:
@@ -220,11 +220,13 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 //
 
 /**
- * Whether a place on `slot` may be held for a conversation: on a runtime entry that launches agents its own way. A
- * place through another runtime is never held, as it would keep the step's credentials past the step.
+ * Whether a place on `slot` may be held for a conversation: on a runtime entry whose init said a prompt's conversation
+ * outlives the prompt in its place (`conversations`), as T3's and Paseo's do. One that launches a tool per prompt keeps
+ * nothing to continue, so none of its places is held. A place through another runtime is never held, as it would keep
+ * the step's credentials past the step.
  */
-function holdsOn(slot: { kind: 'local' | 'external'; launchesAgents: boolean; isThrough?: true } | undefined): boolean {
-  return slot?.kind === 'external' && slot.launchesAgents && slot.isThrough !== true;
+function holdsOn(slot: { kind: 'local' | 'external'; keepsConversations?: true; isThrough?: true } | undefined): boolean {
+  return slot?.kind === 'external' && slot.keepsConversations === true && slot.isThrough !== true;
 }
 
 /** A held place: the attempt and its record, whose `heldFor` names the conversation. */

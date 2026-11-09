@@ -243,6 +243,8 @@ interface SlotBase {
   can: DriverCan;
   /** Its prompt steps go as `prompt`, never as an exec of the tool's argv. */
   launchesAgents: boolean;
+  /** A prompt's conversation outlives the prompt in its place, so the place may be held for a later step (`HeldPlace`). */
+  keepsConversations?: true;
   engine: EngineOptions;
   /** The values of the credentials the runtime declares, which only its prompts' tools get. */
   credentials: Record<string, string>;
@@ -644,7 +646,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
-          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }),
+          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }),
           can: {
             ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
             ...(unproven(entry.can) && { isolation: 'none' as const }),

@@ -10,7 +10,9 @@
 // its agent works `hold_ms` (from when the prompt was first sent, across a restart of the toy) and until the file
 // `release` names exists (`{step}` in it is the lease's step), then writes `output` (or the whole `result`) to the lease's result file and finishes with a
 // session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
-// `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
+// `close` keeps. It answers `conversations` in its init, as T3 and Paseo do, unless `conversations: false`, as a runtime
+// that launches a tool per prompt and keeps nothing to continue. It continues the session a prompt's lease names and
+// says so in `finished`, unless `resumes: false`; with
 // a lease's `continue`, it keeps each conversation a prompt launched in `conversations/<id>.json` in its state, by the
 // conversation's id (its session's), until the place that launched it closes. A prompt that names one it still holds,
 // whose launching turn finished, on the same tool and working directory, is a new turn of it (the same session,
@@ -265,7 +267,8 @@ function init(request) {
   }
 
   // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
-  send({ type: 'init', ok: true, prompt: true, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+  const conversations = options.agent.conversations === false ? {} : { conversations: true };
+  send({ type: 'init', ok: true, prompt: true, ...conversations, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 }
 
 /** Notes which credentials a request brought, by name only: a value is never written. */

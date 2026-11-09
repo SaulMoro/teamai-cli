@@ -980,18 +980,18 @@ describe('a place held open for a conversation a later step continues', () => {
   const ContinueSchema = z.object({ handle: z.string(), op: z.string() });
   const SentSchema = z.object({ op: z.string(), sent: z.object({ step: z.string(), continue: ContinueSchema.optional() }).optional() });
 
-  const toyDriver = async (dir: string, { maxParallel, can = {}, release }: { maxParallel?: number; can?: Record<string, JsonValue>; release?: string } = {}) => {
+  const toyDriver = async (dir: string, { maxParallel, can = {}, release, conversations }: { maxParallel?: number; can?: Record<string, JsonValue>; release?: string; conversations?: false } = {}) => {
     const state = path.join(dir, 'toy-state');
     const calls = path.join(dir, 'toy-calls.jsonl');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
-    const agent = { output: { ok: true }, transcript: true, home: path.join(dir, 'toy-claude'), ...(release !== undefined && { release }) };
+    const agent = { output: { ok: true }, transcript: true, home: path.join(dir, 'toy-claude'), ...(release !== undefined && { release }), ...(conversations === false && { conversations }) };
     const ready = await runtime.init({ options: { state, calls, agent, can }, mode: 'unattended' });
     onTestFinished(() => runtime.dispose());
 
     if (!ready.ok) throw new Error(`toy did not start: ${ready.failure.message}`);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [], ...(maxParallel !== undefined && { maxParallel }) }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.keepsConversations && { keepsConversations: true }), engine: { logins: [], ...(maxParallel !== undefined && { maxParallel }) }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
     };
 
     const asked = (): Asked[] => fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => AskedSchema.parse(JSON.parse(line)));
@@ -1066,6 +1066,24 @@ steps:
     // Step two's own place closes once its report is recorded; step one's, which held the conversation, only after it.
     expect(closedAt(asked, one.handle)).toBeGreaterThan(closedAt(asked, two.handle));
     expect(closedAt(asked, two.handle)).toBeGreaterThan(two.at);
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run was not stored');
+    const sessionOf = (id: string) => { const step = run.steps.find((item) => item.id === id); return step && 'session' in step ? step.session : undefined; };
+    expect(run.steps.find((step) => step.id === 'change.two')).toMatchObject({ resumed: { tool: 'claude', id: sessionOf('change.one') } });
+  }, 30_000);
+
+  it('holds no place on a runtime that launches agents but keeps no conversation, and step two resumes the session instead', async () => {
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
+    const toy = await toyDriver(path.dirname(workspace), { conversations: false });
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const asked = toy.asked();
+    const one = promptOf(asked, toy.leases(), 'change.one');
+    const two = promptOf(asked, toy.leases(), 'change.two');
+    expect(two.continue).toBeUndefined();
+    expect(closedAt(asked, one.handle)).toBeGreaterThan(-1);
+    expect(closedAt(asked, one.handle)).toBeLessThan(two.at);
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error('run was not stored');
     const sessionOf = (id: string) => { const step = run.steps.find((item) => item.id === id); return step && 'session' in step ? step.session : undefined; };

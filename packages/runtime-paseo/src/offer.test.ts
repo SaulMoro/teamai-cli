@@ -10,7 +10,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }, codex_login: 'signed_in' });
 
     expect(await ready(start())).toEqual({
-      type: 'init', ok: true, prompt: true, confinedPrompt: true, wake: true,
+      type: 'init', ok: true, prompt: true, conversations: true, confinedPrompt: true, wake: true,
       can: {
         exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude', 'codex', 'opencode'],
         confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex', 'opencode'] }],
@@ -32,7 +32,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: [] }, sign_in: { claude: 'signed_out' }, codex_login: 'signed_out' });
 
     expect(await ready(start())).toEqual({
-      type: 'init', ok: true, prompt: true, wake: true,
+      type: 'init', ok: true, prompt: true, conversations: true, wake: true,
       can: { exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: [] },
       unavailable: {
         claude: cannotRun('claude', 'signed out; run `claude auth login` on the daemon\'s host'),

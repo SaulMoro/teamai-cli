@@ -79,7 +79,7 @@ export function checkOf(found: Found): Extract<RuntimeMessage, { type: 'init' }>
   const { tools, unavailable } = runnableOf(found);
 
   return tools.length > 0
-    ? { type: 'init', ok: true, prompt: true, can: { exec: false, env: false, hitl: false, unattended: false, tools: tools.map(({ name }) => name) } }
+    ? { type: 'init', ok: true, prompt: true, conversations: true, can: { exec: false, env: false, hitl: false, unattended: false, tools: tools.map(({ name }) => name) } }
     : { type: 'init', ok: false, error: { code: 'tool_unavailable', message: `teamai-runtime-paseo can run no tool on the Paseo daemon at ${found.url} now: ${Object.values(unavailable).join(' ')}` } };
 }
 
@@ -132,7 +132,7 @@ export function offerOf(found: Found & { mode: 'attended' | 'unattended' }): Off
   const permissions = Object.fromEntries(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'bypass' ? [[name, 'full-access' as const]] : [])));
 
   const init: Offered['init'] = {
-    type: 'init', ok: true, prompt: true,
+    type: 'init', ok: true, prompt: true, conversations: true,
     ...(judges.length > 0 && { confinedPrompt: true }),
     ...(Object.keys(unavailable).length > 0 && { unavailable }),
     ...(Object.keys(permissions).length > 0 && { permissions }),

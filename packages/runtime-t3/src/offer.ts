@@ -112,7 +112,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
     if (request.mode === 'check') {
       const can = await options.canStart({ access: parsed.options.runtime_mode === 'full-access' ? 'full-access' : 'auto' });
 
-      write(can.ok ? { type: 'init', ok: true, prompt: true, can: { exec: false, env: false } } : { type: 'init', ok: false, error: can.error });
+      write(can.ok ? { type: 'init', ok: true, prompt: true, conversations: true, can: { exec: false, env: false } } : { type: 'init', ok: false, error: can.error });
 
       return;
     }
@@ -231,7 +231,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
       const onWrapper = defaultProvider !== undefined && defaultDriver !== undefined && !runsOwnBinary(binaryPathOf(defaultProvider.providerInstanceId), defaultDriver);
       const defaultTool = [...runs].find(([, provider]) => provider === defaultProvider)?.[0] ?? (onWrapper && runs.has(DRIVERS[defaultDriver].tool) ? DRIVERS[defaultDriver].tool : undefined);
       write({
-        type: 'init', ok: true, prompt: true, confinedPrompt: true,
+        type: 'init', ok: true, prompt: true, conversations: true, confinedPrompt: true,
         // A fleet member it launches on a machine linked to this T3 Code.
         ...(wakes && { wake: true }),
         // Full access is the member's opt-in, and teamai records the isolation of these steps as none.

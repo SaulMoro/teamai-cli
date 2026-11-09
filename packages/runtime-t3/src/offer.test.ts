@@ -19,7 +19,7 @@ describe('teamai-runtime-t3', () => {
 
       expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
       expect(reply).toEqual({
-        type: 'init', ok: true, prompt: true, confinedPrompt: true, wake: true,
+        type: 'init', ok: true, prompt: true, conversations: true, confinedPrompt: true, wake: true,
         can: {
           exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false,
           workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude', 'codex'],
@@ -195,7 +195,7 @@ describe('teamai-runtime-t3', () => {
 
     // describe sends `check` from a T3 thread to ask whether a run could start there now, and opens nothing after it.
     describe('in check mode', () => {
-      const couldStart = { type: 'init', ok: true, prompt: true, can: { exec: false, env: false } };
+      const couldStart = { type: 'init', ok: true, prompt: true, conversations: true, can: { exec: false, env: false } };
       const check = (runtime: Connection): void => runtime.send({
         type: 'init', protocol: 1, mode: 'check', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: path.join(dir, 'acme-claude') }],
       });

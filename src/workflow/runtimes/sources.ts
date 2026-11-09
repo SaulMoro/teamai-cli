@@ -326,8 +326,9 @@ export type OpenedRuntime =
    * which go only to the tool each signs in (`credentialsForTool`). `unavailable`: the tools it cannot run now, with why.
    * `optionsFrom`: where its options were set, for the person: the definition's file, and the member's config when it sets them too.
    * `wakes`: its init offered to wake fleet members, which a fleet entry's `wake` names it for.
+   * `keepsConversations`: its init said a prompt's conversation outlives the prompt in its place, so teamai may hold the place for a later step.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true }
+  | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true; keepsConversations?: true }
 ;
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
@@ -468,7 +469,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const recovered = await recovering.init({ options: split.runtime, mode: 'recover', checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use) } };
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use) } };
     await recovering.dispose();
     notRecovered = recovered.failure;
   }
@@ -520,7 +521,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const declared = isMemberRoute ? notOwnLogin(values.values) : values.values;
     const given = isKeepingFound ? { ...declared, ...foundHere } : declared;
 
-    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }) } };
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }), ...(ready.keepsConversations && { keepsConversations: true }) } };
   }
 
   await runtime.dispose();
