@@ -226,6 +226,29 @@ it.skipIf(process.platform === 'win32')('stops a group whose starter was killed 
   }
 });
 
+it.skipIf(process.platform === 'win32')('stops a group recorded before ps answered where ps prints dates in the person\'s language', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-locale-'));
+  const bin = path.join(directory, 'bin');
+  const records = path.join(directory, 'records');
+  fs.mkdirSync(bin);
+  fs.mkdirSync(records);
+  // A ps that prints in Chinese, as under a Chinese locale, unless asked for the C locale.
+  fs.writeFileSync(path.join(bin, 'ps'), '#!/bin/sh\n[ "$LC_ALL" = C ] || export LC_ALL=zh_CN.UTF-8\nexec /bin/ps "$@"\n', { mode: 0o755 });
+  const group = await detachedGroup();
+  try {
+    vi.stubEnv('PATH', '');
+    recordGroup(group.shell, records);
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+
+    await stopRecordedGroup(records);
+
+    expect(group.alive()).toBe(false);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it.skipIf(process.platform === 'win32')('stops an attached command and what it started once its starter is gone, from the record it left', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-attached-'));
   const pidFile = path.join(directory, 'sleep.pid');

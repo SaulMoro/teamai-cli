@@ -4,12 +4,17 @@ import path from 'node:path';
 import { z } from 'zod';
 import { commandShell } from '../command-shell.js';
 
+/** Runs ps with `args` in the C locale, whose `lstart` reads the same on every machine and parses as a date. */
+function ps(args: string[]): string {
+  return execFileSync('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } });
+}
+
 /** The start time of every process, as `ps -o lstart=` prints it, by pid; undefined when ps cannot run. */
 export function processStarts(): Map<number, string> | undefined {
   let stdout: string;
 
   try {
-    stdout = execFileSync('ps', ['-A', '-o', 'pid=,lstart='], { encoding: 'utf8' });
+    stdout = ps(['-A', '-o', 'pid=,lstart=']);
   } catch {
     return undefined;
   }
@@ -179,7 +184,7 @@ function descendantsOf(pid: number): { pid: number; start: string }[] {
   let stdout = '';
 
   try {
-    stdout = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,lstart='], { encoding: 'utf8' });
+    stdout = ps(['-A', '-o', 'pid=,ppid=,lstart=']);
   } catch {
     return [];
   }
