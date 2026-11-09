@@ -88,9 +88,12 @@ async function listenOn(at: string): Promise<() => Promise<void>> {
   return () => new Promise((resolve) => { server.close(() => resolve()); });
 }
 
-/** Every process on this machine whose command line holds `marker`. */
+/**
+ * Every process on this machine whose command line holds `marker`, as pid, parent, state and command line: a survivor
+ * then says whether it was reaped late (state Z) or kept running, and whose child it was.
+ */
 function processesWith(marker: string): string[] {
-  return execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' }).split('\n').filter((line) => line.includes(marker) && !line.includes('ps -axo'));
+  return execFileSync('ps', ['-axo', 'pid=,ppid=,stat=,args='], { encoding: 'utf8' }).split('\n').filter((line) => line.includes(marker) && !line.includes('ps -axo'));
 }
 
 const outcomes = (output: string): Record<string, string> => JSON.parse(output) as Record<string, string>;
