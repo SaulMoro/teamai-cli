@@ -330,7 +330,7 @@ function promptFailure(failure: RuntimeFailure, retry: { run: string; step: stri
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, provided, unset, credentials, setUp, isThroughOuter }: {
+export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, provided, unset, credentials, setUp, isThroughOuter, continues }: {
   view: PlaceView;
   runId: RunId;
   step: string;
@@ -342,6 +342,8 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
   setUp: SetUp;
   /** The runtime runs through another, whose open is told what the prompt goes without, since the tool runs in its place. */
   isThroughOuter?: boolean;
+  /** The conversation of an earlier attempt's prompt the step continues, in the place teamai held open for it. */
+  continues?: NonNullable<PromptLease['continue']>;
 }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
@@ -358,6 +360,8 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
     if (input.model) lease.model = input.model.effort ? { name: input.model.name, effort: input.model.effort } : { name: input.model.name };
 
     if (input.resume) lease.resume = input.resume;
+
+    if (continues) lease.continue = continues;
 
     if (input.maxTurns !== undefined) lease.maxTurns = input.maxTurns;
     const env = stringEnv(input.env ?? {});

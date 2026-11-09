@@ -25,7 +25,7 @@ import { setsLimit } from '../requirements.js';
 import { budgeted, idleLimit } from '../limits.js';
 import { createLocalToolAdapter, toolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from './local-tool-adapter.js';
 import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv } from './runtime-steps.js';
-import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun } from '../runtimes/attempt.js';
+import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../runtimes/login.js';
 import { credentialsForTool } from '../runtimes/sources.js';
 import { withRetry } from '../runtimes/step-runtime.js';
@@ -238,6 +238,11 @@ export type PromptRuntime = {
   isThrough?: true;
   /** The runtime picks the tool, model and login where it runs the step (`StepRuntime.isToolPickedThere`). */
   isToolPickedThere?: true;
+  /**
+   * The conversation an earlier attempt launched on this runtime, held open for a later step, for the first of
+   * `sessions` it holds (`HeldPlace.conversationOf`). Absent on a runtime where none is held, such as one through another.
+   */
+  conversationHeld?: (sessions: readonly SessionRef[]) => ReturnType<typeof HeldPlace.conversationOf>;
 };
 
 /**
@@ -375,6 +380,12 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
   const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
 
+  // A runtime that launches agents continues, as a new turn, the conversation an earlier attempt launched on it, in the
+  // place teamai held open for it, when that conversation ran on the tool this step launches.
+  const conversation = lease.session && onRuntime?.conversationHeld
+    ? await onRuntime.conversationHeld([lease.session, ...lease.session.earlier ?? []].filter((session) => session.tool === launched))
+    : undefined;
+
   if (toolHome) {
     await fs.mkdir(toolHome.dir, { recursive: true });
     const seeded = lease.session ? await seedToolHome({ config, run: lock.run, attempt: lease.attempt, tool: launched, sessions: [lease.session, ...lease.session.earlier ?? []] }) : undefined;
@@ -383,6 +394,8 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
     if (isExecRuntimeTool(selected)) await seedMemberModel({ tool: selected, dir: toolHome.dir, memberHome: memberHome() });
 
     if (seeded) resume = { id: seeded.id, resumed: { tool: seeded.tool, id: seeded.id } };
+  } else if (conversation) {
+    resume = { id: conversation.session.id, resumed: conversation.session };
   } else {
     // A runtime that launches agents resumes a session by id in the home it reported it in.
     const held = onRuntime?.launchesAgents ? async (session: SessionRef) => (await attemptHoldingSession(config, lock.run, session)) !== undefined : undefined;
@@ -483,7 +496,10 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
     // Through another runtime, the app's tool runs in the outer's place, on a home of the attempt's, as an exec runtime's does.
     const throughHome = onRuntime.isThrough !== true ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
     const isThroughOuter = onRuntime.isThrough === true;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd, throughHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter });
+    launcher = runtimePrompter(onRuntime.run, {
+      view: await placeView(config, lock.run, lease.attempt, cwd, throughHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
+      credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter, ...(conversation && { continues: { handle: conversation.handle, op: conversation.op } }),
+    });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };

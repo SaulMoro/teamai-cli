@@ -65,8 +65,17 @@ export const AttemptRuntimeRecordSchema = z.object({
   exec: z.object({ op: OpIdSchema }).optional(),
   /** The workflow's setup, run as an exec of the place before the step's own. */
   setup: z.object({ op: OpIdSchema }).optional(),
-  /** The prompt sent to a runtime that launches agents its own way. */
-  prompt: z.object({ op: OpIdSchema }).optional(),
+  /**
+   * The prompt sent to a runtime that launches agents its own way, and the conversation its lease continues
+   * (`PromptLease.continue`), when it names one.
+   */
+  prompt: z.object({ op: OpIdSchema, continues: z.object({ handle: z.string(), op: OpIdSchema }).optional() }).optional(),
+  /**
+   * Set once the attempt reported, on a runtime that launches agents its own way: the place stays open for the
+   * conversation its prompt launched, whose session is `conversation`, since a step that has not settled continues it.
+   * The local driver closes it as soon as none does (`resumableSessions`), at the run's end, on a cancel or a release.
+   */
+  heldFor: z.object({ conversation: z.object({ tool: z.string(), id: z.string() }) }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
   toolHome: ToolHomeSchema.optional(),
   /**
@@ -184,6 +193,86 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 
   return undefined;
 }
+
+// ─── A place held open for a conversation ───────────────
+//
+//  A prompt on a runtime that launches agents its own way launches a conversation (a T3 thread, a Paseo agent) in its
+//  attempt's place. Once the attempt reported, the place is held open (`heldFor`) while a step that has not settled
+//  continues that conversation, so that step's prompt is a new turn of it (`PromptLease.continue`). The record is the
+//  one owner of that state:
+//
+//    reported ──hold (a later step continues its conversation)──▶ held ──release (none does, run end, cancel)──▶ closed
+//        └──────────────────────────── any other report ──────────────────────────────────────────────────────▶ closed
+//
+//  A held place takes no room under `max_parallel`. Its exits are the driver's close after a report, at the run's end
+//  and on a handoff, and `teamai workflow cancel` / `--release`, which close every place whose record is not closed.
+//
+
+/** A held place: the attempt and its record, whose `heldFor` names the conversation. */
+type Held = { attempt: AttemptId; record: AttemptRuntimeRecord & { heldFor: NonNullable<AttemptRuntimeRecord['heldFor']> } };
+
+const isSameSession = (one: SessionRef, other: SessionRef): boolean => one.tool === other.tool && one.id === other.id;
+
+/** The places of run `run` held open for a conversation. */
+async function heldIn(config: LocalConfig, run: RunId): Promise<Held[]> {
+  const names = await fs.readdir(attemptsDir(config, run)).catch((): string[] => []);
+  const held: Held[] = [];
+
+  for (const name of names.sort()) {
+    const attempt = AttemptIdSchema.safeParse(name);
+    const record = attempt.success ? await readAttemptRuntime(config, run, attempt.data) : undefined;
+
+    if (attempt.success && record?.heldFor && record.phase !== 'closed') held.push({ attempt: attempt.data, record: { ...record, heldFor: record.heldFor } });
+  }
+
+  return held;
+}
+
+/**
+ * The conversation a prompt continues: the place of an earlier attempt of run `run`, held on runtime `runtime` of driver
+ * `driver` for the first of `sessions` (the lease's session, then each earlier one), with the op of the prompt that
+ * launched it. Undefined when no held place holds one.
+ */
+async function conversationOf({ config, run, runtime, driver, sessions }: { config: LocalConfig; run: RunId; runtime: string; driver: string; sessions: readonly SessionRef[] }): Promise<{ handle: string; op: OpId; session: SessionRef } | undefined> {
+  const held = await heldIn(config, run);
+
+  for (const session of sessions) {
+    const found = held.find(({ record }) => record.runtime === runtime && record.driver === driver && isSameSession(record.heldFor.conversation, session));
+    const handle = found?.record.open.handle;
+    const op = found?.record.prompt?.op;
+
+    if (handle !== undefined && op !== undefined) return { handle, op, session: { tool: session.tool, id: session.id } };
+  }
+
+  return undefined;
+}
+
+/**
+ * Holds the place of attempt `attempt`, which reported `report`, open for the conversation its prompt launched, when
+ * `continued` (the sessions the steps that have not settled continue) names it. A prompt the runtime took as a turn of
+ * an earlier attempt's conversation launched none: that attempt's place holds it. Answers whether it is held.
+ */
+async function hold({ config, run, attempt, report, continued }: { config: LocalConfig; run: RunId; attempt: AttemptId; report: { tool?: string; session?: string; resumed?: SessionRef }; continued: readonly SessionRef[] }): Promise<boolean> {
+  const record = await readAttemptRuntime(config, run, attempt);
+
+  if (!record?.prompt || record.phase === 'closed' || !report.tool || !report.session || (record.prompt.continues && report.resumed)) return false;
+  const conversation = { tool: report.tool, id: report.session };
+
+  if (!continued.some((session) => isSameSession(session, conversation))) return false;
+  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...record, heldFor: { conversation } });
+
+  return true;
+}
+
+/** The held places of run `run` to close: those whose conversation `continued` no longer names, or, without it, every one. */
+async function toRelease(config: LocalConfig, run: RunId, continued?: readonly SessionRef[]): Promise<Held[]> {
+  const held = await heldIn(config, run);
+
+  return continued === undefined ? held : held.filter(({ record }) => !continued.some((session) => isSameSession(session, record.heldFor.conversation)));
+}
+
+/** The places held open for a conversation a later step continues (`heldFor`), and the moves between their states. */
+export const HeldPlace = { conversationOf, hold, toRelease } as const;
 
 /**
  * The session a prompt on a step runtime resumes: the first of `sessions` (the lease's, then each earlier one it
@@ -666,7 +755,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
         // Still running, or never received: the same id reconnects to it, or sends it now.
       }
 
-      const sent = before.prompt ?? { op: newOpId() };
+      const { continue: continues } = request.lease;
+      const sent = before.prompt ?? { op: newOpId(), ...(continues && { continues }) };
 
       if (before.prompt === undefined) await save({ ...before, prompt: sent, phase: 'running' });
       running = sent;

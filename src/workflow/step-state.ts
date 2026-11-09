@@ -99,6 +99,8 @@ const report = {
   tool: z.string().optional(),
   model: z.string().optional(),
   session: z.string().optional(),
+  /** The session of the lease the attempt continued, as its driver reported it: absent when it started a new one. */
+  resumed: SessionRefSchema.optional(),
   tokens: TokenUsageSchema.optional(),
   /** Milliseconds around the tool launch only, as the driver measured it. */
   durationMs: z.number().int().nonnegative().optional(),

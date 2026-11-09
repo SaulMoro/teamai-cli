@@ -3567,6 +3567,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       tool: report.tool,
       model: report.model,
       session: report.session,
+      resumed: report.resumed,
       tokens: report.tokens,
       durationMs: report.durationMs,
       cost: report.cost,
