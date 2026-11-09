@@ -1677,6 +1677,24 @@ while :; do teamai workflow resume --next --pool build; sleep 60; done
 
 要同时领取多个尝试，就运行多个循环。不带运行 id 的 `teamai workflow resume` 会列出当前检出的 origin 上正在外面的尝试：池、状态、领取它的成员，以及它最近一次进度。
 
+设置 `wake` 后，对没人领取的尝试，你的安装会自己启动一个成员：通过一个能在其他机器上启动 agent、且其 init 提供 `wake` 的运行时：
+
+```yaml
+# drivers/gpu-fleet.yaml
+schemaVersion: v1alpha1
+name: gpu-fleet
+runtimes:
+  - use: fleet
+    options:
+      pool: gpu
+      wake:
+        use: t3            # 启动成员的运行时
+        options: {}        # 可选；你的 workflows.drivers.gpu-fleet.runtimes.t3 会覆盖它们
+  - use: local
+```
+
+你的驱动第一次读到该尝试处于已发布状态时，会请求那个运行时一次：在它能到达的某台机器上、业务仓库的一个检出里运行 `teamai workflow resume --next --pool gpu`。它启动的成员像其他成员一样领取尝试。每个尝试只唤醒一次，驱动重启后也一样；尝试被领取或等待结束时，还在进行中的唤醒会被停止。唤醒失败时会提示一次，并附上那条命令，尝试继续等待有人启动的成员。`teamai workflow resume` 会在 WOKEN 一列列出成员是在哪里被唤醒的，只在你的安装上可见。init 不提供 wake 的运行时会让启动以 `bad_option` 失败。被唤醒的成员用那台机器的工具和登录运行步骤，所以消耗的是那台机器的账号，并在那里运行步骤要运行的内容：只指定能到达你信任其运行本池步骤的机器的运行时。
+
 哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。带 `requires.labels` 的步骤交给 `labels` 选项列出每个标签的 fleet 条目，成员按它自己那份工作流定义要求的标签，只有在它将运行该步骤的地方列出每个标签时才接：在本机运行的步骤看它的 `workflows.labels`，在它 `--driver` 的某个运行时上运行的步骤看该运行时的 `labels`；其他成员会跳过它并记录原因。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。成员会把这个会话连同步骤在其尝试的 `out/` 目录里留下的文件（[保留哪些](scorers.md#无人值守任务结束前运行-drain)）推送到团队会话归档，之后带 `session: continue` 的步骤就在你这里接着它继续。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
 当成员能独立运行整个 `workflow:` 步骤时，它会作为一次尝试整体交给 fleet：它运行的是一个工作流文件，或者一个内联工作流，其中的步骤除了 `inputs` 之外不读取外层的任何内容（不读其他步骤，也不读 `item`）；其中的步骤都是在该步骤的副本里工作的命令步骤或提示词步骤（自身的 `workspace` 只能是 `continue` 或 `read-only`），且没有角色、`deliver`、回答步骤、嵌套工作流或 `interactive`，步骤本身也没有 `on_limit: end_turn`。其中的闸门在你这里提问：成员等待你的驱动像在你运行中的闸门那样问你，然后按你的回答继续；你的驱动前没有人时，按你的驱动此时回答自己闸门的方式作答（`auto_approve`），否则步骤以 `hitl_required` 失败。备注里含有密钥或本地路径的回答不会写入 teamai-reports，你会被再问一次。成员按它自己那份团队工作流运行这些步骤，使用它自己的驱动，并把它们的工作作为这次尝试推送。成员只有在拥有其中每个提示词步骤的工具时才接这个步骤，和下文的提示词尝试一样；其他成员会跳过它并记录原因，例如 `its step "review" runs on claude, which is not on PATH here`。你的运行用该工作流返回的输出和结束点记录这个工作流步骤。其他工作流步骤，以及没有 fleet 条目接的整体步骤，照旧在本机启动，其中的步骤逐个交出。对这类步骤做 `for_each` 会把整条流水线分发出去，每一项一次尝试。
