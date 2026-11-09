@@ -145,6 +145,15 @@ export interface LaunchAdapter {
   readonly confined?: ConfinedLaunch;
 }
 
+/** OpenCode's model arguments: OpenCode 2 has no `--variant` and reads the effort from `--model provider/model#variant`. */
+export function opencodeModelArgs(model: { readonly name: string; readonly effort?: string | undefined } | undefined, major: number): string[] {
+  if (!model) return [];
+
+  if (model.effort === undefined) return ['--model', model.name];
+
+  return major >= 2 ? ['--model', `${model.name}#${model.effort}`] : ['--model', model.name, '--variant', model.effort];
+}
+
 export function jsonLines(stdout: string): JsonValue[] {
   return stdout.split(/\r?\n/).flatMap((line) => {
     const trimmed = line.trim();

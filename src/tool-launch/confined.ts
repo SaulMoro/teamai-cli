@@ -22,9 +22,10 @@ import type { ConfinedUsage } from './confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { HeadlessRun } from '@teamai/tool-launch/call-launch';
+import { confinedArgs, confinedStdin, confinedVariables } from '@teamai/tool-launch/confined-launch';
 import { runTool } from './run.js';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
-import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
+import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from './tools.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** A JSON line a tool prints; a field of the wrong type reads as absent. */
@@ -34,12 +35,6 @@ const RecordSchema = z.looseObject({
   structured_output: JsonValueSchema.optional().catch(undefined),
   total_cost_usd: z.number().optional().catch(undefined),
 });
-
-const COMMON_ENV = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TERM', 'USER', 'LOGNAME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'];
-const CODEX_DISABLED = ['hooks', 'plugins', 'apps', 'browser_use', 'computer_use', 'multi_agent', 'multi_agent_v2'];
-
-// Claude reads the prompt as a system prompt file, so its user turn only asks for the reply.
-const REQUEST = 'Answer from the files in this directory alone. Return only the requested JSON answer.\n';
 
 type ToolLookup = { resolveTool?: (tool: string) => string | null };
 
@@ -64,7 +59,7 @@ function profileOf(tool: ConfinedTool): ConfinedLaunch {
  * confined profile.
  */
 export function confinedEnvNames(tool: string): readonly string[] {
-  return isConfinedTool(tool) ? [...COMMON_ENV, ...profileOf(tool).env] : [];
+  return isConfinedTool(tool) ? confinedVariables(profileOf(tool)) : [];
 }
 
 /** What `tool`, run confined, can do beyond answering, by its adapter's profile. */
@@ -382,12 +377,6 @@ interface Launch {
   failureOf?(run: HeadlessRun, spent: Spend): Promise<ConfinedFailure | undefined>;
 }
 
-const modelArgs = ({ input }: LaunchContext): string[] => input.model ? ['--model', input.model.name] : [];
-
-const jsonSchemaArgs = ({ input }: LaunchContext): string[] => input.schema === undefined ? [] : ['--json-schema', JSON.stringify(input.schema)];
-
-const asked = ({ input }: LaunchContext): string => REQUEST + input.prompt;
-
 const rawOf = (run: HeadlessRun): string => run.stdout + '\n' + run.stderr;
 
 /** How each family is set up and started confined. */
@@ -399,7 +388,7 @@ const LAUNCHES = {
     const prompt = path.join(tmp, 'prompt.md');
     await fs.writeFile(prompt, input.prompt);
 
-    return { stdin: REQUEST, args: ['-p', '--restricted', '--tools=Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--permission-prompts', 'none', '--output-format', 'stream-json', '--verbose', ...jsonSchemaArgs(context), '--append-system-prompt-file', prompt, '--settings', settings, ...modelArgs(context), ...(input.model?.effort ? ['--effort', input.model.effort] : [])] };
+    return { stdin: confinedStdin('claude', input.prompt), args: confinedArgs({ family: 'claude', model: input.model, schema: input.schema, settingsFile: settings, promptFile: prompt }) };
   },
   async codex(context) {
     const { input, env, tmp, dir } = context;
@@ -415,15 +404,15 @@ const LAUNCHES = {
     if (input.schema !== undefined) await fs.writeFile(schema, JSON.stringify(input.schema));
 
     return {
-      stdin: asked(context),
+      stdin: confinedStdin('codex', input.prompt),
       configuredModel: settings.model,
-      args: ['-a', 'never', 'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-rules', ...(input.schema === undefined ? [] : ['--output-schema', schema]), ...CODEX_DISABLED.flatMap((feature) => ['--disable', feature]), '-o', path.join(tmp, 'answer.json'), ...settings.args, ...modelArgs(context), ...(input.model?.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.model.effort)}`] : []), '-'],
+      args: confinedArgs({ family: 'codex', model: input.model, schemaFile: input.schema === undefined ? undefined : schema, answerFile: path.join(tmp, 'answer.json'), configArgs: settings.args }),
     };
   },
-  async codebuddy(context) {
+  async codebuddy({ input }) {
     return {
-      stdin: asked(context),
-      args: ['-p', '--tools', 'Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--setting-sources', '', '--permission-mode', 'dontAsk', '--settings', JSON.stringify({ permissions: { allow: ['Read(./**)'] } }), '--output-format', 'json', ...jsonSchemaArgs(context), ...modelArgs(context)],
+      stdin: confinedStdin('codebuddy', input.prompt),
+      args: confinedArgs({ family: 'codebuddy', model: input.model, schema: input.schema }),
       // CodeBuddy exits 0 when it is not signed in.
       async failureOf(run) {
         if (!/Authentication required/.test(rawOf(run))) return undefined;
@@ -432,14 +421,14 @@ const LAUNCHES = {
       },
     };
   },
-  async cursor(context) {
-    return { stdin: asked(context), args: ['-p', '--output-format', 'json', '--mode', 'ask', '--sandbox', 'enabled', '--trust', ...modelArgs(context)] };
+  async cursor({ input }) {
+    return { stdin: confinedStdin('cursor', input.prompt), args: confinedArgs({ family: 'cursor', model: input.model }) };
   },
-  async pi(context) {
-    return { stdin: asked(context), args: ['-p', '--mode', 'json', '--tools', 'read,grep,find,ls', '--no-context-files', '--no-extensions', '--no-skills', '--no-session', ...modelArgs(context)] };
+  async pi({ input }) {
+    return { stdin: confinedStdin('pi', input.prompt), args: confinedArgs({ family: 'pi', model: input.model }) };
   },
-  async agy(context) {
-    return { stdin: asked(context), args: ['--input-format=stream-json', '--output-format=stream-json', '--print=', '--mode', 'plan', '--sandbox', ...modelArgs(context)] };
+  async agy({ input }) {
+    return { stdin: confinedStdin('agy', input.prompt), args: confinedArgs({ family: 'agy', model: input.model }) };
   },
   async opencode(context) {
     const { input, executable, dir, cwd, env, tmp } = context;
@@ -450,9 +439,9 @@ const LAUNCHES = {
     await noInstructionsAbove(cwd);
 
     return {
-      stdin: asked(context),
+      stdin: confinedStdin('opencode', input.prompt),
       configuredModel: await openCodeSettings(env, tmp),
-      args: ['run', '--standalone', '--format', 'json', ...opencodeModelArgs(input.model, input.model?.effort ? await opencodeMajorVersion(executable) : 2)],
+      args: confinedArgs({ family: 'opencode', model: input.model, opencodeMajor: input.model?.effort ? await opencodeMajorVersion(executable) : 2 }),
       // OpenCode keeps every run as a session in its database; the confined one must not outlive the run.
       async failureOf(run, spent) {
         const session = toolStdout('opencode', run.stdout)?.session;

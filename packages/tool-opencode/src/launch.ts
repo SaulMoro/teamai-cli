@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter, type StepArgsHow, type StepArgsInput } from '@teamai/tool-core/launch';
+import { answered, failed, jsonLines, opencodeModelArgs, type CallOutput, type CallReading, type LaunchAdapter, type StepArgsHow, type StepArgsInput } from '@teamai/tool-core/launch';
 import { readToolMetadata } from '@teamai/tool-core/stdout';
 
 
@@ -34,15 +34,6 @@ function readOpenCodeRun({ stdout }: CallOutput): CallReading {
 
 const UNATTENDED = ['--auto'] as const;
 
-/** OpenCode's model arguments: OpenCode 2 has no `--variant` and reads the effort from `--model provider/model#variant`. */
-function modelArgs(model: string | undefined, effort: string | undefined, major: number): string[] {
-  if (model === undefined) return [];
-
-  if (effort === undefined) return ['--model', model];
-
-  return major >= 2 ? ['--model', `${model}#${effort}`] : ['--model', model, '--variant', effort];
-}
-
 /** An OpenCode step: `run --format json` headless, the TUI with `--prompt` for a person. */
 function stepArgs(input: StepArgsInput, { interactive, opencodeMajor }: StepArgsHow): string[] {
   const unattended = input.unattended ? UNATTENDED : [];
@@ -50,7 +41,7 @@ function stepArgs(input: StepArgsInput, { interactive, opencodeMajor }: StepArgs
 
   if (interactive) return [...unattended, ...agent, ...(input.model ? ['--model', input.model] : []), '--prompt', input.prompt];
 
-  return ['run', '--format', 'json', ...unattended, input.prompt, ...agent, ...modelArgs(input.model, input.effort, opencodeMajor)];
+  return ['run', '--format', 'json', ...unattended, input.prompt, ...agent, ...opencodeModelArgs(input.model === undefined ? undefined : { name: input.model, effort: input.effort }, opencodeMajor)];
 }
 
 /** How teamai launches OpenCode headless. */

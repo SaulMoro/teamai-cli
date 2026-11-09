@@ -87,12 +87,3 @@ export function launchExecutableOf(target: LaunchTarget): string | null {
 export const CONFINED_TOOLS = toolsWith('confined');
 
 export type ConfinedTool = ToolWith<'confined'>;
-
-/** OpenCode's model arguments: OpenCode 2 has no `--variant` and reads the effort from `--model provider/model#variant`. */
-export function opencodeModelArgs(model: { name: string; effort?: string } | undefined, major: number): string[] {
-  if (!model) return [];
-
-  if (model.effort === undefined) return ['--model', model.name];
-
-  return major >= 2 ? ['--model', `${model.name}#${model.effort}`] : ['--model', model.name, '--variant', model.effort];
-}
