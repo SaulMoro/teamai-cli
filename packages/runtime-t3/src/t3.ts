@@ -191,6 +191,11 @@ export class T3Error extends Error {
   get threadGone(): boolean {
     return this.refusal?.code === 'thread_not_found';
   }
+
+  /** T3 refused a tool that acts on another machine because Linked environments is off in its Labs settings. */
+  get linkedEnvironmentsOff(): boolean {
+    return this.refusal?.code === 'capability_denied';
+  }
 }
 
 function refusalIn(text: string): Refusal | undefined {

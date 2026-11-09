@@ -43,12 +43,16 @@ describe('teamai-runtime-t3', () => {
   useT3Runtime();
 
   describe('waking a fleet member', () => {
-    it('offers wake when T3 Code lists the machines linked to it, and not when linked environments are off', async () => {
+    // With them off, the wake itself says how to turn them on, when the person uses it.
+    it('offers wake when T3 Code has linked environments, on or off in its Labs settings, and not when it has none', async () => {
       signIn(t3);
       t3.config({ links: [] });
       expect((await initialized()).reply['wake']).toBe(true);
 
       t3.config({ links: undefined });
+      expect((await initialized()).reply['wake']).toBe(true);
+
+      t3.config({ noLinkedEnvironments: true });
       expect((await initialized()).reply).not.toHaveProperty('wake');
     });
 
@@ -108,17 +112,15 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
     });
 
-    it('fails wake_unavailable, saying to turn linked environments on, when T3 Code has them off', async () => {
+    it('fails wake_unavailable, naming the fix, when T3 Code has linked environments off', async () => {
       signIn(t3);
-      t3.config({ links: [] });
       const { runtime } = await initialized();
-      t3.config({ links: undefined });
 
       runtime.send(wake('op-000000e4'));
 
       expect(await woke(runtime, 'op-000000e4')).toEqual({
         op: 'op-000000e4', event: 'failed',
-        failure: { code: 'wake_unavailable', message: 'T3 Code lists no machine linked to it ({"_tag":"OrchestratorMcpFailure","code":"capability_denied","message":"Linked environments is off on this machine, so no tool can act on another machine."}). Turn on Linked environments in T3 Code under Settings → Labs, then: Link a machine in T3 Code, and add the repository there as a project.' },
+        failure: { code: 'wake_unavailable', message: 'Linked environments is off in T3 Code, so it reaches no other machine. Turn on Linked environments in T3 Code\'s Labs settings, link the machine, and add the repository there as a project.' },
       });
     });
 
