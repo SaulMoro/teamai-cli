@@ -734,6 +734,9 @@ describe('the fleet', () => {
       fs.chmodSync(nested, 0o644);
       if (isAlive(left)) process.kill(left, 'SIGKILL');
       await teamai('alice', ['workflow', 'cancel', run]);
+      // The owner waits for the member to answer the cancel of a whole step, with what it spent, until stale_after:
+      // bob, whose nested run's record reads again, answers it, so neither waits on it in a later test.
+      await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
       await started;
     }
   }, 240_000);
