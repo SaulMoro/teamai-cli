@@ -11,8 +11,8 @@ import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { z } from 'zod';
-import type { Creation, Daemon, Model, Target } from './daemon/connect.js';
-import type { AgentCreate, AgentPrompt, Place, PromptRecord } from './journal.js';
+import type { Creation, Daemon, Model, Target, WaitEnd } from './daemon/connect.js';
+import { resolvedDir, type AgentCreate, type AgentPrompt, type Place, type PromptRecord } from './journal.js';
 import { notOffered } from './offer.js';
 import type { Following, ProcessState } from './process-state.js';
 import { isPaseoTool, type EnsureProvider, type PaseoTool } from './providers.js';
@@ -156,6 +156,43 @@ function readResult(file: string): PromptResult | undefined {
 }
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `file` as it resolves through links, or through its directory's when it does not exist yet. */
+const resolvedFile = (file: string): string => (fs.existsSync(file) ? resolvedDir(file) : path.join(resolvedDir(path.dirname(file)), path.basename(file)));
+
+/**
+ * Whether a permission request asks to write or edit a file under one of `dirs`: what a step's grant allows without
+ * asking (`stepGrant`), which an agent created for an earlier step was not given for this step's result file. Paseo
+ * gives every provider's file write the same detail.
+ */
+function isGranted(asked: NonNullable<WaitEnd['final']>['pendingPermissions'][number], { cwd, dirs }: { cwd: string; dirs: string[] }): boolean {
+  const { detail } = asked;
+
+  if (detail?.type !== 'write' && detail?.type !== 'edit') return false;
+  const file = resolvedFile(path.resolve(cwd, detail.filePath));
+
+  return dirs.some((dir) => {
+    const inside = path.relative(resolvedDir(dir), file);
+
+    return inside !== '' && !inside.startsWith('..') && !path.isAbsolute(inside);
+  });
+}
+
+/**
+ * How an agent created for an earlier prompt differs from what `create` asks, for the notice of a prompt that starts a
+ * new agent instead: its provider and model, its effort, or its mode. Undefined: it runs as `create` would.
+ */
+function differs(agentId: string, earlier: AgentCreate['config'], wanted: AgentCreate['config']): string | undefined {
+  if (earlier.provider !== wanted.provider) return `agent ${agentId} runs ${earlier.provider}, and this step runs ${wanted.provider}`;
+
+  if (earlier.thinkingOptionId !== wanted.thinkingOptionId) {
+    return `agent ${agentId} thinks at effort ${earlier.thinkingOptionId ?? 'the model\'s default'}, and this step at effort ${wanted.thinkingOptionId ?? 'the model\'s default'}`;
+  }
+
+  if (earlier.modeId !== wanted.modeId) return `agent ${agentId} runs in Paseo mode ${earlier.modeId ?? 'unset'}, and this step in mode ${wanted.modeId ?? 'unset'}`;
+
+  return undefined;
+}
 
 /** How long a step waits for the daemon to show the agent its run was started from, before naming it by its id alone. */
 const PARENT_LOOKUP_MS = 5_000;
@@ -387,7 +424,45 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
   };
 
   /**
-   * Creates a pending prompt's agent on one of the tool's models, and follows it. Its agent record is journaled before
+   * The agent of the earlier prompt a lease continues, when this prompt can send it its turn: one this runtime holds in
+   * a place still open, whose prompt finished a step, created as `create` would be, in this place's Paseo workspace, and
+   * idle there; or why not, for the notice. A place that runs through a sandbox never continues one: each prompt there
+   * runs in an agent its registration names.
+   */
+  async function continuable(live: Daemon, earlier: { handle: string; op: OpId }, create: AgentCreate, place: Place): Promise<AgentPrompt | { why: string }> {
+    const record = journal.prompt(earlier.op);
+    const at = journal.place(earlier.handle);
+
+    if (record?.kind !== 'agent' || record.handle !== earlier.handle || !at) return { why: 'this runtime no longer holds its agent' };
+    const { agentId } = record.create;
+
+    if (record.outcome?.state !== 'finished' || record.answer.kind !== 'result-file') return { why: `agent ${agentId} did not finish a step` };
+
+    if (throughOf(at) || throughOf(place)) return { why: 'a place that runs through a sandbox runs each prompt in an agent of its own' };
+    const other = differs(agentId, record.create.config, create.config);
+
+    if (other) return { why: other };
+
+    if (at.workspace?.id !== place.workspace?.id) return { why: `agent ${agentId} works in Paseo workspace ${at.workspace?.name ?? 'none'}, and this step works in ${place.workspace?.name ?? 'none'}` };
+
+    try {
+      const agent = await live.agent(agentId);
+
+      if (!agent) return { why: `Paseo no longer shows agent ${agentId}` };
+
+      if (agent.archivedAt) return { why: `Paseo archived agent ${agentId}` };
+
+      if (agent.status === 'running' || agent.status === 'initializing') return { why: `agent ${agentId} is still running a turn` };
+    } catch (error) {
+      return { why: `Paseo did not show agent ${agentId} (${error instanceof Error ? error.message : String(error)})` };
+    }
+
+    return record;
+  }
+
+  /**
+   * Creates a pending prompt's agent on one of the tool's models, and follows it, or sends its turn to the agent of the
+   * earlier prompt it continues. Its agent record is journaled before
    * the cancel marker is read, so a cancel, here or in another process, either finds that record and stops the agent, or
    * is seen here, and no create is sent.
    */
@@ -420,7 +495,22 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       return;
     }
 
-    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool: target.name, answer: how.answer, cwd: how.cwd, create };
+    const earlier = request.lease.continue;
+    const continued = earlier && (await continuable(live, earlier, create, how.place));
+
+    if (!goesOn(op, following)) return;
+
+    if (earlier && continued && 'why' in continued) {
+      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than continue the conversation of ${earlier.op}: ${continued.why}.` });
+    }
+
+    const base = { kind: 'agent', handle: request.handle, tool: target.name, answer: how.answer, cwd: how.cwd } as const;
+
+    // A turn of the earlier agent: Paseo already shows it, and its create stays the earlier prompt's.
+    const record: AgentPrompt = earlier && continued && !('why' in continued)
+      ? { ...base, create: continued.create, dispatched: 'confirmed', continues: { op: earlier.op, prompt: how.prompt } }
+      : { ...base, create };
+
     journal.savePrompt(op, record);
 
     if (!goesOn(op, following)) return;
@@ -514,11 +604,22 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     const { stopped } = following;
 
     try {
+      // A turn of an earlier prompt's agent creates none: one Paseo no longer shows ends the prompt, which sent it nothing
+      // the agent could still run, or whose turn ended with the agent.
+      if (record.continues && !(await live.agent(create.agentId))) {
+        settle(op, {
+          op, state: 'failed',
+          failure: { code: 'tool_failed', message: `Paseo no longer shows the ${record.tool} agent ${create.agentId}, whose conversation this step continues. Run \`teamai workflow retry\` to run the step in a new agent.` },
+        }, following);
+
+        return;
+      }
+
       // The agent of a repeated prompt is found by its id; a create a runtime died before sending is sent again. A lookup
       // that fails throws: an earlier runtime may have created the agent.
       let creation: Creation = { outcome: 'created' };
 
-      if (!(await live.agent(create.agentId))) {
+      if (!record.continues && !(await live.agent(create.agentId))) {
         // Journaled before it is sent, and kept until Paseo shows the agent: a create that failed may still start it.
         dispatch(op, 'unconfirmed');
         creation = await live.create(record.cwd, create, { isIdle: sandboxed !== undefined });
@@ -583,6 +684,22 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       }
     }
 
+    // A turn of an earlier prompt's agent is sent once, unless a stop came first: its record says so before it is sent.
+    if (record.continues && current?.kind === 'agent' && !current.sent && !journal.isCancelled(op) && !closeStops.has(op) && waiting.get(op) === following) {
+      journal.savePrompt(op, { ...current, sent: true });
+
+      try {
+        await live.send(create.agentId, record.continues.prompt);
+      } catch (error) {
+        settle(op, {
+          op, state: 'failed',
+          failure: { code: CANCEL_FAILED, message: `Paseo did not take this step's turn for the ${record.tool} agent ${create.agentId} (${error instanceof Error ? error.message : String(error)}), though it may still run it in the worktree; stop it in the Paseo app.` },
+        }, following);
+
+        return;
+      }
+    }
+
     for (;;) {
       // teamai went away, or a cancel took the prompt over and ended it.
       if (state.closing || waiting.get(op) !== following) return;
@@ -623,7 +740,19 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
         case 'timeout':
           continue;
         case 'permission': {
-          const asked = end.final?.pendingPermissions[0];
+          const pending = end.final?.pendingPermissions ?? [];
+          const place = journal.place(record.handle);
+          const grant = record.answer.kind === 'result-file' && place?.kind === 'worktree' ? { cwd: record.cwd, dirs: [path.dirname(record.answer.file), place.runDir] } : undefined;
+
+          // A write the step's grant allows, which an agent created for an earlier step, or by an import, was not given:
+          // allowed as the grant would, and the turn goes on.
+          if (grant && pending.length > 0 && pending.every((request) => isGranted(request, grant))) {
+            await Promise.all(pending.map((request) => live.allow(create.agentId, request.id)));
+            await Promise.race([delay(PERMISSION_POLL_MS), stopped]);
+            continue;
+          }
+
+          const asked = pending[0];
           const inMode = create.config.modeId === undefined ? 'in the mode Paseo starts it in' : `in Paseo mode ${create.config.modeId}`;
 
           if (record.answer.kind === 'reply') {
@@ -725,7 +854,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result }, following);
+          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result, ...(record.continues && { resumed: true }) }, following);
 
           return;
         }

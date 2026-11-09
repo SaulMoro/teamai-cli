@@ -23,7 +23,7 @@ import { z } from 'zod';
 //    requests.jsonl      every agent create, start, message, cancel and delete, workspace archive and config change it
 //                        received, for a test to read what crossed
 //    stopped.jsonl       each agent a cancel or an archive stopped, once it stopped running, which may be after the answer
-//    answers/<agent>     a person answered the agent's permission request in the app
+//    answers/<agent>     a person answered the agent's permission request in the app, or a client allowed it
 //    started.jsonl       each start of a custom provider's command for an agent, with how it ended
 //
 //  An agent finds the result file the way a real one does, in teamai's prompt, and writes its output there.
@@ -108,6 +108,14 @@ const BehaviourSchema = z.object({
   touch: z.string().optional(),
   /** The agent asks for permission to run a command first, and waits for an answer. */
   ask_permission: z.boolean().default(false),
+  /**
+   * The agent asks for permission before it writes a result file in a directory its create did not allow, as Claude does
+   * in Always Ask (recorded on Paseo 0.14.0: a `Write` request whose detail is `{ type: 'write', filePath }`), and waits
+   * for an answer, from the app or from `agent_permission_response`.
+   */
+  asks_outside_grant: z.boolean().default(false),
+  /** The person deletes every agent that finished its turn in the Paseo app, before the daemon answers the next request. */
+  forget_finished: z.boolean().default(false),
   /** The provider reports no session id once the agent is done. */
   no_session: z.boolean().default(false),
   /** The provider fails the agent with this error. */
@@ -199,11 +207,18 @@ const AgentRecordSchema = z.object({
   sessionId: z.string().nullable(),
   lastError: z.string().optional(),
   permission: z.boolean(),
+  /** The file the agent asks to write, when its permission request is to write one outside what its create allowed. */
+  asked: z.string().optional(),
+  /** The directories its create allowed it to write without asking, as Claude's `Edit(/<dir>/**)` rules name them. */
+  allowed: z.array(z.string()).default([]),
   behaviour: BehaviourSchema,
   prompt: z.string(),
 });
 
 type AgentRecord = z.infer<typeof AgentRecordSchema>;
+
+/** The Claude launch options of a create: the tools it may use without asking. */
+const AllowedSchema = z.looseObject({ allowedTools: z.array(z.string()) });
 
 const StateSchema = z.object({
   agents: z.record(z.string(), AgentRecordSchema),
@@ -287,7 +302,9 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
     },
     currentModeId: agent.modeId,
     availableModes: modesOf(agent.provider),
-    pendingPermissions: agent.permission ? [{ id: `perm-${agent.id}`, provider: agent.provider, name: 'Bash', kind: 'tool' as const, title: 'Run npm test' }] : [],
+    pendingPermissions: !agent.permission ? [] : agent.asked !== undefined
+      ? [{ id: `perm-write-${agent.id}`, provider: agent.provider, name: 'Write', kind: 'tool' as const, input: { file_path: agent.asked }, detail: { type: 'write' as const, filePath: agent.asked } }]
+      : [{ id: `perm-${agent.id}`, provider: agent.provider, name: 'Bash', kind: 'tool' as const, title: 'Run npm test' }],
     persistence: null,
     runtimeInfo: { provider: agent.provider, sessionId: agent.sessionId, model: agent.model, modeId: agent.modeId },
     title: agent.title,
@@ -387,6 +404,13 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
   /** Runs an agent's turn: its work, a permission it waits on, then its hold or release, then its end. */
   const work = (agent: AgentRecord): void => {
     const { behaviour: does } = agent;
+    const result = /Write the workflow result as JSON to (.+?)\.(?:\s|$)/.exec(agent.prompt)?.[1];
+
+    if (does.asks_outside_grant && result && !agent.allowed.includes(path.dirname(result))) {
+      fs.rmSync(path.join(state, 'answers', agent.id), { force: true });
+      Object.assign(agent, { permission: true, asked: result });
+      changed(agent);
+    }
 
     if (does.touch) fs.writeFileSync(path.join(agent.cwd, does.touch), 'work in progress\n');
     const started = Date.now();
@@ -403,7 +427,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
       if (agent.permission) {
         if (!fs.existsSync(path.join(state, 'answers', agent.id))) return;
-        agent.permission = false;
+        Object.assign(agent, { permission: false, asked: undefined });
         changed(agent);
       }
 
@@ -466,7 +490,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
   };
 
   /** The requests `requests.jsonl` keeps. */
-  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request', 'list_commands_request', 'send_agent_message_request', 'delete_agent_request']);
+  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request', 'list_commands_request', 'send_agent_message_request', 'delete_agent_request', 'agent_permission_response']);
 
   /** The requests already held for the delay `models_ms`, `open_ms`, `create_ms` or `archive_ms` gives them. */
   const held = new WeakSet<Inbound>();
@@ -481,6 +505,12 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
   function handle(message: Inbound, reply: (message: Reply) => void): void {
     openMembers();
+
+    if (behaviour().forget_finished) {
+      for (const agent of Object.values(kept.agents)) if (agent.status === 'idle') delete kept.agents[agent.id];
+      save();
+    }
+
     const { models_ms: listing, list_ms: listingWorkspaces, open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
 
     const holds: Partial<Record<Inbound['type'], number>> = {
@@ -666,6 +696,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
           id, provider: message.config.provider, model, thinking, modeId: message.config.modeId ?? null, cwd: fs.realpathSync(message.config.cwd),
           workspaceId: message.workspaceId ?? '', title: message.config.title ?? null, labels: message.labels, status: message.initialPrompt === undefined ? 'idle' : 'running', createdAt: now(), updatedAt: now(),
           sessionId: null, permission: false, behaviour: behaviour(), prompt: message.initialPrompt ?? '',
+          allowed: (AllowedSchema.safeParse(message.config.providerOptions).data?.allowedTools ?? []).flatMap((rule) => /^Edit\(\/(.+)\/\*\*\)$/.exec(rule)?.[1] ?? []),
         };
 
         agent.permission = agent.behaviour.ask_permission;
@@ -725,11 +756,20 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
           return;
         }
 
-        Object.assign(agent, { prompt: message.text, status: 'running', permission: agent.behaviour.ask_permission });
+        // Each turn works as the daemon's behaviour says by then.
+        const does = behaviour();
+        Object.assign(agent, { prompt: message.text, status: 'running', behaviour: does, permission: does.ask_permission });
         save();
         changed(agent);
         reply({ type: 'send_agent_message_response', payload: { requestId: message.requestId, agentId: agent.id, accepted: true, error: null } });
         work(agent);
+
+        return;
+      }
+
+      case 'agent_permission_response': {
+        // As Paseo: a person's answer in the app, sent by a client; an allowed request lets the turn go on.
+        if (message.response.behavior === 'allow' && kept.agents[message.agentId]) fs.writeFileSync(path.join(state, 'answers', message.agentId), 'allow');
 
         return;
       }

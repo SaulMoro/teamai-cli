@@ -11,7 +11,7 @@ import { z } from 'zod';
 //    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree once Paseo
 //                           opened it, or, for a confined prompt's place, the prompt's directory
 //    ops/<op>.json          a prompt: its handle, then the agent create it sends, whether it sent it and Paseo showed
-//                           the agent, and once it ended, its outcome
+//                           the agent, or the earlier prompt whose agent it sends a turn to, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
 //    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
@@ -119,10 +119,16 @@ const PromptRecordSchema = z.discriminatedUnion('kind', [
      */
     dispatched: z.enum(['unconfirmed', 'confirmed']).optional(),
     /**
-     * Through a sandbox, the agent is created with no prompt, and gets it once its wrapper connected: set before the
-     * prompt is sent, so a runtime started again never sends it twice.
+     * Through a sandbox, the agent is created with no prompt, and gets it once its wrapper connected; a prompt that
+     * continues an earlier one's agent gets it as a new turn. Set before the prompt is sent, so a runtime started again
+     * never sends it twice.
      */
     sent: z.literal(true).optional(),
+    /**
+     * For a prompt that continues an earlier prompt's conversation: that prompt's op, whose agent this one sends its turn
+     * to, and the turn. The agent stays the earlier prompt's, which created it: `create` is that prompt's create.
+     */
+    continues: z.object({ op: OpIdSchema, prompt: z.string() }).optional(),
     outcome: OpStateSchema.optional(),
   }),
 ]);

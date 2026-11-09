@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { OpIdSchema, type RuntimeMessage } from '@teamai/runtime-protocol';
+import { OpIdSchema, type PromptLeaseSchema, type RuntimeMessage } from '@teamai/runtime-protocol';
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { agentIdOf } from './conversation.js';
-import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, agentsOf, delay, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
+import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, openRequest, createdAgent, agentsOf, delay, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
 
 describe('the agent id a prompt gets', () => {
   it('is a version 4 UUID that its op alone decides, so a runtime started again finds the same agent', () => {
@@ -1019,5 +1020,173 @@ describe('teamai-runtime-paseo', () => {
       op: 'op-0000000b', event: 'failed',
       failure: { code: 'tool_failed', message: 'Paseo reported no session for the claude agent, so teamai cannot record or score its pass. Run `teamai workflow retry` to run it again.' },
     });
+  });
+});
+
+describe('a prompt that continues an earlier prompt\'s conversation', () => {
+  useRuntimeSuite();
+
+  /** The fix step's prompt on attempt a0123abce, whose result file sits in its own directory, continuing prompt `earlier` of place `from`. */
+  const fixing = (handle: string, op: string, from: string, earlier: string, lease: Partial<z.input<typeof PromptLeaseSchema>> = {}) => {
+    const result = path.join(dir, 'out-fix', 'result.json');
+    fs.mkdirSync(path.dirname(result), { recursive: true });
+
+    return promptRequest(handle, op, {
+      step: 'fix', result, prompt: `Fix what the review found.\n\nWrite the workflow result as JSON to ${result}. Write {"output": …}.`, continue: { handle: from, op: earlier }, ...lease,
+    });
+  };
+
+  /** The review step ran in its place and finished: its place, and the agent it ran on. */
+  async function reviewed(runtime: ReturnType<typeof start>): Promise<{ review: string; agent: string }> {
+    const review = await opened(runtime);
+    runtime.send(promptRequest(review, 'op-0000000b'));
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+
+    return { review, agent: createdAgent('op-0000000b') };
+  }
+
+  /** The runtime's client reconnects to a restarted daemon within its 2 s backoff, as before the next step comes. */
+  const reconnected = (): Promise<void> => delay(3_000);
+
+  const creates = (): unknown[] => received().filter((request) => request.type === 'agent.create.request');
+  const noticesOf = (runtime: ReturnType<typeof start>, op: string): unknown[] => runtime.lines.filter((line) => 'event' in line && line.event === 'notice' && 'op' in line && line.op === op);
+
+  it('sends the prompt to the earlier prompt\'s agent as a new turn, and ends finished with that agent\'s session and resumed', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true } });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toEqual({
+      op: 'op-0000000d', event: 'finished', session: { tool: 'claude', id: `fake-session-${agent}` }, result: { output: { fixed: true } }, resumed: true,
+    });
+    expect(creates()).toHaveLength(1);
+    expect(received().filter((request) => request.type === 'send_agent_message_request')).toEqual([expect.objectContaining({ agentId: agent, text: expect.stringContaining('Fix what the review found.') })]);
+    expect(noticesOf(runtime, 'op-0000000d')).toEqual([]);
+  });
+
+  it('allows the continued agent to write the later step\'s result file, which its create did not allow, as a new agent would be allowed, and nothing else', async () => {
+    // The agent asks before it writes outside what its create allowed, as Claude does in Always Ask (recorded on Paseo 0.14.0).
+    behave({ output: { verdict: 'request-changes' }, asks_outside_grant: true });
+    const runtime = start();
+    await ready(runtime, { mode: 'unattended' });
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true }, asks_outside_grant: true });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', result: { output: { fixed: true } }, resumed: true });
+    expect(received().filter((request) => request.type === 'agent_permission_response')).toEqual([
+      expect.objectContaining({ agentId: agent, requestId: `perm-write-${agent}`, response: { behavior: 'allow' } }),
+    ]);
+  });
+
+  it('starts a new agent, and says why, when Paseo no longer shows the earlier agent, as when the person deleted it', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    // The person deletes the agent in the Paseo app.
+    behave({ output: { fixed: true }, forget_finished: true });
+
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    const end = await runtime.next(isEnd('op-0000000d'));
+
+    expect(end).toEqual({ op: 'op-0000000d', event: 'finished', session: { tool: 'claude', id: `fake-session-${createdAgent('op-0000000d')}` }, result: { output: { fixed: true } } });
+    expect(noticesOf(runtime, 'op-0000000d')).toEqual([{
+      op: 'op-0000000d', event: 'notice',
+      message: `teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-0000000b: Paseo no longer shows agent ${agent}.`,
+    }]);
+  });
+
+  it('continues the earlier agent after the daemon restarted between the two prompts', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    const port = Number(new URL(daemon.url).port);
+    await daemon.close();
+    behave({ output: { fixed: true } });
+    await restartDaemon({ port });
+    await reconnected();
+
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', session: { id: `fake-session-${agent}` }, resumed: true });
+    expect(creates()).toHaveLength(1);
+  });
+
+  it('starts a new agent, and says why, for a prompt whose place works in another workspace', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const elsewhere = path.join(dir, 'worktree-fix');
+    fs.mkdirSync(elsewhere);
+    const opening = openRequest('op-0000000c', 'a0123abce');
+    runtime.send({ ...opening, view: { ...opening.view, worktree: elsewhere } });
+    const accepted = await runtime.next(isOp('op-0000000c', 'accepted'));
+    await runtime.next(isOp('op-0000000c', 'ready'));
+    const fix = 'handle' in accepted ? String(accepted.handle) : '';
+
+    behave({ output: { fixed: true } });
+    runtime.send({ ...fixing(fix, 'op-0000000d', review, 'op-0000000b'), cwd: elsewhere });
+
+    expect(await runtime.next(isEnd('op-0000000d'))).not.toHaveProperty('resumed');
+    expect(creates()).toHaveLength(2);
+    expect(noticesOf(runtime, 'op-0000000d')).toEqual([expect.objectContaining({ message: expect.stringMatching(new RegExp(`^teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-0000000b: agent ${agent} works in Paseo workspace .+, and this step works in .+\\.$`)) })]);
+  });
+
+  it('starts a new agent, and says why, for a prompt on another model than the earlier agent\'s', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true } });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b', { model: { name: 'claude-sonnet-5-5' } }));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).not.toHaveProperty('resumed');
+    expect(creates()).toHaveLength(2);
+    expect(noticesOf(runtime, 'op-0000000d')).toEqual([{
+      op: 'op-0000000d', event: 'notice',
+      message: `teamai-runtime-paseo starts a new agent for step "fix" rather than continue the conversation of op-0000000b: agent ${agent} runs claude/claude-opus-5-5, and this step runs claude/claude-sonnet-5-5.`,
+    }]);
+  });
+
+  it('cancels only the continued turn, and leaves the agent to the earlier place, whose close ends it', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const { review, agent } = await reviewed(runtime);
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ hold_ms: 60_000, output: { fixed: true } });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000d', 'display'));
+    runtime.send({ type: 'cancel', op: 'op-0000000d' });
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toEqual({ op: 'op-0000000d', event: 'cancelled' });
+    expect(received().filter((request) => request.type === 'cancel_agent_request')).toEqual([expect.objectContaining({ agentId: agent })]);
+
+    // The later place closes first: the agent stays, in the workspace the earlier place still holds.
+    runtime.send({ type: 'close', handle: fix });
+    expect(await runtime.next((line) => 'handle' in line && line.handle === fix && 'event' in line && line.event === 'closed')).toEqual({ event: 'closed', handle: fix });
+    expect(received().filter((request) => request.type === 'archive_workspace_request' || request.type === 'delete_agent_request')).toEqual([]);
+    expect(agentsOf()).toContain(agent);
+
+    runtime.send({ type: 'close', handle: review });
+    await runtime.next((line) => 'handle' in line && line.handle === review && 'event' in line && line.event === 'closed');
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toHaveLength(1);
   });
 });

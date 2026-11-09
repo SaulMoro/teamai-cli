@@ -295,8 +295,10 @@ export interface Daemon {
   create(cwd: string, create: AgentCreate, how?: { isIdle: boolean }): Promise<Creation>;
   /** Starts an idle agent's tool: Paseo starts Codex's at the create, and Claude's at the first listing of its commands. */
   start(agentId: string): Promise<void>;
-  /** Sends an idle agent its first message. */
+  /** Sends an idle agent a message: the first one of an agent created with no prompt, or a new turn of one that finished. */
   send(agentId: string, text: string): Promise<void>;
+  /** Allows the agent's pending permission request `requestId`, as a person who answers it in the app does. */
+  allow(agentId: string, requestId: string): Promise<void>;
   /** Deletes an agent, which stops its tool; its logs go with it. */
   remove(agentId: string): Promise<void>;
   agent(agentId: string): Promise<PaseoAgent | null>;
@@ -769,6 +771,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       // Paseo's client throws a message the daemon did not accept.
       await client.sendAgentMessage(agentId, text);
     },
+    allow: (agentId, requestId) => client.respondToPermission(agentId, requestId, { behavior: 'allow' }),
     remove: (agentId) => client.deleteAgent(agentId),
     wait: (agentId) => client.waitForFinish(agentId, 0),
     cancel: (agentId) => client.cancelAgent(agentId),
