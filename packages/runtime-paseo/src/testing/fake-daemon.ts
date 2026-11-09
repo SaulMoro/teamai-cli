@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   SessionInboundMessageSchema, WSInboundMessageSchema, WSOutboundMessageSchema, type CreationSnapshot, type WorkspaceDescriptorPayload,
 } from '@getpaseo/protocol/messages';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 
 // ─── A fake Paseo daemon ─────────────────────────────────
@@ -26,6 +26,9 @@ import { z } from 'zod';
 //    answers/<agent>     a person answered the agent's permission request in the app, or a client allowed it
 //    started.jsonl       each start of a custom provider's command for an agent, with how it ended
 //
+//  It routes a client to the other daemons it saved as hosts (`hosts`), as `paseo host add` saves one: a route carries
+//  the client's frames to that daemon's WebSocket and its answers back, as text frames.
+//
 //  An agent finds the result file the way a real one does, in teamai's prompt, and writes its output there.
 //
 
@@ -34,6 +37,15 @@ const BehaviourSchema = z.object({
   version: z.string().default('0.14.0'),
   /** Features hello leaves out. */
   missing: z.array(z.string()).default([]),
+  /** The daemon's server id in hello. */
+  server_id: z.string().default('srv_fake0001'),
+  /**
+   * The other daemons it saved as hosts, as `paseo host add` saves one: listed with their status, and routed to at `url`
+   * while online. A route to one that does not answer there fails as Paseo fails a route to a host it lost.
+   */
+  hosts: z.array(z.object({ label: z.string(), server_id: z.string(), url: z.string(), status: z.enum(['connecting', 'online', 'offline', 'error', 'disabled']).default('online') })).default([]),
+  /** The origin URL of the git checkout in each directory, which a workspace there reports as Paseo 0.14.0 does (recorded). */
+  repositories: z.record(z.string(), z.string()).default({}),
   /**
    * The models each provider offers; a provider absent here is unavailable. An empty list is OpenCode connected to no
    * model provider: installed, so available, with a catalog that fails.
@@ -194,7 +206,7 @@ const MODES: Readonly<Record<Provider, Array<{ id: string; label: string; colorT
 /** The mode Paseo 0.14.0 starts each provider in, as its providers snapshot reports it (recorded): none for OpenCode. */
 const DEFAULT_MODES: Readonly<Record<Provider, string | null>> = { claude: 'auto', codex: 'auto-review', opencode: null };
 
-const FEATURES = ['creationLifecycle', 'agentRequestReceipts', 'ownedSubscriptions', 'workspaceRequestReceipts'];
+const FEATURES = ['creationLifecycle', 'agentRequestReceipts', 'ownedSubscriptions', 'workspaceRequestReceipts', 'connectedHosts'];
 
 const AgentRecordSchema = z.object({
   id: z.string(),
@@ -461,6 +473,15 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
     };
 
     const reply = (message: Reply): void => send({ type: 'session', message });
+    /** The routes this client opened to saved hosts, by route id. */
+    const routes = new Map<string, WebSocket>();
+
+    socket.on('close', () => {
+      const open = [...routes.values()];
+      routes.clear();
+
+      for (const route of open) route.close();
+    });
 
     socket.on('message', (data) => {
       const frame = WSInboundMessageSchema.parse(JSON.parse(String(data)));
@@ -476,7 +497,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         reply({
           type: 'status',
           payload: {
-            status: 'server_info', protocolVersion: 1, serverId: 'srv_fake0001', hostname: 'fake-host', version: does.version, sourceId: 'owner',
+            status: 'server_info', protocolVersion: 1, serverId: does.server_id, hostname: 'fake-host', version: does.version, sourceId: 'owner',
             permissions: ['daemon.read', 'workspace.read', 'workspace.write', 'workspace.manage'], desktopManaged: false,
             features: Object.fromEntries(FEATURES.flatMap((feature) => (does.missing.includes(feature) ? [] : [[feature, true]]))),
           },
@@ -486,9 +507,73 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       }
 
       if (frame.type !== 'session') return;
-      handle(frame.message, reply);
+
+      if (!route(frame.message, reply, routes)) handle(frame.message, reply);
     });
   });
+
+  /**
+   * Answers a request about saved hosts, and says whether `message` was one: the host list, and a route a client opens to
+   * one of them, sends frames over and closes.
+   */
+  const route = (message: Inbound, reply: (message: Reply) => void, routes: Map<string, WebSocket>): boolean => {
+    switch (message.type) {
+      case 'hosts.list.request': {
+        const { server_id: serverId, hosts } = behaviour();
+
+        const listed = hosts.map((host, at) => ({
+          registrationId: `hst_${at}`, serverId: host.server_id, label: host.label, source: { id: 'owner', key: 'fake' }, metadata: {}, enabled: host.status !== 'disabled',
+          status: host.status, targetDescription: `tcp://${new URL(host.url).host}`, lastOnlineAt: null, nextRetryAt: null, error: null,
+        }));
+
+        reply({ type: 'hosts.list.response', payload: { requestId: message.requestId, directory: { self: { serverId, label: 'fake-host' }, hosts: listed } } });
+
+        return true;
+      }
+
+      case 'hosts.route.open.request': {
+        record(message);
+        const host = behaviour().hosts.find((one) => one.server_id === message.serverId && one.status === 'online');
+        const refuse = (error: string): void => reply({ type: 'rpc_error', payload: { requestId: message.requestId, requestType: message.type, error, code: 'host_offline' } });
+
+        if (!host) {
+          refuse(`Host ${message.serverId} is offline`);
+
+          return true;
+        }
+
+        const routeId = `rte_${message.scopeId}`;
+        const to = new WebSocket(host.url);
+        routes.set(routeId, to);
+        to.once('open', () => reply({ type: 'hosts.route.open.response', payload: { requestId: message.requestId, routeId } }));
+        to.once('error', () => {
+          routes.delete(routeId);
+          refuse(`Host ${message.serverId} is offline`);
+        });
+        to.on('message', (data) => reply({ type: 'hosts.route.frame', payload: { subscriptionId: routeId, data: String(data), binary: false } }));
+        to.once('close', () => {
+          if (routes.delete(routeId)) reply({ type: 'hosts.route.closed', payload: { subscriptionId: routeId, code: 'host_offline', message: `Host ${message.serverId} is offline` } });
+        });
+
+        return true;
+      }
+
+      case 'hosts.route.frame.request':
+        routes.get(message.routeId)?.send(message.data);
+
+        return true;
+      case 'hosts.route.close.request':
+        for (const [routeId, to] of routes) {
+          if (routeId !== message.routeId && routeId !== `rte_${message.scopeId}`) continue;
+          routes.delete(routeId);
+          to.close();
+        }
+
+        return true;
+      default:
+        return false;
+    }
+  };
 
   const record = (message: Inbound): void => {
     fs.appendFileSync(path.join(state, 'requests.jsonl'), `${JSON.stringify(message)}\n`);
@@ -642,7 +727,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         const id = kept.workspaces[cwd] ?? `wks_${createHash('sha256').update(cwd).digest('hex').slice(0, 16)}`;
         kept.workspaces[cwd] = id;
         save();
-        const answer = (): void => reply({ type: 'open_project_response', payload: { requestId: message.requestId, workspace: workspaceOf(id, cwd), error: null } });
+        const answer = (): void => reply({ type: 'open_project_response', payload: { requestId: message.requestId, workspace: workspaceOf(id, cwd, behaviour().repositories), error: null } });
         const late = made ? behaviour().open_reply_ms : 0;
 
         if (late > 0) timers.add(setTimeout(answer, late));
@@ -652,7 +737,8 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       }
 
       case 'fetch_workspaces_request': {
-        const entries = Object.entries(kept.workspaces).map(([cwd, id]) => workspaceOf(id, cwd));
+        const { repositories } = behaviour();
+        const entries = Object.entries(kept.workspaces).map(([cwd, id]) => workspaceOf(id, cwd, repositories));
         reply({ type: 'fetch_workspaces_response', payload: { requestId: message.requestId, entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } } });
 
         return;
@@ -1032,14 +1118,17 @@ function placementOf(id: string, cwd: string): NonNullable<WorkspaceDescriptorPa
   return { projectKey: `prj_${id.slice(4)}`, projectName: path.basename(cwd), workspaceName: 'main', checkout: { cwd, currentBranch: 'main', remoteUrl: null, worktreeRoot: cwd, isGit: true, isPaseoOwnedWorktree: false, mainRepoRoot: null } };
 }
 
-function workspaceOf(id: string, cwd: string): WorkspaceDescriptorPayload {
+/** The workspace `id` on `cwd`, reporting the origin URL `repositories` gives its checkout, as Paseo reports it in its git runtime. */
+function workspaceOf(id: string, cwd: string, repositories: Record<string, string>): WorkspaceDescriptorPayload {
   const name = path.basename(cwd);
+  const remoteUrl = Object.entries(repositories).find(([dir]) => path.resolve(dir) === cwd)?.[1];
 
   return {
     id, projectId: `prj_${id.slice(4)}`, projectDisplayName: name, projectCustomName: null, projectCustomIconRevision: null, projectRootPath: cwd, workspaceDirectory: cwd,
     setupStatus: null, projectKind: 'git', workspaceKind: 'local_checkout', name: 'main', title: null, pinnedAt: null, background: false, archivingAt: null,
     status: 'done', statusEnteredAt: null, activityAt: null, createdAt: now(), diffStat: null, scripts: [],
     project: placementOf(id, cwd),
+    ...(remoteUrl !== undefined && { gitRuntime: { currentBranch: 'main', remoteUrl, isPaseoOwnedWorktree: false, isDirty: false, aheadBehind: null, aheadOfOrigin: 0, behindOfOrigin: 0 } }),
   };
 }
 

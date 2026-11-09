@@ -16,6 +16,7 @@ import { checkOf, offerOf } from './offer.js';
 import { parseOptions } from './options.js';
 import type { ProcessState } from './process-state.js';
 import { isPaseoTool, PASEO_TOOLS, providerAdds } from './providers.js';
+import { wakes } from './wake.js';
 import { workspaces } from './workspace.js';
 
 // ─── teamai-runtime-paseo ────────────────────────────────
@@ -33,13 +34,16 @@ import { workspaces } from './workspace.js';
 //              restarted, and the attempt fails with its work kept
 //    cancel    recorded first, then the agent is cancelled: Paseo reports a cancelled agent as idle. A stop it cannot
 //              confirm within 10 s ends cancel_failed, which a later cancel tries again
+//    wake      accepted, then an agent on the first host saved on the daemon (`paseo host add`) that has a workspace of
+//              the repository, its first prompt teamai's message: woken with the host, or wake_unavailable naming why
+//              each host could not take it. A cancel before the agent's create went out ends it cancelled
 //    recover   init only to stop what it ran: no sign-in or tool check, and the daemon reached only for a cancel or close
 //    confined  a judge: a fresh agent whose cwd is the prompt's directory, briefed to read only it, in a mode that asks
 //              before it edits or runs anything; any request for permission ends it. Its answer is its last message,
 //              reported best-effort: nothing stops a read outside the directory
 //
 //  This module serves the requests; offer.ts says what init offers, conversation.ts runs a prompt's agent, workspace.ts
-//  an attempt's place, judge.ts a confined prompt, providers.ts Paseo's providers, sandbox.ts a place that runs through a
+//  an attempt's place, wake.ts a fleet member on another host, judge.ts a confined prompt, providers.ts Paseo's providers, sandbox.ts a place that runs through a
 //  sandbox, and daemon/ the connection, over the state of process-state.ts.
 //
 
@@ -129,6 +133,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
   const { send, track, accept, follow, work, cancel } = conversation;
   const { open, adopt, displayOf, keptOf, forgetReleased, closePlace } = workspaces(state, { ensureProvider, conversation });
   const judge = judging(state, { conversation, adopt });
+  const waking = wakes(state);
 
   async function init(request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> {
     if (request.mode !== 'check') return initIn(request, { reply: write });
@@ -224,7 +229,8 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     refill(state.homeDirs, offered.homeDirs);
     refill(state.providerHomes, offered.providerHomes);
     refill(state.toAdd, offered.toAdd);
-    write(offered.init);
+    // A daemon that routes to saved hosts can start a fleet member on one; recover mode returned above.
+    write(offered.init.ok && connected.routesHosts ? { ...offered.init, wake: true } : offered.init);
   }
 
   async function prompt(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>): Promise<void> {
@@ -315,6 +321,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
 
         return;
       case 'cancel':
+        if (waking.cancel(request.op)) return;
         await cancel(request.op);
 
         return;
@@ -347,8 +354,9 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
         await prompt(live, request);
 
         return;
-      // The kit answers a wake itself, since this runtime gives it no wake handler.
       case 'wake':
+        await waking.wake(live, request);
+
         return;
       default: {
         const unhandled: never = request;
@@ -433,7 +441,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     }
   };
 
-  const requests = answering({ init: answerOne, open: answerOne, exec: answerOne, prompt: answerOne, cancel: answerOne, collect: answerOne, reattach: answerOne, close: answerOne });
+  const requests = answering({ init: answerOne, open: answerOne, exec: answerOne, prompt: answerOne, wake: answerOne, cancel: answerOne, collect: answerOne, reattach: answerOne, close: answerOne });
   const status = await serveRuntime({ name: 'paseo', input, env, ledger, handlers: requests.handlers, holds: holdsOp, stopped: 'its Paseo agent', debug: note });
 
   // teamai is gone once stdin ends: the requests in flight get their answers, and an agent goes on in Paseo, which keeps

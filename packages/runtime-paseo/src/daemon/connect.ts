@@ -10,6 +10,7 @@ import { RUN_DIR_ENV, type InitInstance, type RuntimeFailure } from '@teamai/run
 import { paseoKeyOf, type AgentCreate } from '../journal.js';
 import { CustomProvidersSchema, homeDirOf, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, runsCommand, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
 import { isOnThisMachine } from './address.js';
+import { routedHost, savedHosts, type Host, type SavedHost } from './host.js';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
 import { claudeHomeIn, codexLoginStatus, isCodexExecutable, signInStep, type RunsIn, type SignIn } from './sign-in.js';
 
@@ -263,6 +264,12 @@ export interface Daemon {
   url: string;
   serverId: string;
   version: string;
+  /** Whether the daemon routes to the other daemons the member saved on it as hosts (`paseo host add`). */
+  routesHosts: boolean;
+  /** The other daemons the member saved on it as hosts. */
+  hosts(): Promise<SavedHost[]>;
+  /** The saved host `serverId`, reached through this daemon. */
+  host(serverId: string): Promise<Host>;
   /**
    * The tools whose provider the daemon has installed, and the team instances of them, each one it can run when signed
    * in and Paseo gives it a mode a step can start in.
@@ -807,6 +814,9 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       if (error) throw new Error(error);
     },
     link: (agentId) => paseo.buildAgentDeepLink({ serverId, agentId }),
+    routesHosts: info.features?.connectedHosts === true,
+    hosts: () => savedHosts(api),
+    host: (hostId) => routedHost(api, paseo, hostId),
     sessionHome(tool, sessionId, { claudeHome, providerHome, homeDir, since }) {
       switch (tool) {
         case 'claude':
