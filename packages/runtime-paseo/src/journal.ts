@@ -14,6 +14,9 @@ import { z } from 'zod';
 //                           the agent, or the agent it sends a turn to, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
+//    conversations/<op>.json  a conversation a workflow prompt started, by its id, that prompt's op: the place that owns
+//                           it, whose close ends it, and the agent it runs on. A later prompt that continues it, in
+//                           a place of its own, finds it here and sends its turn to that agent
 //    handles/<handle>/<op>  the prompts of a handle, written before each prompt's record, so a handle reads only its
 //                           own records, and one that cannot be read stops only its own handle
 //    opening/<directory>    the pid of the runtime opening a Paseo workspace on a directory: one open at a time decides
@@ -138,6 +141,11 @@ export type PromptRecord = z.infer<typeof PromptRecordSchema>;
 
 export type AgentPrompt = Extract<PromptRecord, { kind: 'agent' }>;
 
+/** A conversation: the place that owns it, the tool it runs, and the create of the agent it runs on, with that agent's id. */
+const ConversationSchema = z.object({ handle: z.string(), tool: z.string(), create: AgentCreateSchema });
+
+export type Conversation = z.infer<typeof ConversationSchema>;
+
 /** A record, or undefined when there is none. A record that cannot be read or parsed is an error, never taken as absent. */
 function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
   let text: string;
@@ -174,7 +182,7 @@ export function resolvedDir(directory: string): string {
   }
 }
 
-function write(file: string, value: Place | PromptRecord): void {
+function write(file: string, value: Place | PromptRecord | Conversation): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
@@ -185,6 +193,7 @@ export function journal(root: string) {
   const placeFile = (handle: string): string => path.join(root, 'places', `${encodeURIComponent(handle)}.json`);
   const promptFile = (op: OpId): string => path.join(root, 'ops', `${op}.json`);
   const cancelFile = (op: OpId): string => path.join(root, 'ops', `${op}.cancel`);
+  const conversationFile = (id: OpId): string => path.join(root, 'conversations', `${id}.json`);
   const names = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
 
   const indexDir = (handle: string): string => path.join(root, 'handles', encodeURIComponent(handle));
@@ -268,12 +277,35 @@ export function journal(root: string) {
       fs.writeFileSync(cancelFile(op), '');
     },
     isCancelled: (op: OpId): boolean => fs.existsSync(cancelFile(op)),
+    /** The conversation the prompt `id` started, while the place that owns it is open. */
+    conversation: (id: OpId): Conversation | undefined => read(conversationFile(id), ConversationSchema),
+    /** Keeps a conversation for its place, unless a close already forgot that place. */
+    saveConversation(id: OpId, conversation: Conversation): void {
+      if (fs.existsSync(indexDir(conversation.handle))) write(conversationFile(id), conversation);
+    },
     /** Removes everything kept for `handle`. */
     forget(handle: string): void {
       for (const { op } of promptsOf(handle)) {
         fs.rmSync(promptFile(op), { force: true });
         fs.rmSync(cancelFile(op), { force: true });
       }
+
+      // The conversations the place started end with it, found by the place each names; one that cannot be read is
+      // left, since its place is unknown, and no later prompt continues it.
+      for (const name of names(path.join(root, 'conversations'))) {
+        const file = path.join(root, 'conversations', name);
+
+        let owner: string | undefined;
+
+        try {
+          owner = read(file, ConversationSchema)?.handle;
+        } catch {
+          owner = undefined;
+        }
+
+        if (owner === handle) fs.rmSync(file, { force: true });
+      }
+
 
       fs.rmSync(placeFile(handle), { force: true });
       fs.rmSync(indexDir(handle), { recursive: true, force: true });
