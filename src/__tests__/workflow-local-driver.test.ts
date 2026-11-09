@@ -570,8 +570,11 @@ sandbox_mode = "read-only"
 
   it('keeps a Claude prompt step that streams for longer than the idle limit but never stays silent that long', async () => {
     const { config, workspace, runId } = await fixture();
-    config.workflows = { tools: { default: 'claude' }, idle_timeout: '1s' };
-    const claude = claudeBeside(workspace, { answer: '{"ok":true}', always: ['slow'], slowMs: 600 });
+    // The fake prints three lines, each after a pause of half the limit: it streams for one and a half limits, and a
+    // pause would have to double under load before the limit stops it.
+    const idleMs = 2000;
+    config.workflows = { tools: { default: 'claude' }, idle_timeout: `${idleMs / 1000}s` };
+    const claude = claudeBeside(workspace, { answer: '{"ok":true}', always: ['slow'], slowMs: idleMs / 2 });
 
     await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
 
