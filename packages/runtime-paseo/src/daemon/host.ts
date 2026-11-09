@@ -1,5 +1,5 @@
-import type { HostSummary, PaseoApi, PaseoWorkspace } from '@getpaseo/client';
-import { PASEO_TOOLS } from '../providers.js';
+import type { HostSummary, PaseoAgentConfig, PaseoApi, PaseoWorkspace } from '@getpaseo/client';
+import { PASEO_TOOLS, type PaseoTool } from '../providers.js';
 import type { PaseoClient } from './client.js';
 
 // ─── Another Paseo daemon, routed through this one ───────
@@ -19,10 +19,10 @@ export interface SavedHost {
 export interface Host {
   /** The workspace whose git checkout's origin `isOf` takes, on any page of the host's workspaces. */
   checkoutOf(isOf: (origin: string) => boolean): Promise<PaseoWorkspace | undefined>;
-  /** The provider and model a member starts on: the default model of the first of teamai's tools the host has, if any. */
-  memberProvider(): Promise<string | undefined>;
-  /** Starts an agent in `workspace` whose first prompt is `prompt`; a repeated `agentId` starts none. */
-  launch(agent: { workspace: PaseoWorkspace; agentId: string; title: string; prompt: string; provider: string; labels: Record<string, string> }): Promise<void>;
+  /** The tool a member starts on, and its provider and model: the default model of the first of teamai's tools the host has, if any. */
+  memberProvider(): Promise<{ tool: PaseoTool; provider: string } | undefined>;
+  /** Starts an agent in `workspace` whose first prompt is `prompt`, with the tool's launch `options`; a repeated `agentId` starts none. */
+  launch(agent: { workspace: PaseoWorkspace; agentId: string; title: string; prompt: string; provider: string; options: PaseoAgentConfig['options']; labels: Record<string, string> }): Promise<void>;
   /** The Paseo app's link to the host's agent. */
   link(agentId: string): string;
   close(): Promise<void>;
@@ -61,10 +61,10 @@ export async function routedHost(api: PaseoApi, paseo: PaseoClient, serverId: st
       const { models = [] } = await remote.providers.listModels(tool);
       const model = models.find((one) => one.isDefault === true) ?? models[0];
 
-      return model && `${tool}/${model.id}`;
+      return model && { tool, provider: `${tool}/${model.id}` };
     },
-    async launch({ workspace, agentId, title, prompt, provider, labels }) {
-      await remote.workspaces.ref(workspace).agents.create({ agentId, idempotencyKey: agentId, title, prompt, labels, config: { provider } });
+    async launch({ workspace, agentId, title, prompt, provider, options, labels }) {
+      await remote.workspaces.ref(workspace).agents.create({ agentId, idempotencyKey: agentId, title, prompt, labels, config: { provider, ...(options && { options }) } });
     },
     link: (agentId) => paseo.buildAgentDeepLink({ serverId, agentId }),
     close: () => remote.dispose(),

@@ -1,8 +1,10 @@
+import type { PaseoAgentConfig } from '@getpaseo/client';
 import type { OpId, RuntimeFailure, RuntimeMessage, WakeRequest } from '@teamai/runtime-protocol';
 import { agentIdOf } from './conversation.js';
 import type { Daemon } from './daemon/connect.js';
 import type { Host } from './daemon/host.js';
 import type { ProcessState } from './process-state.js';
+import type { PaseoTool } from './providers.js';
 
 // ─── Waking a fleet member ───────────────────────────────
 //
@@ -14,6 +16,20 @@ import type { ProcessState } from './process-state.js';
 
 /** What every woken member is told last, so its agent ends once its one attempt is done. */
 export const END_OF_WAKE = 'When that one attempt is done, or nothing is left to claim, end: take no other work in this agent.';
+
+/**
+ * What a woken agent may run without asking, in the mode Paseo starts it in: teamai's command, by the tool's own rule,
+ * and nothing else. Claude's default mode and OpenCode's asked before running it (recorded). Codex takes no rule for one
+ * command, so its first prompt tells the person what to approve (`approveFirst`).
+ */
+const WAKE_ALLOWS: Readonly<Record<PaseoTool, PaseoAgentConfig['options']>> = {
+  claude: { allowedTools: ['Bash(teamai workflow resume:*)'] },
+  codex: undefined,
+  opencode: { permission: { bash: { 'teamai workflow resume *': 'allow' } } },
+};
+
+/** The line a woken Codex agent's first prompt starts with, for the person who sees Codex ask. */
+const approveFirst = (pool: string): string => `teamai woke this agent to take one attempt of the fleet pool ${pool}: approve \`teamai workflow resume\` when Codex asks, or the attempt waits here.`;
 
 /** What the person adds so a wake finds a machine. */
 const NEXT_STEP = 'Add the machine with `paseo host add <host:port>`, and open a checkout of the repository in Paseo there.';
@@ -88,9 +104,9 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
           continue;
         }
 
-        const provider = await host.memberProvider();
+        const member = await host.memberProvider();
 
-        if (!provider) {
+        if (!member) {
           checked.push(`${saved.label} runs none of Claude, Codex or OpenCode`);
           continue;
         }
@@ -99,7 +115,9 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
         const title = request.title.endsWith(` · ${request.pool}`) ? request.title : `${request.title} · ${request.pool}`;
         const agentId = agentIdOf(request.op);
         waking.state = 'launched';
-        await host.launch({ workspace, agentId, title, prompt: `${request.message}\n\n${END_OF_WAKE}`, provider, labels: { 'teamai-pool': request.pool } });
+        const options = WAKE_ALLOWS[member.tool];
+        const prompt = `${options ? '' : `${approveFirst(request.pool)}\n\n`}${request.message}\n\n${END_OF_WAKE}`;
+        await host.launch({ workspace, agentId, title, prompt, provider: member.provider, options, labels: { 'teamai-pool': request.pool } });
 
         return {
           kind: 'woken',
