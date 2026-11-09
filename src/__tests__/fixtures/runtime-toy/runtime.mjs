@@ -46,6 +46,10 @@
 // tool home its view gives, the names an open or a reattach says the step goes without (`unset`), and the names of the
 // credentials it brought, never a value.
 //
+// With `wake_log`, an absolute path, it wakes fleet members: its init says `wake: true`, and it appends each `wake` it is
+// sent to that file as one JSON line, the request as teamai wrote it, then answers `woken` with `where: "toy"`, so a
+// test starts the member from that file.
+//
 // `notice` sends a notice before it answers a request, by request type (`{"init":"…","exec":"…"}`), naming the
 // request's operation or handle. `{NAME}` in it is replaced by the value of credential NAME the request brought, or of
 // NAME in its env, so a test reads what teamai shows of a secret a runtime echoes.
@@ -57,7 +61,7 @@ import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls', 'wake_log']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -246,15 +250,16 @@ function init(request) {
   // `own_logins` names the tools whose login its provider keeps, so teamai copies none for them and sends none of
   // their sign-in variables it found by name.
   const ownLogins = options.own_logins === undefined ? {} : { ownLogins: options.own_logins };
+  const wakes = typeof options.wake_log === 'string' ? { wake: true } : {};
 
   if (options.agent === undefined) {
-    send({ type: 'init', ok: true, ...judging, ...unavailable, ...permissions, ...ownLogins, can: { ...DEFAULT_CAN, tools, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+    send({ type: 'init', ok: true, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 
     return;
   }
 
   // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
-  send({ type: 'init', ok: true, prompt: true, ...judging, ...unavailable, ...permissions, ...ownLogins, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+  send({ type: 'init', ok: true, prompt: true, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 }
 
 /** Notes which credentials a request brought, by name only: a value is never written. */
@@ -710,7 +715,15 @@ function exitWhenIdle() {
   if (ended && running.size === 0 && working.size === 0 && stopping.size === 0) process.exit(0);
 }
 
-const HANDLERS = { init, open, exec, prompt, cancel, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
+/** Wakes a fleet member as `wake_log` says: the request goes to that file, and the member is "woken" on the toy. */
+function wake(request) {
+  if (typeof options.wake_log !== 'string') return send({ op: request.op, event: 'failed', failure: { code: 'wake_unavailable', message: 'The toy wakes no fleet member: give it option wake_log, the file it writes each wake to.' } });
+  fs.appendFileSync(options.wake_log, `${JSON.stringify(request)}\n`);
+  send({ op: request.op, event: 'accepted' });
+  send({ op: request.op, event: 'woken', where: 'toy' });
+}
+
+const HANDLERS = { init, open, exec, prompt, cancel, wake, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
 
 /** Answers a request for a handle or an operation as `answer` says, and says whether it did. */
 function answeredOtherwise(request) {

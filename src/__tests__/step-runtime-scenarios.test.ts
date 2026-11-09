@@ -1688,6 +1688,23 @@ describe('the stdio step runtime client', () => {
     }
   });
 
+  it('wakes on the toy only when its wake_log is set, which gets each wake as one JSON line', async () => {
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-toy-wake-'));
+    const wakeLog = path.join(state, 'wakes.jsonl');
+    const [plain, waking] = [stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }), stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] })];
+    const op = newOpId();
+
+    try {
+      expect(await plain.init({ options: { state: path.join(state, 'plain') }, mode: 'unattended' })).not.toHaveProperty('wakes');
+      expect(await waking.init({ options: { state: path.join(state, 'waking'), wake_log: wakeLog }, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
+      expect(await waking.wake?.({ op, ...WAKE }, {})).toEqual({ kind: 'woken', where: 'toy' });
+      expect(fs.readFileSync(wakeLog, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))).toEqual([{ type: 'wake', op, ...WAKE }]);
+    } finally {
+      await Promise.all([plain.dispose(), waking.dispose()]);
+      fs.rmSync(state, { recursive: true, force: true });
+    }
+  });
+
   it('ends a wake lost when the runtime stops after accepting it, since the member may still launch', async () => {
     const acceptsThenExits = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
       const request = JSON.parse(line);
