@@ -659,6 +659,19 @@ describe('teamai-runtime-t3', () => {
         expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toMatchObject({ instanceId: SANDBOX_CLAUDE });
       });
 
+      it('adds teamai\'s wrapper again, telling the person again, when the member removed it in T3 Code after the open', async () => {
+        const runtime = await throughSandbox();
+        expect(await openThrough(runtime)).toMatchObject({ event: 'ready' });
+        t3.settings({});
+
+        runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000c'));
+
+        expect(await ended(runtime, 'op-0000000c')).toMatchObject({ event: 'finished', session: { tool: 'claude', home: toolHome } });
+        expect(settingsNow()).toMatchObject({ providerInstances: { [SANDBOX_CLAUDE]: { driver: 'claudeAgent', config: { binaryPath: path.join(bin, SANDBOX_CLAUDE) } } } });
+        expect(noticesOf(runtime).filter((line) => String(line['message']).startsWith(`Added the T3 Code provider instance "${SANDBOX_CLAUDE}"`)).map((line) => line['op'])).toEqual([OPEN, 'op-0000000c']);
+        expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toMatchObject({ instanceId: SANDBOX_CLAUDE });
+      });
+
       it('registers the step\'s tool again when a runtime started after its own restart reattaches the place', async () => {
         const first = await throughSandbox();
         expect(await openThrough(first)).toMatchObject({ event: 'ready' });

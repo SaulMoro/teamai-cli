@@ -127,6 +127,23 @@ describe('teamai-runtime-t3', () => {
         expect([...noticesOf(first.runtime), ...noticesOf(second.runtime)].filter((line) => String(line['message']).startsWith('Added'))).toHaveLength(1);
       });
 
+      it('adds it again, telling the person again, on a later open after the member removed it in T3 Code', async () => {
+        signIn(t3, undefined, undefined, AUTO);
+        const { runtime } = await initOn({ mode: 'unattended' });
+        const judgeOpen = (op: string): Promise<Line> => {
+          runtime.send({ type: 'open', op, run: RUN, attempt: op, tool: 'acme-claude', credentials: {} });
+
+          return runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && !isNotice(line), 30_000);
+        };
+
+        expect(await judgeOpen('op-00000041')).toMatchObject({ event: 'ready' });
+        t3.settings(MEMBER_SETTINGS);
+
+        expect(await judgeOpen('op-00000042')).toMatchObject({ event: 'ready' });
+        expect(settingsNow()).toEqual({ ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': ADDED(path.join(bin, 'acme-claude')) } });
+        expect(noticesOf(runtime).filter((line) => String(line['message']).startsWith('Added')).map((line) => line['op'])).toEqual(['op-00000041', 'op-00000042']);
+      });
+
       it('does not offer it, naming what to do, when T3 already has a provider instance of that name that runs another command', async () => {
         signIn(t3, undefined, undefined, FULL);
         const taken = { ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': { driver: 'claudeAgent', config: { binaryPath: '/opt/old/claude-old' } } } };
