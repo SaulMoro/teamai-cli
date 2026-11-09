@@ -562,19 +562,19 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
     if (!goesOn(op, following)) return;
 
-    if (earlier && continued && 'why' in continued) {
-      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than continue the conversation of ${earlier.op}: ${continued.why}.` });
-    }
-
     // A session another driver ran, or an earlier pass whose place is gone, is imported when no conversation goes on.
     const { resume } = request.lease;
     const goesOnInEarlier = continued !== undefined && !('why' in continued);
     const resumed = !goesOnInEarlier && resume !== undefined && !through ? await imported(live, { session: resume, create, provider: on.provider, how }) : undefined;
 
     if (!goesOn(op, following)) return;
+    // One notice for the op, naming each way on it could not take: the conversation it continues, then the session it resumes.
+    const notImported = resume !== undefined && resumed && 'why' in resumed ? `resume session ${resume}: ${resumed.why}` : undefined;
 
-    if (resume !== undefined && resumed && 'why' in resumed) {
-      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than resume session ${resume}: ${resumed.why}.` });
+    if (earlier && continued && 'why' in continued) {
+      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than continue the conversation of ${earlier.op}: ${continued.why}${notImported ? `; nor could it ${notImported}` : ''}.` });
+    } else if (notImported) {
+      write({ op, event: 'notice', message: `teamai-runtime-paseo starts a new agent for step "${request.lease.step}" rather than ${notImported}.` });
     }
 
     const base = { kind: 'agent', handle: request.handle, tool: target.name, answer: how.answer, cwd: how.cwd } as const;
