@@ -1852,6 +1852,23 @@ steps:
       ok: boolean
 `;
 
+/** A whole workflow that reviews on claude, then waits a minute: a cancel lands after the review spent its tokens. */
+const REVIEW_HOLD = `schemaVersion: v1alpha1
+name: reviews
+description: Reviews the work, then waits.
+steps:
+  - id: first
+    workspace: continue
+    tool: claude
+    prompt: Review the work first.
+    output:
+      ok: boolean
+  - id: hold
+    needs: [first]
+    workspace: continue
+    command: sleep 60
+`;
+
 /** A step that requires a label from the workflow's defaults, which only a member that declares it where it runs the step takes. */
 const LABELLED = `schemaVersion: v1alpha1
 name: slow
@@ -2433,6 +2450,39 @@ done`);
       expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 90_000);
+
+  it('ends a member\'s whole workflow the owner cancelled with what its steps spent before it stopped, so the budgets around the step count it', async () => {
+    const owner = await ownerOf({ workflow: RUN_BUDGETED.replace('budget: { tokens: 1 }', 'budget: { tokens: 1000000 }'), workflows: { reviews: REVIEW_HOLD }, tools: ['claude'], isWhole: true, isMeasured: true });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}' });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    // Bob reads the record for a cancel every 4 s, a third of stale_after.
+    const { runtime, exec } = await owner.open(place, { stale_after: '12s' });
+    const op = newOpId();
+
+    try {
+      const ended = exec(op, 'workflow');
+      await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+      await readableReportsWorktree(owner.bob.config);
+      const reviewed = async () => ((await runsOf(owner.bob.config))[0]?.steps.some((step) => step.id === 'first' && step.status === 'succeeded') ? true : undefined);
+      void eventually(reviewed, 60_000).then(async () => runtime.cancel(op));
+
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+      expect(taken).toMatchObject({ data: { cancelled: { run: owner.run, attempt: owner.attempt } } });
+      const end = await ended;
+      expect(end.kind).toBe('cancelled');
+      expect(end.kind === 'cancelled' && JSON.parse(end.stdout ?? '{}')).toMatchObject({ tokens: { input: expect.any(Number), output: expect.any(Number) } });
+      expect(await owner.record()).toMatchObject({ state: 'cancelled', tokens: { input: expect.any(Number) } });
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
+  }, 120_000);
 
   it.each([
     ['the budget of the run around it', RUN_BUDGETED, undefined],

@@ -137,7 +137,7 @@ export function runtimeCommand(input: {
       case 'exited':
         return uncollected ?? { exitCode: end.code, stdout: end.stdout, stderr, output: output || end.stdout };
       case 'cancelled':
-        return { exitCode: STOPPED_EXIT_CODE, stdout: '', stderr, output };
+        return { exitCode: STOPPED_EXIT_CODE, stdout: end.stdout ?? '', stderr, output };
       case 'interrupted':
         return interrupted();
       case 'left':

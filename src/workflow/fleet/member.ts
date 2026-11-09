@@ -29,7 +29,8 @@ import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-re
 import { sameEnvName } from '../../resources/env-key.js';
 import { runCopyBranch } from '../workspace.js';
 import { wholeFit, wholeRunDefinition, type WholeRun } from '../whole-workflow.js';
-import { spentUsage } from '../limits.js';
+import { budgeted, spentUsage } from '../limits.js';
+import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { gateQuestions } from './gate.js';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -343,9 +344,9 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it.
       await stopRecordedGroup(attemptDir(config, record.run, record.attempt));
       // A whole workflow's nested run leaves its steps' commands under attempts of its own, and its state running.
-      const nestedRuns = await endLeftNestedRun(config, record.run, record.attempt);
+      const nestedRun = await endLeftNestedRun(config, record.run, record.attempt);
 
-      if (nestedRuns !== undefined) return { error: { code: 'runtime_lost', message: nestedRuns } };
+      if (nestedRun.kind === 'running') return { error: { code: 'runtime_lost', message: nestedRun.message } };
       const stillRuns = await stopLeftAttempt(config, record.run, record.attempt, root);
 
       if (stillRuns !== undefined) return { error: { code: 'runtime_lost', message: `The step it ran on a step runtime may still run there: ${stillRuns}` } };
@@ -363,10 +364,10 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
 
       if (!isFetched) return { error: { code: 'fetch_failed', message: `The member could not fetch ${ref}, where the claim it holds keeps its work: ${fetched.stderr.trim() || 'origin does not hold it'}` } };
 
-      if (record.state === 'cancelling') return answered(config, record, saved);
+      if (record.state === 'cancelling') return answered(config, record, saved, nestedRun.spent);
       log.info(`Finishing attempt ${record.attempt} of run ${record.run}, which this member claimed and left: step "${record.lease.step}" runs again from the work it pushed.`);
 
-      return runClaim(config, { lock, claim: record, root, secrets, member, place, from: saved });
+      return runClaim(config, { lock, claim: record, root, secrets, member, place, from: saved, ...(nestedRun.spent && { spent: nestedRun.spent }) });
     }, { waitMs: 0 });
 
     if (held.kind !== 'held' || !held.value) continue;
@@ -385,8 +386,8 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
 }
 
 /** Answers the cancel of claim `cancelling` with the work up to `pushed`: the step stopped. */
-async function answered(config: LocalConfig, cancelling: Cancelling, pushed: string): Promise<WorkflowEnvelope> {
-  const written = await answerCancel(config, cancelling, pushed);
+async function answered(config: LocalConfig, cancelling: Cancelling, pushed: string, tokens?: TokenUsage): Promise<WorkflowEnvelope> {
+  const written = await answerCancel(config, cancelling, pushed, tokens);
   const { run, attempt, lease } = cancelling;
 
   if (!written.ok) return { error: fleetFailure(written.error) };
@@ -397,9 +398,9 @@ async function answered(config: LocalConfig, cancelling: Cancelling, pushed: str
 /**
  * Runs claim `claim` in a clone of `root` at `from`, the attempt's start commit unless a restarted member goes on from
  * the work it pushed, then pushes its work and writes how it ended. A cancel of the claim stops the step: its work is
- * pushed, and the member answers the cancel.
+ * pushed, and the member answers the cancel. `spent`: what the nested run a killed run of the claim left spent.
  */
-async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start }: { lock: RunLock; claim: HeldAttempt; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string }): Promise<WorkflowEnvelope> {
+async function runClaim(config: LocalConfig, { lock, claim, root, secrets, member, place, from = claim.start, spent }: { lock: RunLock; claim: HeldAttempt; root: string; secrets: Record<string, string>; member: HandoffOwner; place: MemberPlace; from?: string; spent?: Required<TokenUsage> }): Promise<WorkflowEnvelope> {
   const { run, attempt, lease } = claim;
   const ref = attemptRef(run, attempt);
   const dir = attemptDir(config, run, attempt);
@@ -416,7 +417,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     if (!written.ok && written.error.code === 'state_moved') {
       const now = await readAttemptRecord(config, run, attempt);
 
-      if (now.ok && now.value !== 'absent' && now.value.state === 'cancelling' && now.value.member.id === member.id) return answered(config, now.value, result.to ?? latest.pushed);
+      if (now.ok && now.value !== 'absent' && now.value.state === 'cancelling' && now.value.member.id === member.id) return answered(config, now.value, result.to ?? latest.pushed, result.tokens);
     }
 
     if (!written.ok) return { error: fleetFailure(written.error) };
@@ -560,7 +561,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
 
   try {
     const command = ready.kind === 'workflow'
-      ? workflowRun(config, { claim, trusted: ready, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner })
+      ? workflowRun(config, { claim, trusted: ready, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner, ...(spent && { spent }) })
       : ready.kind === 'prompt'
       ? promptRun(config, { lock, claim, trusted: ready, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(place.command?.kind === 'runtime'
@@ -599,7 +600,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     if (gone !== undefined) return { error: { code: 'state_moved', message: `The owner of run ${run} gave up attempt ${attempt} of step "${lease.step}" while this member ran it, so its result was not written. ${gone}` } };
     const saved = await save(`[teamai] ${lease.step} (run ${run}, attempt ${attempt})`);
 
-    if (cancelling) return answered(config, cancelling, 'to' in saved ? saved.to : latest.pushed);
+    if (cancelling) return answered(config, cancelling, 'to' in saved ? saved.to : latest.pushed, ran.tokens);
 
     // A prompt's owner reads its end from `failure`, not the exit code.
     if ('error' in saved) return finish({ ...ran, exitCode: ran.exitCode === 0 ? 1 : ran.exitCode, stderr: saved.error, failure: { code: 'push_failed', message: saved.error } });
@@ -705,11 +706,12 @@ const NestedDoneSchema = z.object({
  * member's own copy of the team's workflows, started with the inputs the offer's values render, and driven by its local
  * loop on the runtimes of its driver (`place`). Its steps work in one copy of the run, as they would in the copy of the
  * workflow step on the owner; once it ends, the clone takes that copy's last commit, which the member pushes to the
- * attempt's ref. It ends as the run did: its outcome, end and outputs.
+ * attempt's ref. It ends as the run did: its outcome, end and outputs. `spent`, what the nested run a killed run of
+ * the claim left spent, comes out of its budget and joins what it returns as spent.
  */
-function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, secrets, ask }: {
+function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, secrets, ask, spent }: {
   claim: HeldAttempt; trusted: Extract<Trusted, { kind: 'workflow' }>; place: NonNullable<MemberPlace['workflow']>; work: string; from: string; secrets: Record<string, string>;
-  ask: (question: ExecQuestion, signal: AbortSignal) => Promise<ExecAnswer>;
+  ask: (question: ExecQuestion, signal: AbortSignal) => Promise<ExecAnswer>; spent?: Required<TokenUsage>;
 }): StepRun {
   const { definition: offered } = claim;
   let nested: RunId | undefined;
@@ -735,8 +737,13 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
   const exit = (async (): Promise<FleetResult> => {
     const teamEnv = await resolveWorkflowEnv(config);
     const known = { ...teamEnv.secrets, ...secrets };
+    const { budget } = trusted.child;
+
     // A private run publishes no record of its own: it is the owner's step.
-    const definition: WorkflowDefinition = { ...trusted.child, private: true, ...(!trusted.isReadOnly && { workspace: 'new' as const }) };
+    const definition: WorkflowDefinition = {
+      ...trusted.child, private: true, ...(!trusted.isReadOnly && { workspace: 'new' as const }),
+      ...(budget && spent && { budget: { tokens: Math.max(0, budget.tokens - budgeted(spent)) } }),
+    };
 
     const created = await createRun(config, {
       name: definition.name, inputs: isJsonObject(trusted.inputs) ? trusted.inputs : undefined, sourceHash: offered.sourceHash, teamRevision: offered.teamRevision,
@@ -765,7 +772,7 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
     const state = await readRun(config, id.data);
     const isRead = state !== 'missing' && state !== 'corrupt';
     // What its steps spent, which the owner counts against the budgets around the step, whatever its end.
-    const usage = isRead ? spentUsage(state) : undefined;
+    const usage = totalUsage(isRead ? spentUsage(state) : undefined, spent);
     const tokens = usage !== undefined && usage.input + usage.output + usage.cachedInput > 0 ? { tokens: usage } : {};
 
     if (refused !== undefined) return { ...failed({ code: 'hitl_required', message: refused }), ...tokens };
@@ -825,10 +832,10 @@ async function endNestedRun(config: LocalConfig, nested: RunId, message: string)
 
 /**
  * Ends the nested run an earlier run of this member started for attempt `attempt` of run `run` and left, as a member
- * killed during a whole workflow leaves it. Why it could not, if it could not: the claim is kept, so no second nested run
- * of the step runs beside it.
+ * killed during a whole workflow leaves it, and what that run spent, which the run of the step again counts. One it
+ * could not end may still run: the claim is kept, so no second nested run of the step runs beside it.
  */
-async function endLeftNestedRun(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<string | undefined> {
+async function endLeftNestedRun(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<LeftNestedRun> {
   const file = nestedRunPath(config, run, attempt);
   // Only a record that is not there says no nested run is left: one that cannot be read may name a run still running.
   let text: string | null;
@@ -836,19 +843,30 @@ async function endLeftNestedRun(config: LocalConfig, run: RunId, attempt: Attemp
   try {
     text = await readFileIfExists(file);
   } catch (error) {
-    return `The nested run of the whole workflow it ran may still run: its id in ${file} could not be read (${error instanceof Error ? error.message : String(error)}). Make the file readable, then run the step again.`;
+    return { kind: 'running', message: `The nested run of the whole workflow it ran may still run: its id in ${file} could not be read (${error instanceof Error ? error.message : String(error)}). Make the file readable, then run the step again.` };
   }
 
-  if (text === null) return undefined;
+  if (text === null) return { kind: 'ended' };
   const left = RunIdSchema.safeParse(text.trim());
 
-  if (!left.success) return `The nested run of the whole workflow it ran may still run: ${file} does not hold a run id. Stop that run with teamai workflow cancel, remove the file, then run the step again.`;
+  if (!left.success) return { kind: 'running', message: `The nested run of the whole workflow it ran may still run: ${file} does not hold a run id. Stop that run with teamai workflow cancel, remove the file, then run the step again.` };
   const failed = await endNestedRun(config, left.data, 'Cancelled: the fleet member that ran it stopped, and runs its step again');
 
-  if (failed !== undefined) return `The nested run ${left.data} of the whole workflow it ran may still run: ${failed}`;
+  if (failed !== undefined) return { kind: 'running', message: `The nested run ${left.data} of the whole workflow it ran may still run: ${failed}` };
+  const state = await readRun(config, left.data);
   await fs.rm(file, { force: true });
 
-  return undefined;
+  return state === 'missing' || state === 'corrupt' ? { kind: 'ended' } : { kind: 'ended', spent: spentUsage(state) };
+}
+
+/** What a killed run of this member left of a whole workflow's nested run: one that may still run, or one ended, with what it spent. */
+type LeftNestedRun = { kind: 'running'; message: string } | { kind: 'ended'; spent?: Required<TokenUsage> };
+
+/** `first` and `second` together, by kind. */
+function totalUsage(first: Required<TokenUsage> | undefined, second: Required<TokenUsage> | undefined): Required<TokenUsage> | undefined {
+  if (first === undefined || second === undefined) return first ?? second;
+
+  return { input: first.input + second.input, output: first.output + second.output, cachedInput: first.cachedInput + second.cachedInput };
 }
 
 /**

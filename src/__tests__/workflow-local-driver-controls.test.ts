@@ -15,6 +15,8 @@ import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
+import { localStepRuntime } from '../workflow/runtimes/local.js';
+import type { ExecEnd, StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { driverIdentity } from '../driver-identity.js';
 import { driverLockPath, readRun } from '../workflow/store.js';
 // oxlint-disable-next-line teamai/workflow-boundaries -- fails the snapshot taken by a reader in the checkout
@@ -1551,4 +1553,44 @@ steps:
     expect(await runLocalDriver(config, runId, workspace, { toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'close', outcomes: [{ kind: 'learning', id: 'retry-backoff' }] }] });
   });
+});
+
+describe('a workflow step a runtime runs whole', () => {
+  it('counts what its steps spent before the run stopped it, though the run records nothing else of it', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Reviews the project whole.
+steps:
+  - id: work
+    workspace: new
+    timeout: 1s
+    workflow:
+      steps:
+        - id: review
+          workspace: continue
+          command: echo reviewed
+`);
+    const local = localStepRuntime();
+    let stopWhole: (() => void) | undefined;
+    // The whole workflow runs until the run stops it, then answers what its steps spent, as a fleet member's does.
+    const runtime: StepRuntime = {
+      ...local,
+      exec: async (request, events, kind) => (kind !== 'workflow' ? local.exec(request, events, kind) : new Promise<ExecEnd>((resolve) => {
+        events.onAccepted?.({});
+        stopWhole = () => resolve({ kind: 'cancelled', stdout: JSON.stringify({ outcome: 'failed', tokens: { input: 4, output: 2 } }) });
+      })),
+      cancel: async (op) => {
+        stopWhole?.();
+        await local.cancel(op);
+      },
+    };
+    const engine = { logins: [] };
+
+    const done = await runLocalDriver(config, runId, workspace, {
+      runtimes: { driver: 'whole', asked: 'whole', runtimes: [{ kind: 'external', use: 'whole', runtime, can: { workflow: true, tokens: true, workspace: ['new', 'continue'] }, launchesAgents: false, engine, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] },
+    });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', failure: { code: 'timeout' } }], releasedTokens: [{ step: 'work', tokens: { input: 4, output: 2 } }] });
+  }, 30_000);
 });

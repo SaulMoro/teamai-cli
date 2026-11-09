@@ -133,6 +133,28 @@ const SPEND_ONE = flow('spendone', `  - id: review
       ok: boolean
 `);
 
+/** A run on a budget whose workflow step a member takes whole: a review that spends 6 of its 10 tokens, then a hold. */
+const WHOLE_SPEND_HOLD = `schemaVersion: v1alpha1
+name: wholespendhold
+description: wholespendhold
+budget: { tokens: 10 }
+steps:
+  - id: pair
+    workspace: new
+    workflow: spendhold
+`;
+const SPEND_HOLD = flow('spendhold', `  - id: review
+    workspace: continue
+    tool: claude
+    prompt: Review the work.
+    output:
+      ok: boolean
+  - id: hold
+    needs: [review]
+    workspace: continue
+    command: node -e "const fs = require('fs'); const pid = require('os').homedir() + '/nested.pid'; if (fs.existsSync(pid)) process.exit(0); fs.writeFileSync(pid, String(process.pid)); setInterval(() => {}, 1000)"
+`);
+
 const FLEET = { schemaVersion: 'v1alpha1', name: 'build-fleet', tool: 'claude', runtimes: [{ use: 'fleet', options: { pool: 'build', stale_after: '6s', max_parallel: 1, can: { tools: [] } } }, { use: 'local' }] };
 
 /** The default pool, two attempts out at once. */
@@ -395,6 +417,8 @@ describe('the fleet', () => {
       'workflows/wholehold.yaml': WHOLE_HOLD,
       'workflows/wholespend.yaml': WHOLE_SPEND,
       'workflows/spendone.yaml': SPEND_ONE,
+      'workflows/wholespendhold.yaml': WHOLE_SPEND_HOLD,
+      'workflows/spendhold.yaml': SPEND_HOLD,
       'drivers/token-fleet.yaml': stringify(TOKEN_FLEET),
       'workflows/holdone.yaml': HOLD_ONE,
       'drivers/build-fleet.yaml': stringify(FLEET),
@@ -649,6 +673,31 @@ describe('the fleet', () => {
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     // The nested run the killed teamai left ended cancelled; the one the restart ran, succeeded.
     expect(runsOf('bob').filter((id) => !bobsBefore.has(id)).map((id) => runStatusOf('bob', id)).sort()).toEqual(['cancelled', 'succeeded']);
+  }, 240_000);
+
+  it('counts what the nested run a killed member left spent once it runs the whole workflow step again', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const started = teamai('alice', ['workflow', 'start', 'wholespendhold', '--driver', 'token-fleet'], (pid) => { alicePid = pid; });
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    const pidFile = path.join(homeOf('bob'), 'nested.pid');
+    fs.rmSync(pidFile, { force: true });
+
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool'], (pid) => { bobPid = pid; });
+    await waitOn(() => fs.existsSync(pidFile), 60_000, () => bobPid, taking);
+    process.kill(bobPid, 'SIGKILL');
+    await taking;
+
+    const again = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+    expect(again.envelope(), said(again)).toMatchObject({ data: { ran: { run, step: 'pair', exit_code: 1 } } });
+    const [finished] = records(run);
+    // Bob's Claude reports 4 input and 2 output tokens per review: the left run's and the restart's.
+    expect(finished?.result).toMatchObject({ failure: { code: 'budget_exceeded' }, tokens: { input: 8, output: 4 } });
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'failed' } } });
   }, 240_000);
 
   it('runs no whole workflow step again after a restart while the record of the nested run the killed member left cannot be read, and says why', async () => {

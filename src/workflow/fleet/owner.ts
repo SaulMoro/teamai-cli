@@ -22,6 +22,7 @@ import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { workflowRunBy, type WorkflowFailure } from '../types.js';
 import type { WholeEnd } from '../whole-workflow.js';
+import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { isJsonObject } from '../../types.js';
 import { copyGit } from '../place/place.js';
 import { git } from '../worktree.js';
@@ -117,7 +118,7 @@ export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; thro
 /** How the owner's wait on an attempt ended: as the member's step did, cancelled, failed, or left out as this teamai stops. */
 type Waited =
   | { kind: 'finished'; result: FleetResult }
-  | { kind: 'cancelled'; message: string }
+  | { kind: 'cancelled'; message: string; tokens?: TokenUsage }
   | { kind: 'failed'; failure: WorkflowFailure }
   | { kind: 'left' };
 
@@ -243,7 +244,8 @@ export function fleetStepRuntime({ config, masks }: { config: LocalConfig; masks
       case 'cancelled':
         events.onOutput?.('stderr', waited.message);
 
-        return { kind: 'cancelled' };
+        // What a whole workflow's steps spent before it stopped, which the budgets around the step count.
+        return isWhole && waited.tokens ? { kind: 'cancelled', stdout: JSON.stringify({ outcome: 'failed', failure: { code: 'cancelled', message: waited.message }, tokens: waited.tokens } satisfies WholeEnd) } : { kind: 'cancelled' };
       case 'failed':
         return { kind: 'failed', failure: waited.failure, isStepOutcome: true };
       // Only a disposed runtime ends a wait this way, once its teamai no longer reads the exec.
@@ -556,7 +558,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
 
       if (taken) return failed(taken);
 
-      return { kind: 'cancelled', message: `Step "${step}" was cancelled, and the fleet member ${record.member.user} that ran it stopped it.${record.pushed === record.start ? '' : ` Its work up to ${record.pushed} is kept.`}` };
+      return { kind: 'cancelled', message: `Step "${step}" was cancelled, and the fleet member ${record.member.user} that ran it stopped it.${record.pushed === record.start ? '' : ` Its work up to ${record.pushed} is kept.`}`, ...(record.tokens && { tokens: record.tokens }) };
     }
 
     if (record !== undefined && record.write !== lastSeen?.write) {
