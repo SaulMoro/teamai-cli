@@ -63,7 +63,7 @@ function allowancesOf(scope: Scope, state: StepState, step: WorkflowStep): Pick<
 
 export function topScope(run: RunState): Scope {
   return {
-    runId: run.id, prefix: '', definition: run.definition, workflow: run.definition.name, inputs: run.inputs, loops: stepLoops(run.definition.steps), defaultModel: run.definition.defaults?.model,
+    runId: run.nestedIn ?? run.id, prefix: '', definition: run.definition, workflow: run.definition.name, inputs: run.inputs, loops: stepLoops(run.definition.steps), defaultModel: run.definition.defaults?.model,
     requires: mergeRequirements(run.definition.defaults?.requires),
     ...budgetOf(false, run.definition.budget), ...setupOf(run.definition.setup), allowances: [],
   };
@@ -78,7 +78,7 @@ export function finallyScope(run: RunState): Scope {
   const steps = run.definition.finally ?? [];
 
   return {
-    runId: run.id, prefix: '', definition: { steps }, workflow: top.workflow, inputs: run.inputs, outer: expressionSteps(top, statesIn(run, top)), loops: stepLoops(steps),
+    runId: run.nestedIn ?? run.id, prefix: '', definition: { steps }, workflow: top.workflow, inputs: run.inputs, outer: expressionSteps(top, statesIn(run, top)), loops: stepLoops(steps),
     requires: top.requires, budgeted: false, allowances: [],
   };
 }

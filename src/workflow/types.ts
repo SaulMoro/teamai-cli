@@ -513,6 +513,11 @@ export interface RunState {
   runMode?: RunMode;
   /** Whether `definition` is the team's or teamai's default. A claim keeps it. Absent on runs started before it was recorded, all team runs. */
   origin?: RunOrigin;
+  /**
+   * The owner's run whose whole `workflow:` step a fleet member runs as this nested run. Its steps read that run's id
+   * as `run.id`, which is the same in every workflow a run runs.
+   */
+  nestedIn?: string;
   /** Who started the run. A claim keeps it. Absent on runs started before it was recorded. */
   startedBy?: StartedBy;
   /** The driver `workflows.driver` started the run for, which the machine that started it does not run. Absent on a run started for no driver in particular. */

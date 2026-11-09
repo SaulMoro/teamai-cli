@@ -751,7 +751,7 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
 
     const created = await createRun(config, {
       name: definition.name, inputs: isJsonObject(trusted.inputs) ? trusted.inputs : undefined, sourceHash: offered.sourceHash, teamRevision: offered.teamRevision,
-      runMode: resolveRunMode(process.env), definition, workflows: {}, base: { commit: from }, checkout: work, origin: offered.origin ?? { source: 'team' }, secrets: known,
+      runMode: resolveRunMode(process.env), definition, workflows: {}, base: { commit: from }, checkout: work, origin: offered.origin ?? { source: 'team' }, secrets: known, nestedIn: claim.run,
     });
 
     if (!('data' in created)) return failed(created.error);

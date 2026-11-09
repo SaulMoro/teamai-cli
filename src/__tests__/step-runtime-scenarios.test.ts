@@ -2177,6 +2177,25 @@ steps:
     expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('written\n');
   }, 90_000);
 
+  // A run's id is the same in every workflow it runs, as it is where the step runs here.
+  it('gives the steps of a whole workflow step a member runs the owner\'s run id, not its nested run\'s', async () => {
+    const pair = PAIR.replace('      MARK: "{{ inputs.mark }}"\n    command: echo written > "$MARK"', '      MARK: "{{ inputs.mark }}"\n      RUN: "{{ run.id }}"\n    command: echo "$RUN" > "$MARK"');
+    expect(pair).not.toBe(PAIR);
+    const owner = await ownerOf({ workflow: WHOLE, workflows: { pair }, inputs: { mark: 'made.txt' }, isWhole: true });
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    const { exec } = await owner.open(place);
+    const ended = exec(newOpId(), 'workflow');
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+
+    const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+    expect(taken).toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+    expect(await ended).toMatchObject({ kind: 'exited', code: 0 });
+    expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe(`${owner.run}\n`);
+  }, 90_000);
+
   it('offers an inline workflow step whose steps read only the run\'s inputs as one attempt, which a member runs as a nested run and ends with its outputs', async () => {
     const owner = await ownerOf({ workflow: INLINE, inputs: { mark: 'made.txt' }, isWhole: true });
     const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
