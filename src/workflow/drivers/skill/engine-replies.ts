@@ -68,7 +68,7 @@ const NextDataSchema = z.object({
     step: z.string(), pass: z.number().int(), kind: z.enum(['approve', 'choose']), message: z.string(), options: z.array(z.string()), default: z.string().optional(), required: z.boolean(),
   }).optional(),
   wait: z.object({
-    reason: z.string(), delivering: z.array(z.string()).optional(), held: z.array(z.object({ step: z.string(), missing: z.array(z.string()) })).optional(),
+    reason: z.string(), delivering: z.array(z.string()).optional(), held: z.array(z.object({ step: z.string(), missing: z.array(z.string()), limitedTool: z.string().optional() })).optional(),
   }).optional(),
   done: z.object({ outcome: z.enum(['succeeded', 'failed', 'cancelled']), failure: FailureSchema.optional(), prs: z.array(z.string()).optional(), outputs: z.record(z.string(), z.json()).optional(), notPublished: z.object({ code: z.string() }).optional() }).optional(),
 });

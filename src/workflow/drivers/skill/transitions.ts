@@ -19,6 +19,7 @@ import type { ConfinedJudge, HostChoice, HostProfile } from './host-profiles.js'
 import type { HitlMode, StartAnswer, StartCheck } from './preflight.js';
 import type { AttemptState, Dispatch, Gate, PlaceAsk, ReportBody, SkillState, StopReason, TurnEvent, UnansweredHost } from './skill-state.js';
 import type { Waiting } from './turn.js';
+import type { WhenIdle } from '../../usage-limits.js';
 import type { SessionApp } from '../../session-apps.js';
 
 export interface TransitionRow {
@@ -65,7 +66,7 @@ export const TRANSITIONS = [
   { id: 'S4', state: 'host, drive, done', input: 'next `--takeover` from session s', guard: '', effects: 'owner := s, working in the tool its host names; `lastCallAt` := now; `seen[s]` := `seen[o]` when that is later; every offered or dispatched attempt becomes offered with `reissued`, except a confined one whose dispatch names another tool than s works in, which write-ahead `released`', next: 'unchanged', action: 'event `takeover`; the turn of a tick' },
   { id: 'S5', state: 'any', input: 'a runner call (`report --attempt a` with the marker `<run>/a`)', guard: '', effects: 'no session check, no `lastCallAt`', next: 'unchanged', action: 'C rows' },
   { id: 'S6', state: 'host, drive, done', input: 'an agent `report --attempt a`, from any session', guard: 'a is settled, or open offered, dispatched, reporting, or stopping by the agent', effects: 'no session check, no `lastCallAt`', next: 'unchanged', action: 'the input\'s row' },
-  { id: 'D1', state: 'drive', input: 'tick', guard: '', effects: 'engine `next {driver: identity + canFor(host), the can of the host\'s profile, and h1\'s for a run without prompt steps, with can.confined: the session tool\'s own at the level `judging` keeps while `judging`, else one of the run\'s tool at `best-effort` while `sessionJudge`, else none, running: every open attempt, queued: every queued attempt and each D9 unqueued this tick, canTakeLease: fewer open than options.parallel, and than one under a serial host; false in a runner\'s check, autoApprove: true under HITL mode `auto-approve`, runMode: options.mode}`, and in run mode `unattended` `handoff: offers`, so the engine holds a step only a person can take', next: 'drive', action: '' },
+  { id: 'D1', state: 'drive', input: 'tick', guard: '', effects: 'engine `next {driver: identity + canFor(host), the can of the host\'s profile, and h1\'s for a run without prompt steps, with can.confined: the session tool\'s own at the level `judging` keeps while `judging`, else one of the run\'s tool at `best-effort` while `sessionJudge`, else none, running: every open attempt, queued: every queued attempt and each D9 unqueued this tick, canTakeLease: fewer open than options.parallel, and than one under a serial host; false in a runner\'s check, autoApprove: true under HITL mode `auto-approve`, runMode: options.mode}`, and in run mode `unattended` `handoff: offers`, so the engine holds a step only a person can take; while a usage limit kept in `usage` holds a tool, `limitedTools` with it and `toolFor` the children\'s tool, so the engine holds the steps on it', next: 'drive', action: '' },
   { id: 'D2', state: 'drive', input: 'reply `cancelled` holds a', guard: 'a queued or placing', effects: 'drop a', next: 'drive', action: 'event `stopped`' },
   { id: 'D3', state: 'drive', input: 'reply `cancelled` holds a', guard: 'a preparing or running', effects: 'phase stopping by its runner, why `timeout` once its `expiresAt` passed, else `cancelled`', next: 'drive', action: '' },
   { id: 'D4', state: 'drive', input: 'reply `cancelled` holds a', guard: 'a offered or dispatched', effects: 'phase stopping by the agent, why as D3, with `child` its dispatch\'s `continues` title when it has one', next: 'drive', action: '`stop {why, report}` in each foreground turn until reported, its title the `child` when set' },
@@ -84,6 +85,9 @@ export const TRANSITIONS = [
   { id: 'D29', state: 'drive', input: 'reply wait, before its row', guard: 'it lists `held`, no attempt is open, and each held step misses only `confined` or `model`, which this driver\'s offers never give for the run', effects: '`WorkflowClient.giveUp` of the held steps, which cancels the nearest step above each that sets `continue_on_failure`; when it cancels, engine `next` again as D1; when it refuses, D14', next: 'drive', action: '' },
   { id: 'D15', state: 'drive', input: 'reply wait', guard: '', effects: 'none', next: 'drive', action: 'waiting' },
   { id: 'D27', state: 'drive', input: 'reply wait, after its row', guard: 'it lists `held`, and no reply of this tick came to a `next` that took no lease', effects: 'engine `next` as D1, with `canTakeLease: false`, since the engine answers a held step before a gate; H5, then D10 to D12 for a gate, take its reply', next: 'drive', action: '' },
+  { id: 'D36', state: 'drive', input: 'reply wait, before D30 and D14', guard: 'no attempt or score run is open, it lists steps held for a `limitedTool`, and the usage limits kept in `usage` wait for that tool\'s reset: within the cap, or attended, past it', effects: 'none', next: 'drive', action: 'waiting with the limit\'s reason; `then: poll`' },
+  { id: 'D37', state: 'drive', input: 'reply wait, before D30 and D14', guard: 'as D36, in run mode `unattended`, past the cap an unattended run waits for the limit', effects: '`WorkflowClient.offer` as D30', next: 'drive', action: 'D31 naming the steps that tool holds, or D38' },
+  { id: 'D38', state: 'drive', input: 'D37\'s offer answered `unoffered`', guard: '', effects: 'none', next: 'drive', action: 'waiting with the limit\'s reason and why the run could not be offered; `then: poll`' },
   { id: 'D30', state: 'drive', input: 'reply wait, before D13 to D15', guard: 'run mode `unattended`, it lists steps held for `hitl`, and no attempt or score run is open', effects: '`WorkflowClient.offer`: publish the run on teamai-reports, offered, from the run\'s checkout', next: 'drive', action: 'D31 or D32 by the offer\'s answer' },
   { id: 'D31', state: 'drive', input: 'D30\'s offer answered `offers`', guard: '', effects: 'none', next: 'drive', action: '`person why:offered` naming those steps and the person\'s `teamai workflow resume <run> --claim` literal; waiting held; no `then`' },
   { id: 'D32', state: 'drive', input: 'D30\'s offer answered `unoffered`', guard: '', effects: 'engine `next` as D1, with `handoff: unoffered` and the reason, so each of those steps fails `hitl_required` saying why the run could not be offered', next: 'drive', action: 'the reply\'s row' },
@@ -120,7 +124,8 @@ export const TRANSITIONS = [
   { id: 'P2', state: 'drive', input: 'report a', guard: 'a is unknown', effects: 'none', next: 'drive', action: 'error `unknown_attempt`, next: the next literal' },
   { id: 'P3', state: 'drive', input: 'report a', guard: 'a preparing, queued, placing, running, or stopping by its runner', effects: 'none', next: 'drive', action: 'error `not_dispatched`, next: the next literal' },
   { id: 'P4', state: 'drive', input: 'report a `--model-unavailable`', guard: 'a offered or dispatched, its dispatch printed `unavailable`', effects: 'write-ahead `failed` `model_unavailable` naming the model', next: 'reporting', action: 'P7 to P10; after P7 to P9, runner answer `reported`' },
-  { id: 'P5', state: 'drive', input: 'report a', guard: 'a offered or dispatched, otherwise', effects: 'read `result.json`: an output gives `success` with it as outputs, a failure gives `failed` with it, none or an unreadable one gives `failed` `tool_failed`; a confined dispatch adds its confined run: the dispatch\'s tool, else the session\'s, at `best-effort` with `read` access, the model it asked for, and the session; any other dispatch marked `bySession`, reported from a known session while the run\'s tool is known, adds that tool and session, and `resumed` with its `resumes` when that is the same tool and session; a child\'s report adds no session; write-ahead', next: 'reporting', action: 'P7 to P10; after P7 to P9, runner answer `reported`' },
+  { id: 'P5', state: 'drive', input: 'report a', guard: 'a offered or dispatched, otherwise', effects: 'read `result.json`: an output gives `success` with it as outputs, a failure gives `failed` with it, none or an unreadable one gives `failed` `tool_failed`; a confined dispatch adds its confined run: the dispatch\'s tool, else the session\'s, at `best-effort` with `read` access, the model it asked for, and the session; any other dispatch marked `bySession`, reported from a known session while the run\'s tool is known, adds that tool and session, and `resumed` with its `resumes` when that is the same tool and session; a child\'s report adds no session; a child on a known tool (the dispatch\'s, else the run\'s, else the session\'s) that spawned after the limit kept for it was hit ends that limit; write-ahead', next: 'reporting', action: 'P7 to P10; after P7 to P9, runner answer `reported`' },
+  { id: 'P12', state: 'drive', input: 'report a', guard: 'a offered or dispatched, its dispatch printed no `unavailable`, and `result.json` is a failure `usage_limited` from a known tool, as P5 knows it', effects: 'keep the tool\'s usage limit in `usage` from what the failure says; write-ahead `released`, launched, so the step is not failed and its place keeps the child\'s work', next: 'reporting', action: 'P7 to P10; after P7 to P9, runner answer `reported`' },
   { id: 'P6', state: 'drive, done', input: 'report a', guard: 'a stopping by the agent', effects: 'write-ahead `released`', next: 'reporting', action: 'P7 to P10; after P7 to P9, runner answer `reported`' },
   { id: 'P7', state: 'reporting', input: 'engine: reported, any status', guard: '', effects: 'drop a; add to settled', next: 'drive', action: 'event `settled`, with the failure the engine recorded, else the body\'s' },
   { id: 'P8', state: 'reporting', input: 'engine: `repeated_report`', guard: '', effects: 'as P7', next: 'drive', action: 'event `settled`' },
@@ -231,7 +236,13 @@ export type Effect =
    */
   | { kind: 'send'; attempt: AttemptId; body: ReportBody; changed?: readonly string[] }
   /** Gives up `steps`, held steps this driver can never take, so the run goes on without them. */
-  | { kind: 'give-up'; steps: string[] };
+  | { kind: 'give-up'; steps: string[] }
+  /**
+   * Keeps in `usage` what a child's end says of its tool's usage limit: it stopped on the limit (`hit`, what it said), or it
+   * ended without it, spawned at `spawnedAt`, which ends a limit hit before.
+   */
+  | { kind: 'usage'; tool: string; hit: string }
+  | { kind: 'usage'; tool: string; spawnedAt: number };
 
 /** A call the skill driver refuses, with what its message names. */
 export type Refusal =
@@ -807,9 +818,10 @@ function choicePending(state: SkillState): Answered<'R14'> {
  * end (D16), or an error (D17). Undefined once the run is done. `waiting` says why the run leases nothing more; `turn`
  * is the turn a row decides for its call.
  */
-export function replyRow(state: SkillState, input: { reply: EngineReply; at: string; version?: RunVersion }):
-  | (MovedWithEffects<'D6' | 'D7' | 'D8' | 'D28' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16'> & TickTurn)
+export function replyRow(state: SkillState, input: { reply: EngineReply; at: string; version?: RunVersion; idle?: WhenIdle }):
+  | (MovedWithEffects<'D6' | 'D7' | 'D8' | 'D28' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D36'> & TickTurn)
   | (MovedWithEffects<'D30'> & { waiting: Waiting; offer: string[] })
+  | (MovedWithEffects<'D37'> & { waiting: Waiting; offer: string[]; idle: WhenIdle })
   | Answered<'D17', Relayed>
   | undefined {
   if (state.done) return undefined;
@@ -836,6 +848,15 @@ export function replyRow(state: SkillState, input: { reply: EngineReply; at: str
 
     case 'wait': {
       const people = engine.held.filter(({ missing }) => missing.includes('hitl')).map(({ step }) => step);
+      const { idle } = input;
+
+      if (idle && state.attempts.length === 0 && state.scoring.length === 0) {
+        const limited = engine.held.filter(({ limitedTool }) => limitedTool === idle.tool).map(({ step }) => step);
+
+        if (idle.kind === 'past_cap' && state.options.mode === 'unattended') return { row: 'D37', state, effects: [], waiting: { reason: idle.reason, held: engine.held }, offer: limited, idle };
+
+        return { row: 'D36', state, effects: [], waiting: { reason: idle.reason }, turn: { kind: 'turn', events: 'unseen', after: 'poll', quiet: false } };
+      }
 
       if (state.options.mode === 'unattended' && people.length > 0 && state.attempts.length === 0 && state.scoring.length === 0) {
         return { row: 'D30', state, effects: [], waiting: { reason: engine.reason, held: engine.held }, offer: people };
@@ -892,13 +913,16 @@ export function replyRow(state: SkillState, input: { reply: EngineReply; at: str
  * D31 and D32: what D30's offer of the run to a person at `steps` answered. D31's turn names them and ends the loop;
  * D32 asks the engine again with the reason it could not, which fails each of them.
  */
-export function offeredRow(input: { steps: string[]; offered: PersonHandoff }): { row: 'D31'; turn: TurnAnswer } | { row: 'D32'; handoff: PersonHandoff } {
-  const { steps, offered } = input;
+export function offeredRow(input: { steps: string[]; offered: PersonHandoff; limit?: string }): { row: 'D31'; turn: TurnAnswer } | { row: 'D32'; handoff: PersonHandoff } | { row: 'D38'; waiting: Waiting; turn: TurnAnswer } {
+  const { steps, offered, limit } = input;
 
   switch (offered.kind) {
     case 'offers':
       return { row: 'D31', turn: { kind: 'turn', events: 'unseen', after: 'none', quiet: false, offered: steps } };
     case 'unoffered':
+      // A step a usage limit holds does not fail when the run cannot be offered: it waits for the reset.
+      if (limit !== undefined) return { row: 'D38', waiting: { reason: `${limit}, and the run could not be offered on teamai-reports: ${offered.reason}` }, turn: { kind: 'turn', events: 'unseen', after: 'poll', quiet: false } };
+
       return { row: 'D32', handoff: offered };
     default: {
       const unhandled: never = offered;
@@ -1210,9 +1234,9 @@ export function resendRow(state: SkillState, attempt: AttemptId): MovedWithEffec
  * P1 to P6, and P11: an agent's `report --attempt`. `result` is what the attempt's child left, read before the row is
  * taken. Undefined once the run is done and the attempt is neither settled nor open.
  */
-export function reportRow(state: SkillState, input: { attempt: AttemptId; modelUnavailable: boolean; result: ChildResult; session: string | undefined }):
+export function reportRow(state: SkillState, input: { attempt: AttemptId; modelUnavailable: boolean; result: ChildResult; session: string | undefined; tool: string | undefined }):
   | { row: 'P1'; repeated: true }
-  | MovedWithEffects<'P4' | 'P5' | 'P6' | 'P11'>
+  | MovedWithEffects<'P4' | 'P5' | 'P6' | 'P11' | 'P12'>
   | Answered<'P2' | 'P3' | 'R14'>
   | undefined {
   if (state.settled.includes(input.attempt)) return { row: 'P1', repeated: true };
@@ -1240,6 +1264,15 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
     ? { code: 'model_unavailable', message: `Step "${open.step}" needs model ${model.name}, which the host of this coding session cannot run.` }
     : input.result.kind === 'failure' ? input.result.failure : undefined;
 
+  const tool = open.dispatch.tool ?? state.orchestrator.tool ?? input.tool;
+
+  if (!unavailable && failure?.code === 'usage_limited' && tool !== undefined) {
+    const body: ReportBody = { ...base, outcome: 'released', launched: true };
+    const reporting: Extract<AttemptState, { phase: 'reporting' }> = { ...baseOf(open), phase: 'reporting', body };
+
+    return { row: 'P12', state: withAttempt(state, reporting), effects: [{ kind: 'usage', tool, hit: failure.message }, { kind: 'send', attempt: open.attempt, body }] };
+  }
+
   let body: ReportBody;
 
   if (failure) body = { ...base, outcome: 'failed', message: failure.message, failure };
@@ -1254,7 +1287,12 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
 
   const reporting: Extract<AttemptState, { phase: 'reporting' }> = { ...baseOf(open), phase: 'reporting', body, changed: [...input.result.changed] };
 
-  return { row: unavailable ? 'P4' : 'P5', state: withAttempt(state, reporting), effects: [{ kind: 'send', attempt: open.attempt, body, changed: input.result.changed }] };
+  const send: Effect = { kind: 'send', attempt: open.attempt, body, changed: input.result.changed };
+  const spawnedAt = Date.parse(open.spawnedAt);
+
+  if (unavailable) return { row: 'P4', state: withAttempt(state, reporting), effects: [send] };
+
+  return { row: 'P5', state: withAttempt(state, reporting), effects: tool === undefined || Number.isNaN(spawnedAt) ? [send] : [{ kind: 'usage', tool, spawnedAt }, send] };
 }
 
 /**

@@ -113,7 +113,7 @@ export interface WorkflowClient {
    * made under the run's lock, and a prepare that fails settles the attempt `failed` with its own code.
    */
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the payload as a driver sent it; parseNextPayload in engine.ts parses it, and the skill driver passes typed requests
-  next(runId: string, body: unknown, options?: { prepare?: NextPrepare; handoff?: PersonHandoff }): Promise<WorkflowEnvelope>;
+  next(runId: string, body: unknown, options?: { prepare?: NextPrepare; handoff?: PersonHandoff } & Pick<NextOptions, 'limitedTools' | 'toolFor'>): Promise<WorkflowEnvelope>;
   /**
    * Offers run `runId` on teamai-reports, published from `checkout`, for a person to claim, as a driver nobody attends
    * hands a step only a person can take to one: `offers`, or `unoffered` with why it could not.
@@ -127,7 +127,7 @@ export interface WorkflowClient {
    * commits an adopted writer's tree as it stands.
    */
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the payload as a driver sent it; parseReport in engine.ts parses it, and the skill driver's tick.ts passes typed reports
-  report(runId: string, body: unknown, options?: { lock?: RunLock; changed?: readonly string[] }): Promise<WorkflowEnvelope>;
+  report(runId: string, body: unknown, options?: { lock?: RunLock; changed?: readonly string[]; launched?: true }): Promise<WorkflowEnvelope>;
   /** Records an answer, with the provenance decided from the process or driver `via` names. A process inside a workflow attempt answers none: `nested_workflow`. */
   respond(runId: string, step: string, choice: string, options: { note?: string; pass?: number; via: RespondVia }): Promise<WorkflowEnvelope>;
   /** Reopens the target step's dependency cone. */
@@ -677,7 +677,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
 
       if (isRefusal(parsed)) return { error: { code: 'invalid_json', message: parsed } };
       const { driver, ...request } = parsed.request;
-      const next = options?.handoff === undefined ? request : { ...request, handoff: options.handoff };
+      const next = { ...request, ...(options?.handoff !== undefined && { handoff: options.handoff }), ...(options?.limitedTools !== undefined && { limitedTools: options.limitedTools, toolFor: options.toolFor }) };
       const lease = (): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, { ...next, env });
       const run = RunIdSchema.safeParse(runId);
       const prepare = options?.prepare;
@@ -701,7 +701,8 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
 
       if (isRefusal(parsed)) return { error: { code: 'invalid_report', message: parsed } };
       const run = RunIdSchema.safeParse(runId);
-      const report = run.success ? await withPreparedCopy(config, run.data, parsed.report) : parsed.report;
+      const sent = options?.launched === true ? { ...parsed.report, launched: true as const } : parsed.report;
+      const report = run.success ? await withPreparedCopy(config, run.data, sent) : sent;
 
       return withIgnored(await managedReport({ config, runId, report, secrets: env.secrets, lock: options?.lock, changed: options?.changed }), parsed.ignored);
     },

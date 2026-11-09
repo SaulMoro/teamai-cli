@@ -11,6 +11,7 @@ import { redactJson } from '@teamai/shared/redact';
 import type { HostPlaceRequest, RunVersion } from '../../protocol.js';
 import { ConfinedRunReportSchema, FailureSchema, TokenUsageSchema } from '../../step-state.js';
 import { AttemptIdSchema, RunIdSchema, skillStatePath, type RunId, type RunLock } from '../../store.js';
+import { KeptLimitSchema } from '../../usage-limits.js';
 import { HOST_CHOICES } from './host-profiles.js';
 import { INVOCATIONS } from './literals.js';
 import { HITL_MODES } from './preflight.js';
@@ -23,6 +24,8 @@ const ReportBodySchema = z.object({
   revision: z.number().int(),
   /** `released`: the attempt was stopped, so the protocol abandons its place instead of finishing it. */
   outcome: z.enum(['success', 'failed', 'released']),
+  /** A released attempt whose child ran, so its place keeps the child's work. */
+  launched: z.literal(true).optional(),
   driver: DriverSchema,
   exitCode: z.number().int().optional(),
   outputs: z.unknown().optional(),
@@ -239,6 +242,8 @@ const SkillStateSchema = z.object({
   seen: z.record(z.string(), z.number().int()),
   /** The attempts the engine settled or stopped: a report that comes for one again is P1. */
   settled: z.array(AttemptIdSchema),
+  /** The usage limits the run's tools hit, which hold their steps until each resets, as the local driver's book holds them. */
+  usage: z.array(KeptLimitSchema).default([]),
   /**
    * `prs`: the pull requests the run's deliveries opened, as the engine's `done` listed them, and `outputs` the run's
    * declared outputs, as its `done` gave them. `branch`: the branch the run left its changes on, from the run file read
@@ -270,7 +275,7 @@ export function newSkillState(input: {
 
   return {
     version: 1, run, driver, invocation, options, host, orchestrator,
-    attempts: [], ...judgingState(judge), scoring: [], seq: 0, events: [], seen: {}, settled: [],
+    attempts: [], ...judgingState(judge), scoring: [], seq: 0, events: [], seen: {}, settled: [], usage: [],
   };
 }
 
@@ -282,7 +287,7 @@ export function scoringSkillState(scored: SkillState, run: RunId, at: string): S
   const { driver, invocation, options, host, orchestrator, judging, sessionJudge } = scored;
 
   const state: SkillState = {
-    version: 1, run, driver, invocation, options, host, orchestrator: { ...orchestrator, lastCallAt: at }, attempts: [], scoring: [], scores: scored.run, seq: 0, events: [], seen: {}, settled: [],
+    version: 1, run, driver, invocation, options, host, orchestrator: { ...orchestrator, lastCallAt: at }, attempts: [], scoring: [], scores: scored.run, seq: 0, events: [], seen: {}, settled: [], usage: [],
   };
 
   if (judging) state.judging = { tool: judging.tool, level: judging.level };

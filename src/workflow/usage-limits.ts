@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 // ─── Usage limits ────────────────────────────────────────
 //
 //  A step whose tool stops on its usage limit (`usage_limited`) does not fail: the driver hands it back, launches nothing
@@ -117,19 +119,24 @@ function memberZone(): string {
  */
 export type LimitedOn = 'here' | 'fleet';
 
-/** One tool's limit: since when it holds, when the tool said it resets, when the driver tries it again, and what a person answered. */
-interface Limit {
-  tool: string;
-  on: LimitedOn;
-  since: number;
+/**
+ * One tool's limit: since when it holds, when the tool said it resets, when the driver tries it again, and what a person
+ * answered. A driver that keeps its book between calls, as the skill driver does in skill.json, keeps these.
+ */
+export const KeptLimitSchema = z.object({
+  tool: z.string(),
+  on: z.enum(['here', 'fleet']),
+  since: z.number(),
   /** The last time a step on the tool stopped on it. */
-  hitAt: number;
-  resetsAt?: number;
-  tryAt: number;
+  hitAt: z.number(),
+  resetsAt: z.number().optional(),
+  tryAt: z.number(),
   /** Limits in a row with no reset given, which space the tries apart. */
-  tries: number;
-  isWaitChosen: boolean;
-}
+  tries: z.number().int(),
+  isWaitChosen: z.boolean(),
+});
+
+type Limit = z.infer<typeof KeptLimitSchema>;
 
 /** What the driver does once nothing runs and only usage limits hold the steps left. */
 export type WhenIdle =
@@ -154,10 +161,12 @@ export interface UsageLimitBook {
   whenIdle(now: number, tools: readonly string[], options?: { attended?: boolean }): WhenIdle | undefined;
   /** The person chose to wait for `tool`'s limit, past the cap, until a launch on it ends without the limit. */
   choseWait(tool: string): void;
+  /** The limits the book holds, for a driver that keeps them until its next call opens the book again with them. */
+  kept(): Limit[];
 }
 
-function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zone?: string } = {}): UsageLimitBook {
-  const limits = new Map<string, Limit>();
+function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?: number; zone?: string; kept?: readonly Limit[] } = {}): UsageLimitBook {
+  const limits = new Map<string, Limit>(kept.map((limit) => [`${limit.on} ${limit.tool}`, { ...limit }]));
 
   const clock = ({ at, now }: { at: number; now: number }): string => {
     const wall = wallAt(at, zone);
@@ -242,12 +251,15 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone() }: { capMs?: number; zo
     choseWait(tool) {
       for (const limit of limits.values()) if (limit.tool === tool) limit.isWaitChosen = true;
     },
+    kept() {
+      return [...limits.values()].map((limit) => ({ ...limit }));
+    },
   };
 }
 
 export const UsageLimits = {
   /** When the limit a tool's text tells of resets; undefined when it gives no reset. */
   resetOf,
-  /** The usage limits of one drive, empty. */
+  /** The usage limits of one drive, empty, or as a driver kept them (`kept`). */
   open,
 } as const;

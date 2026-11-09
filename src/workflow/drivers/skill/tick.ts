@@ -9,6 +9,7 @@ import { canonicalJson } from '../../../utils/canonical-json.js';
 import type { PersonHandoff, ResumeClaim, RunReadied } from '../../protocol.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { attemptResultPath, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { UsageLimits } from '../../usage-limits.js';
 import type { WorkflowFailure } from '../../types.js';
 import { readChildResult } from './child-brief.js';
 import { engineReply, reportReply, respondReply, startedOf } from './engine-replies.js';
@@ -86,6 +87,15 @@ export async function applyEffects(context: SkillContext, lock: RunLock, start: 
         break;
       }
 
+      case 'usage': {
+        const book = UsageLimits.open({ kept: applied.state.usage });
+
+        if ('hit' in effect) book.hit({ tool: effect.tool, message: effect.hit, now: context.now().getTime() });
+        else book.ran(effect.tool, effect.spawnedAt);
+        applied.state = { ...applied.state, usage: book.kept() };
+        break;
+      }
+
       default: {
         const unhandled: never = effect;
 
@@ -109,8 +119,9 @@ async function spawnRunner(context: SkillContext, state: SkillState, attempt: At
 async function sendReport(context: SkillContext, lock: RunLock, state: SkillState, { attempt, body, changed }: Extract<Effect, { kind: 'send' }>, unqueued: readonly AttemptId[]): Promise<{ state: SkillState; refused?: WorkflowFailure }> {
   await writeSkillState(context.config, lock, state, context.env.secrets);
   // The attempts still waiting for their place keep their whole timeout through this report too.
-  const sent = { ...body, queued: queuedAttempts(state, unqueued) };
-  const answer = await context.client.report(state.run, sent, changed === undefined ? { lock } : { lock, changed });
+  const { launched, ...payload } = body;
+  const sent = { ...payload, queued: queuedAttempts(state, unqueued) };
+  const answer = await context.client.report(state.run, sent, { lock, ...(changed !== undefined && { changed }), ...(launched && { launched }) });
   const taken = traced(context, reportedRow(state, { attempt, reply: reportReply(answer), at: context.now().toISOString() }));
 
   if (!taken) return { state };
@@ -275,7 +286,12 @@ async function stepTick(context: SkillContext, lock: RunLock, start: SkillState,
     };
 
     const handoff = unoffered ?? request.handoff;
-    const options = handoff === undefined ? undefined : { handoff };
+    // The tools a usage limit holds now, so the engine holds the steps on them rather than lease one to fail again.
+    const limits = UsageLimits.open({ kept: state.usage });
+    const now = context.now();
+    const limitedTools = limits.held(now.getTime());
+    const childTool = state.orchestrator.tool ?? context.tool;
+    const options = { ...(handoff !== undefined && { handoff }), ...(Object.keys(limitedTools).length > 0 && { limitedTools, toolFor: () => childTool }) };
     const answer = await context.client.next(state.run, body, options);
     const at = context.now().toISOString();
     const { reply, cancelled, deadlines } = engineReply(state.run, answer);
@@ -292,7 +308,9 @@ async function stepTick(context: SkillContext, lock: RunLock, start: SkillState,
     // A step given up lets the run go on, so the engine is asked again; one it refused waits as D14 says.
     if (givingUp && (await apply(givingUp.effects)).refused === undefined) continue;
     const ended = reply.kind === 'done' && !state.done ? await context.client.runVersion(state.run) : undefined;
-    const replied = traced(context, replyRow(state, { reply, at, version: ended }));
+    const limitedBy = reply.kind === 'wait' ? [...new Set(reply.held.flatMap(({ limitedTool }) => (limitedTool === undefined ? [] : [limitedTool])))] : [];
+    const idle = limitedBy.length > 0 ? limits.whenIdle(now.getTime(), limitedBy, { attended: state.options.mode === 'attended' }) : undefined;
+    const replied = traced(context, replyRow(state, { reply, at, version: ended, idle }));
 
     if (!replied) return { state, spawned };
 
@@ -303,8 +321,10 @@ async function stepTick(context: SkillContext, lock: RunLock, start: SkillState,
     state = replied.state;
     await apply(replied.effects);
 
-    if (replied.row === 'D30') {
-      const offered = traced(context, offeredRow({ steps: replied.offer, offered: await context.client.offer(state.run, state.driver.workspace) }));
+    if (replied.row === 'D30' || replied.row === 'D37') {
+      const offered = traced(context, offeredRow({ steps: replied.offer, offered: await context.client.offer(state.run, state.driver.workspace), limit: replied.row === 'D37' ? replied.idle.reason : undefined }));
+
+      if (offered.row === 'D38') return { state, spawned, waiting: offered.waiting, turn: offered.turn };
 
       if (offered.row === 'D32') {
         unoffered = offered.handoff;
@@ -700,7 +720,7 @@ export async function agentReport(context: SkillContext, run: RunId, call: { att
     const { state } = read;
     const result = await readChildResult({ config: context.config, run, attempt });
     await AttemptResult.mask(attemptResultPath(context.config, run, attempt), context.env.secrets);
-    const taken = traced(context, reportRow(state, { attempt, modelUnavailable: call.modelUnavailable, result, session: context.session }));
+    const taken = traced(context, reportRow(state, { attempt, modelUnavailable: call.modelUnavailable, result, session: context.session, tool: context.tool }));
 
     if (!taken) return { data: { runner: { attempt, status: 'gone' } } };
 

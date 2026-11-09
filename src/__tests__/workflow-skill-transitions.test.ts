@@ -596,6 +596,21 @@ async function reviewed(made: Awaited<ReturnType<typeof harness>>, answers: { ju
   return turnOf(await made.call({ kind: 'next', run: turn.run, wait: false }));
 }
 
+/**
+ * Starts REVIEW, answers the host question with h1, and has the child of its dispatch stop on claude's usage limit,
+ * which resets `resetsMs` from the harness clock on: the run and the dispatch.
+ */
+async function limitedReview(made: Awaited<ReturnType<typeof harness>>, resetsMs: number) {
+  const { run } = await turnOf(await made.call({ kind: 'start', name: 'review', answers: { confirmed: false, judge: false }, inputs: undefined }));
+  const [dispatch] = dispatches(await turnOf(await made.call({ kind: 'choose', run, choice: 'h1' })));
+  if (!dispatch) throw new Error('the host answer dispatched nothing');
+  await made.call({ kind: 'ack', run, attempt: dispatch.attempt });
+  const resetsAt = Math.ceil((made.context.now().getTime() + resetsMs) / 1000);
+  childWrites(dispatch.brief, { kind: 'failure', failure: { code: 'usage_limited', message: `claude hit its usage limit: Claude AI usage limit reached|${resetsAt}` } });
+  await made.call({ kind: 'report', run, attempt: dispatch.attempt, role: 'agent', modelUnavailable: false });
+  return { run, dispatch };
+}
+
 /** Starts RELEASE with `hitl`, then polls until a turn carries a gate's action: that turn. */
 async function gated(made: Awaited<ReturnType<typeof harness>>, hitl: 'person' | 'recommend' | 'auto-approve') {
   const { run } = await turnOf(await made.call({ kind: 'start', name: 'release', answers: { confirmed: false, hitl }, inputs: undefined }));
@@ -1490,6 +1505,39 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       const message = new RegExp(`^Step "go-live" needs a person, and run ${run} could not be offered to one: .+\\. Its state is on this machine\\. Retry the step here, then resume the run where a person answers: teamai workflow retry ${run} go-live; then teamai workflow resume ${run}$`);
       expect(await polledToDone(made, run)).toMatchObject({ status: 'done', actions: [{ kind: 'done', outcome: 'failed' }] });
       expect(await readRun(made.config, run)).toMatchObject({ steps: expect.arrayContaining([expect.objectContaining({ id: 'go-live', status: 'failed', failure: { code: 'hitl_required', message: expect.stringMatching(message) } })]) });
+      return made.rows;
+    },
+  },
+  {
+    name: 'a child that stops on its tool\'s usage limit holds its step instead of failing it, says what it waits for, and dispatches it again once the limit resets',
+    rows: ['P12', 'D36'],
+    run: async () => {
+      const made = await harness({ review: REVIEW });
+      const { run, dispatch } = await limitedReview(made, 60_000);
+      const held = await turnOf(await made.call({ kind: 'next', run, wait: false }));
+      expect(dispatches(held)).toEqual([]);
+      expect(held.waiting?.reason).toMatch(/^claude hit its usage limit, which resets at /);
+      expect(held.then?.kind).toBe('poll');
+      expect(await readRun(made.config, run)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
+      made.advance(61_000);
+      const [again] = dispatches(await turnOf(await made.call({ kind: 'next', run, wait: false })));
+      expect(again).toMatchObject({ step: 'review' });
+      expect(again?.attempt).not.toBe(dispatch.attempt);
+      return made.rows;
+    },
+  },
+  {
+    name: 'an unattended session whose step a usage limit holds past the wait offers the run, and waits on, holding the step, when it cannot be offered',
+    rows: ['P12', 'D37', 'D38'],
+    run: async () => {
+      // A team repository of the checkout itself has no teamai-reports to offer the run on.
+      const made = await harness({ review: REVIEW }, { mode: 'unattended' });
+      const { run } = await limitedReview(made, 7 * 3_600_000);
+      const held = await turnOf(await made.call({ kind: 'next', run, wait: false }));
+      expect(dispatches(held)).toEqual([]);
+      expect(held.waiting?.reason).toMatch(/^claude hit its usage limit, which resets at .+, past the .+ an unattended run waits for it, and the run could not be offered on teamai-reports: .+/);
+      expect(held.then?.kind).toBe('poll');
+      expect(await readRun(made.config, run)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
       return made.rows;
     },
   },

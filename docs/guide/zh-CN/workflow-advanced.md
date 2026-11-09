@@ -2058,6 +2058,8 @@ teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）
 claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here until it resets, or offer run r7a1… to another machine on teamai-reports? [wait/offer]
 ```
 
+运行该步骤的子智能体报告 `usage_limited` 时，skill 驱动也这样挡住该步骤：它在两次调用之间把额度上限和运行一起保存，每一轮都说明该步骤在等什么，额度重置后再次派发该步骤。无人值守时，超过 6 小时，它会在 teamai-reports 上交出运行；交不出时就继续等待。
+
 守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，消息末尾带上重试该步骤的命令：`Then run: teamai workflow retry <run> <step>`。受限提示（例如评审的提示）也一样。受限提示因工具的用量上限而停止时，以 `usage_limited` 失败：teamai 不会等待该上限重置。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
 
 ```text

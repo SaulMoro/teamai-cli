@@ -191,7 +191,8 @@ export interface RunningEntry {
 export interface Waiting {
   reason: string;
   delivering?: string[];
-  held?: Array<{ step: string; missing: string[] }>;
+  /** `limitedTool`: the tool whose usage limit holds the step, until it resets. */
+  held?: Array<{ step: string; missing: string[]; limitedTool?: string }>;
 }
 
 export interface Turn {
