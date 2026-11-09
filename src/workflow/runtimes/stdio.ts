@@ -5,7 +5,7 @@ import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
 import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
-import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from './step-runtime.js';
+import type { Accepted, ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from './step-runtime.js';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
@@ -69,6 +69,47 @@ function displayOf(name: string, shown: Shown) {
   return shown.kind === 'shown' ? { display: shown.display } : {};
 }
 
+/** The `exec`, `prompt` or `wake` operations this connection has in flight, by op, each joinable by a repeat of its op. */
+type InFlight<TEvents, TEnd> = Map<string, { join: (events: TEvents) => Promise<TEnd> }>;
+
+/**
+ * Runs operation `op` once while it is in flight: the first call starts it with `run`, and a call that repeats `op`
+ * before it ends joins it, getting its events from then on, the acceptance it already showed, and the same end.
+ * `run` sends the request and maps its events to its end; it tells every caller of the acceptance through `accept`, and
+ * every other event through `callers`, which grows as calls join.
+ */
+function joinable<TEvents extends Pick<ExecEvents, 'onAccepted'>, TEnd>({ inFlight, op, events, run }: {
+  inFlight: InFlight<TEvents, TEnd>;
+  op: string;
+  events: TEvents;
+  run: (callers: readonly TEvents[], accept: (accepted: Accepted) => void) => Promise<TEnd>;
+}): Promise<TEnd> {
+  const joined = inFlight.get(op);
+
+  if (joined) return joined.join(events);
+  const callers = [events];
+  let shown: Accepted | undefined;
+
+  const ended = run(callers, (accepted) => {
+    shown = accepted;
+
+    for (const caller of callers) caller.onAccepted?.(accepted);
+  });
+
+  inFlight.set(op, {
+    join: (next) => {
+      callers.push(next);
+
+      if (shown) next.onAccepted?.(shown);
+
+      return ended;
+    },
+  });
+  void ended.then(() => { inFlight.delete(op); });
+
+  return ended;
+}
+
 type HandleWaiter = { request: HandleRequest; events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
 
 /** What waits on one operation: the request that started it, and what reads each of its events or its failure. */
@@ -106,9 +147,9 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   const deadlines = new Map<string, number>();
   // An operation repeated while this connection still has it in flight joins it, rather than replacing its listener.
   const opening = new Map<string, { join: (onAccepted: (handle: string) => Promise<void>) => Promise<Opened> }>();
-  const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
-  const prompting = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<PromptEnd> }>();
-  const waking = new Map<string, { join: (events: Parameters<NonNullable<StepRuntime['wake']>>[1]) => Promise<WakeEnd> }>();
+  const executing: InFlight<ExecEvents, ExecEnd> = new Map();
+  const prompting: InFlight<Parameters<StepRuntime['prompt']>[1], PromptEnd> = new Map();
+  const waking: InFlight<Parameters<NonNullable<StepRuntime['wake']>>[1], WakeEnd> = new Map();
   // Whether the runtime's init for new work offered `wake`: one that did not, or answered only to recover, is sent none.
   let offersWake = false;
   // Operations this connection cancelled: a cancel may race their end, and each cancel is answered with an end.
@@ -452,15 +493,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     exec(request, events) {
       if (dead) return Promise.resolve<ExecEnd>({ kind: 'failed', failure: dead });
 
-      const inFlight = executing.get(request.op);
+      return joinable({ inFlight: executing, op: request.op, events, run: (callers, accept) => new Promise<ExecEnd>((resolveEnd) => {
+        // Every stdout chunk the runtime streamed, which is the whole stdout an `exited` carries only the end of.
+        let streamed = '';
 
-      if (inFlight) return inFlight.join(events);
-      const callers = [events];
-      let accepted: ReturnType<typeof displayOf> | undefined;
-      // Every stdout chunk the runtime streamed, which is the whole stdout an `exited` carries only the end of.
-      let streamed = '';
-
-      const ended = new Promise<ExecEnd>((resolveEnd) => {
         const resolve = (end: ExecEnd): void => {
           pastDeadline();
           resolveEnd(end);
@@ -475,14 +511,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           }
 
           switch (event.event) {
-            case 'accepted': {
-              const shownWith = displayOf(name, event.display);
-              accepted = shownWith;
-
-              for (const caller of callers) caller.onAccepted?.(shownWith);
+            case 'accepted':
+              accept(displayOf(name, event.display));
 
               return;
-            }
 
             case 'output':
               if (event.stream === 'stdout') streamed += event.data;
@@ -526,32 +558,13 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
         const pastDeadline = cancelAtDeadline('exec', request.op, request.handle);
         send({ type: 'exec', ...request });
-      });
-
-      executing.set(request.op, {
-        join: (next) => {
-          callers.push(next);
-
-          if (accepted) next.onAccepted?.(accepted);
-
-          return ended;
-        },
-      });
-      void ended.then(() => { executing.delete(request.op); });
-
-      return ended;
+      }) });
     },
 
     prompt(request, events) {
       if (dead) return Promise.resolve<PromptEnd>({ kind: 'failed', failure: dead });
 
-      const inFlight = prompting.get(request.op);
-
-      if (inFlight) return inFlight.join(events);
-      const callers = [events];
-      let accepted: ReturnType<typeof displayOf> | undefined;
-
-      const ended = new Promise<PromptEnd>((resolve) => {
+      return joinable({ inFlight: prompting, op: request.op, events, run: (callers, accept) => new Promise<PromptEnd>((resolve) => {
         const settle = (end: PromptEnd): void => {
           ops.delete(request.op);
           pastDeadline();
@@ -566,14 +579,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           }
 
           switch (event.event) {
-            case 'accepted': {
-              const shownWith = displayOf(name, event.display);
-              accepted = shownWith;
-
-              for (const caller of callers) caller.onAccepted?.(shownWith);
+            case 'accepted':
+              accept(displayOf(name, event.display));
 
               return;
-            }
 
             case 'display':
               for (const caller of callers) showApart(caller, event.display);
@@ -617,20 +626,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
         const pastDeadline = cancelAtDeadline('prompt', request.op, request.handle);
         send({ type: 'prompt', ...request });
-      });
-
-      prompting.set(request.op, {
-        join: (next) => {
-          callers.push(next);
-
-          if (accepted) next.onAccepted?.(accepted);
-
-          return ended;
-        },
-      });
-      void ended.then(() => { prompting.delete(request.op); });
-
-      return ended;
+      }) });
     },
 
     wake(request, events) {
@@ -638,13 +634,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
       if (!offersWake) return Promise.resolve<WakeEnd>({ kind: 'failed', failure: { code: 'wake_unavailable', message: `Step runtime "${name}" wakes no fleet member: its init did not offer wake.` } });
 
-      const inFlight = waking.get(request.op);
-
-      if (inFlight) return inFlight.join(events);
-      const callers = [events];
-      let accepted: ReturnType<typeof displayOf> | undefined;
-
-      const ended = new Promise<WakeEnd>((resolve) => {
+      return joinable({ inFlight: waking, op: request.op, events, run: (callers, accept) => new Promise<WakeEnd>((resolve) => {
         const settle = (end: WakeEnd): void => {
           ops.delete(request.op);
           resolve(end);
@@ -658,14 +648,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
           }
 
           switch (event.event) {
-            case 'accepted': {
-              const shownWith = displayOf(name, event.display);
-              accepted = shownWith;
-
-              for (const caller of callers) caller.onAccepted?.(shownWith);
+            case 'accepted':
+              accept(displayOf(name, event.display));
 
               return;
-            }
 
             case 'display':
               for (const caller of callers) showApart(caller, event.display);
@@ -700,20 +686,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
         });
 
         send({ type: 'wake', ...request });
-      });
-
-      waking.set(request.op, {
-        join: (next) => {
-          callers.push(next);
-
-          if (accepted) next.onAccepted?.(accepted);
-
-          return ended;
-        },
-      });
-      void ended.then(() => { waking.delete(request.op); });
-
-      return ended;
+      }) });
     },
 
     async cancel(op) {
