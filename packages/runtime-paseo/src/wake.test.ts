@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { WakeRequestSchema } from '@teamai/runtime-protocol';
+import { WAKE_COMMAND, type WakeRequestSchema } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { startFakeDaemon, type Behaviour } from './testing/fake-daemon.js';
@@ -83,9 +83,10 @@ describe('waking a fleet member through another Paseo daemon', () => {
   });
 
   it.each([
-    { tool: 'claude', allowed: { allowedTools: ['Bash(teamai workflow resume:*)'] } },
-    { tool: 'opencode', allowed: { permission: { bash: { 'teamai workflow resume *': 'allow' } } } },
-  ])('lets a woken $tool agent run teamai workflow resume without asking, in the mode Paseo starts it in', async ({ tool, allowed }) => {
+    // Each rule twice: as the tool writes it, and as derived from WAKE_COMMAND, the command teamai's message starts with.
+    { tool: 'claude', allowed: { allowedTools: ['Bash(teamai workflow resume:*)'] }, derived: { allowedTools: [`Bash(${WAKE_COMMAND}:*)`] } },
+    { tool: 'opencode', allowed: { permission: { bash: { 'teamai workflow resume *': 'allow' } } }, derived: { permission: { bash: { [`${WAKE_COMMAND} *`]: 'allow' } } } },
+  ])('lets a woken $tool agent run teamai workflow resume without asking, in the mode Paseo starts it in', async ({ tool, allowed, derived }) => {
     const gpu = await otherDaemon('gpu', { server_id: 'srv_gpu', models: { [tool]: tool === 'claude' ? ['claude-opus-5-5'] : ['opencode/beam-free'] }, ...checkout('gpu') });
     behave({ hosts: [{ label: 'gpu-box', server_id: 'srv_gpu', url: gpu.url }] });
     const runtime = start();
@@ -96,6 +97,7 @@ describe('waking a fleet member through another Paseo daemon', () => {
     expect(await runtime.next(isWakeEnd('op-000000ee'))).toMatchObject({ event: 'woken' });
     const [create] = gpu.creates();
     expect(create?.config).toMatchObject({ provider: tool, providerOptions: allowed });
+    expect(create?.config.providerOptions).toEqual(derived);
     expect(create?.config).not.toHaveProperty('modeId');
     expect(create?.initialPrompt).toBe(`teamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
   });
@@ -113,6 +115,7 @@ describe('waking a fleet member through another Paseo daemon', () => {
     expect(create?.config).toMatchObject({ provider: 'codex' });
     expect(create?.config.providerOptions).toBeUndefined();
     expect(create?.initialPrompt).toBe(`teamai woke this agent to take one attempt of the fleet pool gpu: approve \`teamai workflow resume\` when Codex asks, or the attempt waits here.\n\nteamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
+    expect(create?.initialPrompt).toContain(`approve \`${WAKE_COMMAND}\` when Codex asks`);
   });
 
   it('wakes once for a repeated op, answering it as it ended', async () => {

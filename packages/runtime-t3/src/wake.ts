@@ -1,4 +1,4 @@
-import type { OpId, RuntimeFailure, RuntimeMessage, WakeRequest } from '@teamai/runtime-protocol';
+import { WAKE_COMMAND, type OpId, type RuntimeFailure, type RuntimeMessage, type WakeRequest } from '@teamai/runtime-protocol';
 import { threadLink } from './conversation.js';
 import type { Serving, Session } from './runtime.js';
 import { DRIVER_NAMES } from './sessions.js';
@@ -22,8 +22,8 @@ const NEXT_STEP = 'Link a machine in T3 Code, and add the repository there as a 
 /** What the person does while T3 Code has linked environments off, which they are until turned on in its Labs settings. */
 const TURN_ON = 'Turn on Linked environments in T3 Code\'s Labs settings, link the machine, and add the repository there as a project.';
 
-/** The Claude permission rule that lets a member run teamai's wake command without asking. */
-const RESUME_ALLOW_RULE = 'Bash(teamai workflow resume:*)';
+/** The Claude permission rule that lets a member run teamai's wake command without asking: a prefix rule on it. */
+const RESUME_ALLOW_RULE = `Bash(${WAKE_COMMAND}:*)`;
 
 /** The mode a woken member launches in, and the line its message starts with, when that mode asks first. */
 type MemberMode = { runtimeMode: StepMode; firstLine: string | undefined };

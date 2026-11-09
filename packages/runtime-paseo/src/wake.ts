@@ -1,5 +1,5 @@
 import type { PaseoAgentConfig } from '@getpaseo/client';
-import type { OpId, RuntimeFailure, RuntimeMessage, WakeRequest } from '@teamai/runtime-protocol';
+import { WAKE_COMMAND, type OpId, type RuntimeFailure, type RuntimeMessage, type WakeRequest } from '@teamai/runtime-protocol';
 import { agentIdOf } from './conversation.js';
 import type { Daemon } from './daemon/connect.js';
 import type { Host } from './daemon/host.js';
@@ -23,13 +23,13 @@ export const END_OF_WAKE = 'When that one attempt is done, or nothing is left to
  * command, so its first prompt tells the person what to approve (`approveFirst`).
  */
 const WAKE_ALLOWS: Readonly<Record<PaseoTool, PaseoAgentConfig['options']>> = {
-  claude: { allowedTools: ['Bash(teamai workflow resume:*)'] },
+  claude: { allowedTools: [`Bash(${WAKE_COMMAND}:*)`] },
   codex: undefined,
-  opencode: { permission: { bash: { 'teamai workflow resume *': 'allow' } } },
+  opencode: { permission: { bash: { [`${WAKE_COMMAND} *`]: 'allow' } } },
 };
 
 /** The line a woken Codex agent's first prompt starts with, for the person who sees Codex ask. */
-const approveFirst = (pool: string): string => `teamai woke this agent to take one attempt of the fleet pool ${pool}: approve \`teamai workflow resume\` when Codex asks, or the attempt waits here.`;
+const approveFirst = (pool: string): string => `teamai woke this agent to take one attempt of the fleet pool ${pool}: approve \`${WAKE_COMMAND}\` when Codex asks, or the attempt waits here.`;
 
 /** What the person adds so a wake finds a machine. */
 const NEXT_STEP = 'Add the machine with `paseo host add <host:port>`, and open a checkout of the repository in Paseo there.';

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { WAKE_COMMAND } from '@teamai/runtime-protocol';
 import { CLAUDE, CODEX, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
 import { start, t3, useT3Runtime } from './testing/suite.js';
 import { END_OF_WAKE, repositoryKey } from './wake.js';
@@ -126,6 +127,8 @@ describe('teamai-runtime-t3', () => {
         runtimeMode: mode,
         message: `This thread runs in ${label} mode, so it asks before it runs teamai's command below: approve that command, or allow it on this machine with the permission rule Bash(teamai workflow resume:*) in this checkout's .claude/settings.local.json.\n\nRun teamai workflow resume --claim gpu, then report.\n\n${END_OF_WAKE}`,
       });
+      // The rule it names is the one the command teamai sends derives: Claude's prefix rule on WAKE_COMMAND.
+      expect(t3.threads().find((thread) => thread.environmentId !== undefined)?.message).toContain(`permission rule Bash(${WAKE_COMMAND}:*) in`);
     });
 
     it('fails wake_unavailable, naming each machine it looked at and what to add, when no linked machine has the repository', async () => {

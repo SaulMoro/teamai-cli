@@ -500,6 +500,14 @@ export const WakeRequestSchema = z.object({
 
 export type WakeRequest = z.infer<typeof WakeRequestSchema>;
 
+/**
+ * The command a woken fleet member runs to take one attempt: a wake's `message` starts with it, as
+ * `<WAKE_COMMAND> --next --pool <pool>`. teamai's message and each runtime's rule that lets a member run it without
+ * asking derive from this one spelling, so the rule allows the line the member is sent. A runtime whose member's mode
+ * does not ask first, such as T3 in Auto, needs no rule.
+ */
+export const WAKE_COMMAND = 'teamai workflow resume';
+
 /** A request teamai writes to a runtime's stdin. */
 export const RuntimeRequestSchema = z.discriminatedUnion('type', [
   InitRequestSchema,

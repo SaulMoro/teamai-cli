@@ -10,7 +10,7 @@ import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRu
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
-import { RuntimeOptionsSchema } from '@teamai/runtime-protocol';
+import { RuntimeOptionsSchema, WAKE_COMMAND } from '@teamai/runtime-protocol';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { newOpId, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -1322,6 +1322,8 @@ describe('waking a fleet member for an offer no member claimed', () => {
     expect(sent).toMatchObject({ type: 'wake', pool: 'gpu', repository });
     // The member's first message: the command that takes one attempt, alone on its first line, then where, and to end after it.
     expect(String(sent?.message).split('\n')[0]).toBe('teamai workflow resume --next --pool gpu');
+    // That line is the command WAKE_COMMAND spells, which each runtime's rule for a woken member derives from.
+    expect(String(sent?.message).split('\n')[0]).toBe(`${WAKE_COMMAND} --next --pool gpu`);
     expect(String(sent?.message)).toContain(repository);
     expect(String(sent?.message)).toContain('then end');
     // A title the person recognises on the machine woken: the step, the run and the pool.

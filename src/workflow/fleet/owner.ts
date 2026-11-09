@@ -10,7 +10,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WAKE_COMMAND, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { safeText } from '../../session-flow/session-cmd-shared.js';
 import { getRepoIdentity } from '../../session-flow/sync.js';
@@ -756,7 +756,7 @@ async function openWaker(wake: { use: string; options?: RuntimeOptions | undefin
  * The command that takes one attempt of `pool`. A woken member's first message starts with exactly this: the rule that
  * lets a woken agent run it without asking matches that prefix.
  */
-const takeCommand = (pool: string): string => `teamai workflow resume --next --pool ${pool}`;
+const takeCommand = (pool: string): string => `${WAKE_COMMAND} --next --pool ${pool}`;
 
 /** The wake of one offer: shown each record the owner reads, and stopped once the owner stops waiting. */
 type WakeOnOffer = { seen(record: FleetRecord | 'absent'): Promise<void>; stop(): Promise<void> };
