@@ -232,7 +232,7 @@ export function withoutPrompt(message: string, input: LocalToolRun): string {
 
 /** Whether what the tool printed says it stopped on its usage limit: by the kind of its error, else, for one with no kind, by its text. */
 function isUsageLimit(printed: ToolReport | null): printed is ToolReport & { error: string } {
-  return printed?.error !== undefined && (printed.isUsageLimit ?? isUsageLimitText(printed.error));
+  return printed?.error !== undefined && (printed.errorKind === undefined ? isUsageLimitText(printed.error) : printed.errorKind === 'usage_limit');
 }
 
 /** A spent usage limit, with the tool's own words, which name the reset when the tool gives it. */

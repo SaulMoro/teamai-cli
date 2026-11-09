@@ -257,6 +257,8 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
 function runtimeConfinedReport(input: { runtime: string; tool: string; model: StepModel | undefined; level: ConfinedLevel; end: PromptEnd; durationMs: number; retry: { run: string; step: string } }): ConfinedStepReport {
   const { runtime, tool, model, level, end, durationMs, retry } = input;
   const failed = (failure: WorkflowFailure): ConfinedStepReport => ({ outcome: 'failed', tool, durationMs, message: failure.message, failure });
+  // The tool's or the runtime's failure: a usage limit stays one, naming the retry; any other fails the confined prompt.
+  const failedWith = ({ code, message }: { code: string; message: string }): ConfinedStepReport => failed({ code: code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: withRetry({ code, message }, retry) });
 
   switch (end.kind) {
     case 'finished': {
@@ -269,7 +271,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
         return failed({ code: 'confined_failed', message: `Step runtime "${runtime}" kept the confined prompt at ${kept.level}, below the ${level} its directory asks for.` });
       }
 
-      if (end.result.failure) return failed({ code: end.result.failure.code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: withRetry({ code: end.result.failure.code, message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` }, retry) });
+      if (end.result.failure) return failedWith({ code: end.result.failure.code, message: `${tool} could not answer on step runtime "${runtime}" (${end.result.failure.code}): ${end.result.failure.message}` });
       const outputs = JsonValueSchema.safeParse(end.result.output);
 
       if (!outputs.success) return failed({ code: 'confined_reply_invalid', message: `${tool} on step runtime "${runtime}" replied with no JSON value.` });
@@ -282,7 +284,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
     case 'cancelled':
       return failed({ code: 'confined_failed', message: `The confined ${tool} prompt on step runtime "${runtime}" was stopped before it replied.` });
     case 'failed':
-      return failed({ code: end.failure.code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: withRetry({ code: end.failure.code, message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` }, retry) });
+      return failedWith({ code: end.failure.code, message: `Step runtime "${runtime}" could not run the confined ${tool} prompt (${end.failure.code}): ${end.failure.message}` });
     case 'lost':
       return failed({ code: 'runtime_lost', message: `Step runtime "${runtime}" stopped answering while it ran the confined ${tool} prompt, which may still run there: ${end.failure.message}` });
     default: {

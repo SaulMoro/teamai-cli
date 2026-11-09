@@ -8,12 +8,11 @@ import { resolveCliPath } from '../utils/cli-path.js';
 import { log } from '../utils/logger.js';
 import { CallError, memberTools, type MemberTool } from './member-tools.js';
 import { runTool } from './run.js';
-import { toolStdout, type TokenUsage } from './stdout.js';
+import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
 import { addTokens } from '@teamai/tool-core/stdout';
 import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from './tools.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
-import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import type { CallLaunch } from '@teamai/tool-core/launch';
 import type { z } from 'zod';
 
@@ -191,7 +190,7 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
           const reason = (reading.ok ? undefined : reading.message) || run.stderr.trim() || (streaming ? '' : run.stdout.trim()) || `exit code ${run.code}`;
 
           // A typed error decides by its kind (OpenCode 2.x); one without a kind, by its text.
-          if (toolStdout(launchAdapterIdOf(tool), run.stdout)?.isUsageLimit ?? isUsageLimitText(reason)) throw new CallError('usage_limited', `${tool} hit its usage limit: ${reason}`, tool);
+          if (stoppedOnUsageLimit(toolStdout(launchAdapterIdOf(tool), run.stdout), reason)) throw new CallError('usage_limited', `${tool} hit its usage limit: ${reason}`, tool);
           throw new CallError('call_failed', `AI call failed (tool: ${tool}): ${reason}`, tool);
         }
 
