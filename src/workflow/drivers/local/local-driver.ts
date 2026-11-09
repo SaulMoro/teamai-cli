@@ -798,6 +798,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     }
   }
 
+  /** The workspace step `step` shares with the steps beside it, where it may go on in an earlier step's conversation. */
+  const workspaceOf = async (step: string): Promise<string | undefined> => {
+    const state = await readRun(config, runId);
+
+    return state !== 'missing' && state !== 'corrupt' ? sharedWorkspace(state, step) : undefined;
+  };
+
   /**
    * The conversations the steps of the run that have not settled go on in, each with its workspace, and the workspace
    * step `step` shares with the steps beside it, where a later one may go on in its conversation.
@@ -1447,7 +1454,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
               run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn,
               ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }),
               ...(slot && HeldPlace.holdsOn(slot) && {
-                conversationHeld: (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions }),
+                conversationHeld: async (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions, workspace: await workspaceOf(lease.step) }),
               }),
             },
           });

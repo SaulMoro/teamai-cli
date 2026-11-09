@@ -1072,6 +1072,49 @@ steps:
     expect(run.steps.find((step) => step.id === 'change.two')).toMatchObject({ resumed: { tool: 'claude', id: sessionOf('change.one') } });
   }, 30_000);
 
+  it('names no held conversation in the lease of a step with a workspace of its own, while that conversation is held for another step', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Step one's conversation goes on in step two; a step between them works in a copy of its own.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: one
+          prompt: Plan the change.
+          output:
+            ok: boolean
+        - id: aside
+          needs: [one]
+          workspace: new
+          session:
+            from: one
+          prompt: Try the change on its own.
+          output:
+            ok: boolean
+        - id: two
+          needs: [aside]
+          session:
+            from: one
+          prompt: Make the change you planned.
+          output:
+            ok: boolean
+`);
+    const toy = await toyDriver(path.dirname(workspace));
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const asked = toy.asked();
+    const one = promptOf(asked, toy.leases(), 'change.one');
+    const aside = promptOf(asked, toy.leases(), 'change.aside');
+    const two = promptOf(asked, toy.leases(), 'change.two');
+    // Step one's place is held while aside runs, since step two goes on in its conversation; aside's lease names none.
+    expect(closedAt(asked, one.handle)).toBeGreaterThan(aside.at);
+    expect(aside.continue).toBeUndefined();
+    expect(two.continue).toEqual({ handle: one.handle, op: one.op });
+  }, 30_000);
+
   it('records a held place it closed as closed, held for no conversation any more', async () => {
     const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
     const toy = await toyDriver(path.dirname(workspace));

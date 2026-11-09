@@ -251,14 +251,16 @@ async function heldIn(config: LocalConfig, run: RunId): Promise<Held[]> {
 
 /**
  * The conversation a prompt continues: the place of an earlier attempt of run `run`, held on runtime `runtime` of driver
- * `driver` for the first of `sessions` (the lease's session, then each earlier one), with the op of the prompt that
- * launched it. Undefined when no held place holds one.
+ * `driver` in `workspace` (the one the prompt's step shares with the steps beside it) for the first of `sessions` (the
+ * lease's session, then each earlier one), with the op of the prompt that launched it. Undefined when no held place
+ * holds one, and for a step with no shared workspace, which goes on in none, as `hold` holds none for it.
  */
-async function conversationOf({ config, run, runtime, driver, sessions }: { config: LocalConfig; run: RunId; runtime: string; driver: string; sessions: readonly SessionRef[] }): Promise<{ handle: string; op: OpId; session: SessionRef } | undefined> {
+async function conversationOf({ config, run, runtime, driver, sessions, workspace }: { config: LocalConfig; run: RunId; runtime: string; driver: string; sessions: readonly SessionRef[]; workspace: string | undefined }): Promise<{ handle: string; op: OpId; session: SessionRef } | undefined> {
+  if (workspace === undefined) return undefined;
   const held = await heldIn(config, run);
 
   for (const session of sessions) {
-    const found = held.find(({ record }) => record.runtime === runtime && record.driver === driver && isSameSession(record.heldFor.conversation, session));
+    const found = held.find(({ record }) => record.runtime === runtime && record.driver === driver && record.heldFor.workspace === workspace && isSameSession(record.heldFor.conversation, session));
     const handle = found?.record.open.handle;
     const op = found?.record.prompt?.op;
 
