@@ -216,13 +216,14 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toEqual([]);
     });
 
-    // Once a step ended and T3 holds no run of its thread, teamai settles it: it leaves the active list and still opens from its link.
+    // Once a step ended and T3 holds no run of its thread, teamai settles it at close, since a later step may continue it
+    // until then: it leaves the active list and still opens from its link.
     it.each([
       { ended: 'finished', agent: { output: { verdict: 'approve' } }, event: 'finished' },
       { ended: 'finished, reporting the step failed', agent: { failure: { code: 'tests_failed', message: 'npm test fails in src/cart.test.ts.' } }, event: 'finished' },
       { ended: 'failed', agent: { fail: true }, event: 'failed' },
       { ended: 'cancelled', agent: { hold: true, output: {} }, event: 'cancelled' },
-    ])('settles the thread of a step that ended $ended once teamai collects it', async ({ agent, event }) => {
+    ])('settles the thread of a step that ended $ended once teamai closes its place', async ({ agent, event }) => {
       t3.config({ agent });
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000030'));
@@ -239,8 +240,12 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'collect', handle });
 
       expect(await runtime.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle });
-      expect(t3.threads()[0]?.settled).toBe(true);
-      expect(t3.calls().filter((call) => call.tool === 't3_thread_organize').map((call) => call.args)).toEqual([{ threadId: t3.threads()[0]?.threadId, action: 'settle' }]);
+      expect(t3.threads()[0]?.settled).toBe(false);
+      const { threadId } = t3.threads()[0] ?? {};
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_organize').map((call) => call.args)).toEqual([{ threadId, action: 'settle' }]);
     });
 
     it('started outside a T3 thread, names no thread it was started from', async () => {
@@ -654,8 +659,8 @@ describe('teamai-runtime-t3', () => {
         expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000043', state: 'running' }] });
 
         expect(await second.next((line) => line['op'] === 'op-00000043')).toEqual({ op: 'op-00000043', event: 'cancelled' });
-        second.send({ type: 'collect', handle: first.handle });
-        await second.next((line) => line['event'] === 'collected');
+        second.send({ type: 'close', handle: first.handle });
+        await second.next((line) => line['handle'] === first.handle && line['event'] === 'closed');
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       });
     });
@@ -883,7 +888,7 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 
-    it('stops the thread a runtime before it left running when teamai cancels that prompt first thing after a restart, and settles it at collect', async () => {
+    it('stops the thread a runtime before it left running when teamai cancels that prompt first thing after a restart, and settles it at close', async () => {
       t3.config({ agent: { release: path.join(dir, 'release'), output: { verdict: 'approve' } } });
       const first = await opened();
       first.runtime.send(prompt(first.handle, 'op-0000001c'));
@@ -904,9 +909,9 @@ describe('teamai-runtime-t3', () => {
       }).toEqual([{ op: 'op-0000001c', state: 'cancelled' }]);
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: false });
 
-      second.send({ type: 'collect', handle: first.handle });
+      second.send({ type: 'close', handle: first.handle });
 
-      expect(await second.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle: first.handle });
+      expect(await second.next((line) => line['handle'] === first.handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle: first.handle });
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 

@@ -253,7 +253,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     // After a restart, cancel ends the op once T3 acknowledged the stop, which may come before the run ended.
-    it('settles the thread of a step cancelled after a restart, once its run ends after T3 acknowledged the stop', async () => {
+    it('settles the thread of a step cancelled after a restart at close, once its run ends after T3 acknowledged the stop', async () => {
       t3.config({ agent: { hold: true, output: {} } });
       const first = await opened();
       first.runtime.send(prompt(first.handle, 'op-00000036'));
@@ -268,10 +268,25 @@ describe('teamai-runtime-t3', () => {
       second.send({ type: 'cancel', op: 'op-00000036' });
       expect(await second.next((line) => line['op'] === 'op-00000036')).toEqual({ op: 'op-00000036', event: 'cancelled' });
       expect(t3.threads()[0]?.status).toBe('interrupted');
-      second.send({ type: 'collect', handle: first.handle });
+      second.send({ type: 'close', handle: first.handle });
 
-      expect(await second.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle: first.handle });
+      expect(await second.next((line) => line['handle'] === first.handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle: first.handle });
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+    });
+
+    // A later step may continue the thread's conversation, which T3 keeps in the person's active threads until the place closes.
+    it('leaves the thread of a step that ended unsettled at collect, and settles it at close', async () => {
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000039'));
+      expect(await ended(runtime, 'op-00000039')).toMatchObject({ event: 'finished' });
+
+      runtime.send({ type: 'collect', handle });
+      expect(await runtime.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle });
+      expect(t3.threads()[0]).toMatchObject({ status: 'completed', settled: false });
+
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(t3.threads()[0]).toMatchObject({ status: 'completed', settled: true });
     });
 
     it('never settles a thread that still runs, or an interactive step\'s thread that waits for the person', async () => {
@@ -338,7 +353,7 @@ describe('teamai-runtime-t3', () => {
     });
 
     // T3 leaves a delegated task's thread unsettled when it settles the thread that delegated it.
-    it('settles the tasks a step thread delegated, at any depth, with the step thread, and no task of another thread', async () => {
+    it('settles the tasks a step thread delegated, at any depth, with the step thread at close, and no task of another thread', async () => {
       t3.config({ agent: { output: { verdict: 'approve' }, delegates: true } });
       t3.addThread({ threadId: 'thread-person-1', title: 'Fix the cart total', status: 'completed' });
       t3.addThread({ threadId: 'thread-person-1:task', title: 'Check the totals', status: 'completed', parentThreadId: 'thread-person-1' });
@@ -347,8 +362,8 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000037')).toMatchObject({ event: 'finished' });
       const step = t3.threads().find((thread) => thread.title === `review · teamai ${RUN}`)?.threadId;
 
-      runtime.send({ type: 'collect', handle });
-      await runtime.next((line) => line['event'] === 'collected');
+      runtime.send({ type: 'close', handle });
+      await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed');
 
       expect(Object.fromEntries(t3.threads().map((thread) => [thread.threadId, thread.settled]))).toEqual({
         [`${step}`]: true, [`${step}:task`]: true, [`${step}:task:task`]: true, 'thread-person-1': false, 'thread-person-1:task': false,
@@ -367,8 +382,8 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000038')).toMatchObject({ event: 'finished' });
       const step = t3.threads().find((thread) => thread.title === `review · teamai ${RUN}`)?.threadId;
 
-      runtime.send({ type: 'collect', handle });
-      await runtime.next((line) => line['event'] === 'collected');
+      runtime.send({ type: 'close', handle });
+      await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed');
 
       const settled = Object.fromEntries(t3.threads().filter((thread) => thread.threadId.startsWith(`${step}`)).map((thread) => [thread.threadId, thread.settled]));
       expect(settled).toEqual({ [`${step}`]: true, [`${step}:task`]: true, [`${step}:task:task`]: true });
