@@ -401,7 +401,7 @@ describe('a clone place', () => {
     const secrets = await knownSecrets(config);
     let prepares = 0;
     // The step's second attempt is cancelled by a retry once its place is prepared, before its tool starts.
-    const prepared = async ({ step }: { step: string }, signal: AbortSignal): Promise<void> => {
+    const retryOnSecond = async ({ step }: { step: string }, signal: AbortSignal): Promise<void> => {
       prepares += 1;
 
       if (step !== 'note' || prepares !== 2) return;
@@ -410,7 +410,7 @@ describe('a clone place', () => {
       await stopped;
     };
 
-    const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths, prepared });
+    const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths, prepared: retryOnSecond });
 
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(prepares).toBe(3);
