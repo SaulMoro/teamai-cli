@@ -11,6 +11,8 @@ You orchestrate. You run the literal commands the CLI prints, and you keep the p
 
 ## Start
 
+When this session started with `teamai workflow resume --next --pool <pool>`, or the person asks you to take fleet work, follow `references/fleet.md` instead.
+
 Run `teamai workflow start --describe <name> --driver skill` with the workflow name from the skill that sent you. When the person names no workflow, or one no generated skill names, run `teamai list workflows`, pick the one they mean, and describe it. Where this machine runs teamai through `npx teamai-cli`, use that in its place; every literal the CLI prints after this already does.
 
 Act on `data.describe.ask.kind`:
