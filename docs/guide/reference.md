@@ -216,7 +216,7 @@ CURSOR_DATA_DIR=~/.cursor-data teamai init
 CURSOR_CONFIG_DIR=~/.cursor-config teamai init
 ```
 
-teamai syncs to the directory when it sits in your home or under `~/.config/`. A directory outside your home is recorded too, but only for the tool's sessions: teamai reads the sessions there and keeps syncing the tool's other files to its default root, and `init` and `teamai doctor` say so. Copilot uses its own `COPILOT_HOME`.
+teamai syncs to the directory when it sits in your home or under `~/.config/`. A directory outside your home is recorded too, but only for the tool's sessions: teamai reads the sessions there and keeps syncing the tool's other files to its default root, and `init` and `teamai doctor` say so. When the config already records a root in your home for the tool, `init` keeps it and says how to switch. Copilot uses its own `COPILOT_HOME`.
 
 Cursor CLI moves two directories: `CURSOR_DATA_DIR` holds the transcripts, `CURSOR_CONFIG_DIR` the `cli-config.json` the co-author setting goes into. Its user `mcp.json`, `rules/` and `commands/` stay in `~/.cursor` whatever the two variables say, so those keep their default paths. With `CURSOR_CONFIG_DIR` unset the config root is `$XDG_CONFIG_HOME/cursor` when that variable is set, `~/.cursor` otherwise.
 
