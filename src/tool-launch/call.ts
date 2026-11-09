@@ -168,7 +168,9 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     });
 
     // A call teamai stopped at its limit names no tool: the tool gave no answer of its own.
-    if (!end.ok) throw new CallError(end.code, end.message, 'stopped' in end ? undefined : tool);
+    if (end.kind === 'stopped') throw new CallError('call_failed', end.message);
+
+    if (end.kind === 'failed') throw new CallError(end.code, end.message, tool);
     const result: CallResult & { session?: string } = { text: end.text, tool };
 
     if (end.tokens) result.tokens = end.tokens;

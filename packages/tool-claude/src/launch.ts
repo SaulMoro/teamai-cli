@@ -9,13 +9,13 @@ function stepArgs(input: StepArgsInput, { interactive }: StepArgsHow): string[] 
   const model = input.model ? ['--model', input.model] : [];
   const effort = input.effort ? ['--effort', input.effort] : [];
   const resume = input.resume ? ['--resume', input.resume] : [];
-  const result = resultDirRule(input.resultDir);
+  const editRule = resultDirRule(input.resultDir);
 
-  if (interactive) return [...unattended, result, ...agent, ...model, ...effort, ...resume, input.prompt];
+  if (interactive) return [...unattended, editRule, ...agent, ...model, ...effort, ...resume, input.prompt];
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
 
   // Only partial messages state each message's final usage as it ends, which the budget meter counts.
-  return ['-p', input.prompt, '--output-format', 'stream-json', '--verbose', ...(input.streamsUsage ? ['--include-partial-messages'] : []), ...unattended, result, ...turns, ...agent, ...model, ...effort, ...resume];
+  return ['-p', input.prompt, '--output-format', 'stream-json', '--verbose', ...(input.streamsUsage ? ['--include-partial-messages'] : []), ...unattended, editRule, ...turns, ...agent, ...model, ...effort, ...resume];
 }
 
 /** How teamai launches Claude Code and its variants headless; each variant starts its own command. */

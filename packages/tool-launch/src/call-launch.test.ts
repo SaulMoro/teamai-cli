@@ -32,7 +32,7 @@ describe('callLaunch', () => {
 
     expect(argv).toEqual(['-p', '--output-format', 'json']);
     expect(given).toBe('Review it.');
-    expect(end).toEqual({ ok: true, text: 'Looks good.', session: 's-1', tokens: { input: 12, output: 3 } });
+    expect(end).toEqual({ kind: 'answered', text: 'Looks good.', session: 's-1', tokens: { input: 12, output: 3 } });
   });
 
   it('reads Codex\'s answer from the last-message file its argv names', async () => {
@@ -50,7 +50,7 @@ describe('callLaunch', () => {
 
     expect(argv.slice(0, 4)).toEqual(['exec', '--json', '--skip-git-repo-check', '-o']);
     expect(argv.slice(-1)).toEqual(['-']);
-    expect(end).toEqual({ ok: true, text: 'Looks good.' });
+    expect(end).toEqual({ kind: 'answered', text: 'Looks good.' });
   });
 
   it('continues a session with the arguments after the profile\'s own', async () => {
@@ -65,7 +65,7 @@ describe('callLaunch', () => {
   it('ends stopped at its timeout, naming the limit, when the tool runs past it', async () => {
     const end = await callLaunch({ tool: claude, prompt: 'Review it.', timeoutMs: 20, start: () => fakeProcess('', undefined) });
 
-    expect(end).toEqual({ ok: false, code: 'call_failed', stopped: 'timeout', message: 'AI call timed out after 0s (tool: claude)' });
+    expect(end).toEqual({ kind: 'stopped', limit: 'timeout', message: 'AI call timed out after 0s (tool: claude)' });
   });
 
   it('fails usage_limited, in the tool\'s words, when the tool says it hit its usage limit', async () => {
@@ -73,6 +73,6 @@ describe('callLaunch', () => {
 
     const end = await callLaunch({ tool: claude, prompt: 'Review it.', timeoutMs: 10_000, start: () => fakeProcess(`${record}\n`, 1) });
 
-    expect(end).toEqual({ ok: false, code: 'usage_limited', message: 'claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)' });
+    expect(end).toEqual({ kind: 'failed', code: 'usage_limited', message: 'claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)' });
   });
 });

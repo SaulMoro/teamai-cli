@@ -85,9 +85,9 @@ export interface CallTool {
 
 /** How a call ended: the tool's answer, the tool's own failure, or a stop at one of its limits, at which teamai stopped it. */
 export type CallEnd =
-  | { ok: true; text: string; tokens?: TokenUsage; session?: string }
-  | { ok: false; code: 'usage_limited' | 'call_failed'; message: string }
-  | { ok: false; code: 'call_failed'; stopped: 'timeout' | 'idle'; message: string };
+  | { kind: 'answered'; text: string; tokens?: TokenUsage; session?: string }
+  | { kind: 'failed'; code: 'usage_limited' | 'call_failed'; message: string }
+  | { kind: 'stopped'; limit: 'timeout' | 'idle'; message: string };
 
 /**
  * Runs `prompt` once on `tool`'s call profile through `start`, continuing `session` when given: the arguments and stdin
@@ -119,10 +119,10 @@ export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeout
     const stdin = call.prompt !== 'stdin' ? '' : call.stdinOf ? call.stdinOf(prompt) : prompt;
     const run = await runHeadless({ start: start(args), stdin, timeoutMs, ...(streaming && { idleTimeoutMs }), signal });
 
-    if (run.stopped === 'timeout') return { ok: false, code: 'call_failed', stopped: 'timeout', message: `AI call timed out after ${Math.round(timeoutMs / 1000)}s (tool: ${tool.name})` };
+    if (run.stopped === 'timeout') return { kind: 'stopped', limit: 'timeout', message: `AI call timed out after ${Math.round(timeoutMs / 1000)}s (tool: ${tool.name})` };
 
     if (run.stopped === 'idle') {
-      return { ok: false, code: 'call_failed', stopped: 'idle', message: `AI call printed nothing for ${(idleTimeoutMs ?? 0) / 1000}s, longer than its idle limit (tool: ${tool.name}). Raise the idle limit if this tool works silently for longer.` };
+      return { kind: 'stopped', limit: 'idle', message: `AI call printed nothing for ${(idleTimeoutMs ?? 0) / 1000}s, longer than its idle limit (tool: ${tool.name}). Raise the idle limit if this tool works silently for longer.` };
     }
 
     const lastMessage = await readRegularFile(lastMessageFile, 'utf8').catch(() => undefined);
@@ -133,12 +133,12 @@ export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeout
       const reason = (reading.ok ? undefined : reading.message) || run.stderr.trim() || (streaming ? '' : run.stdout.trim()) || `exit code ${run.code}`;
 
       // A typed error decides by its kind (OpenCode 2.x); one without a kind, by its text.
-      if (stoppedOnUsageLimit(toolStdout(tool.family, run.stdout), reason)) return { ok: false, code: 'usage_limited', message: `${tool.name} hit its usage limit: ${reason}` };
+      if (stoppedOnUsageLimit(toolStdout(tool.family, run.stdout), reason)) return { kind: 'failed', code: 'usage_limited', message: `${tool.name} hit its usage limit: ${reason}` };
 
-      return { ok: false, code: 'call_failed', message: `AI call failed (tool: ${tool.name}): ${reason}` };
+      return { kind: 'failed', code: 'call_failed', message: `AI call failed (tool: ${tool.name}): ${reason}` };
     }
 
-    const answer: CallEnd = { ok: true, text: reading.text };
+    const answer: CallEnd = { kind: 'answered', text: reading.text };
 
     if (reading.tokens) answer.tokens = reading.tokens;
 

@@ -48,7 +48,7 @@ export type ToolResolve = (command: string) => string | null;
  * no flag to pass, the step's prompt, and the instruction to write the result file.
  */
 export function agentPrompt(input: LocalToolRun): string {
-  return stepPrompt({ ...input, expected: expectedOutput(input.output) }, true);
+  return stepPrompt({ ...input, expected: expectedOutput(input.output) }, { inPrompt: true });
 }
 
 /** What the launch reads from this machine. */
@@ -130,7 +130,8 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
         };
       }
 
-      const { budget, timeoutMs, idleTimeoutMs, output, launch: launched, command: _command, ...run } = input;
+      // `command` is resolved above; the launch ignores it.
+      const { budget, timeoutMs, idleTimeoutMs, output, launch: launched, ...run } = input;
 
       return runStepLaunch({
         tool: { name: tool, family: launchAdapterIdOf(tool), step: launchAdapterOf(tool).step, executable },

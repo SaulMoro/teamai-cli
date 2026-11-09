@@ -8,12 +8,12 @@ function stepArgs(input: StepArgsInput, { interactive }: StepArgsHow): string[] 
   const agent = input.agent && !input.agent.inPrompt ? ['--agent', input.agent.name] : [];
   const model = input.model ? ['--model', input.model] : [];
   const resume = input.resume ? ['--resume', input.resume] : [];
-  const result = resultDirRule(input.resultDir);
+  const editRule = resultDirRule(input.resultDir);
 
-  if (interactive) return [...unattended, result, ...agent, ...model, ...resume, input.prompt];
+  if (interactive) return [...unattended, editRule, ...agent, ...model, ...resume, input.prompt];
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
 
-  return ['-p', input.prompt, '--output-format', 'stream-json', '--verbose', ...unattended, result, ...turns, ...agent, ...model, ...resume];
+  return ['-p', input.prompt, '--output-format', 'stream-json', '--verbose', ...unattended, editRule, ...turns, ...agent, ...model, ...resume];
 }
 
 /** How teamai launches the CodeBuddy CLI headless; WorkBuddy has no launch profile. */

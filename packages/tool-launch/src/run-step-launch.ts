@@ -144,7 +144,7 @@ function resultInstruction(input: Pick<StepLaunchInput, 'resultPath' | 'expected
  * The whole prompt a step's tool gets: with `inPrompt`, the agent definition's instructions first, for a launch with no
  * flag to pass them; the step's prompt; and the instruction to write the result file.
  */
-export function stepPrompt(input: Pick<StepLaunchInput, 'prompt' | 'resultPath' | 'expected' | 'agent'>, inPrompt: boolean): string {
+export function stepPrompt(input: Pick<StepLaunchInput, 'prompt' | 'resultPath' | 'expected' | 'agent'>, { inPrompt }: { inPrompt: boolean }): string {
   return resultInstruction(input, inPrompt && input.agent?.instructions ? `${input.agent.instructions}\n\n${input.prompt}` : input.prompt);
 }
 
@@ -154,11 +154,11 @@ function promptHandoff(family: StepFamily, input: StepLaunchInput, opencodeMajor
 }
 
 /** The argv that launches the step, which the tool's family builds. */
-function stepArgv(tool: StepTool, input: StepLaunchInput, opencodeMajor: number, interactive: boolean, streamsUsage: boolean): string[] {
+function stepArgv(tool: StepTool, input: StepLaunchInput, { opencodeMajor, interactive, streamsUsage }: { opencodeMajor: number; interactive: boolean; streamsUsage: boolean }): string[] {
   const inPrompt = promptHandoff(tool.family, input, opencodeMajor);
 
   return tool.step.args({
-    prompt: stepPrompt(input, inPrompt),
+    prompt: stepPrompt(input, { inPrompt }),
     resultDir: path.dirname(input.resultPath),
     resume: input.resume,
     maxTurns: input.maxTurns,
@@ -300,7 +300,7 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
   }
 
   const { budget, timeoutMs, idleTimeoutMs } = limits;
-  const args = stepArgv(tool, input, opencodeMajor, interactive, budget !== undefined);
+  const args = stepArgv(tool, input, { opencodeMajor, interactive, streamsUsage: budget !== undefined });
   const applied = input.agent ? { applied: promptHandoff(tool.family, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
   const meter = budget !== undefined ? tokenMeter(tool.family) : undefined;
   let metered: TokenUsage | undefined;
