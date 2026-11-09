@@ -420,7 +420,8 @@ export interface AttemptRun {
   cancel(): Promise<void>;
   /**
    * This teamai stops: an exec on a runtime whose execs go on without it (`StepRuntime.isExecReconnected`) is left
-   * running there and ends `left`, for a later teamai to reconnect to; any other is cancelled.
+   * running there and ends `left`, for a later teamai to reconnect to; any other is cancelled. An operation the run
+   * already asked to `cancel` is not left: the stop waits for that cancel.
    */
   stop(): Promise<void>;
   /**
@@ -474,6 +475,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   let running: { op: OpId } | undefined;
   // Ends the exec running now as `left`, while one runs.
   let leave: (() => void) | undefined;
+  // The cancel the run asked of the operation running now: a stop after it waits for it, since leaving would drop it.
+  let cancelling: { op: OpId; landed: Promise<void> } | undefined;
   // An exec ended `left` goes on on its runtime: its place stays open, for a later teamai to reconnect to or cancel.
   let isLeft = false;
   // Why an exec or prompt of this attempt may still run, once one ended `lost`: its place is not closed under it.
@@ -798,6 +801,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     },
 
     async stop() {
+      if (running && cancelling?.op === running.op) return cancelling.landed;
+
       if (leave && runtime.isExecReconnected) {
         leave();
 
@@ -808,7 +813,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     },
 
     async cancel() {
-      if (running) await runtime.cancel(running.op);
+      if (!running) return;
+      cancelling = { op: running.op, landed: runtime.cancel(running.op) };
+      await cancelling.landed;
     },
 
     async collect() {

@@ -298,6 +298,39 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     expect(sent[1]).toBe(sent[0]);
     expect(cancels).toBe(0);
   });
+
+  it('waits at a stop for the cancel the run already asked of an exec on a runtime whose execs go on without teamai, rather than leaving it', async () => {
+    const seeing = runtimeSeeing([running]);
+    let endExec = (_end: ExecEnd): void => {};
+    let landCancel = (): void => {};
+    const cancelLanded = new Promise<void>((resolve) => { landCancel = resolve; });
+    const runtime: StepRuntime = {
+      ...seeing,
+      isExecReconnected: true,
+      exec: (request, events, kind) => {
+        void seeing.exec(request, events, kind);
+
+        return new Promise<ExecEnd>((resolve) => { endExec = resolve; });
+      },
+      // The exec ends cancelled once the cancel lands, as a fleet exec does once its member answers it.
+      cancel: async () => {
+        await cancelLanded;
+        endExec({ kind: 'cancelled' });
+      },
+    };
+    const attempt = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    expect(await attempt.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
+    const exec = attempt.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
+    await seeing.received;
+
+    // The run cancels the step, and the driver stops it as it ends, before the cancel landed.
+    const cancelAsked = attempt.cancel();
+    const stopped = attempt.stop();
+    landCancel();
+    await Promise.all([cancelAsked, stopped]);
+
+    expect(await exec).toMatchObject({ kind: 'cancelled' });
+  });
 });
 
 describe('an open that failed, or that a killed teamai left unanswered', () => {
