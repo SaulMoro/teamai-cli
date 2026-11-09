@@ -128,7 +128,7 @@ A step thread is a thread of its own, so nobody but you can answer its requests.
 | Auto-accept edits | Edits in the worktree go through. Every command waits for you, and so does the write of the result file. |
 | Supervised | Every command and every edit waits for you, including the write of the result file. |
 
-On your machine teamai lets Claude write a step's result file without asking. A T3 thread gets no such grant, because T3 has no way to pass one. The result file is outside the worktree, so in Auto-accept edits and Supervised the thread asks once to write it ("Path is outside allowed working directories"). Approve that write, and the step ends.
+On your machine teamai lets Claude write a step's result file without asking. A T3 thread gets no such grant, because T3 has no way to pass one. The result file is outside the worktree, and so is every other file the step writes beside it in `out/`, such as evidence. In Auto-accept edits and Supervised the thread asks for each of those writes ("Path is outside allowed working directories"). Approve them, and the step ends.
 
 The same README review asked for nothing in Auto. In Supervised it asked twice, once to make the result directory and once to write the result file, and the step took 9 minutes because the requests waited for someone to approve them.
 
