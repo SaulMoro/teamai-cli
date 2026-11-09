@@ -151,7 +151,7 @@ Where the guards of several rows hold, the first row in the order below answers:
 
 - Describe: R1 or R31, R16, R2 or R23, R17, R30 (R3 under it), R27, R18, R3, R4.
 - Start: R29, R8, R25, R9, R10.
-- Resume or takeover: R22, before the lock; in run mode `unattended`, R24 for a run `WorkflowClient.carried` cannot read, then R8 and R24 as the run stands before the claim; then R20 or R21, R8, the S rows of a skill.json kept here that the claim did not replace, R24, R28, R19.
+- Resume or takeover: R22, before the lock; in run mode `unattended`, R24 for a run `WorkflowClient.carried` cannot read, then R8 and R24 as the run stands before the claim; then R20 or R21; R22 again once a `--confirmed` takeover of a run its owner may still drive landed, for the `invoke: ask` that `--confirmed` did not answer; R8, the S rows of a skill.json kept here that the claim did not replace, R24, R28, R19.
 
 | Row | State | Input | Guard | Effects | Next | Action |
 |---|---|---|---|---|---|---|
