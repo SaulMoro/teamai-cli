@@ -20,7 +20,9 @@ import { redact } from '@teamai/shared/redact';
 import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { credentialSecrets, isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../requirements.js';
+import { credentialSecrets } from './sources.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── An attempt on a step runtime ────────────────────────
@@ -469,7 +471,7 @@ function isStopRefused(failure: RuntimeFailure): boolean {
  * which bounds what runs in the place; undefined when the attempt has no such limit, or only stops what a teamai before
  * it left.
  */
-export function attemptRun({ config, run, attempt, runtime, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string; deadline?: string }): AttemptRun {
+export function attemptRun({ config, run, attempt, runtime, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; driver: string; deadline?: string }): AttemptRun {
   const file = attemptRuntimePath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   let running: { op: OpId } | undefined;

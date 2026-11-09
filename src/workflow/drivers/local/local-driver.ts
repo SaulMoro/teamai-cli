@@ -27,7 +27,9 @@ import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
 import { type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
-import { credentialSecrets, newOpId, resumeOrPublish, retryCommand, type ExecAnswer, type ExecQuestion, type StepRuntime } from '../../runtimes/step-runtime.js';
+import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
+import { credentialSecrets } from '../../runtimes/sources.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
@@ -236,7 +238,7 @@ type RuntimeSlot = SlotBase & { kind: 'local' | 'external' };
 
 interface SlotBase {
   use: string;
-  runtime: StepRuntime;
+  runtime: StepRuntime<DriverCan>;
   can: DriverCan;
   /** Its prompt steps go as `prompt`, never as an exec of the tool's argv. */
   launchesAgents: boolean;

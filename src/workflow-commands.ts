@@ -10,7 +10,7 @@ import { Subject } from './scorers/subject.js';
 import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from './utils/logger.js';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, retryCommand, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
-import { resumeOrPublish } from './workflow/runtimes/step-runtime.js';
+import { resumeOrPublish } from './workflow/runtimes/retry-command.js';
 import { claimOffered, publishRun, resumeRun, takeoverFor } from './workflow/handoff.js';
 import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Taker } from './workflow-published-runs.js';
 import { safeText } from './session-flow/session-cmd-shared.js';

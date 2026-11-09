@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JsonValue } from '../types.js';
 import { composedOffer, composedStepRuntime, nestedOptions } from '../workflow/runtimes/composed.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
-import { newOpId, type Initialized, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type Initialized, type OpenRequest, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../workflow/requirements.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
-type Offer = Extract<Initialized, { ok: true }>;
+type Offer = Extract<Initialized<DriverCan>, { ok: true }>;
 
 describe('the offer of a runtime through another', () => {
   const outer: Offer = {
@@ -54,12 +55,12 @@ describe('a toy through a toy, over stdio', () => {
   let dir: string;
   let worktree: string;
   let calls: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
-  const toy = (name: string): StepRuntime => stdioStepRuntime({ name, command: process.execPath, args: [TOY_RUNTIME] });
+  const toy = (name: string): StepRuntime<DriverCan> => stdioStepRuntime({ name, command: process.execPath, args: [TOY_RUNTIME] });
 
   /** The toy pair over the same state, as a restarted teamai starts it again; `inner` adds options to the inner toy. */
-  const start = async (inner: Record<string, JsonValue> = {}, innerCredentials: Record<string, string> = { INNER_TOKEN: 'inner-value' }): Promise<StepRuntime> => {
+  const start = async (inner: Record<string, JsonValue> = {}, innerCredentials: Record<string, string> = { INNER_TOKEN: 'inner-value' }): Promise<StepRuntime<DriverCan>> => {
     const runtime = composedStepRuntime({ outer: toy('sandboxtoy'), inner: toy('apptoy'), innerCredentials });
     started.push(runtime);
     const ready = await runtime.init({

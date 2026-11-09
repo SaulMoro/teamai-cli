@@ -29,7 +29,8 @@ import { isJsonObject } from '../../types.js';
 import { copyGit, placeEditsOf } from '../place/place.js';
 import { git } from '../worktree.js';
 import { localStepRuntime } from '../runtimes/local.js';
-import { newOpId, type ExecAnswer, type ExecEnd, type ExecEvents, type ExecQuestion, type PromptEnd, type StepRuntime, type WakeEnd } from '../runtimes/step-runtime.js';
+import { newOpId, type ExecAnswer, type ExecEnd, type ExecEvents, type ExecQuestion, type PromptEnd, type StepRuntime, type WakeEnd } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../requirements.js';
 import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
 import { DRIVER_ENV_REACH, DriverEnvSchema, LabelSchema } from '../requirements.js';
 
@@ -130,10 +131,10 @@ type Waited =
  * Opens the runtime a fleet entry's `options.wake` names, on its own and never through another, as the driver opens its
  * runtimes: `wakes` when its `init` offered `wake`.
  */
-export type OpenWake = (entry: { use: string; options: RuntimeOptions }) => Promise<{ ok: true; runtime: StepRuntime; wakes: boolean } | { ok: false; failure: WorkflowFailure }>;
+export type OpenWake = (entry: { use: string; options: RuntimeOptions }) => Promise<{ ok: true; runtime: StepRuntime<DriverCan>; wakes: boolean } | { ok: false; failure: WorkflowFailure }>;
 
 /** The runtime a fleet entry wakes members through, by the name its entry gave. */
-type Waker = { use: string; runtime: StepRuntime; wake: NonNullable<StepRuntime['wake']> };
+type Waker = { use: string; runtime: StepRuntime<DriverCan>; wake: NonNullable<StepRuntime<DriverCan>['wake']> };
 
 /** The place of an attempt on the fleet: its handle names the run and the attempt, so a restarted teamai reads it again. */
 type FleetPlace = { run: RunId; attempt: AttemptId };
@@ -245,7 +246,7 @@ function promptEnded(result: FleetResult, attempt: AttemptId): Extract<PromptEnd
  * holds the values an offer may not carry, which the drive adds to as it resolves the team's secrets. `openWake` opens
  * the runtime an entry's `options.wake` names: without it, an entry that sets one fails `init`.
  */
-export function fleetStepRuntime({ config, masks, openWake }: { config: LocalConfig; masks: Record<string, string>; openWake?: OpenWake }): StepRuntime {
+export function fleetStepRuntime({ config, masks, openWake }: { config: LocalConfig; masks: Record<string, string>; openWake?: OpenWake }): StepRuntime<DriverCan> {
   const local = localStepRuntime();
   const disposing = new AbortController();
   // The wait of each exec this teamai sent, by its id, so a repeated id reconnects to it and a cancel reaches it.

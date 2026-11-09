@@ -1,44 +1,17 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions, type WakeRequest } from '@teamai/runtime-protocol';
+import { OpIdSchema, type Can, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions, type WakeRequest } from './protocol.js';
 import type { z } from 'zod';
-import type { DriverCan } from '../requirements.js';
 
 // ─── Step runtimes ───────────────────────────────────────
 //
 //  A step runtime is where and how a workflow step's processes run: `local`, in teamai's process on the host, or an
 //  external program speaking the runtime protocol over stdio (protocol.ts). The local loop reaches each through this
-//  one interface. Not to be confused with the bundled runtime (`src/bundled-runtime.ts`), the Node and shell that
+//  one interface, which a runtime package can implement from the protocol alone. Not to be confused with the bundled runtime (`src/bundled-runtime.ts`), the Node and shell that
 //  WorkBuddy and CodeBuddy ship, nor with `Executor` (`command` or `prompt`), nor with a tool.
 //
 //  Every operation is accepted first and finishes later. teamai names each with an id it persists before it sends the
 //  request, and a runtime answers a repeated id with the same acceptance and the same terminal outcome until `close`.
 //
-
-/** The command that runs step `step` of run `run` again. */
-export function retryCommand({ run, step }: { run: string; step: string }): string {
-  return `teamai workflow retry ${run} ${step}`;
-}
-
-/** The two ways on for a run this machine stops driving: resume it here, or publish it for another machine to take. */
-export function resumeOrPublish(run: string): string {
-  return `here with: teamai workflow resume ${run}, or hand it to another machine with: teamai workflow publish ${run}`;
-}
-
-/** The failure codes of a step that a retry fixes as it is: the usage limit reset, or the runtime's daemon is back. */
-const RETRIED_CODES: ReadonlySet<string> = new Set(['usage_limited', 'daemon_restarted']);
-
-/**
- * The message of a step's failure, ending with `Then run:` and the retry command when a retry fixes its code, which is
- * the runtime's own. A runtime never spells the run or the step itself.
- */
-export function withRetry({ code, message }: { code: string; message: string }, retry: { run: string; step: string }): string {
-  return RETRIED_CODES.has(code) ? `${message.replace(/\.?\s*$/, '.')} Then run: ${retryCommand(retry)}` : message;
-}
-
-/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
-export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
-}
 
 /** A new operation id. */
 export function newOpId(): OpId {
@@ -135,10 +108,13 @@ export interface ExecEvents {
 /** `unavailable`: the tools the runtime cannot run now, each with the runtime's reason and next step. */
 /** `ownLogins`: the tools whose login the runtime's provider keeps: teamai copies none of their logins, nor sends the sign-ins it found for them. */
 /** `wakes`: it launches a fleet member on another machine it reaches, through `StepRuntime.wake`. */
-export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[]; wakes?: true } | { ok: false; failure: RuntimeFailure };
+export type Initialized<TCan = Can> = { ok: true; can: TCan; launchesAgents: boolean; unavailable?: Record<string, string>; ownLogins?: string[]; wakes?: true } | { ok: false; failure: RuntimeFailure };
 
-/** One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in flight. */
-export interface StepRuntime {
+/**
+ * One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in
+ * flight. `TCan` is what its `init` answers: the protocol's `Can`, or teamai's wider one for an in-process runtime.
+ */
+export interface StepRuntime<TCan = Can> {
   /** The runtime's name, as a driver definition's `use` names it. */
   readonly name: string;
   /**
@@ -157,7 +133,7 @@ export interface StepRuntime {
    * names of the `credentials` its definition gives it, the tool `instances` the member may run, and the run's
    * `checkout`. In `recover` mode it only answers for the handles it recorded.
    */
-  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[]; checkout?: string }): Promise<Initialized>;
+  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[]; checkout?: string }): Promise<Initialized<TCan>>;
   /**
    * Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open`
    * rejects with its error. A place made in steps (a runtime through another) is accepted at each, with the handle so far.

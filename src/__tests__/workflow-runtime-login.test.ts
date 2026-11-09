@@ -9,7 +9,8 @@ import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
 import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../workflow/requirements.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 
 const RUN = RunIdSchema.parse('r0123abcd');
@@ -89,7 +90,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
    * A runtime whose exec and prompt never end, and whose reattach answers `seen` in turn, then the last of them.
    * `received` settles once it was sent its exec or prompt: teamai records the operation before it sends it.
    */
-  const runtimeSeeing = (seen: Array<(op: string) => Reattached>): StepRuntime & { received: Promise<void> } => {
+  const runtimeSeeing = (seen: Array<(op: string) => Reattached>): StepRuntime<DriverCan> & { received: Promise<void> } => {
     let asked = 0;
     let op = '';
     let receive = (): void => {};
@@ -152,7 +153,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const omits = (): Reattached => ({ kind: 'alive', ops: [] });
     const cancels: string[] = [];
     const closes: string[] = [];
-    const runtime = { ...runtimeSeeing([omits]), cancel: async (op) => { cancels.push(op); }, close: async (handle) => { closes.push(handle); return { ok: true }; } } satisfies StepRuntime;
+    const runtime = { ...runtimeSeeing([omits]), cancel: async (op) => { cancels.push(op); }, close: async (handle) => { closes.push(handle); return { ok: true }; } } satisfies StepRuntime<DriverCan>;
     await leftRunning(runtime);
     const placed = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
 
@@ -169,7 +170,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toBeUndefined();
   });
 
-  const resumePrompt = (runtime: StepRuntime) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).prompt({
+  const resumePrompt = (runtime: StepRuntime<DriverCan>) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).prompt({
     lease: { step: 'review', tool: 'codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
   }, {});
 
@@ -178,7 +179,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const workspace = { label: 'Workspace', url: 'https://example.com/workspace/1' };
     const agent = { label: 'Review', url: 't3://thread/actual-agent' };
     let atReconnect: RuntimeDisplay | undefined;
-    const runtime: StepRuntime = {
+    const runtime: StepRuntime<DriverCan> = {
       ...runtimeSeeing([]),
       reattach: async () => ({ kind: 'alive', display: agent, ops: [{ op, state: 'running' }] }),
       prompt: async (request, events) => {
@@ -238,7 +239,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
         await cancelLet;
       },
       reattach: async () => (Date.now() < slowFrom ? running(op) : new Promise<Reattached>((resolve) => setTimeout(() => resolve(running(op)), 15_000))),
-    } satisfies StepRuntime;
+    } satisfies StepRuntime<DriverCan>;
     await leftRunning(runtime);
     const stopped = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation();
     await cancelAsked;
@@ -275,7 +276,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const sent: string[] = [];
     let cancels = 0;
     const seeing = runtimeSeeing([running]);
-    const runtime: StepRuntime = {
+    const runtime: StepRuntime<DriverCan> = {
       ...seeing,
       isExecReconnected: true,
       exec: async (request, events, kind) => {
@@ -304,7 +305,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     let endExec = (_end: ExecEnd): void => {};
     let landCancel = (): void => {};
     const cancelLanded = new Promise<void>((resolve) => { landCancel = resolve; });
-    const runtime: StepRuntime = {
+    const runtime: StepRuntime<DriverCan> = {
       ...seeing,
       isExecReconnected: true,
       exec: (request, events, kind) => {
@@ -339,7 +340,7 @@ describe('an open that failed, or that a killed teamai left unanswered', () => {
   const refused = { code: 'sandbox_failed', message: 'The image cannot be pulled.' };
 
   /** A runtime whose open runs `open`, and that notes each open and close it was sent. */
-  const runtimeOpening = (open: StepRuntime['open']): StepRuntime & { opens: string[]; closes: string[] } => {
+  const runtimeOpening = (open: StepRuntime<DriverCan>['open']): StepRuntime<DriverCan> & { opens: string[]; closes: string[] } => {
     const opens: string[] = [];
     const closes: string[] = [];
 
@@ -523,7 +524,7 @@ describe('the session store of an OpenCode prompt on a runtime that launches age
   const config = (): LocalConfig => ({ repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') });
 
   /** A runtime whose prompt finishes an OpenCode session with `home`, or none. */
-  const finishing = (home: string | undefined): StepRuntime => ({
+  const finishing = (home: string | undefined): StepRuntime<DriverCan> => ({
     name: 'agents',
     init: async () => ({ ok: true, can: {}, launchesAgents: true }),
     open: async (_request, onAccepted) => {
@@ -544,7 +545,7 @@ describe('the session store of an OpenCode prompt on a runtime that launches age
     dispose: async () => {},
   });
 
-  const promptOn = async (runtime: StepRuntime): Promise<void> => {
+  const promptOn = async (runtime: StepRuntime<DriverCan>): Promise<void> => {
     const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
     expect(await run.open(undefined, { tool: 'opencode' })).toMatchObject({ ok: true });
     expect(await run.prompt({
@@ -575,7 +576,7 @@ describe('a place a restarted teamai opens again', () => {
     fs.mkdirSync(attemptDir(config(), RUN, FIRST), { recursive: true });
     fs.writeFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), JSON.stringify(recorded));
     // The outer accepts again; the inner's open then fails, as one that timed out.
-    const runtime: StepRuntime = {
+    const runtime: StepRuntime<DriverCan> = {
       name: 'app through box',
       init: async () => ({ ok: true, can: {}, launchesAgents: true }),
       open: async (_request, onAccepted) => {

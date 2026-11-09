@@ -4,7 +4,7 @@
  * after the member moved on: an answer goes only to the question it answers, once.
  */
 import { isDeepStrictEqual } from 'node:util';
-import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
+import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 
 /** The owner's answer as an `answered` record holds it: the write that holds it, the question it answers, and the answer. */
 export type HeardAnswer = { write: string; question: ExecQuestion; answer: ExecAnswer };

@@ -16,7 +16,8 @@ import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workf
 import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
-import type { ExecEnd, StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import type { ExecEnd, StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../workflow/requirements.js';
 import { driverIdentity } from '../driver-identity.js';
 import { driverLockPath, readRun } from '../workflow/store.js';
 // oxlint-disable-next-line teamai/workflow-boundaries -- fails the snapshot taken by a reader in the checkout
@@ -1573,7 +1574,7 @@ steps:
     const local = localStepRuntime();
     let stopWhole: (() => void) | undefined;
     // The whole workflow runs until the run stops it, then answers what its steps spent, as a fleet member's does.
-    const runtime: StepRuntime = {
+    const runtime: StepRuntime<DriverCan> = {
       ...local,
       exec: async (request, events, kind) => (kind !== 'workflow' ? local.exec(request, events, kind) : new Promise<ExecEnd>((resolve) => {
         events.onAccepted?.({});

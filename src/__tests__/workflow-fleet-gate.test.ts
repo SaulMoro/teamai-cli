@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { gateQuestions } from '../workflow/fleet/gate.js';
-import type { ExecQuestion } from '../workflow/runtimes/step-runtime.js';
+import type { ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 
 const GO_ON: ExecQuestion = { step: 'confirm', kind: 'approve', message: 'Go on?', options: ['yes', 'no'], required: false };
 const SHIP: ExecQuestion = { step: 'ship', kind: 'approve', message: 'Ship it?', options: ['yes', 'no'], required: false };

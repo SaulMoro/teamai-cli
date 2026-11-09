@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runtimePrompter } from '../workflow/steps/runtime-steps.js';
 import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 import { RunIdSchema } from '../workflow/store.js';
-import type { PromptEnd } from '../workflow/runtimes/step-runtime.js';
+import type { PromptEnd } from '@teamai/runtime-protocol/step-runtime';
 
 /**
  * An attempt on a runtime that launches agents its own way. Like the real one, `cancel` stops only the prompt it has

@@ -15,12 +15,13 @@ import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedC
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
 import { stopCancelledAttempts, stopLeftAttempt } from '../runtimes/cancelled.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
-import type { StepRuntime } from '../runtimes/step-runtime.js';
+import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../requirements.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
-import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
+import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
 import { runLocalDriver, type DriverRuntimes } from '../drivers/local/local-driver.js';
@@ -64,7 +65,7 @@ const ANSWER_READ_MS = 1_000;
 const STDERR_KEPT = 4_000;
 
 /** Where a member runs a step: here, as `--driver local` does, or on a step runtime of its own driver. */
-type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime; labels?: readonly string[]; tools?: string[] };
+type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime<DriverCan>; labels?: readonly string[]; tools?: string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
 type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true };

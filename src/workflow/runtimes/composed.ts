@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { RuntimeOptionsSchema, type OpId, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { DriverCan } from '../requirements.js';
 import { toolHomeVariable } from './attempt.js';
-import { isUnansweredFailure, type Initialized, type OpenRequest, type Reattached, type StepRuntime } from './step-runtime.js';
+import { isUnansweredFailure, type Initialized, type OpenRequest, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 
 // ─── A runtime through another ───────────────────────────
 //
@@ -18,7 +18,7 @@ import { isUnansweredFailure, type Initialized, type OpenRequest, type Reattache
 /** The workspace modes the outer prepares itself, which the entry offers whatever the inner says. */
 const PREPARED_MODES = ['clone', 'team'] as const;
 
-type Offer = Extract<Initialized, { ok: true }>;
+type Offer = Extract<Initialized<DriverCan>, { ok: true }>;
 
 /** Both values when both declare the key, as the weaker; the one declared otherwise. */
 function weaker(outer: boolean | undefined, inner: boolean | undefined): boolean | undefined {
@@ -123,10 +123,10 @@ export function composedName(inner: string, outer: string): string {
  * credentials the engine sends with an open, an exec or a reattach are the prompt's, for the outer, which hands them to
  * the tool it runs. Each `init` option is nested under the runtime it is for, by name.
  */
-export function composedStepRuntime({ outer, inner, innerCredentials }: { outer: StepRuntime; inner: StepRuntime; innerCredentials: Record<string, string> }): StepRuntime {
+export function composedStepRuntime({ outer, inner, innerCredentials }: { outer: StepRuntime<DriverCan>; inner: StepRuntime<DriverCan>; innerCredentials: Record<string, string> }): StepRuntime<DriverCan> {
   const name = composedName(inner.name, outer.name);
   // Which runtime runs each operation, so a cancel reaches it: an exec the outer, a prompt the inner.
-  const ranBy = new Map<OpId, StepRuntime>();
+  const ranBy = new Map<OpId, StepRuntime<DriverCan>>();
   // The prompt's credentials each place was opened with, none too, and the names it goes without, by the outer's handle,
   // in memory only, which the outer's reattach of that place carries again. One composed runtime serves every attempt.
   const openedWith = new Map<string, Pick<OpenRequest, 'credentials' | 'unset'>>();

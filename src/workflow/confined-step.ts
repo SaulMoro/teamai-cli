@@ -19,7 +19,8 @@ import { attemptDir, attemptResultPath, type RunId } from './store.js';
 import type { WorkflowFailure } from './types.js';
 import type { ConfinedRunReport } from './step-state.js';
 import type { AttemptRun } from './runtimes/attempt.js';
-import { withRetry, type PromptEnd } from './runtimes/step-runtime.js';
+import { type PromptEnd } from '@teamai/runtime-protocol/step-runtime';
+import { withRetry } from './runtimes/retry-command.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** What a driver reports of a confined run, besides the attempt and itself. */

@@ -12,7 +12,8 @@ import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { composedStepRuntime } from '../workflow/runtimes/composed.js';
 import type { OpId, OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type ExecEvents, type ExecQuestion, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type ExecEnd, type ExecEvents, type ExecQuestion, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../workflow/requirements.js';
 import type { JsonValue } from '../types.js';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
 import { t3OnFakeServer } from './helpers/t3-runtime.js';
@@ -40,7 +41,7 @@ import { getRepoIdentity } from '../session-flow/sync.js';
 interface Subject {
   name: string;
   /** A runtime over `state`, which a restarted runtime of the same subject reads again. */
-  start(state: string): StepRuntime;
+  start(state: string): StepRuntime<DriverCan>;
   options(state: string): RuntimeOptions;
   retains: boolean;
   /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
@@ -132,9 +133,9 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
   let dir: string;
   let worktree: string;
   let state: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
-  const start = async (): Promise<StepRuntime> => {
+  const start = async (): Promise<StepRuntime<DriverCan>> => {
     const runtime = subject.start(state);
     started.push(runtime);
     const ready = await runtime.init({ options: subject.options(state), mode: 'unattended' });
@@ -445,7 +446,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
  */
 interface PromptSubject {
   name: string;
-  start(state: string): StepRuntime;
+  start(state: string): StepRuntime<DriverCan>;
   options(state: string, agent: JsonValue): RuntimeOptions;
   /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
   display?: RuntimeDisplay;
@@ -522,9 +523,9 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   let dir: string;
   let worktree: string;
   let state: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
-  const start = async (agent: JsonValue = {}): Promise<StepRuntime> => {
+  const start = async (agent: JsonValue = {}): Promise<StepRuntime<DriverCan>> => {
     const runtime = subject.start(state);
     started.push(runtime);
     const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended' });
@@ -533,7 +534,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     return runtime;
   };
 
-  const opened = async (runtime: StepRuntime): Promise<string> => {
+  const opened = async (runtime: StepRuntime<DriverCan>): Promise<string> => {
     const place = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
       view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
@@ -757,7 +758,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
 
   describe.runIf(subject.forget !== undefined)('a prompt that continues an earlier conversation, over stdio', () => {
     /** The place of a later attempt, in `at`. */
-    const openedAt = async (runtime: StepRuntime, at: string): Promise<string> => {
+    const openedAt = async (runtime: StepRuntime<DriverCan>, at: string): Promise<string> => {
       if (at !== worktree && subject.elsewhere) subject.elsewhere(state, at);
       else fs.mkdirSync(at, { recursive: true });
       const place = await runtime.open({
@@ -771,7 +772,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     };
 
     /** The first step's prompt, finished, and the place it ran in, which teamai keeps open. */
-    const earlier = async (runtime: StepRuntime): Promise<{ handle: string; request: PromptRequest; session: { tool: string; id: string } }> => {
+    const earlier = async (runtime: StepRuntime<DriverCan>): Promise<{ handle: string; request: PromptRequest; session: { tool: string; id: string } }> => {
       const handle = await opened(runtime);
       const request = promptRequest(handle);
       const end = await runtime.prompt(request, {});
@@ -905,10 +906,10 @@ describe('a runtime that answers confined prompts, over stdio', () => {
   let dir: string;
   let evidence: string;
   let state: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
   const offer = [{ level: 'best-effort' as const, access: 'read' as const, tools: ['claude'] }];
 
-  const start = (): StepRuntime => {
+  const start = (): StepRuntime<DriverCan> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
 
@@ -967,7 +968,7 @@ describe('a runtime that answers confined prompts, over stdio', () => {
 
 describe('a runtime\'s display over stdio', () => {
   let dir: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-display-'));
@@ -1073,7 +1074,7 @@ describe('a runtime\'s display over stdio', () => {
 
 describe('a runtime that cannot close a place, over stdio', () => {
   let dir: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-close-'));
@@ -1085,7 +1086,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const opened = async (options: RuntimeOptions): Promise<{ runtime: StepRuntime; handle: string }> => {
+  const opened = async (options: RuntimeOptions): Promise<{ runtime: StepRuntime<DriverCan>; handle: string }> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
     expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
@@ -1349,7 +1350,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
 
 describe('a cancel a runtime tries again, over stdio', () => {
   let dir: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-retry-'));
@@ -1361,7 +1362,7 @@ describe('a cancel a runtime tries again, over stdio', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const toy = async (options: RuntimeOptions): Promise<StepRuntime> => {
+  const toy = async (options: RuntimeOptions): Promise<StepRuntime<DriverCan>> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
     expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
@@ -1394,7 +1395,7 @@ describe('a cancel a runtime tries again, over stdio', () => {
 
 describe('the toy runtime once teamai stops reading it', () => {
   let dir: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-epipe-'));
@@ -1571,7 +1572,7 @@ describe('a driver whose runtime stopped on a line it could not read', () => {
 
 describe('an attempt\'s deadline, over stdio', () => {
   let dir: string;
-  const started: StepRuntime[] = [];
+  const started: StepRuntime<DriverCan>[] = [];
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-deadline-'));
@@ -1585,7 +1586,7 @@ describe('an attempt\'s deadline, over stdio', () => {
   });
 
   /** A toy with `options`, and its place opened with `deadline`. */
-  const opened = async (options: RuntimeOptions, deadline: string): Promise<{ runtime: StepRuntime; handle: string }> => {
+  const opened = async (options: RuntimeOptions, deadline: string): Promise<{ runtime: StepRuntime<DriverCan>; handle: string }> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
     expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
@@ -2209,7 +2210,7 @@ steps:
 `;
 
 /** The fleet runtimes a scenario opened, which teardown disposes. */
-const fleetRuntimes: StepRuntime[] = [];
+const fleetRuntimes: StepRuntime<DriverCan>[] = [];
 
 /** Polls `read` until it answers something. */
 async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): Promise<T> {

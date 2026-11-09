@@ -28,7 +28,7 @@ import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepE
 import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../runtimes/login.js';
 import { credentialsForTool } from '../runtimes/sources.js';
-import { withRetry } from '../runtimes/step-runtime.js';
+import { withRetry } from '../runtimes/retry-command.js';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { attemptDir, attemptResultPath, type RunLock } from '../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, preparedClone, cloneRoleProblem, roleNotDeliveredFailure, runPlaceSetup, worktreeRoleProblem, type StepEnd } from '../place/place.js';

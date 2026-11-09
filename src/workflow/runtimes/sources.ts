@@ -18,7 +18,7 @@ import { stdioStepRuntime } from './stdio.js';
 import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
-import { credentialSecrets, type StepRuntime } from './step-runtime.js';
+import { type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
 import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
@@ -35,6 +35,11 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 //  A team runtime is code a teammate pushed, so before its first spawn at a revision a person accepts that revision:
 //  an attended run asks, and an unattended one refuses.
 //
+
+/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
+export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
+}
 
 /** The file in a runtime directory that teamai spawns. */
 export const RUNTIME_ENTRY = 'runtime';
@@ -322,7 +327,7 @@ export type OpenedRuntime =
    * `optionsFrom`: where its options were set, for the person: the definition's file, and the member's config when it sets them too.
    * `wakes`: its init offered to wake fleet members, which a fleet entry's `wake` names it for.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true }
+  | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true }
 ;
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
@@ -452,7 +457,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   // the values the member's environment holds for them, which what the attempt left may echo.
   const masks = credentialSecrets(source.name, { ...values.values, ...found, ...(purpose === 'stop' && valuesSet(split.credentials, process.env)) });
 
-  const spawned = (): StepRuntime => (source.kind === 'shipped'
+  const spawned = (): StepRuntime<DriverCan> => (source.kind === 'shipped'
     ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], cwd: checkout, secrets: masks })
     : stdioStepRuntime({ name: source.name, command: source.executable, cwd: checkout, secrets: masks }));
 

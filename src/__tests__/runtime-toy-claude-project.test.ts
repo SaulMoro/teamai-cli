@@ -4,10 +4,11 @@ import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
-import { newOpId, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../workflow/requirements.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
-const started: StepRuntime[] = [];
+const started: StepRuntime<DriverCan>[] = [];
 let dir: string | undefined;
 
 afterEach(async () => {

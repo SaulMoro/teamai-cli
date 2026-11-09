@@ -27,7 +27,7 @@ import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTexts, templateExpressions, type TemplateContext } from '../template.js';
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep } from '../types.js';
-import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
+import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 import { inlineReads, wholeInputs } from '../whole-workflow.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { stopProcess } from '../../tool-launch/process-stop.js';
 import type { DriverCan } from '../requirements.js';
 import { boundedStdout, type OpId, type OpState } from '@teamai/runtime-protocol';
-import type { ExecEnd, Lost, StepRuntime } from './step-runtime.js';
+import type { ExecEnd, Lost, StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 
 /** How an exec of this runtime ended: never lost, since it runs in teamai's own process. */
 type LocalEnd = Exclude<ExecEnd, Lost>;
@@ -29,13 +29,13 @@ function endedState(op: OpId, end: LocalEnd): OpState {
  * there in a process group of its own. It retains outcomes for as long as this process lives, so a teamai started
  * again finds every handle `gone`. It takes no options; `can` is what the caller decided this machine offers.
  */
-export function localStepRuntime(can: DriverCan = {}): StepRuntime {
+export function localStepRuntime(can: DriverCan = {}): StepRuntime<DriverCan> {
   const handles = new Map<string, string>();
   const ended = new Map<OpId, { handle: string; end: LocalEnd }>();
   const running = new Map<OpId, { handle: string; end: Promise<ExecEnd>; stop: () => Promise<void>; cancelled: boolean }>();
   const detached = process.platform !== 'win32';
 
-  const exec: StepRuntime['exec'] = async (request, events) => {
+  const exec: StepRuntime<DriverCan>['exec'] = async (request, events) => {
     const retained = ended.get(request.op);
 
     if (retained) {
