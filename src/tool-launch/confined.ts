@@ -540,10 +540,11 @@ async function outcomeOf({ input, tmp }: LaunchContext, launch: Launch, run: Too
   if (failure) return failure;
   const reported = reportedError(input.tool, run);
 
-  // A usage limit keeps its own code, which says the step can run again once the limit resets.
+  // A usage limit keeps its own code, which says the step can run again once the limit resets. A typed error decides by
+  // its kind (OpenCode 2.x); one without a kind, by its text.
   const toolError: ConfinedFailure | undefined = !reported
     ? undefined
-    : isUsageLimitText(reported)
+    : toolStdout(family, run.stdout)?.isUsageLimit ?? isUsageLimitText(reported)
       ? { ok: false, code: 'usage_limited', message: `${input.tool} hit its usage limit: ${reported}`, raw, reported, ...spent }
       : { ok: false, code: 'confined_failed', message: `${input.tool} reported an error: ${reported.replace(/\.?$/, '.')} Fix that, then retry or use another tool or driver.`, raw, reported, ...spent };
 

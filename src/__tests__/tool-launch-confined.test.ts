@@ -291,6 +291,18 @@ it('refuses to run OpenCode where it would load an AGENTS.md above its copy of t
   });
 });
 
+it.each([
+  ['fails usage_limited on an OpenCode error whose type is a usage limit, whatever its message says', 'provider.rate-limit', 'Too many requests', 'usage_limited'],
+  ['fails confined_failed on an OpenCode error whose type is no usage limit, though its message reads like one', 'provider.no-route', 'Rate limit reached for anthropic/claude-nonexistent-9 on no route', 'confined_failed'],
+])('%s', async (_, type, message, code) => {
+  const { dir } = await evidenceDir();
+  const opencode = await fakeTool('opencode', 'opencode v2.1.2', `console.log(JSON.stringify({ type: 'error', error: { type: ${JSON.stringify(type)}, message: ${JSON.stringify(message)} } })); process.exit(1);`);
+
+  const result = await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ opencode }) });
+
+  expect(result).toMatchObject({ ok: false, code, reported: message });
+});
+
 it('fails a tool that exits non-zero with only stderr by its exit code, keeping that stderr', async () => {
   const { dir } = await evidenceDir();
   const cursor = await fakeTool('cursor', '2026.10.1', "process.stderr.write('network unreachable'); process.exit(2);");
