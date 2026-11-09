@@ -48,8 +48,11 @@ export function repositoryKey(url: string): string | undefined {
 /** How a wake ended: its agent started, why not, or cancelled by teamai before the start went out. */
 type Ended = { kind: 'woken'; message: Extract<RuntimeMessage, { event: 'woken' }> } | { kind: 'failed'; failure: RuntimeFailure } | { kind: 'cancelled' };
 
-/** A wake under way in this process: whether its start went out, and whether teamai cancelled it before. */
-interface Waking { launched: boolean; cancelled: boolean }
+/** A wake under way in this process: still looking for a host, its create sent, or cancelled by teamai before that. */
+interface Waking { state: 'looking' | 'launched' | 'cancelled' }
+
+/** Whether teamai cancelled `waking`, which a cancel may do while the wake awaits Paseo. */
+const isCancelled = (waking: Waking): boolean => waking.state === 'cancelled';
 
 const unavailable = (message: string): RuntimeFailure => ({ code: 'wake_unavailable', message });
 
@@ -67,7 +70,7 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
     const checked: string[] = [];
 
     for (const saved of await live.hosts()) {
-      if (waking.cancelled) return { kind: 'cancelled' };
+      if (isCancelled(waking)) return { kind: 'cancelled' };
 
       if (saved.status !== 'online' || saved.serverId === null) {
         checked.push(`${saved.label} is ${saved.status}`);
@@ -92,10 +95,10 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
           continue;
         }
 
-        if (waking.cancelled) return { kind: 'cancelled' };
-        const title = request.title.includes(request.pool) ? request.title : `${request.title} · ${request.pool}`;
+        if (isCancelled(waking)) return { kind: 'cancelled' };
+        const title = request.title.endsWith(` · ${request.pool}`) ? request.title : `${request.title} · ${request.pool}`;
         const agentId = agentIdOf(request.op);
-        waking.launched = true;
+        waking.state = 'launched';
         await host.launch({ workspace, agentId, title, prompt: `${request.message}\n\n${END_OF_WAKE}`, provider, labels: { 'teamai-pool': request.pool } });
 
         return {
@@ -106,7 +109,7 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
         const why = (error instanceof Error ? error.message : String(error)).replace(/\.$/, '');
 
         // One whose start went out may have started the member: no other host gets a second one.
-        if (waking.launched) return { kind: 'failed', failure: unavailable(`Paseo on ${saved.label} did not confirm the member's agent (${why}); look for it in Paseo there before the run wakes another.`) };
+        if (waking.state === 'launched') return { kind: 'failed', failure: unavailable(`Paseo on ${saved.label} did not confirm the member's agent (${why}); look for it in Paseo there before the run wakes another.`) };
         checked.push(`${saved.label} did not answer (${why})`);
       } finally {
         await host?.close().catch(() => {});
@@ -143,7 +146,7 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
     if (ended) return answer(request.op, ended);
 
     if (under.has(request.op)) return;
-    const waking: Waking = { launched: false, cancelled: false };
+    const waking: Waking = { state: 'looking' };
     under.set(request.op, waking);
     let outcome: Ended;
 
@@ -178,8 +181,8 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
 
     if (!waking) return false;
 
-    if (!waking.launched) {
-      waking.cancelled = true;
+    if (waking.state === 'looking') {
+      waking.state = 'cancelled';
       ends.set(op, { kind: 'cancelled' });
       ledger.end({ op, state: 'cancelled' });
     }
