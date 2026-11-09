@@ -34,8 +34,15 @@ fs.writeFileSync(path.join(bin, 'teamai'), `#!/bin/sh\nexec "${process.execPath}
 fs.chmodSync(path.join(bin, 'teamai'), 0o755);
 fs.writeFileSync(path.join(bin, 'teamai.cmd'), `@"${process.execPath}" "${cli}" %*\r\n`);
 
+// The temporary directory too, as isolate-home gives unit tests theirs: no
+// other file then works in it, so a skill runner left working there fails the
+// test that left it (teardown-writers.ts). Beside the sandbox rather than in
+// it, under a short name: a step runtime's attempt socket sits under it, and
+// macOS holds a unix socket path of at most 103 bytes.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-'));
+
 const saved = Object.fromEntries(
-  ['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_NOSYSTEM', 'PATH'].map((name) => [name, process.env[name]]),
+  ['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_NOSYSTEM', 'PATH', 'TMPDIR', 'TMP', 'TEMP'].map((name) => [name, process.env[name]]),
 );
 process.env.HOME = home;
 process.env.USERPROFILE = home;
@@ -44,6 +51,9 @@ process.env.USERPROFILE = home;
 delete process.env.XDG_CONFIG_HOME;
 process.env.GIT_CONFIG_NOSYSTEM = '1';
 process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
+process.env.TMPDIR = tmp;
+process.env.TMP = tmp;
+process.env.TEMP = tmp;
 
 afterAll(() => {
   for (const [name, value] of Object.entries(saved)) {
@@ -51,4 +61,5 @@ afterAll(() => {
     else process.env[name] = value;
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

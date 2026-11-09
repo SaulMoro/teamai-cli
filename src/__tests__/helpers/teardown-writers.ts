@@ -137,8 +137,8 @@ function recordChild(started: unknown, args: readonly unknown[]): unknown {
 }
 
 /**
- * The home and temporary directory isolate-home gave this file, which no other file's runner works in: none under a
- * config without it, whose home and temporary directory, the ones this worker started with, every file shares.
+ * The home and temporary directory isolate-home or isolate-e2e-env gave this file, which no other file's runner works
+ * in: none that is still the one this worker started with, which every file shares.
  */
 function ownDirectories(): string[] {
   return [[process.env.HOME, startHome], [os.tmpdir(), startTmp]].flatMap(([dir, start]) => (dir !== undefined && dir !== start && isDirectory(dir) ? [dir] : []));
