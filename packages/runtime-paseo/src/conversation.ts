@@ -97,10 +97,9 @@ export function agentIdOf(op: OpId): string {
  * What a step's agent may write without asking besides its worktree: the directory of teamai's result file, where the
  * step also leaves its evidence, as teamai's own launch allows it on a POSIX host, and the run's scratch directory, which
  * the place gives read-write at its own path. Claude's default mode asks before any write, so those two are allowed,
- * and only they. Codex's `auto` sandbox writes the
- * worktree, so the result file's directory and the run directory are added to it. OpenCode asks before it touches a
- * directory outside its project (`external_directory: ask`), so the same two are allowed by OpenCode's own rule, which
- * Paseo sets on the agent's session.
+ * and only they. Codex's `auto` sandbox writes the worktree, so the result file's directory and the run directory are
+ * added to it. OpenCode asks before it touches a directory outside its project (`external_directory: ask`), so the same
+ * two are allowed by OpenCode's own rule, which Paseo sets on the agent's session.
  */
 function stepGrant(tool: PaseoTool, result: string, runDir: string): AgentCreate['config']['options'] {
   switch (tool) {
