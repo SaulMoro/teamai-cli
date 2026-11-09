@@ -145,6 +145,9 @@ const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().op
 const LEFT_WHY_MAX = 400;
 const LEFT_MAX = 16;
 
+/** The reason an offer gets in place of one that names a path or a value of the member's machine, which its log keeps. */
+const UNPUBLISHED_WHY = 'this member lacks what the step needs, and its reason names a path or a value of its machine, so only its own log says it';
+
 /** Why `member` left an offer, which the owner's wait shows. */
 const LeftSchema = z.strictObject({ member: OwnerSchema, why: z.string().max(LEFT_WHY_MAX), at: z.string() });
 
@@ -494,16 +497,22 @@ export async function claimAttempt(config: LocalConfig, offered: Offered, member
 
 /**
  * Says on offer `offered` why `member` leaves it, so the owner's wait shows it: `why` cut to what the record keeps, one
- * entry per member, newest last. An offer that holds the same reason already is not written again. The write replaces
- * the offer's write id, so it lands only over that offer, and answers state_moved once the offer changed.
+ * entry per member, newest last, and no new member once 16 are listed. A reason that names a path or a value of this
+ * machine is said as `UNPUBLISHED_WHY`. An offer that holds the same reason already is not written again. The write
+ * replaces the offer's write id, so it lands only over that offer, and answers state_moved once the offer changed.
  */
 export async function leaveOffer(config: LocalConfig, offered: Offered, { member, why, secrets }: { member: HandoffOwner; why: string; secrets: Record<string, string> }): Promise<Written<void>> {
+  const listed = offered.left ?? [];
+  const leftWith = (reason: string): Offered => ({ ...offered, write: randomUUID(), left: [...listed.filter((entry) => entry.member.id !== member.id), { member, why: reason, at: new Date().toISOString() }].slice(-LEFT_MAX) });
   const kept = why.length <= LEFT_WHY_MAX ? why : `${why.slice(0, LEFT_WHY_MAX - 1)}…`;
+  // A reason names what this machine lacks, which may hold one of its paths or values: the offer says only that it does.
+  const said = unpublishable(leftWith(kept), secrets) ? UNPUBLISHED_WHY : kept;
 
-  if (offered.left?.some((entry) => entry.member.id === member.id && entry.why === kept)) return { ok: true, value: undefined };
-  const left = [...(offered.left ?? []).filter((entry) => entry.member.id !== member.id), { member, why: kept, at: new Date().toISOString() }].slice(-LEFT_MAX);
-  const record: Offered = { ...offered, write: randomUUID(), left };
-  // A reason names what this machine lacks, which may hold one of its paths or values.
+  if (listed.some((entry) => entry.member.id === member.id && entry.why === said)) return { ok: true, value: undefined };
+
+  // A full list takes no new member: each would push out another, which would write itself back at its next take.
+  if (listed.length >= LEFT_MAX && !listed.some((entry) => entry.member.id === member.id)) return { ok: true, value: undefined };
+  const record = leftWith(said);
   const unfit = unpublishable(record, secrets);
 
   if (unfit) return { ok: false, error: unfit };
