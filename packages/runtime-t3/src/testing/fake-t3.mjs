@@ -14,7 +14,8 @@
 //                               with its generic orchestration_error refusal, before it looks anything up; launchMs: a launch answers this long after
 //                               it launched; launchReplyLost: a launch launches, then its reply never comes (an MCP error, not a refusal)
 //                               launchInvalid: a new launch's check refuses every launch, a repeated one too, with invalid_request
-//                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
+//                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment;
+//                               providersMs: the same for the provider list
 //                               wrappedHome: the tool home of a thread whose instance runs teamai's sandbox wrapper, as its grant sets it
 //                               decisionRefused: T3 refuses every sign-in decision; decisionNoCode: a decision redirects with no code
 //                               decisionMs: a sign-in decision answers this long after it was posted
@@ -346,7 +347,8 @@ const TOOLS = {
 
     return ok(config().environment);
   },
-  orchestrator_capabilities: (args) => {
+  orchestrator_capabilities: async (args) => {
+    await sleep(config().providersMs ?? 0);
     const failOnce = config().providersFailOnceAdded;
     const failed = path.join(STATE, 'providers-failed');
 

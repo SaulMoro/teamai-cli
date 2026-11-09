@@ -106,6 +106,8 @@ export interface Running {
   title: string;
   /** When teamai cancelled the op: the time, in ms since the epoch, by which the cancel ends. */
   cancelBy?: number;
+  /** While the prompt has launched and sent nothing, and asks T3 only what it needs first: a cancel ends it at once. */
+  preparing?: boolean;
   thread?: ThreadRecord;
   /** Answers why T3 did not stop the thread, or nothing once it stopped; the stop, not the follow, ends the op then. */
   stopping?: Promise<string | undefined>;
@@ -569,7 +571,11 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     const ended = ledger.unkept(request.op) ?? opened?.ops[request.op];
 
     /** The acceptance shows the step's thread when the journal holds it already, so the run details link it during the run. */
+    let accepted = false;
+
     const accept = (thread: ThreadRecord | undefined): void => {
+      if (accepted) return;
+      accepted = true;
       write({ op: request.op, event: 'accepted', ...(thread && session && { display: threadDisplay(thread, session.environment) }) });
     };
 
@@ -602,19 +608,23 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     let thread = opened.threads[request.op];
     const pending = opened.launches[request.op];
 
+    /** The op once it runs in this process, whose end then goes through the ledger's run. */
+    let begun: Running | undefined;
+
     /**
      * Ends an op this process launched no thread for. A thread the journal holds for it, which another process may have
      * launched, or a launch T3 never answered, stays the runtime's to stop: while it may still run, the op ends as a stop
      * the runtime could not confirm, with the refusal as its cause, so a later cancel stops it.
      */
-    const refuse = async (state: OpEnd): Promise<void> => {
+    const refuse = async (refusal: OpEnd): Promise<void> => {
       accept(undefined);
+      const close = (outcome: OpEnd): Promise<void> => (begun && ledger.running(request.op) === begun ? endRunning(begun, outcome, { threadEnded: false }) : end(outcome));
 
-      if (state.state !== 'failed' || (thread ? thread.ended : !pending)) return end(state);
-      const { code, message } = state.failure;
+      if (refusal.state !== 'failed' || (thread ? thread.ended : !pending)) return close(refusal);
+      const { code, message } = refusal.failure;
       const held = thread ? `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}")` : `The T3 thread "${pending?.title}", whose launch T3 Code never answered,`;
 
-      await end(unconfirmed(request.op, code === 'launch_unconfirmed' ? message : `${message.replace(/\.$/, '')} (${code}). ${held} may still run: run teamai workflow cancel ${opened.run} to stop it.`));
+      await close(unconfirmed(request.op, code === 'launch_unconfirmed' ? message : `${message.replace(/\.$/, '')} (${code}). ${held} may still run: run teamai workflow cancel ${opened.run} to stop it.`));
     };
 
     // Why teamai's cancel came before this prompt, if it did.
@@ -642,9 +652,31 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     }
 
     const lease = request.lease;
+    // The op runs here from now on, before the runtime asks T3 anything slow: a cancel meanwhile finds it, and ends it at
+    // once while nothing was launched or sent.
+    const state: Running = { handle: request.handle, run: opened.run, title: pending?.title ?? `${lease.step} · teamai ${opened.run}`, preparing: !thread && !pending };
+    ledger.begin(request.op, state);
+    begun = state;
+    ledger.forget(request.op);
+    accept(thread);
+    /** Whether teamai cancelled the op while it prepared, which ended it. */
+    const gone = (): boolean => ledger.running(request.op) !== state;
+
+    /** A record that cannot be written fails the request with nothing sent, and leaves no run behind to swallow a cancel. */
+    const journaledOrAbandoned = async (save: () => Promise<void>): Promise<void> => {
+      try {
+        await save();
+      } catch (error) {
+        ledger.abandon(request.op, state);
+        throw error;
+      }
+    };
+
     // The open adds a tool instance's provider instance; one teamai opened with no tool adds it here.
     const toAdd = s.pending.get(lease.tool);
     const added = await adder.instanceFor(s, lease.tool, { op: request.op });
+
+    if (gone()) return;
 
     if (added && !added.ok) {
       await refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: adder.notAdded(lease.tool, toAdd, added) } });
@@ -655,6 +687,8 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     const through = opened.kind === 'worktree' ? opened.through : undefined;
     // Through a sandbox, the tool runs on the provider instance whose Binary path is teamai's wrapper.
     const wrapped = through && await adder.wrapperFor(s, lease.tool, { op: request.op });
+
+    if (gone()) return;
 
     if (wrapped && !wrapped.ok) {
       await refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: adder.notAdded(`${WRAPPER_PREFIX}${lease.tool}`, undefined, wrapped) } });
@@ -728,6 +762,8 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       const earlier = lease.continue;
       const continuing = await continuable({ s, request, instanceId: instance.providerInstanceId, selection: selection.selection });
 
+      if (gone()) return;
+
       if (continuing.ok) {
         const { ended: _ended, ...continued } = continuing.thread;
         const { configure } = continuing;
@@ -737,8 +773,10 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
           turnOf: { handle: earlier.handle, op: earlier.op, runsBefore: continuing.runs, ...(configure && { configure }) },
         };
 
-        await journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, () => ({ state: { op: request.op, state: 'running' }, thread: turn }));
+        state.preparing = false;
+        await journaledOrAbandoned(() => journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, () => ({ state: { op: request.op, state: 'running' }, thread: turn })));
         thread = turn;
+        write({ op: request.op, event: 'display', display: threadDisplay(turn, s.environment) });
       } else {
         notice(`Runtime t3 starts a new T3 thread for step "${lease.step}" rather than continue the conversation of ${earlier.op}: ${continuing.why}.`, { op: request.op, handle: request.handle });
       }
@@ -755,13 +793,12 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
     // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent. One it cannot
     // journal fails the request before the op runs here, as nothing was launched.
+    state.preparing = false;
+
     if (!thread) {
-      await journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, (conversation) => ({ ...conversation, state: { op: request.op, state: 'running' }, launch }));
+      await journaledOrAbandoned(() => journalOp({ handle: request.handle, op: request.op, ...(!places.isReleased(request.handle) && { opened }) }, (conversation) => ({ ...conversation, state: { op: request.op, state: 'running' }, launch })));
     }
 
-    const state: Running = { handle: request.handle, run: opened.run, title };
-    ledger.begin(request.op, state);
-    ledger.forget(request.op);
     const finish = (outcome: OpEnd, threadEnded = false): Promise<void> => endRunning(state, outcome, { threadEnded });
 
     try {
@@ -883,6 +920,8 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
   const cancel = async (op: OpId): Promise<void> => {
     const state = ledger.running(op);
     const session = serving.session();
+
+    if (state?.preparing) return endRunning(state, { op, state: 'cancelled' }, { threadEnded: false });
 
     if (state) {
       if (state.cancelBy === undefined) {

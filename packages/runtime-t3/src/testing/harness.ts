@@ -107,6 +107,8 @@ export interface FakeT3Config {
   projectsMs?: number;
   /** How long the environment read takes to answer, in ms. */
   environmentMs?: number;
+  /** How long the provider list takes to answer, in ms. */
+  providersMs?: number;
   /**
    * The tool home a thread keeps its session in when its provider instance runs teamai's sandbox wrapper
    * (`WRAPPER_PREFIX` and the tool's name): the attempt's, which the sandbox's grant gives the tool.
