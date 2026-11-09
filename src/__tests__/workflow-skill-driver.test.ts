@@ -201,6 +201,49 @@ steps:
     prompt: Test the change you made.
 `;
 
+// An item of a for_each body goes on in the conversation of a step beside the for_each.
+const FAN = `schemaVersion: v1alpha1
+name: fan
+description: Plan a change, then make it for each item in the same conversation
+invoke: allow
+inputs:
+  items: [string]
+steps:
+  - id: plan
+    prompt: Plan the change.
+  - id: each
+    needs: [plan]
+    for_each: inputs.items
+    workflow:
+      steps:
+        - id: make
+          session:
+            from: plan
+          prompt: Make the change you planned for this item.
+`;
+
+// Two steps side by side go on from one earlier step.
+const FORK = `schemaVersion: v1alpha1
+name: fork
+description: Plan a change, then make two parts of it beside each other
+invoke: allow
+steps:
+  - id: plan
+    prompt: Plan the change.
+  - id: left
+    needs: [plan]
+    workspace: new
+    session:
+      from: plan
+    prompt: Make the left part.
+  - id: right
+    needs: [plan]
+    workspace: new
+    session:
+      from: plan
+    prompt: Make the right part.
+`;
+
 // Setup passes only when it gets the run mode the start kept, and the command prints the one it gets.
 const MODE = `schemaVersion: v1alpha1
 name: mode
@@ -1540,7 +1583,7 @@ describe('a step that continues an earlier step\'s conversation, under the skill
     return { dispatch, next: await harness.call({ kind: 'next', run, wait: false }, { session }) };
   };
 
-  const DispatchShape = z.object({ attempt: AttemptIdSchema, title: z.string(), brief: z.string(), continue: z.object({ title: z.string() }).optional() }).passthrough();
+  const DispatchShape = z.object({ attempt: AttemptIdSchema, step: z.string(), title: z.string(), brief: z.string(), continue: z.object({ title: z.string() }).optional() }).passthrough();
 
   const startOn = async (host: 'h1' | 'h4') => {
     const harness = await skillHarness({ plan: PLAN });
@@ -1577,6 +1620,37 @@ describe('a step that continues an earlier step\'s conversation, under the skill
 
     expect(make.dispatch.continue).toEqual({ title: plan.dispatch.title });
     expect(test.dispatch.continue).toEqual({ title: plan.dispatch.title });
+  });
+
+  it('on h1, dispatches an item of a for_each body to the child of the step beside the for_each it goes on from', async () => {
+    const harness = await skillHarness({ fan: FAN });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'fan', answers: { confirmed: false, parallel: 1 }, inputs: { items: ['a'] } });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const plan = await work(harness, run, await harness.call({ kind: 'choose', run, choice: 'h1' }), 'session-a');
+    const make = await work(harness, run, plan.next, 'session-a');
+
+    expect(make.dispatch).toMatchObject({ step: 'each[0].make', continue: { title: plan.dispatch.title } });
+  });
+
+  it('on h1, sends only one of two steps beside each other to the earlier child, and the other to a new one', async () => {
+    const harness = await skillHarness({ fork: FORK });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'fork', answers: { confirmed: false, parallel: 2 }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const plan = await work(harness, run, await harness.call({ kind: 'choose', run, choice: 'h1' }), 'session-a');
+    const byStep = new Map<string, z.infer<typeof DispatchShape>>();
+
+    for (let answer = plan.next, polls = 0; byStep.size < 2 && polls < 10; answer = await harness.call({ kind: 'next', run, wait: true }, { session: 'session-a' }), polls += 1) {
+      const turn = z.object({ data: z.object({ turn: z.object({ actions: z.array(z.object({ kind: z.string() }).passthrough()) }) }) }).parse(answer);
+      for (const action of turn.data.turn.actions) if (action.kind === 'dispatch') { const dispatch = DispatchShape.parse(action); byStep.set(dispatch.step, dispatch); }
+    }
+
+    const dispatches = [...byStep.values()];
+    expect([...byStep.keys()].sort()).toEqual(['left', 'right']);
+    expect(dispatches.filter((dispatch) => dispatch.continue !== undefined)).toEqual([expect.objectContaining({ continue: { title: plan.dispatch.title } })]);
   });
 
   it('on h4, records the session that worked each step, and resumed for the later step the same session reports', async () => {

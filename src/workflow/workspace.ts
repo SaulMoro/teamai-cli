@@ -787,6 +787,25 @@ function latestContinuation(run: RunState, session: SessionRef | undefined): Lea
  * The session a step resumes: its own latest with `session: continue`, or the latest of the step `session.from` names,
  * as later steps that continued it left it.
  */
+/**
+ * The step `session.from: name` of a step in `scope` resumes: the step of that name in the scope, else, inside a nested
+ * scope, the one beside its enclosing step. Undefined when there is none.
+ */
+export function sessionSource(run: RunState, scope: Scope, name: string): { state: StepState; definition: WorkflowStep } | undefined {
+  const local = statesIn(run, scope).find((item) => localId(scope, item) === name);
+  const localDefinition = scope.definition.steps.find((item) => item.id === name);
+
+  if (local && localDefinition) return { state: local, definition: localDefinition };
+
+  if (local || !scope.prefix) return undefined;
+  const parent = scope.prefix.slice(0, -1);
+  const grand = parent.includes('.') ? parent.slice(0, parent.lastIndexOf('.') + 1) : '';
+  const outer = run.steps.find((item) => item.id === `${grand}${name}`);
+  const outerDefinition = outer ? stepDefinitions(run)(outer.id) : undefined;
+
+  return outer && outerDefinition ? { state: outer, definition: outerDefinition } : undefined;
+}
+
 export function sessionOf(run: RunState, scope: Scope, state: StepState, definition: WorkflowStep): LeaseSession | WorkflowFailure | undefined {
   if (!definition.session) return undefined;
 
@@ -815,16 +834,9 @@ export function sessionOf(run: RunState, scope: Scope, state: StepState, definit
   }
 
   const name = definition.session.from;
-  const states = statesIn(run, scope);
-  let target = states.find((item) => localId(scope, item) === name);
-  let targetDefinition = scope.definition.steps.find((item) => item.id === name);
-
-  if (!target && scope.prefix) {
-    const parent = scope.prefix.slice(0, -1);
-    const grand = parent.includes('.') ? parent.slice(0, parent.lastIndexOf('.') + 1) : '';
-    target = run.steps.find((item) => item.id === `${grand}${name}`);
-    targetDefinition = target ? stepDefinitions(run)(target.id) : undefined;
-  }
+  const source = sessionSource(run, scope, name);
+  const target = source?.state;
+  const targetDefinition = source?.definition;
 
   if (!target || !targetDefinition) {
     return { code: 'bad_session', message: `step "${state.id}" resumes "${name}", which is not a step it can read` };

@@ -201,13 +201,18 @@ async function fail(context: SkillContext, lock: RunLock, input: { state: SkillS
 /**
  * The child of the earlier step whose conversation `step` goes on in (`session.from`), on a host that starts children:
  * the one this run dispatched that step's settled attempt to. The run records no session of such a child, whose session
- * is its orchestrator's, so the earlier step's attempt names it.
+ * is its orchestrator's, so the earlier step's attempt names it. None while an open attempt already went on in that
+ * child: a conversation takes one step at a time, as a runtime starts a new one for a turn it cannot take.
  */
 async function continuedChild(config: LocalConfig, state: SkillState, step: string): Promise<{ title: string } | undefined> {
   if (state.host.kind !== 'chosen' || !HOST_PROFILES[state.host.id].startsChildAgent) return undefined;
   const earlier = await continuedAttempt(config, state.run, step);
 
-  return earlier && state.settled.includes(earlier.attempt) ? { title: childTitle(earlier.step, earlier.attempt) } : undefined;
+  if (!earlier || !state.settled.includes(earlier.attempt)) return undefined;
+  const title = childTitle(earlier.step, earlier.attempt);
+  const isBusy = state.attempts.some((open) => ('dispatch' in open && open.dispatch.continues?.title === title) || (open.phase === 'stopping' && open.child === title));
+
+  return isBusy ? undefined : { title };
 }
 
 /** Under the lock: prepares the attempt's place (C4 to C7), or sends the report it already has. */

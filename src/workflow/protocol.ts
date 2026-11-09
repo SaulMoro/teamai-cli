@@ -28,7 +28,7 @@ import { StepModelSchema } from './step-model.js';
 import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
 import type { DriverCan } from './requirements.js';
 import { isWorkflowError, type DriverIdentity, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure } from './types.js';
-import { cloneBranchOf, confinedOf, deliveryProblem, runCopyToMerge, stepRoleOf } from './workspace.js';
+import { cloneBranchOf, confinedOf, deliveryProblem, runCopyToMerge, sessionSource, stepRoleOf } from './workspace.js';
 import { headCommit } from './worktree.js';
 
 export type { PersonHandoff };
@@ -366,16 +366,16 @@ export async function continuedAttempt(config: LocalConfig, run: RunId, step: st
   const seen = new Set<string>();
 
   for (let located = locateStep(state, step); located?.step.session && 'from' in located.step.session;) {
-    const id = `${located.scope.prefix}${located.step.session.from}`;
+    // The step the engine resumes the session of, found as its lease's session is.
+    const earlier = sessionSource(state, located.scope, located.step.session.from)?.state;
 
-    if (seen.has(id)) break;
-    seen.add(id);
-    const earlier = state.steps.find((item) => item.id === id);
-    const attempt = AttemptIdSchema.safeParse(earlier && 'attempt' in earlier ? earlier.attempt : undefined);
+    if (!earlier || seen.has(earlier.id)) break;
+    seen.add(earlier.id);
+    const attempt = AttemptIdSchema.safeParse('attempt' in earlier ? earlier.attempt : undefined);
 
     if (!attempt.success) break;
-    first = { step: id, attempt: attempt.data };
-    located = locateStep(state, id);
+    first = { step: earlier.id, attempt: attempt.data };
+    located = locateStep(state, earlier.id);
   }
 
   return first;
