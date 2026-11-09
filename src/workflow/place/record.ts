@@ -128,11 +128,10 @@ const PlaceRecordSchema = z.discriminatedUnion('phase', [
   z.object({ ...PlaceBase, phase: z.literal('setting-up') }),
   z.object({ ...PlaceBase, phase: z.literal('ready') }),
   z.object({ ...PlaceBase, phase: z.literal('finished'), at: z.string(), finished: PlaceFinishedSchema }),
-  /**
-   * The step ended without a report to finish it: the copy is as it was found, and nothing was committed. A place that
-   * was `kept` is recorded so once the step's next attempt goes on in it.
-   */
+  /** The step ended without a report to finish it: the copy is as it was found, and nothing was committed. */
   z.object({ ...PlaceBase, phase: z.literal('abandoned'), at: z.string() }),
+  /** A place this attempt `kept` that the step's next attempt went on in, or that a fresh place replaced: no attempt goes on in it from this record. */
+  z.object({ ...PlaceBase, phase: z.literal('retired'), at: z.string() }),
   /**
    * The attempt was released after its tool ran, as on a usage limit: the clone, team clone or data checkout at `dir`
    * keeps what the tool did there, and the step's next attempt goes on in it rather than in a fresh one.

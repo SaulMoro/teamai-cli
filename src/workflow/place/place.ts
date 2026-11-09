@@ -75,7 +75,7 @@ export async function placeHeldBy(input: { config: LocalConfig; run: RunId; root
     const read = await readPlaceRecord(config, run, other);
     const recorded = read.kind === 'found' ? read.record : undefined;
 
-    if (!recorded || recorded.phase === 'finished' || recorded.phase === 'abandoned' || recorded.phase === 'kept') continue;
+    if (!recorded || recorded.phase === 'finished' || recorded.phase === 'abandoned' || recorded.phase === 'retired' || recorded.phase === 'kept') continue;
 
     if (places.has(recorded.dir)) return { behind: other, dir: recorded.dir };
   }
@@ -300,7 +300,7 @@ async function prepareClone(input: {
   const { config, run, root, lease, workspace, recorded } = input;
 
   // An attempt prepared again made its clone, and what it ran there before is not this run of it: it gets a fresh one.
-  if (recorded && recorded.phase !== 'opening' && recorded.phase !== 'abandoned' && recorded.place.role === 'clone' && recorded.place.created) {
+  if (recorded && recorded.phase !== 'opening' && recorded.phase !== 'abandoned' && recorded.phase !== 'retired' && recorded.place.role === 'clone' && recorded.place.created) {
     await removeClone(config, run, workspace.branch);
   } else {
     const result = await recordedResult(config, recorded, lease);
@@ -430,7 +430,7 @@ async function prepareTeam(input: {
 
 /** The place a prepare recorded for the attempt before, unless it gave the place up or left its git undone. */
 async function recordedResult(config: LocalConfig, recorded: PlaceRecord | undefined, lease: OverlaidLease): Promise<PlacePrepared | undefined> {
-  if (recorded === undefined || recorded.phase === 'abandoned' || recorded.phase === 'opening') return undefined;
+  if (recorded === undefined || recorded.phase === 'abandoned' || recorded.phase === 'retired' || recorded.phase === 'opening') return undefined;
 
   return recorded.phase === 'preparing' ? overlaid(config, recorded, lease, { resume: true }) : preparedOf(recorded, lease.prompt);
 }
@@ -825,7 +825,7 @@ export async function finishPlace(input: {
 
   // A setup that failed gave the place up, and a prepare that failed in git made none: the report carries that failure.
   // A setup a killed teamai left that its runtime could not stop may still write the place, which is kept as it is.
-  if ((recorded.phase === 'abandoned' || recorded.phase === 'opening' || recorded.phase === 'setting-up') && end.outcome === 'failed') return end;
+  if ((recorded.phase === 'abandoned' || recorded.phase === 'retired' || recorded.phase === 'opening' || recorded.phase === 'setting-up') && end.outcome === 'failed') return end;
 
   // A step that failed before its setup ran, as on a step runtime that could not open the place setup runs in, gives
   // the place up as a failed setup does: the report carries the step's own failure.
@@ -901,7 +901,7 @@ async function cloneRan(config: LocalConfig, runId: RunId, attempt: AttemptId): 
 }
 
 /** Why a place in `phase` has nothing to finish. */
-function unfinishedPlace(phase: 'opening' | 'preparing' | 'staged' | 'setting-up' | 'abandoned' | 'kept'): string {
+function unfinishedPlace(phase: 'opening' | 'preparing' | 'staged' | 'setting-up' | 'abandoned' | 'retired' | 'kept'): string {
   switch (phase) {
     case 'opening':
     case 'preparing':
@@ -914,6 +914,8 @@ function unfinishedPlace(phase: 'opening' | 'preparing' | 'staged' | 'setting-up
       return 'it was given up when the step stopped';
     case 'kept':
       return 'the step was released after its tool ran, and its next attempt goes on there';
+    case 'retired':
+      return 'the step\'s next attempt went on in it, or a fresh place replaced it';
     default: {
       const unhandled: never = phase;
 
@@ -1040,7 +1042,7 @@ export async function abandonPlace(input: { config: LocalConfig; lock: RunLock; 
   const read = await readPlaceRecord(config, run, attempt);
   const recorded = read.kind === 'found' ? read.record : undefined;
 
-  if (!recorded || recorded.phase === 'finished' || recorded.phase === 'abandoned' || recorded.phase === 'kept') return undefined;
+  if (!recorded || recorded.phase === 'finished' || recorded.phase === 'abandoned' || recorded.phase === 'retired' || recorded.phase === 'kept') return undefined;
   const { dir } = recorded;
 
   // Once the place is put back, the host's own hooks run again in a place it made.
@@ -1174,7 +1176,7 @@ async function keptPlaceOf(input: { config: LocalConfig; run: RunId; step: strin
 
 /** Gives up the place `kept` held, once the step's next attempt went on in it or a fresh place replaced it, so no later attempt goes on there. */
 async function retireKeptPlace(config: LocalConfig, kept: KeptPlace): Promise<void> {
-  await writePlaceRecord(config, { ...baseOf(kept), phase: 'abandoned', at: new Date().toISOString() });
+  await writePlaceRecord(config, { ...baseOf(kept), phase: 'retired', at: new Date().toISOString() });
 }
 
 /** Prepares `ready`, the place `kept` held, for this attempt, recorded before the kept one is retired, so a kill between loses neither. */

@@ -38,7 +38,7 @@ export async function adoptRefusal(input: {
 
   if (adopt === undefined) return undefined;
 
-  if (recorded !== undefined && recorded.phase !== 'abandoned') {
+  if (recorded !== undefined && recorded.phase !== 'abandoned' && recorded.phase !== 'retired') {
     if (recorded.dir !== adopt) return `Attempt ${lease.attempt} is already prepared in ${recorded.dir}, so it cannot adopt ${adopt}. Prepare it again without --adopt, which answers with that place.`;
 
     if (recorded.phase !== 'opening') return undefined;

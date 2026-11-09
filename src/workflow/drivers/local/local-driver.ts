@@ -30,7 +30,7 @@ import { type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js
 import { credentialSecrets, newOpId, resumeOrPublish, retryCommand, type ExecAnswer, type ExecQuestion, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
-import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, runPlaceSetup, sweepClones } from '../../place/place.js';
+import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../../tool-launch/member-tools.js';
@@ -820,6 +820,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     await closeRun(attempt);
   };
 
+  // A lease stopped before its tool started: a place that went on in work an earlier attempt kept keeps it for the next.
+  const giveBackUnlaunched = async (attempt: AttemptId): Promise<void> => {
+    await releaseUnlaunchedPlace({ config, lock, attempt });
+    await closeRun(attempt);
+  };
+
   // A driver killed before cleanup, of this run or any other, left clones behind. The runtimes that ran in them, which
   // that driver can no longer tell, hear of it at a close.
   await closeAfterSweep(config, await sweepClones(config));
@@ -1361,7 +1367,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease) });
 
             if (!startable(lease, controller.signal)) {
-              await abandonPlace({ config, lock, attempt: lease.attempt });
+              await releaseUnlaunchedPlace({ config, lock, attempt: lease.attempt });
 
               return undefined;
             }
@@ -1408,7 +1414,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease) });
 
           if (!startable(lease, controller.signal)) {
-            await abandon(lease.attempt);
+            await giveBackUnlaunched(lease.attempt);
 
             return undefined;
           }
@@ -1634,7 +1640,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       if (staged.kind === 'stopped') {
         // Its lease ended while it was staged: the engine stops it, and the driver leaves the copy as it found it.
-        await abandon(exited.lease.attempt);
+        await giveBackUnlaunched(exited.lease.attempt);
         continue;
       }
 
