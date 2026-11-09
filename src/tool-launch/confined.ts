@@ -21,7 +21,8 @@ import { JsonValueSchema, type JsonValue } from '../types.js';
 import type { ConfinedUsage } from './confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
-import { runTool, type ToolRun } from './run.js';
+import type { HeadlessRun } from '@teamai/tool-launch/call-launch';
+import { runTool } from './run.js';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type ConfinedTool } from './tools.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
@@ -378,7 +379,7 @@ interface Launch {
   args: string[];
   stdin: string;
   configuredModel?: string;
-  failureOf?(run: ToolRun, spent: Spend): Promise<ConfinedFailure | undefined>;
+  failureOf?(run: HeadlessRun, spent: Spend): Promise<ConfinedFailure | undefined>;
 }
 
 const modelArgs = ({ input }: LaunchContext): string[] => input.model ? ['--model', input.model.name] : [];
@@ -387,7 +388,7 @@ const jsonSchemaArgs = ({ input }: LaunchContext): string[] => input.schema === 
 
 const asked = ({ input }: LaunchContext): string => REQUEST + input.prompt;
 
-const rawOf = (run: ToolRun): string => run.stdout + '\n' + run.stderr;
+const rawOf = (run: HeadlessRun): string => run.stdout + '\n' + run.stderr;
 
 /** How each family is set up and started confined. */
 // oxlint-disable-next-line teamai/tool-facts -- keyed by launch adapter id, as LAUNCH_ADAPTERS is; a tool picks one with TOOLS.launch
@@ -512,7 +513,7 @@ async function levelReached({ input, executable, dir, cwd, env, tmp }: LaunchCon
 }
 
 /** The error the tool reported, or '' when it reported none. */
-function reportedError(tool: ConfinedTool, run: ToolRun): string {
+function reportedError(tool: ConfinedTool, run: HeadlessRun): string {
   const family = launchAdapterIdOf(tool);
   const reading = launchAdapterOf(tool).call.read({ stdout: run.stdout, lastMessage: undefined });
 
@@ -523,7 +524,7 @@ function reportedError(tool: ConfinedTool, run: ToolRun): string {
 }
 
 /** What ran, as far as the run showed it. A model or effort it did not observe stays undefined, which the JSON leaves out. */
-function ranOn(input: ConfinedInput, launch: Launch, run: ToolRun, isolation: ConfinedLevel): ConfinedRun {
+function ranOn(input: ConfinedInput, launch: Launch, run: HeadlessRun, isolation: ConfinedLevel): ConfinedRun {
   const model = observedModel({ requested: input.model?.name ?? launch.configuredModel, reported: toolStdout(launchAdapterIdOf(input.tool), run.stdout)?.model });
   const effort = observedEffort({ requested: input.model?.effort });
 
@@ -531,7 +532,7 @@ function ranOn(input: ConfinedInput, launch: Launch, run: ToolRun, isolation: Co
 }
 
 /** What a finished run gave: the error the tool reported, its exit code, or its reply. */
-async function outcomeOf({ input, tmp }: LaunchContext, launch: Launch, run: ToolRun, isolation: ConfinedLevel): Promise<ConfinedResult> {
+async function outcomeOf({ input, tmp }: LaunchContext, launch: Launch, run: HeadlessRun, isolation: ConfinedLevel): Promise<ConfinedResult> {
   const family = launchAdapterIdOf(input.tool);
   const raw = rawOf(run);
   const spent = spendOf(input.tool, run.stdout);

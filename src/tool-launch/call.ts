@@ -1,21 +1,17 @@
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { resolveConfigForDir } from '../config.js';
 import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV, type LaunchedBy } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { resolveCliPath } from '../utils/cli-path.js';
 import { log } from '../utils/logger.js';
 import { CallError, memberTools, type MemberTool } from './member-tools.js';
-import { runTool } from './run.js';
-import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
+import { spawnHeadless } from './run.js';
+import type { TokenUsage } from './stdout.js';
 import { addTokens } from '@teamai/tool-core/stdout';
 import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from './tools.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
-import type { CallLaunch } from '@teamai/tool-core/launch';
+import { callLaunch } from '@teamai/tool-launch/call-launch';
 import type { z } from 'zod';
-import { readRegularFile } from '@teamai/shared/regular-file';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 
@@ -162,49 +158,24 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
 
   /** One run of the picked tool: its answer, and the session it ran in when the tool reported one. */
   const callOnce = async ({ tool, executable }: Picked, prompt: string, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, cwd = process.cwd(), signal, idleTimeout }: CallOptions, session?: string): Promise<CallResult & { session?: string }> => {
-      const { call } = launchAdapterOf(tool);
-      log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
-      const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-call-'));
+    log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
+    const env = callEnv(launchedBy, tool);
 
-      try {
-        const lastMessageFile = path.join(scratch, 'last-message.txt');
-        const promptFile = path.join(scratch, 'prompt.md');
+    const end = await callLaunch({
+      tool: { name: tool, family: launchAdapterIdOf(tool), call: launchAdapterOf(tool).call, executable },
+      prompt, session, timeoutMs: timeout, idleTimeoutMs: idleTimeout, signal,
+      start: (args) => spawnHeadless({ executable, args, cwd, env, detached: false }),
+    });
 
-        if (call.prompt === 'file') await fs.writeFile(promptFile, prompt);
-        const resumed = session !== undefined && 'resume' in call ? call.resume.args(session) : [];
-        const { streams }: CallLaunch = call;
-        const streaming = idleTimeout === undefined ? undefined : streams;
-        const args = [...(streaming?.args ?? call.args)({ prompt, promptFile, lastMessageFile }), ...resumed];
-        const run = await runTool({ executable, args, cwd, env: callEnv(launchedBy, tool), stdin: call.prompt !== 'stdin' ? '' : 'stdinOf' in call ? call.stdinOf(prompt) : prompt, timeoutMs: timeout, ...(streaming && { idleTimeoutMs: idleTimeout }), detached: false, signal });
+    // A call teamai stopped at its limit names no tool: the tool gave no answer of its own.
+    if (!end.ok) throw new CallError(end.code, end.message, 'stopped' in end ? undefined : tool);
+    const result: CallResult & { session?: string } = { text: end.text, tool };
 
-        if (run.stopped === 'timeout') throw new CallError('call_failed', `AI call timed out after ${Math.round(timeout / 1000)}s (tool: ${tool})`);
+    if (end.tokens) result.tokens = end.tokens;
 
-        if (run.stopped === 'idle') {
-          throw new CallError('call_failed', `AI call printed nothing for ${(idleTimeout ?? 0) / 1000}s, longer than its idle limit (tool: ${tool}). Raise the idle limit if this tool works silently for longer.`);
-        }
+    if (end.session !== undefined) result.session = end.session;
 
-        const lastMessage = await readRegularFile(lastMessageFile, 'utf8').catch(() => undefined);
-        const reading = call.read({ stdout: run.stdout, lastMessage });
-
-        if (run.code !== 0 || !reading.ok) {
-          // A streamed call's stdout is its transcript, files it read included, so only a plain one stands for a reason.
-          const reason = (reading.ok ? undefined : reading.message) || run.stderr.trim() || (streaming ? '' : run.stdout.trim()) || `exit code ${run.code}`;
-
-          // A typed error decides by its kind (OpenCode 2.x); one without a kind, by its text.
-          if (stoppedOnUsageLimit(toolStdout(launchAdapterIdOf(tool), run.stdout), reason)) throw new CallError('usage_limited', `${tool} hit its usage limit: ${reason}`, tool);
-          throw new CallError('call_failed', `AI call failed (tool: ${tool}): ${reason}`, tool);
-        }
-
-        const result: CallResult & { session?: string } = { text: reading.text, tool };
-
-        if (reading.tokens) result.tokens = reading.tokens;
-
-        if (reading.session !== undefined) result.session = reading.session;
-
-        return result;
-      } finally {
-        await fs.rm(scratch, { recursive: true, force: true, maxRetries: 3 });
-      }
+    return result;
   };
 
   const callTool: ToolCaller['callTool'] = async (prompt, options) => {
