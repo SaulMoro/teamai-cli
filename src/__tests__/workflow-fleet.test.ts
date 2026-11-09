@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { answerCancel, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
+import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, recordProgress } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../tool-launch/process-stop.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -763,6 +763,18 @@ describe('cancelling an attempt through its record', () => {
 
     expect(await recordProgress(bob.config, claimed.value, 'e'.repeat(40), { question, secrets: {} })).toMatchObject({ ok: false, error: { code: 'fleet_unpublishable' } });
     expect(await readAttemptRecord(bob.config, offered.run, offered.attempt)).toMatchObject({ ok: true, value: { state: 'claimed' } });
+  });
+
+  it('writes no answer to a gate whose note holds a secret value to teamai-reports, as publishing the run would not', async () => {
+    const { alice, bob, offered } = await offerSlow(60_000);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const question = { step: 'keep', kind: 'approve' as const, message: 'Ship it?', options: ['yes', 'no'], required: false };
+    const asking = await recordProgress(bob.config, claimed.value, 'e'.repeat(40), { question, secrets: {} });
+    if (!asking.ok || asking.value.state !== 'asking') throw new Error('the member did not ask');
+
+    expect(await answerQuestion(alice.config, asking.value, { choice: 'yes', note: 'Deploy with ghp_0123456789abcdefghijklmnopqrstuvwxyzAB' }, {})).toMatchObject({ ok: false, error: { code: 'fleet_unpublishable' } });
+    expect(await readAttemptRecord(alice.config, offered.run, offered.attempt)).toMatchObject({ ok: true, value: { state: 'asking' } });
   });
 
   it('goes on from the work a member pushed before a cancel it never answered', async () => {

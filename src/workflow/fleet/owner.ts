@@ -599,7 +599,7 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
 
     // The answer goes over what the record holds now, which still asks it: the member's progress may have landed meanwhile.
     if (record?.state === 'asking' && asked?.answer !== undefined) {
-      const written = await answerQuestion(config, record, asked.answer);
+      const written = await answerQuestion(config, record, asked.answer, secrets);
 
       // Once written, the answer is spent: the member asking the same again, as when its run did not take the answer,
       // asks the person again.

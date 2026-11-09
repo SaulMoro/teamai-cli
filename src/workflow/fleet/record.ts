@@ -545,9 +545,15 @@ export async function cancelAttempt(config: LocalConfig, record: Offered | HeldA
   return written.ok ? { ok: true, value: cancel } : written;
 }
 
-/** Writes the owner's answer `answer` to the question of claim `asking`; a progress of its member that landed first answers `state_moved`. */
-export async function answerQuestion(config: LocalConfig, asking: Asking, answer: ExecAnswer): Promise<Written<Extract<FleetRecord, { state: 'answered' }>>> {
+/**
+ * Writes the owner's answer `answer` to the question of claim `asking`; a progress of its member that landed first answers
+ * `state_moved`. The person's note is checked against `secrets` as a run is before it is published.
+ */
+export async function answerQuestion(config: LocalConfig, asking: Asking, answer: ExecAnswer, secrets: Record<string, string>): Promise<Written<Extract<FleetRecord, { state: 'answered' }>>> {
   const answered: Extract<FleetRecord, { state: 'answered' }> = { ...asking, write: randomUUID(), state: 'answered', answer };
+  const unfit = unpublishable(answered, secrets);
+
+  if (unfit) return { ok: false, error: unfit };
   const written = await writeRecord(config, answered, { replaces: asking.write, message: `[teamai] Answer attempt ${asking.attempt} of run ${asking.run}` });
 
   return written.ok ? { ok: true, value: answered } : written;
