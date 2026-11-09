@@ -118,8 +118,11 @@ async function memberModel(t3: T3, link: EnvironmentLink, project: Project): Pro
 /** How a wake ended: its thread launched, why not, or cancelled by teamai before the launch went out. */
 type Ended = { kind: 'woken'; message: Extract<RuntimeMessage, { event: 'woken' }> } | { kind: 'failed'; failure: RuntimeFailure } | { kind: 'cancelled' };
 
-/** A wake under way in this process: whether its launch went out, and whether teamai cancelled it before. */
-interface Waking { launched: boolean; cancelled: boolean }
+/** A wake under way in this process: still looking for a machine, its launch sent, or cancelled by teamai before that. */
+interface Waking { state: 'looking' | 'launched' | 'cancelled' }
+
+/** Whether teamai cancelled `waking`, which a cancel may do while the wake awaits T3. */
+const isCancelled = (waking: Waking): boolean => waking.state === 'cancelled';
 
 /** The wakes of a runtime process: each launches one thread at most, and a cancel ends one that has not launched. */
 export function wakes({ serving }: { serving: Serving }) {
@@ -176,7 +179,7 @@ export function wakes({ serving }: { serving: Serving }) {
   const launch = async (s: Session, request: WakeRequest, waking: Waking): Promise<Ended> => {
     const found = await where(s.t3, request);
 
-    if (waking.cancelled) return { kind: 'cancelled' };
+    if (isCancelled(waking)) return { kind: 'cancelled' };
 
     if (!found.ok) return { kind: 'failed', failure: found.failure };
     const { link, project } = found;
@@ -186,8 +189,8 @@ export function wakes({ serving }: { serving: Serving }) {
     if (!modelSelection) return { kind: 'failed', failure: unavailable(`${link.label} runs no Claude or Codex provider instance a member can start on. Enable one in T3 Code there, under Settings → Providers.`) };
     const title = request.title.includes(request.pool) ? request.title : `${request.title} · ${request.pool}`;
 
-    if (waking.cancelled) return { kind: 'cancelled' };
-    waking.launched = true;
+    if (isCancelled(waking)) return { kind: 'cancelled' };
+    waking.state = 'launched';
 
     const { runtimeMode, firstLine } = memberMode(s.runtimeMode);
     const message = [firstLine, request.message, END_OF_WAKE].filter((line) => line !== undefined).join('\n\n');
@@ -234,7 +237,7 @@ export function wakes({ serving }: { serving: Serving }) {
     const session = serving.session();
 
     if (!session) return fail(request.op, { code: 'runtime_protocol', message: 'wake came before a successful init.' });
-    const waking: Waking = { launched: false, cancelled: false };
+    const waking: Waking = { state: 'looking' };
     under.set(request.op, waking);
     let outcome: Ended;
 
@@ -242,15 +245,15 @@ export function wakes({ serving }: { serving: Serving }) {
       outcome = await launch(session, request, waking);
     } catch (error) {
       // A cancel ended it already: its end stands.
-      outcome = waking.cancelled ? { kind: 'cancelled' } : { kind: 'failed', failure: unavailable(`T3 Code did not launch the member on the linked machine: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. ${NEXT_STEP}`) };
+      outcome = isCancelled(waking) ? { kind: 'cancelled' } : { kind: 'failed', failure: unavailable(`T3 Code did not launch the member on the linked machine: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. ${NEXT_STEP}`) };
     } finally {
       under.delete(request.op);
     }
 
+    // A cancel ended it already, whatever the lookup it cut short found.
+    if (ends.get(request.op)?.kind === 'cancelled') return;
     ends.set(request.op, outcome);
-
-    // A cancel ended it already.
-    if (outcome.kind !== 'cancelled') answer(request.op, outcome);
+    answer(request.op, outcome);
   };
 
   /**
@@ -261,12 +264,16 @@ export function wakes({ serving }: { serving: Serving }) {
     const waking = under.get(op);
     const ended = ends.get(op);
 
-    if (ended) answer(op, ended);
+    if (ended) {
+      answer(op, ended);
 
-    if (!waking) return ended !== undefined;
+      return true;
+    }
 
-    if (!waking.launched) {
-      waking.cancelled = true;
+    if (!waking) return false;
+
+    if (waking.state === 'looking') {
+      waking.state = 'cancelled';
       ends.set(op, { kind: 'cancelled' });
       ledger.end({ op, state: 'cancelled' });
     }

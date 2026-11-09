@@ -187,6 +187,40 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['op'] === 'op-000000e6').map((line) => line['event'])).toEqual(['accepted', 'cancelled']);
       expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
     });
+
+    it('answers a second cancel of a wake it cancelled once, while that wake still looks for a machine', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, projectsMs: 1_000 });
+      const { runtime } = await initialized();
+      runtime.send(wake('op-000000e7'));
+      await runtime.next((line) => line['op'] === 'op-000000e7' && line['event'] === 'accepted');
+      runtime.send({ type: 'cancel', op: 'op-000000e7' });
+      await woke(runtime, 'op-000000e7');
+
+      runtime.send({ type: 'cancel', op: 'op-000000e7' });
+
+      await new Promise((resolve) => setTimeout(resolve, 3_500));
+      expect(runtime.lines.filter((line) => line['op'] === 'op-000000e7').map((line) => line['event'])).toEqual(['accepted', 'cancelled', 'cancelled']);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+    });
+
+    it('keeps a wake cancelled while it read the machine\'s providers cancelled, when that machine turns out to have none', async () => {
+      signIn(t3);
+      t3.config({
+        links: [{ environmentId: 'env-sam', label: 'sams-laptop', status: 'reachable' }],
+        environments: { 'env-sam': { projects: [acmeApp], providers: [] } },
+        providersMs: 1_000,
+      });
+      const { runtime } = await initialized();
+      runtime.send(wake('op-000000e8'));
+      await runtime.next((line) => line['op'] === 'op-000000e8' && line['event'] === 'accepted');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      runtime.send({ type: 'cancel', op: 'op-000000e8' });
+
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(runtime.lines.filter((line) => line['op'] === 'op-000000e8').map((line) => line['event'])).toEqual(['accepted', 'cancelled']);
+    });
   });
 
   describe('the repository a remote names', () => {
