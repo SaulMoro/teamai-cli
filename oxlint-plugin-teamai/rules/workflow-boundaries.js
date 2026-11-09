@@ -70,8 +70,6 @@ const SKILL_IMPORTS = {
   'src/launch-context.ts': { names: ['resolveRunMode', 'RunMode', 'RUN_MODES', 'RunModeSchema'] },
   'src/utils/fs.ts': {},
   'src/types.ts': { typeOnly: true },
-  // The usage limits a run's tools hit, which the skill driver keeps between calls and holds steps on as the local driver does.
-  'src/workflow/usage-limits.ts': { names: ['UsageLimits', 'KeptLimitSchema', 'KeptLimit', 'WhenIdle'] },
 };
 
 /** Rule 3: the modules through which code outside a folder reaches it; tests may also import the entries of their unit. */
