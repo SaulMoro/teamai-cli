@@ -108,7 +108,7 @@ A `dispatch` action is one prompt step for one child agent. For each one:
 
 When your host cannot run `model.name`, run `unavailable` in place of both steps.
 
-A dispatch that carries `continue` goes on in the conversation of an earlier step's child: send the brief's prompt to the child named `continue.title` (Claude Code `SendMessage`, T3 `t3_thread_send`) in place of starting one in step 1. When your host cannot reach that child, start a new one as step 1 says. Then run `ack`.
+A dispatch that carries `continue` goes on in the conversation of an earlier child: the child of the step it continues (`session.from`), or of this step's earlier pass (`session: continue`). Send the brief's prompt to the child named `continue.title` (Claude Code `SendMessage`, T3 `t3_thread_send`) in place of starting one in step 1. When your host cannot reach that child, start a new one as step 1 says, and tell the person that the step starts a new session, since that child could not be reached. Then run `ack`.
 
 A dispatch whose `needs.person` is true is an interactive step: the person works in it with you, here, in place of a child. Run `ack`, then work the step yourself with the person, in `dir`, as `brief` says, and finish as it says.
 

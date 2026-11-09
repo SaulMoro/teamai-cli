@@ -222,6 +222,18 @@ steps:
           prompt: Make the change you planned for this item.
 `;
 
+// A step that goes on in its own conversation each pass a loop runs it.
+const AGAIN = `schemaVersion: v1alpha1
+name: again
+description: Make a change, then improve it in the same conversation
+invoke: allow
+steps:
+  - id: make
+    session: continue
+    prompt: Make the change, or improve the one you made.
+    loop: { back_to: make, while: "steps.make.outputs == 'done'", max_iterations: 2 }
+`;
+
 // Two steps side by side go on from one earlier step.
 const FORK = `schemaVersion: v1alpha1
 name: fork
@@ -1632,6 +1644,19 @@ describe('a step that continues an earlier step\'s conversation, under the skill
     const make = await work(harness, run, plan.next, 'session-a');
 
     expect(make.dispatch).toMatchObject({ step: 'each[0].make', continue: { title: plan.dispatch.title } });
+  });
+
+  it('on h1, dispatches the next pass of a step with session: continue to the child that worked its earlier pass', async () => {
+    const harness = await skillHarness({ again: AGAIN });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'again', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const first = await work(harness, run, await harness.call({ kind: 'choose', run, choice: 'h1' }), 'session-a');
+    const second = await work(harness, run, first.next, 'session-a');
+
+    expect(first.dispatch.continue).toBeUndefined();
+    expect(second.dispatch).toMatchObject({ step: 'make', continue: { title: first.dispatch.title } });
   });
 
   it('on h1, sends only one of two steps beside each other to the earlier child, and the other to a new one', async () => {

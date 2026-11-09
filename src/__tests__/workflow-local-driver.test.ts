@@ -1091,6 +1091,29 @@ steps:
     expect(closedAt(asked, one.handle)).toBeGreaterThan(three.at);
   }, 30_000);
 
+  it('keeps a pass\'s place open for the next pass of a step with session: continue, which goes on in its conversation', async () => {
+    const { config, workspace, runId } = await workflowFixture(inOneWorkspace(`schemaVersion: v1alpha1
+name: build
+description: A step that goes on in its own conversation each pass.
+steps:
+  - id: make
+    session: continue
+    prompt: Make the change, or improve it.
+    output:
+      ok: boolean
+    loop: { back_to: make, while: steps.make.outputs.ok, max_iterations: 2 }
+`));
+    const toy = await toyDriver(path.dirname(workspace));
+
+    await runLocalDriver(config, runId, workspace, { runtimes: toy.runtimes });
+
+    const asked = toy.asked();
+    const [first, second, ...more] = toy.leases().filter((sent) => sent.step === 'change.make').map((sent) => promptOf(asked, [sent], 'change.make'));
+    if (!first || !second || more.length > 0) throw new Error(`make did not run twice: ${JSON.stringify(toy.leases())}`);
+    expect(second.continue).toEqual({ handle: first.handle, op: first.op });
+    expect(closedAt(asked, first.handle)).toBeGreaterThan(second.at);
+  }, 30_000);
+
   it('gives step two room under max_parallel: 1 while step one\'s place is held', async () => {
     const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR));
     const toy = await toyDriver(path.dirname(workspace), { maxParallel: 1 });
