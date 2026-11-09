@@ -296,6 +296,8 @@ const RunProgressSchema = z.object({
   finalizing: z.object({
     outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(), failure: FailureSchema.optional(), since: z.string(), until: z.string(),
   }).optional(),
+  /** The owner's run a fleet member runs this one for, whose id its steps read as `run.id`. */
+  nestedIn: RunIdSchema.optional(),
   timeout: z.number().int().positive().optional(),
   driveOptions: (z.object({
     tools: z.record(z.string(), z.string()).optional(), autoApprove: z.boolean().optional(), sandbox: z.literal(true).optional(), driver: z.string().min(1).optional(),

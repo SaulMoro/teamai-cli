@@ -10,6 +10,7 @@ import type { OnLimit, Requirements, Setup, TurnLimits, Unenforced } from './req
 import type { LeaseSession } from './workspace.js';
 import type { ConfinedLease } from './lease-wire.js';
 import type { StepModel } from './step-model.js';
+import type { RunId } from './store.js';
 import type { ClonePlace } from './clone.js';
 import type { JsonValue } from '../types.js';
 import type { DriverName } from './driver-name.js';
@@ -517,7 +518,7 @@ export interface RunState {
    * The owner's run whose whole `workflow:` step a fleet member runs as this nested run. Its steps read that run's id
    * as `run.id`, which is the same in every workflow a run runs.
    */
-  nestedIn?: string;
+  nestedIn?: RunId;
   /** Who started the run. A claim keeps it. Absent on runs started before it was recorded. */
   startedBy?: StartedBy;
   /** The driver `workflows.driver` started the run for, which the machine that started it does not run. Absent on a run started for no driver in particular. */
