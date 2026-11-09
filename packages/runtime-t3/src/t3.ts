@@ -45,10 +45,10 @@ const ProjectSchema = z.object({
   id: z.string().min(1), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional(),
   scripts: z.array(ScriptSchema).optional().catch(undefined),
   /**
-   * The repository T3 found in the project's git remotes, as `host/path` (`origin`: the one it was forked from). T3
-   * finds none for a remote on this machine's disk.
+   * The repository T3 found in the project's git remote, as `host/path`. T3 finds none for a remote on this machine's
+   * disk.
    */
-  repositoryIdentity: z.object({ canonicalKey: z.string(), origin: z.object({ canonicalKey: z.string() }).optional().catch(undefined) }).nullable().optional().catch(undefined),
+  repositoryIdentity: z.object({ canonicalKey: z.string() }).nullable().optional().catch(undefined),
   /** The model the member set for the project's new threads. */
   defaultModelSelection: z.object({ instanceId: z.string().min(1), model: z.string().min(1) }).nullable().optional().catch(undefined),
 });
