@@ -10,6 +10,7 @@ import { instanceAdder } from './instances.js';
 import type { Journal } from './journal.js';
 import { offer } from './offer.js';
 import { placeHandlers } from './place.js';
+import { wakes } from './wake.js';
 import type { ModelSelection } from './settings.js';
 import type { Environment, Provider, StepMode, T3 } from './t3.js';
 import type { T3Command } from './t3-command.js';
@@ -29,6 +30,7 @@ import type { T3Command } from './t3-command.js';
 //             confined: an idle scratch thread, its folder filled with a read-only copy of `dir`, then briefed to read
 //             only that; its last message is the reply
 //    cancel   stop the thread                     reattach  the ops and the thread, from the journal
+//    wake     launch a fleet member's thread on a linked environment that has the repository, and forget it (wake.ts)
 //    collect  nothing to copy: the worktree, the result and the transcript are already on this machine. A thread that
 //             ended stays in the person's active threads, since a later step may continue its conversation
 //    close    stop each thread the runtime has not seen stop, whichever process launched it, settle each thread that
@@ -182,6 +184,7 @@ export function serve(options: ServeOptions): Promise<number> {
   const adder = instanceAdder({ options, notice });
   const talks = conversations({ serving, adder });
   const at = placeHandlers({ serving, adder, conversations: talks });
+  const woken = wakes({ serving });
 
   return serveRuntime({
     name: 't3',
@@ -195,7 +198,8 @@ export function serve(options: ServeOptions): Promise<number> {
         fail(request.op, { code: 'exec_unsupported', message: 'Runtime t3 runs prompt steps as T3 Code threads and runs no command (can.exec: false).' });
       },
       prompt: talks.prompt,
-      cancel: (request) => talks.cancel(request.op),
+      wake: woken.wake,
+      cancel: async (request) => { if (!woken.cancel(request.op)) await talks.cancel(request.op); },
       collect: at.collect,
       reattach: at.reattach,
       close: at.close,

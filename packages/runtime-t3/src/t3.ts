@@ -44,9 +44,21 @@ export type Provider = z.infer<typeof ProviderSchema>;
 const ProjectSchema = z.object({
   id: z.string().min(1), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional(),
   scripts: z.array(ScriptSchema).optional().catch(undefined),
+  /**
+   * The repository T3 found in the project's git remotes, as `host/path` (`origin`: the one it was forked from). T3
+   * finds none for a remote on this machine's disk.
+   */
+  repositoryIdentity: z.object({ canonicalKey: z.string(), origin: z.object({ canonicalKey: z.string() }).optional().catch(undefined) }).nullable().optional().catch(undefined),
+  /** The model the member set for the project's new threads. */
+  defaultModelSelection: z.object({ instanceId: z.string().min(1), model: z.string().min(1) }).nullable().optional().catch(undefined),
 });
 
 export type Project = z.infer<typeof ProjectSchema>;
+
+/** Another machine's T3 Code environment linked to this one, as `t3_environment_links` lists it. */
+const EnvironmentLinkSchema = z.object({ environmentId: z.string().min(1), label: z.string(), status: z.string() });
+
+export type EnvironmentLink = z.infer<typeof EnvironmentLinkSchema>;
 
 const ProjectPageSchema = z.object({ projects: z.array(ProjectSchema), nextCursor: z.number().int().nullable().optional() });
 
@@ -80,6 +92,7 @@ const ThreadShellSchema = z.object({
   worktreePath: z.string().nullable(),
   runCount: z.number().int().nonnegative(),
   pendingRequestCount: z.number().int().nonnegative(),
+  title: z.string().optional().catch(undefined),
   /** The provider instance and model the thread's runs use. T3 reports no model options here. */
   providerInstanceId: z.string().min(1).nullable().optional().catch(undefined),
   model: z.string().min(1).nullable().optional().catch(undefined),
@@ -146,6 +159,10 @@ export interface Launch extends NewThread {
   message?: string;
   projectId: string;
   workspace: { type: 'existing_worktree'; worktreePath: string } | { type: 'root' };
+  /** A linked environment to launch on, whose project `projectId` is: none, this one. */
+  environmentId?: string;
+  /** The thread here the launch was made for, which T3 shows the launched thread as delegated from. */
+  delegatedFrom?: { environmentId: string; threadId: string; title: string };
 }
 
 /** The body T3 answers a refused call with, as its text. */
@@ -183,8 +200,12 @@ function refusalIn(text: string): Refusal | undefined {
 
 export interface T3 {
   environment(): Promise<Environment>;
-  providers(): Promise<Provider[]>;
-  projects(): Promise<Project[]>;
+  /** The provider instances of this environment, or of the linked environment `environmentId`. */
+  providers(environmentId?: string): Promise<Provider[]>;
+  /** The projects of this environment, or of the linked environment `environmentId`. */
+  projects(environmentId?: string): Promise<Project[]>;
+  /** The environments linked to this one; T3 refuses while linked environments are off in its Labs settings. */
+  environmentLinks(): Promise<EnvironmentLink[]>;
   launch(launch: Launch): Promise<z.infer<typeof LaunchedSchema>>;
   /** Launches an idle thread in a new, empty scratch folder of T3's own, which `thread` names. */
   launchScratch(thread: NewThread): Promise<z.infer<typeof LaunchedSchema>>;
@@ -298,13 +319,14 @@ function t3Over(client: Client): T3 {
 
   return {
     environment: () => call('t3_environment_read', {}, EnvironmentSchema),
-    providers: async () => (await call('orchestrator_capabilities', {}, z.object({ providers: z.array(ProviderSchema) }))).providers,
-    projects: async () => {
+    providers: async (environmentId) => (await call('orchestrator_capabilities', { ...(environmentId !== undefined && { environmentId }) }, z.object({ providers: z.array(ProviderSchema) }))).providers,
+    environmentLinks: async () => (await call('t3_environment_links', {}, z.object({ links: z.array(EnvironmentLinkSchema) }))).links,
+    projects: async (environmentId) => {
       const projects: Project[] = [];
       let cursor: number | null | undefined = 0;
 
       while (cursor !== null && cursor !== undefined) {
-        const page: z.infer<typeof ProjectPageSchema> = await call('t3_project_list', { cursor, limit: 100 }, ProjectPageSchema);
+        const page: z.infer<typeof ProjectPageSchema> = await call('t3_project_list', { cursor, limit: 100, ...(environmentId !== undefined && { environmentId }) }, ProjectPageSchema);
         projects.push(...page.projects);
         cursor = page.nextCursor;
       }
@@ -320,6 +342,8 @@ function t3Over(client: Client): T3 {
       runtimeMode: launch.runtimeMode,
       interactionMode: 'default',
       clientRequestId: launch.clientRequestId,
+      ...(launch.environmentId !== undefined && { environmentId: launch.environmentId }),
+      ...(launch.delegatedFrom && { delegatedFrom: launch.delegatedFrom }),
     }, LaunchedSchema),
     launchScratch: (thread) => call('t3_thread_launch', {
       title: thread.title,
