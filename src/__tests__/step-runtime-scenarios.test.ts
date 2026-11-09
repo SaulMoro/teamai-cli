@@ -1720,6 +1720,24 @@ describe('the stdio step runtime client', () => {
     }
   });
 
+  it('sends no wake to a runtime opened only to recover, whatever its init says', async () => {
+    // A runtime that offers wake in every mode, and would wake on any.
+    const always = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
+      const request = JSON.parse(line);
+      const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+      if (request.type === 'init') write({ type: 'init', ok: true, can: {}, wake: true });
+      if (request.type === 'wake') { write({ op: request.op, event: 'accepted' }); write({ op: request.op, event: 'woken', where: 'anywhere' }); }
+    });`;
+    const runtime = stdioStepRuntime({ name: 'always', command: process.execPath, args: ['-e', always] });
+
+    try {
+      expect(await runtime.init({ options: {}, mode: 'recover' })).toMatchObject({ ok: true });
+      expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, {})).toMatchObject({ kind: 'failed', failure: { code: 'wake_unavailable' } });
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it('ends a wake lost when the runtime stops after accepting it, since the member may still launch', async () => {
     const acceptsThenExits = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
       const request = JSON.parse(line);

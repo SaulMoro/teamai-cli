@@ -168,7 +168,9 @@ export interface StepRuntime {
   prompt(request: PromptRequest, events: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>): Promise<PromptEnd>;
   /**
    * Launches a fleet member of `pool` on another machine, for a runtime whose `init` answered `wakes`, and forgets it:
-   * the runtime never follows, settles or stops what it woke. At-least-once: the fleet record keeps one claim.
+   * the runtime never follows, settles or stops what it woke. At-least-once: the fleet record keeps one claim. Nothing
+   * bounds a wake once the runtime accepted it, since it has no place and no deadline: the caller cancels one it stops
+   * waiting for.
    */
   wake?(request: Omit<WakeRequest, 'type'>, events: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>): Promise<WakeEnd>;
   /** Stops operation `op` and every process it started. Its `exec` or `prompt` then ends `cancelled`. */

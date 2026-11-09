@@ -109,7 +109,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
   const prompting = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<PromptEnd> }>();
   const waking = new Map<string, { join: (events: Parameters<NonNullable<StepRuntime['wake']>>[1]) => Promise<WakeEnd> }>();
-  // Whether the runtime's init offered `wake`: one that did not is sent none.
+  // Whether the runtime's init for new work offered `wake`: one that did not, or answered only to recover, is sent none.
   let offersWake = false;
   // Operations this connection cancelled: a cancel may race their end, and each cancel is answered with an end.
   const cancelSent = new Set<string>();
@@ -180,7 +180,6 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     const { message } = parsed;
 
     if ('type' in message) {
-      offersWake = message.ok && message.wake === true;
       onInit?.(message.ok
         ? {
           ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }), ...(message.ownLogins && { ownLogins: message.ownLogins }), ...(message.wake === true && { wakes: true }),
@@ -342,6 +341,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       return new Promise<Initialized>((resolve) => {
         const settle = (reply: Initialized): void => {
           clearTimeout(timer);
+          offersWake = reply.ok && reply.wakes === true && mode !== 'recover';
           resolve(reply);
         };
 
