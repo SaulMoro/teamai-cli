@@ -853,6 +853,46 @@ describe('skill driver', () => {
     expect(execFileSync('git', ['log', '--format=%s', `teamai/${run}/work/p1`], { cwd: dir, encoding: 'utf8' }).trim().split('\n')).toHaveLength(3);
   });
 
+  it('resumes a run whose skill state names the session host as earlier versions stored it', async () => {
+    const harness = await skillHarness({ change: `schemaVersion: v1alpha1
+name: change
+description: Write a change
+invoke: allow
+steps:
+  - id: work
+    workspace: new
+    prompt: Write the change.
+` });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'change', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const file = skillStatePath(harness.config, run);
+    const Stored = z.object({ host: z.unknown() }).passthrough();
+    // What an earlier version kept before the session host question was answered, and after h3.
+    const pending = Stored.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    expect(pending.host).toEqual({ kind: 'pending', hasPromptStep: true });
+    fs.writeFileSync(file, JSON.stringify({ ...pending, host: { kind: 'pending' } }));
+    const chosen = await harness.call({ kind: 'choose', run, choice: 'h3' });
+    if (!('data' in chosen) || !('turn' in chosen.data)) throw new Error(JSON.stringify(chosen));
+    expect(Stored.parse(JSON.parse(fs.readFileSync(file, 'utf8'))).host).toEqual({ kind: 'chosen', id: 'h3', children: 'parallel', places: 'host' });
+    const [place] = chosen.data.turn.actions;
+    if (place?.kind !== 'place') throw new Error(JSON.stringify(chosen));
+    const dir = path.join(harness.root, 'hosts', 'place');
+    execFileSync('git', ['worktree', 'add', '-q', '--detach', dir, place.start], { cwd: harness.work });
+    const adopted = await harness.call({ kind: 'adopt', run, attempt: place.attempt, dir });
+    if (!('data' in adopted) || !('turn' in adopted.data)) throw new Error(JSON.stringify(adopted));
+    const [write] = adopted.data.turn.actions;
+    if (write?.kind !== 'dispatch') throw new Error(JSON.stringify(adopted));
+    await harness.call({ kind: 'ack', run, attempt: write.attempt });
+    fs.writeFileSync(path.join(dir, 'change.txt'), 'written\n');
+    const result = /Write `([^`]+result\.json)`/.exec(fs.readFileSync(write.brief, 'utf8'))?.[1];
+    if (!result) throw new Error('the brief names no result file');
+    fs.writeFileSync(result, JSON.stringify({ kind: 'output', output: 'Wrote the change.', changed: ['change.txt'] }));
+    await harness.call({ kind: 'report', run, attempt: write.attempt, role: 'agent', modelUnavailable: false });
+    expect(await harness.call({ kind: 'next', run, wait: false })).toMatchObject({ data: { turn: { status: 'done', actions: [{ kind: 'done', outcome: 'succeeded' }] } } });
+  });
+
   it('does not run a command in an adopted place that is already dirty', async () => {
     const commands: string[] = [];
     const harness = await skillHarness({ change: `schemaVersion: v1alpha1
