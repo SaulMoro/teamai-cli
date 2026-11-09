@@ -2076,6 +2076,33 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     expect(infos).toHaveBeenCalledWith(`Left attempt ${owner.attempt} of run ${owner.run} for another member: its step requires env DEPLOY_URL, which workflows.allow.env on this machine does not allow.`);
   }, 60_000);
 
+  it('says on the offer why it left it, once, and the owner\'s wait shows that reason once, naming the member', async () => {
+    const owner = await ownerOf({ workflow: SCOPED, command: SCOPED_COMMAND, files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, isSandbox: true });
+    const { exec } = await owner.open();
+    void exec(newOpId());
+    await owner.record();
+    await readableReportsWorktree(owner.bob.config);
+    owner.bob.config.workflows = { tools: {}, allow: { env: ['NPM_TOKEN'] } };
+    vi.spyOn(log, 'info').mockImplementation(() => {});
+    const warns = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const bob = await installOwner(owner.bob.config);
+    const take = () => takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: bob, secrets: {}, place: { command: { kind: 'here' } } });
+    const why = 'its step requires env DEPLOY_URL, which workflows.allow.env on this machine does not allow';
+
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    const left = await owner.record();
+    expect(left).toMatchObject({ state: 'offered', left: [{ member: bob, why }] });
+    // The same reason again is on the offer already: the member writes nothing.
+    await readableReportsWorktree(owner.bob.config);
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(await owner.record()).toMatchObject({ write: left?.write });
+
+    const shown = `Fleet member ${bob.user} left step "work" of run ${owner.run} for another member of pool default: ${why}. The step waits for a member that can run it; to stop waiting, run teamai workflow cancel ${owner.run}.`;
+    expect(await until(() => warns.mock.calls.some(([message]) => message === shown), 10_000)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(warns.mock.calls.filter(([message]) => message === shown)).toHaveLength(1);
+  }, 60_000);
+
   it('runs a prompt step\'s tool with the env its lease scopes, as it does a command', async () => {
     vi.stubEnv('GH_TOKEN', 'member-token');
     const owner = await ownerOf({ workflow: SCOPED_PROMPT, tools: ['claude'], files: { 'env/env.yaml': 'variables:\n  - key: DEPLOY_URL\n    value: https://deploy.example\n' }, isSandbox: true });

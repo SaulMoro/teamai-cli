@@ -529,6 +529,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
   let cancelledAt: number | undefined;
   // The gate the member asks, put to this driver's person once: `answer` once the person answered.
   let asked: Asked | undefined;
+  // Each reason a member gave on the offer for leaving it, shown once, by member and reason.
+  const shownLeft = new Set<string>();
   // A record that does not change is read less often, down to a third of stale_after, so a staleness is seen in time.
   const slowestPollMs = Math.min(RECORD_POLL_MAX_MS, Math.max(RECORD_POLL_MS, Math.floor(staleAfterMs / 3)));
   let pollMs = RECORD_POLL_MS;
@@ -559,6 +561,14 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
       if (taken) return failed(taken);
 
       return { kind: 'cancelled', message: `Step "${step}" was cancelled, and the fleet member ${record.member.user} that ran it stopped it.${record.pushed === record.start ? '' : ` Its work up to ${record.pushed} is kept.`}`, ...(record.tokens && { tokens: record.tokens }) };
+    }
+
+    for (const { member, why } of record?.state === 'offered' ? record.left ?? [] : []) {
+      const key = `${member.id}\u0000${why}`;
+
+      if (shownLeft.has(key)) continue;
+      shownLeft.add(key);
+      log.warn(`Fleet member ${member.user} left step "${step}" of run ${run} for another member of pool ${pool}: ${why}. The step waits for a member that can run it; to stop waiting, run teamai workflow cancel ${run}.`);
     }
 
     if (record !== undefined && record.write !== lastSeen?.write) {

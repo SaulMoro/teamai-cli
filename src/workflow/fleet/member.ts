@@ -19,7 +19,7 @@ import type { StepRuntime } from '../runtimes/step-runtime.js';
 import { shellArgv, STOPPED_EXIT_CODE } from '../shell-command.js';
 import { teamCommitReach } from '../cache.js';
 import { retryCommand } from '../engine.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '../runtimes/step-runtime.js';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
@@ -298,6 +298,10 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
 
     if (lacks !== undefined) {
       log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: ${lacks}.`);
+      const said = await leaveOffer(config, offer, { member, why: lacks, secrets });
+
+      // An offer that changed meanwhile is read again at the next take, which says the reason over it then.
+      if (!said.ok && said.error.code !== 'state_moved') log.warn(`Attempt ${offer.attempt} of run ${offer.run} does not say why this member left it: ${said.error.message}`);
       continue;
     }
 

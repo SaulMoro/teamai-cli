@@ -1691,7 +1691,7 @@ while :; do teamai workflow resume --next --pool build; sleep 60; done
 
 成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>`（团队的或 teamai 自带的定义，从不读 `~/.teamai/drivers/`）时，成员在该驱动里第一个能运行命令的运行时上运行命令步骤（例如沙箱），只带步骤自己的 env，在第一个能运行提示词的运行时上运行提示词步骤；不带它，或驱动的第一个运行时是 `local` 时，就在本机运行。成员按它自己那份步骤定义，像本地驱动一样限定步骤的 env：步骤 `requires.env` 列出的每个键取自成员的团队 env，团队的其他键都不给，严格沙箱下也不给代码托管平台的令牌；步骤的 `requires.env` 不在它 `workflows.allow.env` 允许范围内时，成员会跳过它。带 `requires.env` 的步骤只有在 fleet 条目的 `can` 声明 `env: true` 或 `env: member` 时才交给它。`env: true` 还要求你的安装上有每个值；`env: member` 不要求：成员从它自己的团队 env 给出每个值，只有在本机运行的工作流 setup 需要你的安装上有它的值。成员没有某个键的值时，会跳过该尝试并记录原因，例如 `its step requires env DEPLOY_KEY, which has no value here: …`。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。
 
-每条记录都写明写入它的 teamai 版本。teamai 遇到更新格式的记录时：作为成员会跳过这个尝试，作为所有者会让步骤以 `fleet_record_newer` 失败，并说明要升级到哪个版本。尝试在外时，你的驱动每秒读一次它的记录；记录没有变化时读得越来越少，最慢每 30 秒一次。
+每条记录都写明写入它的 teamai 版本。teamai 遇到更新格式的记录时：作为成员会跳过这个尝试，作为所有者会让步骤以 `fleet_record_newer` 失败，并说明要升级到哪个版本。尝试在外时，你的驱动每秒读一次它的记录；记录没有变化时读得越来越少，最慢每 30 秒一次。成员如果运行不了这个步骤（缺少标签、env 或工具，或找不到运行的定义），会把它留给其他成员，并在记录上写明原因；你的驱动会把每个成员的原因打印一次。
 
 **升级一个池。** 请把你的安装和池里的每个成员一起升级。记录现在是格式 2，旧版 teamai 读不了；这个 teamai 也不读旧版写的记录：成员会跳过它，所有者会让步骤以 `fleet_record_unreadable` 失败，并写明写入它的 teamai。以前只接命令步骤的 fleet 条目，现在也接提示词步骤，用它 `can.tools` 列出的工具；没有列出时，就是 teamai 能启动的所有工具。成员只有在自己的环境里有该步骤的工具时才接提示词尝试，查找方式和本地驱动一样：先看步骤自己的 `tool`，再看 `workflows.tools` 和你的 AI 工具，然后在 PATH 上找；或者在它 `--driver` 中运行该步骤的运行时的工具里找。其他成员会跳过它并记录原因，例如 `Left attempt a2f0a5441 of run rf03e08d02eec400b for another member: its prompt step runs on claude, which is not on PATH here.`。要让提示词步骤不交给某个池，就在 `can.tools` 下列出它拥有的工具，或者设置 `can.prompt: false`。
 

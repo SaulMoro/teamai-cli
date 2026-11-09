@@ -141,6 +141,13 @@ const RECORD_VERSION = 2;
 /** What any teamai's record says of its format, whatever else it holds. */
 const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined) });
 
+/** What a member's reason for leaving an offer keeps, and how many members' reasons an offer keeps, the newest. */
+const LEFT_WHY_MAX = 400;
+const LEFT_MAX = 16;
+
+/** Why `member` left an offer, which the owner's wait shows. */
+const LeftSchema = z.strictObject({ member: OwnerSchema, why: z.string().max(LEFT_WHY_MAX), at: z.string() });
+
 const OfferedSchema = z.strictObject({
   /** The record's format. A teamai that reads a newer one refuses it, naming the teamai that wrote it (`teamai`). */
   version: z.literal(RECORD_VERSION),
@@ -163,6 +170,8 @@ const OfferedSchema = z.strictObject({
   /** The definitions the run executes, which a member reads from its own team repository and checks the lease against. */
   definition: RunDefinitionSchema.strict(),
   values: LeaseValuesSchema,
+  /** Why members that read the offer left it, one entry per member, newest last: the owner's wait shows each once. */
+  left: z.array(LeftSchema).max(LEFT_MAX).optional(),
   state: z.literal('offered'),
 });
 
@@ -472,6 +481,25 @@ export async function claimAttempt(config: LocalConfig, offered: Offered, member
   if (!written.ok && written.error.code === 'state_moved') await fs.rm(marker, { force: true });
 
   return written.ok ? { ok: true, value: claim } : written;
+}
+
+/**
+ * Says on offer `offered` why `member` leaves it, so the owner's wait shows it: `why` cut to what the record keeps, one
+ * entry per member, newest last. An offer that holds the same reason already is not written again. The write replaces
+ * the offer's write id, so it lands only over that offer, and answers state_moved once the offer changed.
+ */
+export async function leaveOffer(config: LocalConfig, offered: Offered, { member, why, secrets }: { member: HandoffOwner; why: string; secrets: Record<string, string> }): Promise<Written<void>> {
+  const kept = why.length <= LEFT_WHY_MAX ? why : `${why.slice(0, LEFT_WHY_MAX - 1)}…`;
+
+  if (offered.left?.some((entry) => entry.member.id === member.id && entry.why === kept)) return { ok: true, value: undefined };
+  const left = [...(offered.left ?? []).filter((entry) => entry.member.id !== member.id), { member, why: kept, at: new Date().toISOString() }].slice(-LEFT_MAX);
+  const record: Offered = { ...offered, write: randomUUID(), left };
+  // A reason names what this machine lacks, which may hold one of its paths or values.
+  const unfit = unpublishable(record, secrets);
+
+  if (unfit) return { ok: false, error: unfit };
+
+  return writeRecord(config, record, { replaces: offered.write, message: `[teamai] Leave attempt ${offered.attempt} of run ${offered.run}` });
 }
 
 /**
