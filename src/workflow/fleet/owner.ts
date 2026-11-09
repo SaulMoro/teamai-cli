@@ -752,6 +752,12 @@ async function openWaker(wake: { use: string; options?: RuntimeOptions | undefin
   return { waker: { use: wake.use, runtime: opened.runtime, wake: wakes } };
 }
 
+/**
+ * The command that takes one attempt of `pool`. A woken member's first message starts with exactly this: the rule that
+ * lets a woken agent run it without asking matches that prefix.
+ */
+const takeCommand = (pool: string): string => `teamai workflow resume --next --pool ${pool}`;
+
 /** The wake of one offer: shown each record the owner reads, and stopped once the owner stops waiting. */
 type WakeOnOffer = { seen(record: FleetRecord | 'absent'): Promise<void>; stop(): Promise<void> };
 
@@ -767,7 +773,7 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
   let isDone = false;
 
   const settle = async (end: WakeEnd, { pool, step, repository }: { pool: string; step: string; repository: string }): Promise<void> => {
-    const take = `teamai workflow resume --next --pool ${pool}, in a checkout of ${repository}`;
+    const take = `${takeCommand(pool)}, in a checkout of ${repository}`;
 
     switch (end.kind) {
       case 'woken': {
@@ -779,8 +785,8 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
 
       case 'failed':
       case 'lost':
-        // The owner stopped it: the offer was taken, or the wait ended.
-        if (end.kind === 'failed' && end.failure.code === 'cancelled') return;
+        // The owner stopped it: the offer was taken, or the wait ended, whether the runtime confirmed the cancel or not.
+        if (isDone || (end.kind === 'failed' && end.failure.code === 'cancelled')) return;
         log.warn(`Fleet pool ${pool} could not wake a member for step "${step}" of run ${run} through ${waker.use} (${end.failure.code}): ${end.failure.message} The step waits for a member someone starts: ${take}.`);
 
         return;
@@ -814,7 +820,7 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
 
       const unsent = (why: string): void => {
         isDone = true;
-        log.warn(`Fleet pool ${pool} could not wake a member for step "${step}" of run ${run} through ${waker.use}: ${why} The step waits for a member someone starts: teamai workflow resume --next --pool ${pool}, in a checkout of the business repository.`);
+        log.warn(`Fleet pool ${pool} could not wake a member for step "${step}" of run ${run} through ${waker.use}: ${why} The step waits for a member someone starts: ${takeCommand(pool)}, in a checkout of the business repository.`);
       };
 
       // The URL as configured, which the machine woken knows the repository by: no insteadOf rewrites it into one of this machine's.
@@ -832,8 +838,8 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
         return unsent(`teamai could not note the wake before sending it, so it sent none: ${error instanceof Error ? error.message : String(error)}`);
       }
 
-      const take = `teamai workflow resume --next --pool ${pool}`;
-      const message = `Take one attempt of fleet pool ${pool}: in a checkout of ${repository}, run \`${take}\` once, then end, whether it ran a step or found nothing to claim.`;
+      // The command first and alone on its line, then where to run it and to end.
+      const message = `${takeCommand(pool)}\n\nRun that command once, in a checkout of ${repository}, then end, whether it ran a step or found nothing to claim.`;
       const end = waker.wake({ op, pool, repository, message, title: `teamai: step ${step} of run ${run}, fleet pool ${pool}` }, {});
 
       const current = { op, settled: Promise.resolve(), isSettled: false };

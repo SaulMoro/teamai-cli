@@ -581,9 +581,9 @@ describe('the fleet', () => {
     expect(listed.stdout.split('\n').find((line) => line.startsWith(run) && line.includes(' wake ')), said(listed)).toMatch(/ offered .* toy\s*$/);
 
     // The member the wake started runs what its message says, in a checkout of the repository it names.
-    const command = /`teamai ([^`]+)`/.exec(wake?.message ?? '')?.[1] ?? '';
-    expect(command).toBe('workflow resume --next --pool wake');
-    const taken = await teamai('bob', command.split(' '));
+    const [command = ''] = (wake?.message ?? '').split('\n');
+    expect(command).toBe('teamai workflow resume --next --pool wake');
+    const taken = await teamai('bob', command.split(' ').slice(1));
     expect(taken.envelope(), said(taken)).toMatchObject({ data: { ran: { run, step: 'build', exit_code: 0 } } });
     const done = await started;
     expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
