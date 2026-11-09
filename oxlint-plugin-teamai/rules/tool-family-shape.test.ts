@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { reachesSource, sourceModules } from '../imports.js';
 import { ruleHarness } from '../test/harness.ts';
+import { FAMILY, PROCESS_STARTERS } from '../utils.js';
 import { familySource } from './tool-family-shape.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -27,6 +29,14 @@ export const run = () => [execCommand('sqlite3', []), require('child_process')];
   expect(output).toContain('imports @teamai/tool-core/exec');
   expect(output).toContain('imports child_process');
 }, { filename: 'packages/tool-codex/src/launch.ts' });
+
+rule.invalid('rejects a workspace module that starts a process for its caller, and cross-spawn', `import { execVersion } from '@teamai/tool-core/detect';
+import spawn from 'cross-spawn';
+export const detect = { zzz: () => execVersion('zzz') };
+export const run = () => spawn('zzz');`, (output) => {
+  expect(output).toContain('imports @teamai/tool-core/detect');
+  expect(output).toContain('imports cross-spawn');
+}, { filename: 'packages/tool-zzz/src/detect.ts' });
 
 rule.valid('allows the types of tool-core\'s exec module', `import type { ExecResult } from '@teamai/tool-core/exec';
 export const ok = (result: ExecResult) => result.code === 0;`, { filename: 'packages/tool-codex/src/launch.ts' });
@@ -86,4 +96,36 @@ it('lists in its stillSpawns option only files that exist in this checkout', () 
   const [, options] = z.tuple([z.literal('error'), z.object({ stillSpawns: z.array(z.string()).min(1) })]).parse(rules['teamai/tool-family-shape']);
 
   for (const file of options.stillSpawns) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
+});
+
+/**
+ * The module names each workspace package but a family exports, with the source file behind each; a `*` export gives
+ * one per file. Families are left out: only @teamai/tool-definitions may import one (teamai/package-boundaries).
+ */
+function workspaceModules(): Array<[string, string]> {
+  const ManifestSchema = z.object({ name: z.string(), exports: z.record(z.string(), z.string()).optional() });
+
+  return fs.readdirSync(path.join(REPO, 'packages')).flatMap((folder) => {
+    const file = path.join(REPO, 'packages', folder, 'package.json');
+
+    if (FAMILY.test(folder) || !fs.existsSync(file)) return [];
+    const { name, exports = {} } = ManifestSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+
+    return Object.entries(exports).filter(([, target]) => target.endsWith('.ts')).flatMap(([subpath, target]): Array<[string, string]> => {
+      if (!target.includes('*')) return [[`${name}${subpath.slice(1)}`, path.join(REPO, 'packages', folder, target)]];
+      const dir = path.join(REPO, 'packages', folder, path.dirname(target));
+
+      return fs.readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'))
+        .map((entry): [string, string] => [`${name}${subpath.slice(1).replace('*', entry.replace(/\.ts$/, '').split(path.sep).join('/'))}`, path.join(dir, entry)]);
+    });
+  });
+}
+
+it('lists every workspace module that starts a process, so a new wrapper of one is caught', () => {
+  const NODE_STARTERS = new Set(['child_process', 'node:child_process', 'cross-spawn']);
+  const starts = (file: string) => sourceModules(file, false).some((specifier) => NODE_STARTERS.has(specifier));
+  const starters = workspaceModules().filter(([, file]) => reachesSource(file, starts, false) !== undefined).map(([name]) => name);
+
+  expect(starters).toContain('@teamai/tool-core/exec');
+  expect(starters.filter((name) => !PROCESS_STARTERS.has(name))).toEqual([]);
 });

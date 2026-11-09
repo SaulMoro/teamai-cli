@@ -10,10 +10,25 @@ import { z } from 'zod';
 export const FAMILY = /^tool-(?!(?:core|testing|definitions|launch)$)/;
 
 /**
- * The modules whose values start a process: Node's, and the workspace's spawn and exec helpers, which a new helper there
- * joins. `@teamai/shared/exec` is where the helpers move out of tool-core, so the move keeps them covered.
+ * The modules whose values start a process: Node's and `cross-spawn`, and every workspace module but a family's that
+ * reaches one of them, which `tool-family-shape.test.ts` derives from the source graph so a new wrapper fails until it is listed here.
+ * `@teamai/shared/exec` is where the exec helpers move out of tool-core, so the move keeps them covered.
  */
-export const PROCESS_STARTERS = new Set(['child_process', 'node:child_process', '@teamai/tool-core/exec', '@teamai/shared/exec']);
+export const PROCESS_STARTERS = new Set([
+  'child_process',
+  'node:child_process',
+  'cross-spawn',
+  '@teamai/shared/exec',
+  '@teamai/runtime-testing/connect',
+  '@teamai/runtime-testing/leaks',
+  '@teamai/shared/process-group',
+  '@teamai/tool-core/cli-path',
+  '@teamai/tool-core/detect',
+  '@teamai/tool-core/exec',
+  '@teamai/tool-core/formats/codex',
+  '@teamai/tool-core/sessions/sqlite',
+  '@teamai/tool-testing/fake-agent',
+]);
 
 /**
  * The linted file's path with `/` separators, so a rule can scope itself on any platform.

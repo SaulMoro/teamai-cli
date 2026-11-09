@@ -50,8 +50,8 @@ export default defineRule({
   meta: {
     type: 'problem',
     docs: { description: 'Keep a tool family to data and readers: it builds argv and never starts a process, and its index.ts exports only `family`.' },
-    // `stillSpawns`: family files, from the repository root, that still start a process to read the tool's sessions,
-    // until that read moves behind a port the core gives. A new file starts no process; the list only shrinks: an entry
+    // `stillSpawns`: family files, from the repository root, that still start a process to read the tool's sessions or
+    // its version, until that read moves behind a port the core gives. A new file starts no process; the list only shrinks: an entry
     // that no longer starts one, or whose file is gone, fails until it is removed.
     schema: [{ type: 'object', properties: { stillSpawns: { type: 'array', items: { type: 'string' } } }, required: ['stillSpawns'], additionalProperties: false }],
   },

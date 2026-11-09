@@ -120,8 +120,12 @@ function staticModule(statement, includeTypes) {
   return includeTypes || statement.exportKind !== 'type' ? statement.source?.value : undefined;
 }
 
-/** @param {string} file @param {boolean} includeTypes */
-function sourceModules(file, includeTypes) {
+/**
+ * The modules `file` imports at its top level, its type-only imports too when `includeTypes`, and with them its dynamic
+ * imports and vi.mock calls.
+ * @param {string} file @param {boolean} includeTypes
+ */
+export function sourceModules(file, includeTypes) {
   const source = fs.readFileSync(file, 'utf8');
   const key = `${file}:${includeTypes}`;
   const cached = dependencyCache.get(key);
