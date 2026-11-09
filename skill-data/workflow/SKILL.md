@@ -92,7 +92,7 @@ Done when you reported `message`.
 
 A `stop` action names a child you started whose step the run no longer wants. `why` says why: `cancelled` or `timeout`. For each one:
 
-1. When the child named `title` still runs, tell it to stop its work and end. A stop of a step that went on in an earlier step's child names that child.
+1. When the child named `title` still runs, tell it to stop its work and end. A stop of a step that went on in an earlier step's child names that child: tell it to stop this step's work, and do not end it, since a later step may go on in its conversation.
 2. Run `report`. The action stays in every turn until you do.
 
 Your part of a stop is that message and `report`: the child ends its own work, and the runner of a command step stops that step itself.
