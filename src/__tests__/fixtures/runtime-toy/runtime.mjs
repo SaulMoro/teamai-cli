@@ -430,6 +430,22 @@ function promptEnded(op, outcome) {
   return { op, event: state, ...rest };
 }
 
+/**
+ * Whether this toy records how prompt `op` ended. A toy whose teamai was killed still waits on the agent beside the one
+ * the restarted teamai sent the prompt to again, and both see it end: the first to claim the end records it. A claim it
+ * cannot write at all is its own, as a lone toy's is.
+ */
+function claimsEnd(op) {
+  try {
+    fs.mkdirSync(file('ended'), { recursive: true });
+    fs.closeSync(fs.openSync(file('ended', op), 'wx'));
+
+    return true;
+  } catch (error) {
+    return error?.code !== 'EEXIST';
+  }
+}
+
 /** Records how the prompt's agent ended and says so, or waits for it. */
 function settlePrompt(op) {
   const record = readOp(op);
@@ -437,6 +453,23 @@ function settlePrompt(op) {
 
   if (outcome === undefined) {
     working.set(op, setTimeout(() => settlePrompt(op), Math.max(record.startedAt + (options.agent.hold_ms ?? 0) - Date.now(), 25)));
+
+    return;
+  }
+
+  if (!record.outcome && !claimsEnd(op)) {
+    // Another toy records this end: say it as that toy records it, once it has.
+    const recorded = readOp(op)?.outcome;
+
+    if (recorded === undefined) {
+      working.set(op, setTimeout(() => settlePrompt(op), 25));
+
+      return;
+    }
+
+    working.delete(op);
+    send(promptEnded(op, recorded));
+    exitWhenIdle();
 
     return;
   }
