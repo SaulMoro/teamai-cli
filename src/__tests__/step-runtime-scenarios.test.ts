@@ -28,6 +28,8 @@ import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js'
 import { claimAttempt, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from '../workflow/store.js';
 import { readableReportsWorktree } from '../utils/reports-branch.js';
+import { acquireLock, releaseLock } from '../update.js';
+import { getWorktreeDir, REPORTS_LOCK_FILENAME, REPORTS_WORKTREE_DIRNAME } from '../types.js';
 import { shellArgv } from '../workflow/shell-command.js';
 import { getRepoIdentity } from '../session-flow/sync.js';
 
@@ -2511,6 +2513,25 @@ done`);
     expect(await ended).toEqual({ kind: 'cancelled' });
     expect(await owner.record()).toMatchObject({ state: 'withdrawn' });
   });
+
+  it('withdraws the attempt once teamai-reports frees when the run cancels the step while another write holds it, rather than leaving the offer out', async () => {
+    const owner = await ownerOf();
+    const { runtime, exec } = await owner.open();
+    const op = newOpId();
+    const ended = exec(op);
+    await owner.record();
+    // Another teamai process of this install writing teamai-reports, as a cancel's own publish does.
+    const lock = path.join(path.dirname(getWorktreeDir(owner.alice.config, REPORTS_WORKTREE_DIRNAME)), REPORTS_LOCK_FILENAME);
+    expect(await acquireLock(lock)).toBe(true);
+
+    const cancelled = runtime.cancel(op);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await releaseLock(lock);
+    await cancelled;
+
+    expect(await ended).toEqual({ kind: 'cancelled' });
+    expect(await owner.record()).toMatchObject({ state: 'withdrawn' });
+  }, 60_000);
 
   it('runs any other exec of the place, such as setup, on this host', async () => {
     const owner = await ownerOf();
