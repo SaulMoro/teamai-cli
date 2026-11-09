@@ -2,7 +2,7 @@ import type { OpId, RuntimeFailure, RuntimeMessage, WakeRequest } from '@teamai/
 import { threadLink } from './conversation.js';
 import type { Serving, Session } from './runtime.js';
 import { DRIVER_NAMES } from './sessions.js';
-import { T3Error, type EnvironmentLink, type Launch, type Project, type T3 } from './t3.js';
+import { T3Error, type EnvironmentLink, type Launch, type Project, type StepMode, type T3 } from './t3.js';
 
 // ─── Waking a fleet member ───
 //
@@ -22,6 +22,37 @@ const NEXT_STEP = 'Link a machine in T3 Code, and add the repository there as a 
 /** What the person does while T3 Code has linked environments off, which they are until turned on in its Labs settings. */
 const TURN_ON = 'Turn on Linked environments in T3 Code\'s Labs settings, link the machine, and add the repository there as a project.';
 
+/** The Claude permission rule that lets a member run teamai's wake command without asking. */
+const RESUME_ALLOW_RULE = 'Bash(teamai workflow resume:*)';
+
+/** The mode a woken member launches in, and the line its message starts with, when that mode asks first. */
+type MemberMode = { runtimeMode: StepMode; firstLine: string | undefined };
+
+/**
+ * How a woken member runs, and the line its message starts with. Never full access: nobody chose it for that machine.
+ * In Auto, T3 runs teamai's command without asking; a stricter mode asks first, so the line says what to approve.
+ */
+function memberMode(mode: StepMode | undefined): MemberMode {
+  switch (mode) {
+    case undefined:
+    case 'auto':
+    case 'full-access':
+      return { runtimeMode: 'auto', firstLine: undefined };
+    case 'approval-required':
+      return { runtimeMode: mode, firstLine: asksFirst('Supervised') };
+    case 'auto-accept-edits':
+      return { runtimeMode: mode, firstLine: asksFirst('Auto-accept edits') };
+    default: {
+      const unhandled: never = mode;
+
+      return unhandled;
+    }
+  }
+}
+
+function asksFirst(label: string): string {
+  return `This thread runs in ${label} mode, so it asks before it runs teamai's command below: approve that command, or allow it on this machine with the permission rule ${RESUME_ALLOW_RULE} in this checkout's .claude/settings.local.json.`;
+}
 
 /**
  * The repository a git remote URL names, as T3 keys a project's repository: `host/path`, lowercased, with no scheme,
@@ -158,9 +189,12 @@ export function wakes({ serving }: { serving: Serving }) {
     if (waking.cancelled) return { kind: 'cancelled' };
     waking.launched = true;
 
+    const { runtimeMode, firstLine } = memberMode(s.runtimeMode);
+    const message = [firstLine, request.message, END_OF_WAKE].filter((line) => line !== undefined).join('\n\n');
+
     const launched = await s.t3.launch({
-      title, message: `${request.message}\n\n${END_OF_WAKE}`, projectId: project.id, workspace: { type: 'root' }, environmentId: link.environmentId,
-      modelSelection, runtimeMode: s.runtimeMode ?? 'auto', clientRequestId: request.op, ...(from && { delegatedFrom: from }),
+      title, message, projectId: project.id, workspace: { type: 'root' }, environmentId: link.environmentId,
+      modelSelection, runtimeMode, clientRequestId: request.op, ...(from && { delegatedFrom: from }),
     });
 
     return {
