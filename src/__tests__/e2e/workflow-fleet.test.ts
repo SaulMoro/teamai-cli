@@ -859,7 +859,7 @@ describe('the fleet', () => {
   it.each([{ parallel: 'workflows.max_parallel: 4', isDefault: false }, { parallel: 'the default max_parallel', isDefault: true }])('stops the command a killed local driver left running when the run is cancelled, with $parallel', async ({ isDefault }) => {
     const config = path.join(dataHomeOf('alice'), 'config.yaml');
     const kept = fs.readFileSync(config, 'utf8');
-    if (isDefault) fs.writeFileSync(config, kept.replace('workflows:\n  max_parallel: 4\n', ''));
+    if (isDefault) fs.writeFileSync(config, kept.replace('\n  max_parallel: 4\n', '\n'));
     const pidFile = path.join(homeOf('alice'), 'hold.pid');
     fs.rmSync(pidFile, { force: true });
     const before = new Set(runsOf('alice'));
