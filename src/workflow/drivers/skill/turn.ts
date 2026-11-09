@@ -6,9 +6,9 @@ import { offeredToPerson } from '../../handoff.js';
 import type { Judging } from '../../protocol.js';
 import type { AttemptId, RunId } from '../../store.js';
 import type { OutputSchema, WorkflowFailure } from '../../types.js';
-import { HOST_CHOICES, HOST_PROFILES, HOST_QUESTION, type HostChoice } from './host-profiles.js';
+import { SESSION_HOST_CHOICES, SESSION_HOST_PROFILES, SESSION_HOST_QUESTION, type SessionHostChoice } from './session-host-profiles.js';
 import {
-  ackLiteral, adoptLiteral, chooseHostLiteral, localStartLiteral, nextLiteral, personRespondLiteral, pollLiteral, reportLiteral, respondLiteral, resumeLiteral,
+  ackLiteral, adoptLiteral, chooseSessionHostLiteral, localStartLiteral, nextLiteral, personRespondLiteral, pollLiteral, reportLiteral, respondLiteral, resumeLiteral,
   skillResumeLiteral, takeoverLiteral, unavailableLiteral, type Invocation, type Literal,
 } from './literals.js';
 import { childTitle, type AttemptState, type Dispatch, type Gate, type ModelPick, type SkillState, type StopReason, type TurnEvent } from './skill-state.js';
@@ -162,7 +162,7 @@ export interface OfferedAction {
 
 export type Action =
   /** The agent's own answer, once per run with prompt steps: how its host runs a child. */
-  | { kind: 'choose'; about: 'host'; decide: 'agent'; question: string; options: Array<{ id: HostChoice; label: string; run: Literal }>; reference: string }
+  | { kind: 'choose'; about: 'host'; decide: 'agent'; question: string; options: Array<{ id: SessionHostChoice; label: string; run: Literal }>; reference: string }
   | StopAction
   | DispatchAction
   | PlaceAction
@@ -432,9 +432,9 @@ export function scoringWaits(scoring: readonly SkillState[]): boolean {
  */
 function actionsOf(state: SkillState, scoring: readonly SkillState[]): Action[] {
   if (state.host.kind === 'pending') {
-    const options = HOST_CHOICES.map((id) => ({ id, label: HOST_PROFILES[id].label, run: chooseHostLiteral(state.invocation, state.run, id) }));
+    const options = SESSION_HOST_CHOICES.map((id) => ({ id, label: SESSION_HOST_PROFILES[id].label, run: chooseSessionHostLiteral(state.invocation, state.run, id) }));
 
-    return [{ kind: 'choose', about: 'host', decide: 'agent', question: HOST_QUESTION, options, reference: reference('hosts.md') }];
+    return [{ kind: 'choose', about: 'host', decide: 'agent', question: SESSION_HOST_QUESTION, options, reference: reference('hosts.md') }];
   }
 
   const stops = stopsOf(state);

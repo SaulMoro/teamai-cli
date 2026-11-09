@@ -12,7 +12,7 @@ import type { HostPlaceRequest, RunVersion } from '../../protocol.js';
 import { ConfinedRunReportSchema, FailureSchema, TokenUsageSchema } from '../../step-state.js';
 import { AttemptIdSchema, RunIdSchema, skillStatePath, type RunId, type RunLock } from '../../store.js';
 import { KeptLimitSchema } from '../../usage-limits.js';
-import { HOST_CHOICES } from './host-profiles.js';
+import { SESSION_HOST_CHOICES } from './session-host-profiles.js';
 import { INVOCATIONS } from './literals.js';
 import { HITL_MODES } from './preflight.js';
 import type { JudgedBy } from './transitions.js';
@@ -208,7 +208,7 @@ const SkillStateSchema = z.object({
   host: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('none') }),
     z.object({ kind: z.literal('pending'), hasPromptStep: z.boolean().default(true) }),
-    z.object({ kind: z.literal('chosen'), id: z.enum(HOST_CHOICES), children: z.enum(['parallel', 'serial']), places: z.enum(['teamai', 'host']) }),
+    z.object({ kind: z.literal('chosen'), id: z.enum(SESSION_HOST_CHOICES), children: z.enum(['parallel', 'serial']), places: z.enum(['teamai', 'host']) }),
   ]),
   gate: GateSchema.optional(),
   /**

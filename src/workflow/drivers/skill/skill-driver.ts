@@ -19,7 +19,7 @@ import { inProcessClient, invokeDeniedMessage, type ResumeClaim, type WorkflowCl
 import type { SessionApp } from '../../session-apps.js';
 import type { WorkflowFailure } from '../../types.js';
 import { AttemptIdSchema, RunIdSchema, runnerAlive, runsDir, takeRunLock, type AttemptId, type LockTaken, type RunId, type RunLock } from '../../store.js';
-import { canFor, HOST_CHOICES, sessionOffers, type HostChoice } from './host-profiles.js';
+import { canFor, SESSION_HOST_CHOICES, sessionOffers, type SessionHostChoice } from './session-host-profiles.js';
 import { journalCall } from './journal.js';
 import { describeLiteral, invocationOf, type Invocation } from './literals.js';
 import { askFor, attendedReason, ceilingOf, checkStartAnswers, localPromptTool, localReason, neededAnswers, needsTool, type HitlMode } from './preflight.js';
@@ -30,7 +30,7 @@ import { APP_CHECKED_ROWS, describeRow, judgedBy, startRow, type DescribeInput, 
 import { errorOf, type SkillAnswer, type SkillError } from './turn.js';
 
 // What the runs offered on teamai-reports are judged by outside this driver, as a resume through it judges them.
-export { canFor } from './host-profiles.js';
+export { canFor } from './session-host-profiles.js';
 
 export { ceilingOf, isLeft, listOf, localReason, personClauses } from './preflight.js';
 
@@ -52,7 +52,7 @@ export type SkillCall =
   /** `next --takeover`: this session drives the run from now on, as the person agreed; `confirmed` as a resume's. */
   | { kind: 'takeover'; run: RunId; confirmed: boolean }
   /** `next --choice`: the agent's answer to the host question. */
-  | { kind: 'choose'; run: RunId; choice: HostChoice }
+  | { kind: 'choose'; run: RunId; choice: SessionHostChoice }
   /** `next --ack dispatch.<a>`: the child of attempt `a` started. */
   | { kind: 'ack'; run: RunId; attempt: AttemptId }
   /** `next --attempt <a> --adopt <dir>`: the host made `dir`, an absolute path, for the place attempt `a` asked for. */
@@ -249,7 +249,7 @@ const NextOptionsSchema = z.object({
   wait: z.boolean().optional(),
   takeover: z.boolean().optional(),
   confirmed: z.boolean().optional(),
-  choice: z.enum(HOST_CHOICES, { error: `--choice takes the id of a host question option: ${HOST_CHOICES.join(', ')}` }).optional(),
+  choice: z.enum(SESSION_HOST_CHOICES, { error: `--choice takes the id of a host question option: ${SESSION_HOST_CHOICES.join(', ')}` }).optional(),
   ack: z.string().transform((offer, ctx) => {
     const attempt = AttemptIdSchema.safeParse(OFFER.exec(offer)?.[1]);
 

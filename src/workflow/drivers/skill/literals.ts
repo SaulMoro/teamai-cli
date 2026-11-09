@@ -1,7 +1,7 @@
 /** Every command line the skill driver prints, and the permission patterns that pre-approve them. */
 import { z } from 'zod';
 import type { AttemptId, RunId } from '../../store.js';
-import type { HostChoice } from './host-profiles.js';
+import type { SessionHostChoice } from './session-host-profiles.js';
 import type { HitlMode } from './preflight.js';
 
 const LiteralSchema = z.string().brand<'Literal'>();
@@ -132,7 +132,7 @@ export function pollLiteral(invocation: Invocation, run: RunId): Literal {
 }
 
 /** Answers the host question with profile `choice`. */
-export function chooseHostLiteral(invocation: Invocation, run: RunId, choice: HostChoice): Literal {
+export function chooseSessionHostLiteral(invocation: Invocation, run: RunId, choice: SessionHostChoice): Literal {
   return LiteralSchema.parse(`${invocation} workflow next ${run} --driver skill --choice ${choice}`);
 }
 
