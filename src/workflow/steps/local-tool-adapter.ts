@@ -9,10 +9,9 @@ import { resolveCliPath, resolvePathCommand } from '../../utils/cli-path.js';
 import { log } from '../../utils/logger.js';
 import type { toolExtrasFor } from '../../resources/agent-format.js';
 import { stopProcess } from '../../tool-launch/process-stop.js';
-import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../tool-launch/stdout.js';
+import { stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../tool-launch/stdout.js';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
 import { spawnCommand } from '@teamai/tool-core/exec';
-import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../tool-launch/tools.js';
 import { AttemptResult } from '../attempt-result.js';
 import { budgeted } from '../limits.js';
@@ -232,7 +231,7 @@ export function withoutPrompt(message: string, input: LocalToolRun): string {
 
 /** Whether what the tool printed says it stopped on its usage limit: by the kind of its error, else, for one with no kind, by its text. */
 function isUsageLimit(printed: ToolReport | null): printed is ToolReport & { error: string } {
-  return printed?.error !== undefined && (printed.errorKind === undefined ? isUsageLimitText(printed.error) : printed.errorKind === 'usage_limit');
+  return printed?.error !== undefined && stoppedOnUsageLimit(printed, printed.error);
 }
 
 /** A spent usage limit, with the tool's own words, which name the reset when the tool gives it. */
