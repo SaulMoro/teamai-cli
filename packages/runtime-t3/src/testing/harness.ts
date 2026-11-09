@@ -134,6 +134,10 @@ export interface FakeT3Config {
   providersFailOnceAdded?: string;
   /** Provider instance ids the first provider list leaves out, as T3 does before it reloads its settings. */
   unlistedOnce?: string[];
+  /** The environments linked to this one, as T3 lists them. Unset: linked environments are off in T3's Labs settings. */
+  links?: Array<{ environmentId: string; label: string; status: string }>;
+  /** What each linked environment has, by its id: one not here does not answer. */
+  environments?: Record<string, { projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null; repositoryIdentity?: { canonicalKey: string } | null; defaultModelSelection?: { instanceId: string; model: string } | null }>; providers: FakeProvider[] }>;
   /** How long a send answers after it started the thread's turn, in ms. */
   sendMs?: number;
   /** How long after T3 answered a send the thread's turn starts, in ms: until then the thread reads as its earlier run ended. */
@@ -147,6 +151,8 @@ export type FakeCall = z.infer<typeof CallSchema>;
 const ThreadSchema = z.object({
   threadId: z.string(), title: z.string(), message: z.string().optional(), worktreePath: z.string().optional(), projectId: z.string().optional(),
   provider: z.string(), model: z.string().optional(), runtimeMode: z.string().optional(), status: z.string(), settled: z.boolean(),
+  /** The linked environment a forwarded launch started the thread on, and the thread here it was delegated from. */
+  environmentId: z.string().optional(), delegatedFrom: z.object({ environmentId: z.string(), threadId: z.string(), title: z.string() }).optional(),
   /** How many runs the thread had: one per turn a message started. */
   runCount: z.number().optional(),
   /** The thread that delegated this one's task, for a delegated task's thread. */

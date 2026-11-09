@@ -7,6 +7,7 @@ import type { Serving, Session } from './runtime.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, toolOf, type Driver, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings } from './settings.js';
 import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde } from './tool-instances.js';
+import { canWake } from './wake.js';
 import { T3Error, tooOld, type Provider, type T3 } from './t3.js';
 import { within } from './within.js';
 
@@ -139,7 +140,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
     }
 
     try {
-      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout), readThreadModel(connected.t3, options.startedFrom)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
+      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers(), projectAt(connected.t3, checkout), readThreadModel(connected.t3, options.startedFrom), canWake(connected.t3)]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
 
       if (!asking.answered) {
         void connected.t3.close().catch(() => {});
@@ -147,7 +148,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
         return unanswered();
       }
 
-      const [environment, providers, here, fromThread] = asking.value;
+      const [environment, providers, here, fromThread, wakes] = asking.value;
       const old = tooOld(environment);
 
       if (old !== undefined) {
@@ -231,6 +232,8 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
       const defaultTool = [...runs].find(([, provider]) => provider === defaultProvider)?.[0] ?? (onWrapper && runs.has(DRIVERS[defaultDriver].tool) ? DRIVERS[defaultDriver].tool : undefined);
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
+        // A fleet member it launches on a machine linked to this T3 Code.
+        ...(wakes && { wake: true }),
         // Full access is the member's opt-in, and teamai records the isolation of these steps as none.
         ...(parsed.options.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
         ...(Object.keys(unavailable).length > 0 && { unavailable }),

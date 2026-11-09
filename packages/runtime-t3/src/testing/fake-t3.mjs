@@ -21,6 +21,8 @@
 //                               addedInstanceConstraints: the constraints T3 reports for a provider instance the settings add
 //                               providersFailOnceAdded: the provider list fails once, the first time the settings hold this instance
 //                               unlistedOnce: provider instance ids the first provider list leaves out, as T3 before it reloads its settings
+//                               links: the environments linked to this one, { environmentId, label, status }; unset: linked
+//                               environments are off; environments: each linked one's { projects, providers }, by its id
 //                               sendMs: a send answers this long after it started the turn; turnStartsLateMs: a send's turn starts this
 //                               long after T3 answered it
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
@@ -315,13 +317,36 @@ function launch(args) {
   return ok({ threadId, link: link(threadId), status: idle ? null : 'starting', modelSelection: { instanceId: provider.providerInstanceId, model: modelSelection.model } });
 }
 
+/** As T3 answers a call it forwards to a linked environment it cannot reach. */
+const unreachable = (environmentId) => fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'environment_unreachable', message: `Environment ${environmentId} did not answer.` }));
+
+/**
+ * A launch forwarded to a linked environment: the thread is that machine's, which this fake keeps with its environment
+ * and leaves starting, since nothing here plays its run. A repeated clientRequestId answers the thread it launched.
+ */
+function launchThere(args) {
+  const linked = config().environments?.[args.environmentId];
+
+  if (!linked) return unreachable(args.environmentId);
+  const threadId = `mcp:launch:${createHash('sha256').update(JSON.stringify([args.environmentId, args.clientRequestId])).digest('hex')}`;
+
+  if (!readThread(threadId)) {
+    writeThread({
+      threadId, title: args.title, message: args.message, environmentId: args.environmentId, projectId: args.projectId, delegatedFrom: args.delegatedFrom, workspace: args.workspaceStrategy?.type,
+      provider: args.modelSelection.instanceId, instanceId: args.modelSelection.instanceId, model: args.modelSelection.model, runtimeMode: args.runtimeMode, status: 'starting', settled: false, runCount: 1,
+    });
+  }
+
+  return ok({ threadId, link: `<t3-thread://v2/${args.environmentId}/${threadId}>`, status: 'starting', modelSelection: args.modelSelection });
+}
+
 const TOOLS = {
   t3_environment_read: async () => {
     await sleep(config().environmentMs ?? 0);
 
     return ok(config().environment);
   },
-  orchestrator_capabilities: () => {
+  orchestrator_capabilities: (args) => {
     const failOnce = config().providersFailOnceAdded;
     const failed = path.join(STATE, 'providers-failed');
 
@@ -335,12 +360,32 @@ const TOOLS = {
     const hidden = fs.existsSync(unlisted) ? [] : config().unlistedOnce ?? [];
     fs.writeFileSync(unlisted, '');
 
+    if (args.environmentId !== undefined) {
+      const linked = config().environments?.[args.environmentId];
+
+      return linked ? ok({ providers: linked.providers }) : unreachable(args.environmentId);
+    }
+
     return ok({ providers: providers().filter((provider) => !hidden.includes(provider.providerInstanceId)) });
   },
-  t3_project_list: async () => {
+  t3_project_list: async (args) => {
     await sleep(config().projectsMs ?? 0);
 
+    if (args.environmentId !== undefined) {
+      const linked = config().environments?.[args.environmentId];
+
+      return linked ? ok({ projects: linked.projects, nextCursor: null }) : unreachable(args.environmentId);
+    }
+
     return ok({ projects: config().projects, nextCursor: null });
+  },
+  // As T3 lists the machines linked to it; it refuses while linked environments are off in its Labs settings.
+  t3_environment_links: () => {
+    const { links } = config();
+
+    if (!links) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'capability_denied', message: 'Linked environments is off on this machine, so no tool can act on another machine.' }));
+
+    return ok({ environmentId: config().environment.environmentId, links });
   },
   t3_thread_launch: async (args) => {
     if (config().launchFails) return fail('T3 Code cannot launch threads now.');
@@ -350,7 +395,7 @@ const TOOLS = {
 
     // As T3 answers when it could not complete the call, such as the repeated launch's own lookup failing.
     if (config().launchUnavailable) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'orchestration_error', message: 'The operation could not be completed.' }));
-    const launched = launch(args);
+    const launched = args.environmentId === undefined ? launch(args) : launchThere(args);
     await sleep(config().launchMs ?? 0);
 
     if (config().launchReplyLost) throw new Error('The connection closed before T3 answered.');
@@ -405,7 +450,7 @@ const TOOLS = {
     return ok({
       // As T3 reads a thread: the instance and model its runs use and its mode, but not the model's options.
       thread: {
-        threadId: thread.threadId, status: thread.status, worktreePath: thread.worktreePath ?? null, runCount: thread.runCount ?? 1, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled,
+        threadId: thread.threadId, title: thread.title, status: thread.status, worktreePath: thread.worktreePath ?? null, runCount: thread.runCount ?? 1, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled,
         providerInstanceId: thread.instanceId ?? null, model: thread.model ?? null, runtimeMode: thread.runtimeMode ?? null,
       },
       items, nextPosition: items.at(-1)?.position ?? null, hasMore: false,

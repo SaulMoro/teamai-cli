@@ -1,0 +1,229 @@
+import type { OpId, RuntimeFailure, RuntimeMessage, WakeRequest } from '@teamai/runtime-protocol';
+import { threadLink } from './conversation.js';
+import type { Serving, Session } from './runtime.js';
+import { DRIVER_NAMES } from './sessions.js';
+import type { EnvironmentLink, Launch, Project, T3 } from './t3.js';
+
+// ─── Waking a fleet member ───
+//
+//  A wake launches a thread on another machine linked to this T3 Code: the first linked environment that answers and
+//  has a project of the run's repository. The thread's first message is teamai's command to take one attempt of the
+//  pool, then to end. The runtime launches it and forgets it: the person finds it in that machine's T3 Code, delegated
+//  from the thread the run started in, when it did, and stops it there.
+//
+
+/** What every woken member is told last, so its thread ends once its one attempt is done. */
+export const END_OF_WAKE = 'When that one attempt is done, or nothing is left to claim, end: take no other work in this thread.';
+
+/** What the person adds so a wake finds a machine. */
+const NEXT_STEP = 'Link a machine in T3 Code, and add the repository there as a project.';
+
+/**
+ * The repository a git remote URL names, as T3 keys a project's repository: `host/path`, lowercased, with no scheme,
+ * user, port or `.git`. Undefined for a URL it cannot read.
+ */
+export function repositoryKey(url: string): string | undefined {
+  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(url);
+  let host: string;
+  let repoPath: string;
+
+  if (scp?.[1] !== undefined && scp[2] !== undefined) {
+    host = scp[1];
+    repoPath = scp[2];
+  } else {
+    try {
+      const parsed = new URL(url);
+      host = parsed.hostname;
+      repoPath = parsed.pathname;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const trimmed = repoPath.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
+
+  return host !== '' && trimmed !== '' ? `${host}/${trimmed}`.toLowerCase() : undefined;
+}
+
+/** Whether `project` is a checkout of the repository `key`, or of the one it was forked from. */
+function isOf(project: Project, key: string): boolean {
+  const identity = project.repositoryIdentity;
+
+  return !project.deletedAt && identity !== null && identity !== undefined && [identity.canonicalKey, identity.origin?.canonicalKey].some((one) => one?.toLowerCase() === key);
+}
+
+/** Whether `init` offers `wake`: T3 lists the environments linked to this one, which it refuses while Labs has them off. */
+export async function canWake(t3: T3): Promise<boolean> {
+  return t3.environmentLinks().then(() => true, () => false);
+}
+
+/** The model a member starts on in `project` of `link`: the project's default, else the first model of a tool this runtime runs. */
+async function memberModel(t3: T3, link: EnvironmentLink, project: Project): Promise<Launch['modelSelection'] | undefined> {
+  if (project.defaultModelSelection) return project.defaultModelSelection;
+  const providers = await t3.providers(link.environmentId);
+
+  for (const driver of DRIVER_NAMES) {
+    const provider = providers.find((one) => one.driverKind === driver && (one.constraints ?? []).length === 0);
+    const model = provider?.models[0]?.id;
+
+    if (provider && model) return { instanceId: provider.providerInstanceId, model };
+  }
+
+  return undefined;
+}
+
+/** How a wake ended: its thread launched, why not, or cancelled by teamai before the launch went out. */
+type Ended = { kind: 'woken'; message: Extract<RuntimeMessage, { event: 'woken' }> } | { kind: 'failed'; failure: RuntimeFailure } | { kind: 'cancelled' };
+
+/** A wake under way in this process: whether its launch went out, and whether teamai cancelled it before. */
+interface Waking { launched: boolean; cancelled: boolean }
+
+/** The wakes of a runtime process: each launches one thread at most, and a cancel ends one that has not launched. */
+export function wakes({ serving }: { serving: Serving }) {
+  const { options, ledger, write, fail } = serving;
+  const under = new Map<OpId, Waking>();
+  /** How each wake of this process ended, which a repeated op is answered with again. */
+  const ends = new Map<OpId, Ended>();
+
+  const unavailable = (message: string): RuntimeFailure => ({ code: 'wake_unavailable', message });
+
+  /** The environment and project the member runs in, or why no linked machine can run it. */
+  const where = async (t3: T3, request: WakeRequest): Promise<{ ok: true; link: EnvironmentLink; project: Project } | { ok: false; failure: RuntimeFailure }> => {
+    const key = repositoryKey(request.repository);
+
+    if (!key) return { ok: false, failure: unavailable(`teamai cannot tell which repository ${request.repository} names, so it cannot find a machine that has it.`) };
+    let links: EnvironmentLink[];
+
+    try {
+      links = await t3.environmentLinks();
+    } catch (error) {
+      return { ok: false, failure: unavailable(`T3 Code lists no machine linked to it (${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}). Turn on Linked environments in T3 Code under Settings → Labs, then: ${NEXT_STEP}`) };
+    }
+
+    const checked: string[] = [];
+
+    for (const link of links) {
+      if (link.status !== 'reachable') {
+        checked.push(`${link.label} is ${link.status}`);
+        continue;
+      }
+
+      const project = await t3.projects(link.environmentId).then((listed) => listed.find((one) => isOf(one, key)), () => undefined);
+
+      if (project) return { ok: true, link, project };
+      checked.push(`${link.label} has no project of it`);
+    }
+
+    const seen = checked.length > 0 ? ` (${checked.join('; ')})` : ', since none is linked';
+
+    return { ok: false, failure: unavailable(`No machine linked to T3 Code has ${request.repository} as a project${seen}. ${NEXT_STEP}`) };
+  };
+
+  /** The thread the run started in, as T3 shows a thread delegated from it, when it can read its title. */
+  const delegatedFrom = async (s: Session): Promise<Launch['delegatedFrom']> => {
+    if (!options.startedFrom) return undefined;
+    const { startedFrom } = options;
+    const title = await s.t3.thread(startedFrom).then((thread) => thread.title, () => undefined);
+
+    return title === undefined ? undefined : { environmentId: s.environment.environmentId, threadId: startedFrom, title };
+  };
+
+  const launch = async (s: Session, request: WakeRequest, waking: Waking): Promise<Ended> => {
+    const found = await where(s.t3, request);
+
+    if (waking.cancelled) return { kind: 'cancelled' };
+
+    if (!found.ok) return { kind: 'failed', failure: found.failure };
+    const { link, project } = found;
+    const modelSelection = await memberModel(s.t3, link, project);
+
+    if (!modelSelection) return { kind: 'failed', failure: unavailable(`${link.label} runs no Claude or Codex provider instance a member can start on. Enable one in T3 Code there, under Settings → Providers.`) };
+    const title = request.title.includes(request.pool) ? request.title : `${request.title} · ${request.pool}`;
+    const from = await delegatedFrom(s);
+
+    if (waking.cancelled) return { kind: 'cancelled' };
+    waking.launched = true;
+
+    const launched = await s.t3.launch({
+      title, message: `${request.message}\n\n${END_OF_WAKE}`, projectId: project.id, workspace: { type: 'root' }, environmentId: link.environmentId,
+      modelSelection, runtimeMode: s.runtimeMode ?? 'auto', clientRequestId: request.op, ...(from && { delegatedFrom: from }),
+    });
+
+    return {
+      kind: 'woken',
+      message: {
+        op: request.op, event: 'woken', where: link.label,
+        display: { label: title.slice(0, 80), url: threadLink(link, launched.threadId), fields: { thread: launched.threadId.slice(0, 200), environment: link.label } },
+      },
+    };
+  };
+
+  /** Writes how `op`'s wake ended, as often as teamai asks. */
+  const answer = (op: OpId, ended: Ended): void => {
+    switch (ended.kind) {
+      case 'woken':
+        return write(ended.message);
+      case 'failed':
+        return fail(op, ended.failure);
+      case 'cancelled':
+        return ledger.end({ op, state: 'cancelled' });
+      default: {
+        const unhandled: never = ended;
+
+        return unhandled;
+      }
+    }
+  };
+
+  const wake = async (request: WakeRequest): Promise<void> => {
+    write({ op: request.op, event: 'accepted' });
+    const ended = ends.get(request.op);
+
+    // A wake this process answered, or one it runs, launched or launches its one thread.
+    if (ended) return answer(request.op, ended);
+
+    if (under.has(request.op)) return;
+    const session = serving.session();
+
+    if (!session) return fail(request.op, { code: 'runtime_protocol', message: 'wake came before a successful init.' });
+    const waking: Waking = { launched: false, cancelled: false };
+    under.set(request.op, waking);
+    let outcome: Ended;
+
+    try {
+      outcome = await launch(session, request, waking);
+    } catch (error) {
+      outcome = { kind: 'failed', failure: unavailable(`T3 Code did not launch the member on the linked machine: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. ${NEXT_STEP}`) };
+    } finally {
+      under.delete(request.op);
+    }
+
+    ends.set(request.op, outcome);
+
+    // A cancel ended it already.
+    if (outcome.kind !== 'cancelled') answer(request.op, outcome);
+  };
+
+  /**
+   * Ends a wake of this process that has not launched cancelled, answers one that ended with its end again, and says
+   * whether `op` is a wake here. A wake whose launch went out ends with that launch.
+   */
+  const cancel = (op: OpId): boolean => {
+    const waking = under.get(op);
+    const ended = ends.get(op);
+
+    if (ended) answer(op, ended);
+
+    if (!waking) return ended !== undefined;
+
+    if (!waking.launched) {
+      waking.cancelled = true;
+      ends.set(op, { kind: 'cancelled' });
+      ledger.end({ op, state: 'cancelled' });
+    }
+
+    return true;
+  };
+
+  return { wake, cancel };
+}

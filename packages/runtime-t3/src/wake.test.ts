@@ -1,0 +1,168 @@
+import { describe, expect, it } from 'vitest';
+import { CLAUDE, CODEX, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
+import { start, t3, useT3Runtime } from './testing/suite.js';
+import { END_OF_WAKE, repositoryKey } from './wake.js';
+
+// A wake launches a fleet member's thread on a machine linked to this T3 Code that has the run's repository as a
+// project, and forgets it.
+
+const REPOSITORY = 'https://github.com/acme/acme-app.git';
+
+/** The project of the repository on a linked machine, as T3 lists it there. */
+const acmeApp = { id: 'project-there', title: 'acme-app', workspaceRoot: '/Users/sam/code/acme-app', deletedAt: null, repositoryIdentity: { canonicalKey: 'github.com/acme/acme-app' } };
+
+/** Three linked machines: one that does not answer, one without the repository, and one with it. */
+const LINKED: Pick<FakeT3Config, 'links' | 'environments'> = {
+  links: [
+    { environmentId: 'env-gone', label: 'old-mac', status: 'unreachable' },
+    { environmentId: 'env-other', label: 'build-box', status: 'reachable' },
+    { environmentId: 'env-sam', label: 'sams-laptop', status: 'reachable' },
+  ],
+  environments: {
+    'env-other': { projects: [{ id: 'project-web', title: 'web', workspaceRoot: '/srv/web', repositoryIdentity: { canonicalKey: 'github.com/acme/web' } }], providers: [CLAUDE] },
+    'env-sam': { projects: [acmeApp], providers: [CODEX, CLAUDE] },
+  },
+};
+
+const wake = (op: string, request: Line = {}) => ({ type: 'wake', op, pool: 'gpu', repository: REPOSITORY, message: 'Run teamai workflow resume --claim gpu, then report.', title: 'teamai fleet r7f3a91c2 · gpu', ...request });
+
+/** A runtime past an attended init, and its init reply. */
+async function initialized(env: Record<string, string> = {}): Promise<{ runtime: Connection; reply: Line }> {
+  const runtime = start(env);
+  runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+  const reply = await runtime.next((line) => line['type'] === 'init');
+  expect(reply).toMatchObject({ ok: true });
+
+  return { runtime, reply };
+}
+
+/** How the wake `op` ended. */
+const woke = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted');
+
+describe('teamai-runtime-t3', () => {
+  useT3Runtime();
+
+  describe('waking a fleet member', () => {
+    it('offers wake when T3 Code lists the machines linked to it, and not when linked environments are off', async () => {
+      signIn(t3);
+      t3.config({ links: [] });
+      expect((await initialized()).reply['wake']).toBe(true);
+
+      t3.config({ links: undefined });
+      expect((await initialized()).reply).not.toHaveProperty('wake');
+    });
+
+    it('offers no wake in recover mode', async () => {
+      t3.config(LINKED);
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
+    });
+
+    // With no model set for the project there, the member starts on the first model of the first tool this runtime runs, Claude before Codex.
+    it('launches the member on the first linked machine that answers and has the repository, with teamai\'s message and the end, delegated from the run\'s thread', async () => {
+      signIn(t3);
+      t3.config(LINKED);
+      t3.addThread({ threadId: 'thread-owner-1', title: 'Ship the GPU pass', status: 'running' });
+      const { runtime } = await initialized({ T3CODE_THREAD_ID: 'thread-owner-1' });
+
+      runtime.send(wake('op-000000e1'));
+
+      const end = await woke(runtime, 'op-000000e1');
+      const member = t3.threads().find((thread) => thread.environmentId !== undefined);
+      expect(end).toEqual({
+        op: 'op-000000e1', event: 'woken', where: 'sams-laptop',
+        display: { label: 'teamai fleet r7f3a91c2 · gpu', url: `t3code://threads/env-sam/${encodeURIComponent(member?.threadId ?? '')}`, fields: { thread: member?.threadId, environment: 'sams-laptop' } },
+      });
+      expect(member).toMatchObject({
+        environmentId: 'env-sam', title: 'teamai fleet r7f3a91c2 · gpu', message: `Run teamai workflow resume --claim gpu, then report.\n\n${END_OF_WAKE}`,
+        workspace: 'root', provider: 'claudeAgent', model: 'claude-opus-5-5', runtimeMode: 'auto',
+        delegatedFrom: { environmentId: 'env-fake-1', threadId: 'thread-owner-1', title: 'Ship the GPU pass' },
+      });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch').map((call) => call.args['clientRequestId'])).toEqual(['op-000000e1']);
+    });
+
+    it('starts the member on the model the project there sets, and names the pool in a title that lacks it', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, environments: { ...LINKED.environments, 'env-sam': { projects: [{ ...acmeApp, defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } }], providers: [CODEX, CLAUDE] } } });
+      const { runtime } = await initialized();
+
+      runtime.send(wake('op-000000e2', { title: 'teamai fleet r7f3a91c2' }));
+
+      expect(await woke(runtime, 'op-000000e2')).toMatchObject({ event: 'woken', where: 'sams-laptop' });
+      expect(t3.threads().find((thread) => thread.environmentId !== undefined)).toMatchObject({ title: 'teamai fleet r7f3a91c2 · gpu', provider: 'claudeAgent', model: 'claude-sonnet-5-5' });
+    });
+
+    it('fails wake_unavailable, naming each machine it looked at and what to add, when no linked machine has the repository', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, environments: { 'env-other': LINKED.environments?.['env-other'] ?? { projects: [], providers: [] } } });
+      const { runtime } = await initialized();
+
+      runtime.send(wake('op-000000e3'));
+
+      expect(await woke(runtime, 'op-000000e3')).toEqual({
+        op: 'op-000000e3', event: 'failed',
+        failure: { code: 'wake_unavailable', message: `No machine linked to T3 Code has ${REPOSITORY} as a project (old-mac is unreachable; build-box has no project of it; sams-laptop has no project of it). Link a machine in T3 Code, and add the repository there as a project.` },
+      });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+    });
+
+    it('fails wake_unavailable, saying to turn linked environments on, when T3 Code has them off', async () => {
+      signIn(t3);
+      t3.config({ links: [] });
+      const { runtime } = await initialized();
+      t3.config({ links: undefined });
+
+      runtime.send(wake('op-000000e4'));
+
+      expect(await woke(runtime, 'op-000000e4')).toEqual({
+        op: 'op-000000e4', event: 'failed',
+        failure: { code: 'wake_unavailable', message: 'T3 Code lists no machine linked to it ({"_tag":"OrchestratorMcpFailure","code":"capability_denied","message":"Linked environments is off on this machine, so no tool can act on another machine."}). Turn on Linked environments in T3 Code under Settings → Labs, then: Link a machine in T3 Code, and add the repository there as a project.' },
+      });
+    });
+
+    it('launches one member for an op teamai sends twice, and answers both with it', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, launchMs: 300 });
+      const { runtime } = await initialized();
+
+      runtime.send(wake('op-000000e5'));
+      runtime.send(wake('op-000000e5'));
+      const first = await woke(runtime, 'op-000000e5');
+      runtime.send(wake('op-000000e5'));
+      await runtime.next((line) => line['op'] === 'op-000000e5' && line['event'] === 'woken' && runtime.lines.filter((one) => one['event'] === 'woken').length === 2);
+
+      expect(first).toMatchObject({ event: 'woken', where: 'sams-laptop' });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toHaveLength(1);
+      expect(t3.threads().filter((thread) => thread.environmentId !== undefined)).toHaveLength(1);
+    });
+
+    it('ends a wake cancelled before its launch went out, and launches nothing', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, projectsMs: 1_000 });
+      const { runtime } = await initialized();
+      runtime.send(wake('op-000000e6'));
+      await runtime.next((line) => line['op'] === 'op-000000e6' && line['event'] === 'accepted');
+
+      runtime.send({ type: 'cancel', op: 'op-000000e6' });
+
+      expect(await woke(runtime, 'op-000000e6')).toEqual({ op: 'op-000000e6', event: 'cancelled' });
+      await new Promise((resolve) => setTimeout(resolve, 3_500));
+      expect(runtime.lines.filter((line) => line['op'] === 'op-000000e6').map((line) => line['event'])).toEqual(['accepted', 'cancelled']);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+    });
+  });
+
+  describe('the repository a remote names', () => {
+    it.each([
+      ['https://github.com/acme/acme-app.git', 'github.com/acme/acme-app'],
+      ['git@github.com:Acme/Acme-App.git', 'github.com/acme/acme-app'],
+      ['ssh://git@gitlab.example.com:2222/team/sub/app.git', 'gitlab.example.com/team/sub/app'],
+      ['https://github.com/acme/acme-app/', 'github.com/acme/acme-app'],
+      ['not a url', undefined],
+    ])('%s is %s', (url, key) => {
+      expect(repositoryKey(url)).toBe(key);
+    });
+  });
+});
