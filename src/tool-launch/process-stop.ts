@@ -36,12 +36,12 @@ type Recorded = z.infer<typeof RecordedSchema>;
 /** How long before its starter read the clock a spawned process may have started: the spawn, which load slows. */
 const SPAWN_LEEWAY_MS = 10_000;
 
-/** Whether `now`, when ps says the recorded pid's process started, names the process `recorded` names. */
-function isRecordedStart(recorded: Recorded, now: string | undefined): boolean {
-  if (now === undefined) return false;
+/** Whether `psStart`, when ps says the recorded pid's process started, names the process `recorded` names. */
+function isRecordedStart(recorded: Recorded, psStart: string | undefined): boolean {
+  if (psStart === undefined) return false;
 
-  if ('start' in recorded) return now === recorded.start;
-  const started = Date.parse(now);
+  if ('start' in recorded) return psStart === recorded.start;
+  const started = Date.parse(psStart);
 
   // ps prints the start to the second, and the starter read the clock once the spawn returned.
   return started <= recorded.spawnedAt && recorded.spawnedAt - started < SPAWN_LEEWAY_MS;
