@@ -1,10 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
+import { bundleOnce, bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
 import { connectRuntime, type Connection, type Line } from '@teamai/runtime-testing/connect';
 import type { StepMode } from '../t3.js';
 
@@ -19,13 +18,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_T3 = path.join(HERE, 'fake-t3.mjs');
 const ENTRY = path.join(HERE, '..', 'main.ts');
 
-/** fake-t3.mjs built once per test file with the packages it imports inside, as teamai's own session code names a project. */
-let fakeT3Built: Promise<string> | undefined;
-
+/** fake-t3.mjs built once per process with the packages it imports inside, as teamai's own session code names a project. */
 function builtFakeT3(): Promise<string> {
-  fakeT3Built ??= bundleRuntimeAt({ entry: FAKE_T3, outfile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fake-t3-')), 'fake-t3.mjs') });
-
-  return fakeT3Built;
+  return bundleOnce(FAKE_T3);
 }
 
 /** Builds the runtime's executable into `dir`, as tsup bundles it, and returns its path. */

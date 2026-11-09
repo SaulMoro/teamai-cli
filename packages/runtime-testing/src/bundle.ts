@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { build, stop, type BuildOptions } from 'esbuild';
 
 /** Builds of this module still running: esbuild's service, which they share, stops once none is. */
@@ -25,4 +28,27 @@ export async function bundleRuntime({ entry, outfile, alias, plugins }: { entry:
   }
 
   return outfile;
+}
+
+/** The bundles this process built with `bundleOnce`, by entry. */
+const bundledOnce = new Map<string, Promise<string>>();
+
+/**
+ * Bundles `entry` as `bundleRuntime` does, once per process, and returns the file's path: a fake app that both a
+ * runtime package's tests and the scenario suite start is built once for every test of the process. The file sits in a
+ * directory of its own under the temporary directory, named after the entry (`fake-t3.mjs` for `fake-t3.mjs`), which
+ * is removed when the process exits. A build that failed is not kept, so the next call builds again.
+ */
+export function bundleOnce(entry: string): Promise<string> {
+  const known = bundledOnce.get(entry);
+
+  if (known) return known;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-bundle-'));
+  process.once('exit', () => { fs.rmSync(dir, { recursive: true, force: true }); });
+  const built = bundleRuntime({ entry, outfile: path.join(dir, `${path.basename(entry).replace(/\.[cm]?[jt]s$/u, '')}.mjs`) });
+
+  bundledOnce.set(entry, built);
+  built.catch(() => { bundledOnce.delete(entry); });
+
+  return built;
 }

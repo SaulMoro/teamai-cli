@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { bundleRuntime } from './bundle.js';
+import { bundleOnce, bundleRuntime } from './bundle.js';
 
 let dir: string;
 
@@ -52,5 +52,33 @@ describe('bundleRuntime', () => {
 
     expect(outfiles.map((outfile) => fs.readFileSync(outfile, 'utf8'))).toEqual([expect.stringContaining('var name = "one"'), expect.stringContaining('var name = "two"')]);
     expect(childCommands().filter((command) => command.includes('esbuild'))).toEqual([]);
+  });
+});
+
+describe('bundleOnce', () => {
+  it('bundles an entry once per process, and gives every later call the same file', async () => {
+    const entry = path.join(dir, 'fake.ts');
+    fs.writeFileSync(entry, "export const said: string = 'first';\n");
+
+    const [one, two] = await Promise.all([bundleOnce(entry), bundleOnce(entry)]);
+    // The entry changes, and a later call still gets the file built first: nothing built it again.
+    fs.writeFileSync(entry, "export const said: string = 'second';\n");
+    const later = await bundleOnce(entry);
+
+    expect(two).toBe(one);
+    expect(later).toBe(one);
+    expect(path.basename(one)).toBe('fake.mjs');
+    expect(fs.readFileSync(later, 'utf8')).toContain('var said = "first"');
+    expect(childCommands().filter((command) => command.includes('esbuild'))).toEqual([]);
+  });
+
+  it('builds again after a build that failed', async () => {
+    const entry = path.join(dir, 'broken.ts');
+    fs.writeFileSync(entry, 'export const said: string = ;\n');
+
+    await expect(bundleOnce(entry)).rejects.toThrow();
+    fs.writeFileSync(entry, "export const said: string = 'fixed';\n");
+
+    expect(fs.readFileSync(await bundleOnce(entry), 'utf8')).toContain('var said = "fixed"');
   });
 });

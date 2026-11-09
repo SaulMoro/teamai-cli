@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RuntimeOptions } from '@teamai/runtime-protocol';
-import { bundleRuntime } from '@teamai/runtime-testing/bundle';
+import { bundleOnce, bundleRuntime } from '@teamai/runtime-testing/bundle';
 import type { JsonValue } from '../../types.js';
 
 const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'runtime-t3', 'src');
@@ -39,8 +39,9 @@ export async function t3OnFakeServer(): Promise<{
   const executable = path.join(dir, 'teamai-runtime-t3.mjs');
 
   await bundleRuntime({ entry: path.join(PACKAGE, 'main.ts'), outfile: executable });
-  // The fake too, with the packages it imports inside, as teamai's own session code names a project.
-  const fake = await bundleRuntime({ entry: FAKE_T3, outfile: path.join(dir, 'fake-t3.mjs') });
+  // The fake too, with the packages it imports inside, as teamai's own session code names a project: the one build the
+  // runtime's own tests start.
+  const fake = await bundleOnce(FAKE_T3);
 
   const servers = new Map<string, Promise<void>>();
   const exits = new Map<string, { stop: () => void; exited: Promise<void> }>();
