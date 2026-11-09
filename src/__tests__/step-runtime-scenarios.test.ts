@@ -2587,6 +2587,24 @@ done`);
     expect(await owner.record()).toMatchObject({ state: 'withdrawn' });
   }, 60_000);
 
+  it('withdraws the attempt once teamai-reports can be read again when the run cancels the step while it cannot, rather than leaving the offer out', async () => {
+    const owner = await ownerOf();
+    const { runtime, exec } = await owner.open();
+    const op = newOpId();
+    const ended = exec(op);
+    await owner.record();
+    const clone = owner.alice.config.repo.localPath;
+    git(clone, 'remote', 'set-url', 'origin', path.join(path.dirname(clone), 'gone.git'));
+
+    const cancelled = runtime.cancel(op);
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    git(clone, 'remote', 'set-url', 'origin', owner.alice.config.repo.remote);
+    await cancelled;
+
+    expect(await ended).toEqual({ kind: 'cancelled' });
+    expect(await owner.record()).toMatchObject({ state: 'withdrawn' });
+  }, 60_000);
+
   it('runs any other exec of the place, such as setup, on this host', async () => {
     const owner = await ownerOf();
     const { runtime, handle } = await owner.open();
