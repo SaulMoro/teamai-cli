@@ -36,7 +36,11 @@ const ThreadSchema = z.object({
    * A step's: what a later prompt that continues the thread's conversation shares with it, the folder its tool works in
    * and the model selection its launch named. Absent from a record before it was kept: such a thread is not continued.
    */
-  conversation: z.object({ cwd: z.string(), modelSelection: ModelSelectionSchema.optional() }).optional(),
+  conversation: z.object({
+    cwd: z.string(), modelSelection: ModelSelectionSchema.optional(),
+    /** The model T3 launched the thread on, as it said back, which a later step that names no model sets it back to. */
+    launchedOn: ModelSelectionSchema.optional(),
+  }).optional(),
   /**
    * This op's turn of the conversation an earlier prompt launched the thread for: that prompt's place and op, how many
    * runs the thread had before the turn was sent, so a run that ended before it is not taken for the turn's, and the

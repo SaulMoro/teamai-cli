@@ -463,8 +463,10 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
     // A chain names its first prompt, and a turn between may have set the thread to another model: T3 says which it
     // runs now, though not its options.
-    const moved = shell.model !== undefined && shell.model !== null && shell.model !== selection?.model;
-    const configure = selection && (moved || !sameSelection(thread.conversation.modelSelection, selection)) ? selection : undefined;
+    // A step that names no model goes on in the model the thread was launched on.
+    const wanted = selection ?? thread.conversation.launchedOn;
+    const moved = shell.model !== undefined && shell.model !== null && shell.model !== wanted?.model;
+    const configure = wanted && (moved || (selection !== undefined && !sameSelection(thread.conversation.modelSelection, selection))) ? wanted : undefined;
 
     return { ok: true, thread, runs: shell.runCount, ...(configure && { configure }) };
   };
@@ -791,7 +793,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
         const { configure } = continuing;
 
         const turn: ThreadRecord = {
-          ...continued, ...(configure && { model: configure.model, conversation: { cwd: request.cwd, modelSelection: configure } }),
+          ...continued, ...(configure && { model: configure.model, conversation: { ...continued.conversation, cwd: request.cwd, modelSelection: configure } }),
           turnOf: { handle: earlier.handle, op: earlier.op, runsBefore: continuing.runs, ...(configure && { configure }) },
         };
 
@@ -831,9 +833,16 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = async (threadId: string, copy: string | undefined, model: string | undefined): Promise<ThreadRecord> => {
+        const launchedOn = launch.modelSelection ?? (model === undefined ? undefined : { instanceId: instance.providerInstanceId, model });
+
         const launched: ThreadRecord = {
           threadId, title, model: model ?? launch.modelSelection?.model ?? 'default', tool: launch.tool, instanceId: instance.providerInstanceId, launchedAt, ...(copy && { copy }),
-          ...(work.kind === 'step' && { conversation: { cwd: request.cwd, ...(launch.modelSelection && { modelSelection: launch.modelSelection }) } }),
+          ...(work.kind === 'step' && {
+            conversation: {
+              cwd: request.cwd, ...(launch.modelSelection && { modelSelection: launch.modelSelection }),
+              ...(launchedOn && { launchedOn }),
+            },
+          }),
         };
 
         // A cancel that ended the op while T3 had not answered the launch keeps that outcome.
