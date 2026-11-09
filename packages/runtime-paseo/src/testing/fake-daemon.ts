@@ -114,6 +114,11 @@ const BehaviourSchema = z.object({
    * for an answer, from the app or from `agent_permission_response`.
    */
   asks_outside_grant: z.boolean().default(false),
+  /**
+   * The sessions the daemon's providers hold, which Paseo lists as importable in any directory until an agent has one.
+   * An import of any other session is taken all the same, and its agent's first turn fails, as Paseo 0.14.0 does (recorded).
+   */
+  provider_sessions: z.array(z.string()).default([]),
   /** The person deletes every agent that finished its turn in the Paseo app, before the daemon answers the next request. */
   forget_finished: z.boolean().default(false),
   /** The provider reports no session id once the agent is done. */
@@ -332,7 +337,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         fs.writeFileSync(result, JSON.stringify(does.result ?? (does.failure ? { failure: does.failure } : { output: does.output })));
       }
 
-      Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : `fake-session-${agent.id}` });
+      Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : agent.sessionId ?? `fake-session-${agent.id}` });
 
       if (baseOf(agent.provider) === 'codex' && does.codex_home !== undefined && agent.sessionId) {
         const at = new Date();
@@ -490,7 +495,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
   };
 
   /** The requests `requests.jsonl` keeps. */
-  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request', 'list_commands_request', 'send_agent_message_request', 'delete_agent_request', 'agent_permission_response']);
+  const RECORDED = new Set<Inbound['type']>(['agent.create.request', 'cancel_agent_request', 'archive_workspace_request', 'set_daemon_config_request', 'list_commands_request', 'send_agent_message_request', 'delete_agent_request', 'agent_permission_response', 'import_agent_request', 'set_agent_model_request', 'set_agent_mode_request', 'set_agent_thinking_request']);
 
   /** The requests already held for the delay `models_ms`, `open_ms`, `create_ms` or `archive_ms` gives them. */
   const held = new WeakSet<Inbound>();
@@ -763,6 +768,67 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
         changed(agent);
         reply({ type: 'send_agent_message_response', payload: { requestId: message.requestId, agentId: agent.id, accepted: true, error: null } });
         work(agent);
+
+        return;
+      }
+
+      case 'fetch_recent_provider_sessions_request': {
+        const taken = new Set(Object.values(kept.agents).map((agent) => agent.sessionId));
+
+
+        const entries = behaviour().provider_sessions.filter((id) => !taken.has(id)).map((id) => ({
+          providerId: message.providers?.[0] ?? 'claude', providerLabel: 'Claude', providerHandleId: id, cwd: message.cwd ?? '', title: null, firstPromptPreview: null, lastPromptPreview: null, lastActivityAt: now(),
+        }));
+
+        reply({ type: 'fetch_recent_provider_sessions_response', payload: { requestId: message.requestId, entries } });
+
+        return;
+      }
+
+      case 'import_agent_request': {
+        // As Paseo 0.14.0: an idle agent of an id the daemon chooses, on the provider's default model and mode, whose
+        // session is the one imported; a session an agent already has is refused (recorded).
+        const session = message.providerHandleId ?? message.sessionId ?? '';
+        const provider = message.providerId ?? message.provider ?? '';
+
+        if (Object.values(kept.agents).some((agent) => agent.sessionId === session)) {
+          reply({ type: 'status', payload: { status: 'agent_create_failed', requestId: message.requestId, error: `Provider session is already imported: ${session}` } });
+
+          return;
+        }
+
+        const id = crypto.randomUUID();
+
+
+        const agent: AgentRecord = {
+          id, provider, model: null, thinking: null, modeId: DEFAULT_MODES[baseOf(provider) ?? 'claude'] ?? null, cwd: fs.realpathSync(message.cwd ?? '.'), workspaceId: message.workspaceId ?? '',
+          title: null, labels: message.labels ?? {}, status: 'idle', createdAt: now(), updatedAt: now(), sessionId: session, permission: false, allowed: [], behaviour: behaviour(), prompt: '',
+        };
+
+        kept.agents[id] = agent;
+        save();
+        reply({ type: 'status', payload: { status: 'agent_resumed', requestId: message.requestId, agentId: id, timelineSize: 0, agent: snapshot(agent) } });
+
+        return;
+      }
+
+      case 'set_agent_model_request':
+      case 'set_agent_mode_request':
+      case 'set_agent_thinking_request': {
+        const agent = kept.agents[message.agentId];
+
+        if (agent && message.type === 'set_agent_model_request') agent.model = message.modelId;
+
+        if (agent && message.type === 'set_agent_mode_request') agent.modeId = message.modeId;
+
+        if (agent && message.type === 'set_agent_thinking_request') agent.thinking = message.thinkingOptionId;
+
+        if (agent) changed(agent);
+
+        const payload = { requestId: message.requestId, agentId: message.agentId, accepted: agent !== undefined, error: agent ? null : `Agent not found: ${message.agentId}` };
+
+        const type = message.type === 'set_agent_model_request' ? 'set_agent_model_response' as const : message.type === 'set_agent_mode_request' ? 'set_agent_mode_response' as const : 'set_agent_thinking_response' as const;
+        reply({ type, payload });
 
         return;
       }
