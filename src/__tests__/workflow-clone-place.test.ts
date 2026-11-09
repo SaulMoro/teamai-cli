@@ -378,6 +378,45 @@ describe('a clone place', () => {
     expect(found.slice(0, 2)).toEqual([['first.txt'], ['first.txt', 'half.txt']]);
   }, 20_000);
 
+  it('keeps the work a step left in its team clone on a usage limit when its next attempt is cancelled before its tool starts', async () => {
+    const { config, workspace, runId } = await fixture(TEAM_PROMPT('{ team: { branch: teamai/notes/alpha } }', ''));
+    teamOrigin(config);
+    config.workflows = { ...config.workflows, tools: { default: 'claude' } };
+    const resetsAt = Date.now() + 1500;
+    // Whether each attempt's tool found the note the first one left.
+    const found: boolean[] = [];
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_tool, input) => {
+        const note = path.join(input.cwd, 'rules', 'half.md');
+        found.push(fs.existsSync(note));
+
+        if (found.length > 1) return { started: true as const, exitCode: 0 };
+        fs.mkdirSync(path.dirname(note), { recursive: true });
+        fs.writeFileSync(note, '# Half\n');
+
+        return { started: true as const, exitCode: 1, failure: { code: 'usage_limited', message: `claude hit its usage limit: Claude AI usage limit reached|${Math.ceil(resetsAt / 1000)}` } };
+      }),
+    };
+    const secrets = await knownSecrets(config);
+    let prepares = 0;
+    // The step's second attempt is cancelled by a retry once its place is prepared, before its tool starts.
+    const prepared = async ({ step }: { step: string }, signal: AbortSignal): Promise<void> => {
+      prepares += 1;
+
+      if (step !== 'note' || prepares !== 2) return;
+      const stopped = new Promise((resolve) => { signal.addEventListener('abort', resolve, { once: true }); });
+      expect(await retryStep(config, runId, secrets, 'note')).not.toHaveProperty('error');
+      await stopped;
+    };
+
+    const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths, prepared });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(prepares).toBe(3);
+    expect(found).toEqual([false, true]);
+  }, 20_000);
+
   it('keeps the clone when a step that continues it is released, with the work committed there', async () => {
     const { config, runId } = await fixture((commit) => PROMPTED(commit));
     const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });

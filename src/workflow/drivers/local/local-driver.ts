@@ -211,6 +211,11 @@ export interface LocalDriverOptions {
   progress?: (line: string, stream: 'stdout' | 'stderr') => void;
   /** The runtimes of the driver definition `--driver` names, in its order. Without it, the loop has one: `local`. */
   runtimes?: DriverRuntimes;
+  /**
+   * Awaited once a prompt step's place is prepared, before the driver checks whether its tool may start, with the signal
+   * that stops the attempt, as on a cancel.
+   */
+  prepared?: (lease: { step: string; attempt: AttemptId }, signal: AbortSignal) => Promise<void>;
 }
 
 /** A driver definition's runtimes, which the loop offers in turn: each step goes to the first that can take it. */
@@ -1112,6 +1117,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
    * which it may have hit while this one's workspace was prepared.
    */
   const beforeLaunch = async (lease: StagedLease, { signal, failure, slot }: { signal: AbortSignal; failure: WorkflowFailure | undefined; slot: RuntimeSlot | undefined }): Promise<{ kind: 'launch' } | { kind: 'given-back' } | { kind: 'ends'; report: ReportBody }> => {
+    await options.prepared?.({ step: lease.step, attempt: lease.attempt }, signal);
+
     if (!startable(lease, signal)) {
       await giveBackUnlaunched(lease.attempt);
 
