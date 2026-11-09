@@ -1630,6 +1630,16 @@ steps:
     budget: { tokens: 1 }
 `;
 
+/** A whole workflow step whose two reviews run on claude. */
+const REVIEWED = `schemaVersion: v1alpha1
+name: slow
+description: Reviews twice.
+steps:
+  - id: work
+    workspace: new
+    workflow: reviews
+`;
+
 const REVIEWS = `schemaVersion: v1alpha1
 name: reviews
 description: Reviews the work twice.
@@ -2179,6 +2189,31 @@ done`);
     } finally {
       vi.unstubAllEnvs();
       expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
+  }, 60_000);
+
+  it('leaves a whole workflow step one of whose prompt steps runs on a tool this member does not have, rather than claiming and failing it', async () => {
+    const owner = await ownerOf({ workflow: REVIEWED, workflows: { reviews: REVIEWS }, tools: ['claude'], isWhole: true });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    // Only the system's own programs, so no claude this machine has installed is found.
+    vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(path.delimiter));
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    const infos = vi.spyOn(log, 'info').mockImplementation(() => {});
+    const { exec } = await owner.open();
+
+    try {
+      void exec(newOpId(), 'workflow');
+      await eventually(async () => ((await owner.record())?.state === 'offered' ? true : undefined));
+      await readableReportsWorktree(owner.bob.config);
+
+      const taken = await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } } });
+
+      expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+      expect(await owner.record()).toMatchObject({ state: 'offered' });
+      expect(infos).toHaveBeenCalledWith(`Left attempt ${owner.attempt} of run ${owner.run} for another member: its step "first" runs on claude, which is not on PATH here.`);
+    } finally {
+      vi.unstubAllEnvs();
     }
   }, 60_000);
 

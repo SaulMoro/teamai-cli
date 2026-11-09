@@ -141,7 +141,7 @@ function declaredLabels(config: LocalConfig, at: NonNullable<MemberPlace[keyof M
 /**
  * What keeps this member from the step `offer` leases where `at` would run it, as its own copy of the team's workflows
  * defines the step, never as the record says: a label not declared there, env its policy does not allow, or for a prompt
- * step, a tool its setup does not have. A whole workflow is judged step by step on the steps the one fit rule
+ * step, one inside a whole workflow too, a tool its setup does not have where it would run it. A whole workflow is judged step by step on the steps the one fit rule
  * (`wholeFit`) gives, as the owner's negotiation judged them, or the run's definitions, which this member does not find
  * (another member's copy may hold them). Undefined when nothing does.
  */
@@ -169,7 +169,28 @@ async function lackedFor(config: LocalConfig, offer: Offered, at: NonNullable<Me
     if (denied.length > 0) return `${which} requires env ${denied.join(', ')}, which workflows.allow.env on this machine does not allow`;
   }
 
-  return offer.lease.kind === 'prompt' && (at.kind === 'here' || at.kind === 'runtime') ? promptToolLack(config, defined.step, at) : undefined;
+  switch (offer.lease.kind) {
+    case 'command': return undefined;
+    case 'prompt': return at.kind === 'driver' ? undefined : promptToolLack(config, defined.step, at);
+    case 'workflow': {
+      // A whole workflow's nested run runs here, or on the runtimes of the member's driver.
+      if (at.kind === 'runtime') return undefined;
+
+      for (const { step, executor } of runs) {
+        const lack = executor === 'prompt' ? await wholePromptToolLack(config, step, at) : undefined;
+
+        if (lack !== undefined) return lack;
+      }
+
+      return undefined;
+    }
+
+    default: {
+      const unhandled: never = offer.lease;
+
+      return unhandled;
+    }
+  }
 }
 
 /**
@@ -195,20 +216,45 @@ function runsOf(kind: FleetLease['kind'], defined: Extract<ReturnType<typeof def
   }
 }
 
-/**
- * Why the member's setup has no tool for prompt step `step` where `at` runs it, as the local driver locates the tool:
- * the step's own `tool`, else `workflows.tools` and the member's AI tool, then on PATH here, or among the tools runtime
- * `at` offers. Undefined when it has one.
- */
-async function promptToolLack(config: LocalConfig, step: Pick<WorkflowStep, 'agent' | 'tool'>, at: { kind: 'here' } | RuntimePlace | PromptRuntimePlace): Promise<string | undefined> {
-  const choice = launchToolFor(step, config, {}, await memberTools(config), 'defaultTool' in at ? at.defaultTool : undefined);
+/** Where a prompt step's tool is looked for: on PATH here, or among the tools a step runtime offers, with its default tool. */
+type ToolPlace = { kind: 'here' } | { kind: 'runtime'; driver: string; use: string; tools?: string[]; defaultTool?: string };
 
-  if (!choice.ok) return `its prompt step has no tool here: ${choice.failure.message.replace(/\.$/, '')}`;
+/**
+ * Why the member's setup has no tool for prompt step `step` (named `which` in the answer) where `at` runs it, as the
+ * local driver locates the tool: the step's own `tool`, else `workflows.tools` and the member's AI tool, then on PATH
+ * here, or among the tools runtime `at` offers. Undefined when it has one.
+ */
+async function promptToolLack(config: LocalConfig, step: Pick<WorkflowStep, 'agent' | 'tool'>, at: ToolPlace, which = 'its prompt step'): Promise<string | undefined> {
+  const choice = launchToolFor(step, config, {}, await memberTools(config), at.kind === 'runtime' ? at.defaultTool : undefined);
+
+  if (!choice.ok) return `${which} has no tool here: ${choice.failure.message.replace(/\.$/, '')}`;
   const { name } = choice.target;
 
-  if (at.kind === 'here') return launchExecutableOf(choice.target) === null ? `its prompt step runs on ${name}, which is not on PATH here` : undefined;
+  if (at.kind === 'here') return launchExecutableOf(choice.target) === null ? `${which} runs on ${name}, which is not on PATH here` : undefined;
 
-  return lacksTool(name, { tools: at.tools }) ? `its prompt step runs on ${name}, which runtime ${at.use} of driver ${at.driver} does not offer` : undefined;
+  return lacksTool(name, { tools: at.tools }) ? `${which} runs on ${name}, which runtime ${at.use} of driver ${at.driver} does not offer` : undefined;
+}
+
+/**
+ * Why the member's setup has no tool for prompt step `step` of a whole workflow where its nested run would run it: here,
+ * or on any runtime of the member's driver that runs prompt steps. Undefined when one of them has it.
+ */
+async function wholePromptToolLack(config: LocalConfig, step: WorkflowStep, at: NonNullable<MemberPlace['workflow']>): Promise<string | undefined> {
+  const which = `its step "${step.id}"`;
+
+  if (at.kind === 'here') return promptToolLack(config, step, at, which);
+  const { driver, runtimes } = at.runtimes;
+
+  const places = runtimes.flatMap((entry): ToolPlace[] => {
+    if (entry.kind === 'local') return [{ kind: 'here' }];
+
+    return entry.can.prompt === false ? [] : [{ kind: 'runtime', driver, use: entry.use, ...(entry.can.tools && { tools: entry.can.tools }), ...(entry.can.default_tool !== undefined && { defaultTool: entry.can.default_tool }) }];
+  });
+
+  if (places.length === 0) return `${which} is a prompt step, which no runtime of driver ${driver} runs`;
+  const lacks = await Promise.all(places.map(async (place) => promptToolLack(config, step, place, which)));
+
+  return lacks.every((lack) => lack !== undefined) ? lacks[0] : undefined;
 }
 
 /**
