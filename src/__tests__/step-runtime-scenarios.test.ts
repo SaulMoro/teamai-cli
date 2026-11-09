@@ -688,6 +688,33 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     }
   });
 
+  // Two toys on one state, as a killed teamai's and the restarted one's, both wait on the same agent.
+  it.runIf(subject.name.startsWith('toy'))('ends a prompt two runtimes wait on in both, when the one that claims the end cannot journal it', async () => {
+    const release = path.join(dir, 'release');
+    const agent = { release, output: { verdict: 'approve' } };
+    const before = await start(agent);
+    const handle = await opened(before);
+    const request = promptRequest(handle);
+    let accepted = false;
+    const first = before.prompt(request, { onAccepted: () => { accepted = true; } });
+    expect(await until(() => accepted)).toBe(true);
+    const after = await start(agent);
+    const second = after.prompt(request, {});
+    const journal = subject.journal(state);
+
+    try {
+      for (const root of journal) setDirModes(root, 0o500);
+      fs.writeFileSync(release, '');
+
+      expect(await Promise.all([first, second])).toEqual([
+        expect.objectContaining({ kind: 'finished', result: { output: { verdict: 'approve' } } }),
+        expect.objectContaining({ kind: 'finished', result: { output: { verdict: 'approve' } } }),
+      ]);
+    } finally {
+      for (const root of journal) setDirModes(root, 0o700);
+    }
+  });
+
   it('reattaches after its own restart with a finished prompt, and a repeated prompt reads the same outcome', async () => {
     const first = await start({ output: { verdict: 'approve' }, usage: { input: 10 } });
     const handle = await opened(first);

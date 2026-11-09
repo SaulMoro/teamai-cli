@@ -474,14 +474,15 @@ function promptEnded(op, outcome) {
 }
 
 /**
- * Whether this toy records how prompt `op` ended. A toy whose teamai was killed still waits on the agent beside the one
- * the restarted teamai sent the prompt to again, and both see it end: the first to claim the end records it. A claim it
- * cannot write at all is its own, as a lone toy's is.
+ * Whether this toy records how prompt `op` ended, `outcome`. A toy whose teamai was killed still waits on the agent
+ * beside the one the restarted teamai sent the prompt to again, and both see it end: the first to claim the end records
+ * it, and its claim carries that end, so the other reads it there when the journal cannot record it. A claim it cannot
+ * write at all is its own, as a lone toy's is.
  */
-function claimsEnd(op) {
+function claimsEnd(op, outcome) {
   try {
     fs.mkdirSync(file('ended'), { recursive: true });
-    fs.closeSync(fs.openSync(file('ended', op), 'wx'));
+    fs.writeFileSync(file('ended', op), JSON.stringify(outcome), { flag: 'wx' });
 
     return true;
   } catch (error) {
@@ -508,9 +509,9 @@ function settlePrompt(op) {
     return;
   }
 
-  if (!record.outcome && !claimsEnd(op)) {
-    // Another toy records this end: say it as that toy records it, once it has.
-    const recorded = readOp(op)?.outcome;
+  if (!record.outcome && !claimsEnd(op, outcome)) {
+    // Another toy records this end: say it as that toy records it, or as its claim says it, once it has.
+    const recorded = readOp(op)?.outcome ?? readJson(file('ended', op), undefined);
 
     if (recorded === undefined) {
       working.set(op, setTimeout(() => settlePrompt(op), 25));
