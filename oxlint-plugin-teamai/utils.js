@@ -86,13 +86,23 @@ export function sourcePath(context) {
 }
 
 /**
- * Whether the linted file is test support: under `src/testing/` of its package or of a `packages/<name>/` folder, which
- * `teamai/package-boundaries` keeps everything that ships from importing.
+ * Whether `file`, relative to the workspace root, is test support: under `src/testing/` of the root package or of a
+ * `packages/<name>/` folder, the harness its tests run, which `teamai/package-boundaries` keeps everything that ships
+ * from importing.
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function isTestSupportPath(file) {
+  return /^(?:packages\/[^/]+\/)?src\/testing\//.test(file);
+}
+
+/**
+ * Whether the linted file is test support (see {@link isTestSupportPath}).
  * @param {Context} context
  * @returns {boolean}
  */
 export function inTestSupport(context) {
-  return sourcePath(context).replace(/^packages\/[^/]+\//, '').startsWith('src/testing/');
+  return isTestSupportPath(sourcePath(context));
 }
 
 /**
@@ -127,4 +137,24 @@ export function scopedFiles(files) {
 export function stringLiteralValue(node) {
   // oxlint-disable-next-line teamai/no-runtime-typeof -- an ESTree Literal's value is a string, number, boolean, null, bigint or RegExp, and typeof is how ESTree tells them apart
   return node?.type === 'Literal' && typeof node.value === 'string' ? node.value : undefined;
+}
+
+/**
+ * What `name` names where `node` uses it: the variable it resolves to from the innermost scope around `node` outwards,
+ * or undefined for a name nothing in the file binds.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} node
+ * @param {string} name
+ */
+export function variableOf(sourceCode, node, name) {
+  /** @type {import('@oxlint/plugins').Scope | null} */
+  let scope = sourceCode.getScope(node);
+
+  for (; scope; scope = scope.upper) {
+    const variable = scope.set.get(name);
+
+    if (variable) return variable;
+  }
+
+  return undefined;
 }

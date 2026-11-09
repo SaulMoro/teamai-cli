@@ -1,7 +1,8 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { stringLiteralValue } from '../utils.js';
+import { importedName } from '../imports.js';
+import { stringLiteralValue, variableOf } from '../utils.js';
 
 /** The methods that add a listener to an emitter. */
 const LISTENS = new Set(['on', 'once', 'addListener', 'prependListener', 'prependOnceListener']);
@@ -34,26 +35,6 @@ function isProcessInput(node) {
 const READLINE = new Set(['readline', 'node:readline', 'readline/promises', 'node:readline/promises']);
 
 /**
- * What `name` names where `node` uses it: the variable it resolves to from the innermost scope around `node` outwards,
- * or undefined for a name nothing in the file binds.
- * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
- * @param {ESTree.Node} node
- * @param {string} name
- */
-function variableOf(sourceCode, node, name) {
-  /** @type {import('@oxlint/plugins').Scope | null} */
-  let scope = sourceCode.getScope(node);
-
-  for (; scope; scope = scope.upper) {
-    const variable = scope.set.get(name);
-
-    if (variable) return variable;
-  }
-
-  return undefined;
-}
-
-/**
  * The name `variable` imports from readline: `createInterface` or `Interface` for a named import, `*` for the module
  * itself, as a default or namespace import gives it; undefined when it is no import of readline.
  * @param {import('@oxlint/plugins').Variable | undefined} variable
@@ -66,7 +47,7 @@ function readlineImport(variable) {
 
   if (node.type !== 'ImportSpecifier') return '*';
 
-  return node.imported.type === 'Identifier' ? node.imported.name : String(node.imported.value);
+  return importedName(node);
 }
 
 /**

@@ -1,7 +1,8 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { inProductionSource, isOneOf, scopedFiles, stringLiteralValue } from '../utils.js';
+import { importedName } from '../imports.js';
+import { inProductionSource, isOneOf, scopedFiles, stringLiteralValue, variableOf } from '../utils.js';
 
 /** The one module that starts a process through cross-spawn, behind `spawnCommand`, `spawnCommandSync` and `execCommand`. */
 const OWNER = scopedFiles(['packages/tool-core/src/exec.ts']);
@@ -25,26 +26,7 @@ function isCreateRequire(sourceCode, node) {
   if (def?.type !== 'ImportBinding') return node.name === 'createRequire';
 
   return def.node.type === 'ImportSpecifier' && def.parent?.type === 'ImportDeclaration' && MODULE.has(String(def.parent.source.value))
-    && (def.node.imported.type === 'Identifier' ? def.node.imported.name : String(def.node.imported.value)) === 'createRequire';
-}
-
-/**
- * The variable `name` resolves to where `node` uses it, from the innermost scope around `node` outwards.
- * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
- * @param {ESTree.Node} node
- * @param {string} name
- */
-function variableOf(sourceCode, node, name) {
-  /** @type {import('@oxlint/plugins').Scope | null} */
-  let scope = sourceCode.getScope(node);
-
-  for (; scope; scope = scope.upper) {
-    const variable = scope.set.get(name);
-
-    if (variable) return variable;
-  }
-
-  return undefined;
+    && importedName(def.node) === 'createRequire';
 }
 
 /**

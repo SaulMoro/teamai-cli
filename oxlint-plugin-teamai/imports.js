@@ -5,8 +5,11 @@ import { parse } from '@babel/parser';
 import { isIdentifier, traverseFast } from '@babel/types';
 import { stringLiteralValue } from './utils.js';
 
-/** @param {ESTree.ImportDeclaration['specifiers'][number]} specifier */
-function importedName(specifier) {
+/**
+ * The name `specifier` imports: `default` for a default import, `*` for a namespace import.
+ * @param {ESTree.ImportDeclaration['specifiers'][number]} specifier
+ */
+export function importedName(specifier) {
   if (specifier.type === 'ImportDefaultSpecifier') return 'default';
 
   if (specifier.type === 'ImportNamespaceSpecifier') return '*';
