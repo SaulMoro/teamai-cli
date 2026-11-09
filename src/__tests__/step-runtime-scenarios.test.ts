@@ -1705,6 +1705,21 @@ describe('the stdio step runtime client', () => {
     }
   });
 
+  it('sends no wake to a runtime whose init did not offer one', async () => {
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-toy-nowake-'));
+    const calls = path.join(state, 'calls.jsonl');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+
+    try {
+      expect(await runtime.init({ options: { state, calls }, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, {})).toEqual({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Step runtime "toy" wakes no fleet member: its init did not offer wake.' } });
+      expect(fs.existsSync(calls)).toBe(false);
+    } finally {
+      await runtime.dispose();
+      fs.rmSync(state, { recursive: true, force: true });
+    }
+  });
+
   it('ends a wake lost when the runtime stops after accepting it, since the member may still launch', async () => {
     const acceptsThenExits = `require('readline').createInterface({ input: process.stdin }).on('line', (line) => {
       const request = JSON.parse(line);

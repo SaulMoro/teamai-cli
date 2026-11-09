@@ -108,7 +108,9 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
   const opening = new Map<string, { join: (onAccepted: (handle: string) => Promise<void>) => Promise<Opened> }>();
   const executing = new Map<string, { join: (events: ExecEvents) => Promise<ExecEnd> }>();
   const prompting = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<PromptEnd> }>();
-  const waking = new Map<string, { join: (events: Parameters<StepRuntime['prompt']>[1]) => Promise<WakeEnd> }>();
+  const waking = new Map<string, { join: (events: Parameters<NonNullable<StepRuntime['wake']>>[1]) => Promise<WakeEnd> }>();
+  // Whether the runtime's init offered `wake`: one that did not is sent none.
+  let offersWake = false;
   // Operations this connection cancelled: a cancel may race their end, and each cancel is answered with an end.
   const cancelSent = new Set<string>();
   // Ends of operations nothing waits on any more, which teamai ignores but counts.
@@ -178,6 +180,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
     const { message } = parsed;
 
     if ('type' in message) {
+      offersWake = message.ok && message.wake === true;
       onInit?.(message.ok
         ? {
           ok: true, launchesAgents: message.prompt === true, ...(message.unavailable && { unavailable: message.unavailable }), ...(message.ownLogins && { ownLogins: message.ownLogins }), ...(message.wake === true && { wakes: true }),
@@ -632,6 +635,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
     wake(request, events) {
       if (dead) return Promise.resolve<WakeEnd>({ kind: 'failed', failure: dead });
+
+      if (!offersWake) return Promise.resolve<WakeEnd>({ kind: 'failed', failure: { code: 'wake_unavailable', message: `Step runtime "${name}" wakes no fleet member: its init did not offer wake.` } });
 
       const inFlight = waking.get(request.op);
 

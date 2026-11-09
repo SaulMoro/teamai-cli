@@ -27,7 +27,8 @@ import { z } from 'zod';
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…","home":"…"},"result":{"output":{…}},"usage":{…},"resumed":true}   resumed: true only when it continued lease.resume
 //    > {"type":"prompt","op":"op-c27e…","handle":"…","lease":{…,"resume":"…","continue":{"handle":"<earlier place>","op":"op-91c4…"}},…}
 //    < {"op":"op-c27e…","event":"finished","session":{…the conversation's…},…,"resumed":true}   a new turn of op-91c4…'s conversation
-//    < {"event":"notice","op":"op-c27e…","message":"…why not…"}  or a new conversation, resuming `resume` if it can, `resumed` false or absent
+//                                                   or, when it does not hold it: {"event":"notice","op":"op-c27e…","message":"…why…"},
+//                                                   then a new conversation's finished, resuming `resume` if it can, `resumed` false or absent
 //    > {"type":"open",…,"credentials":{}}                                      no view: the place of a confined prompt
 //    > {"type":"prompt",…,"confined":{"dir":"…","level":"verified","access":"read","schema":{…}}}
 //    < {"op":"op-a3d5…","event":"finished",…,"result":{"output":{…}},"confined":{"level":"verified","access":"read"}}
