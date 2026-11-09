@@ -578,7 +578,10 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // the scoring and resume store.
       const instanceId = instanceIdOf(s, thread);
       const toolHome = driver && (toolHomes?.[DRIVERS[driver].homeEnv] ?? (instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined));
-      const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt }) : undefined;
+      // A new thread never resumes the session the lease names (T3 starts each with a new one), so that session, of an
+      // earlier thread in this folder the step did not go on in, is not this one's.
+      const other = thread.turnOf ? undefined : request.lease.resume;
+      const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
 
       if (!driver || toolHome === undefined || !id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.` } });
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
