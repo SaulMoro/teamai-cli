@@ -8,13 +8,15 @@
 //
 // With `agent`, it is a runtime that launches agents its own way, as T3 or Paseo: it offers `prompt` and no `exec`, and
 // its agent works `hold_ms` (from when the prompt was first sent, across a restart of the toy) and until the file
-// `release` names exists, then writes `output` (or the whole `result`) to the lease's result file and finishes with a
+// `release` names exists (`{step}` in it is the lease's step), then writes `output` (or the whole `result`) to the lease's result file and finishes with a
 // session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
 // `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
-// a lease's `continue`, it keeps a conversation per prompt op until that prompt's place closes, and a prompt that names
-// one it still holds, finished, on the same tool and working directory, is a new turn of it (the same session,
-// `resumed: true`); any other is a new conversation with a new session, one notice saying why, and no `resumed`. A
-// person who deletes the conversation is the test removing that op's record from `ops/` in its state. With
+// a lease's `continue`, it keeps each conversation a prompt launched in `conversations/<id>.json` in its state, by the
+// conversation's id (its session's), until the place that launched it closes. A prompt that names one it still holds,
+// whose launching turn finished, on the same tool and working directory, is a new turn of it (the same session,
+// `resumed: true`); any other is a new conversation with a new session, one notice saying why, and no `resumed`. The
+// close of a later place stops only its own turns; the conversation it continued stays with the place that launched
+// it. A person who deletes the conversation is the test removing that file. With
 // `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
 // machine does; with `home` too, in that Claude home instead, which `finished` reports as the session's `home`, as a
 // T3 provider instance with its own home does. Each open records the tool its attempt's prompt runs (`open.tool`) and
@@ -410,7 +412,8 @@ function agentOutcome(record) {
 
   if (Date.now() < record.startedAt + (options.agent.hold_ms ?? 0)) return undefined;
 
-  if (options.agent.release !== undefined && !fs.existsSync(options.agent.release)) return undefined;
+  // `{step}` in `release` is the lease's step, so a test releases one step's agent apart from another's.
+  if (options.agent.release !== undefined && !fs.existsSync(options.agent.release.replaceAll('{step}', record.lease.step))) return undefined;
 
   if (options.agent.fail) return { state: 'failed', failure: options.agent.fail };
   // `echo` names a credential whose value the agent writes into its output, as an agent that prints its token would.
@@ -423,7 +426,7 @@ function agentOutcome(record) {
   // A lease that names a conversation is a turn of it, as the prompt's first send found it, or else a new one.
   const continues = record.lease.continue !== undefined;
   const resumes = continues ? record.continued !== undefined : record.lease.resume !== undefined && options.agent.resumes !== false;
-  const id = continues ? record.continued ?? `toy-session-${record.op.slice(3)}` : resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}`;
+  const id = continues ? record.continued ?? conversationId(record.op) : resumes ? record.lease.resume : conversationId(record.op);
   const session = { tool: record.lease.tool, id, ...(options.agent.home !== undefined && { home: options.agent.home }) };
 
   if (options.agent.transcript) {
@@ -440,23 +443,28 @@ function agentOutcome(record) {
   return { state: 'finished', session, result, ...usage, ...(record.lease.resume !== undefined && { resumed: resumes }) };
 }
 
+/** The id of the conversation prompt `op` launches: the session its agent reports. */
+const conversationId = (op) => `toy-session-${op.slice(3)}`;
+const conversationPath = (id) => file('conversations', `${id}.json`);
+
 /**
- * The conversation the lease of `request` names, when this toy still holds it for this prompt: `{ session }`, its
- * session; else `{ notice }`, why this prompt starts a new conversation.
+ * The conversation the lease of `request` names, read by its id from the conversations this toy holds:
+ * `{ session }`, its session; else `{ notice }`, why this prompt starts a new conversation.
  */
 function conversationFor(request) {
   const { handle, op } = request.lease.continue;
-  const earlier = known(handle) ? readOp(op) : undefined;
+  const id = conversationId(op);
+  const held = readJson(conversationPath(id), undefined);
 
-  if (earlier?.kind !== 'prompt' || earlier.handle !== handle) return { notice: `The toy holds no conversation ${op} in place ${handle} any more, so this prompt starts a new one.` };
+  if (held === undefined || held.place !== handle || !known(handle)) return { notice: `The toy holds no conversation ${id} in place ${handle} any more, so this prompt starts a new one.` };
 
-  if (earlier.outcome?.state !== 'finished') return { notice: `Conversation ${op} has no finished turn to continue, so this prompt starts a new one.` };
+  if (!held.isReady) return { notice: `Conversation ${id} has no finished turn to continue, so this prompt starts a new one.` };
 
-  if (earlier.lease.tool !== request.lease.tool) return { notice: `Conversation ${op} runs ${earlier.lease.tool}, not ${request.lease.tool}, so this prompt starts a new one.` };
+  if (held.tool !== request.lease.tool) return { notice: `Conversation ${id} runs ${held.tool}, not ${request.lease.tool}, so this prompt starts a new one.` };
 
-  if (earlier.cwd !== request.cwd) return { notice: `Conversation ${op} works in ${earlier.cwd}, not ${request.cwd}, so this prompt starts a new one.` };
+  if (held.cwd !== request.cwd) return { notice: `Conversation ${id} works in ${held.cwd}, not ${request.cwd}, so this prompt starts a new one.` };
 
-  return { session: earlier.outcome.session.id };
+  return { session: id };
 }
 
 function promptEnded(op, outcome) {
@@ -484,6 +492,14 @@ function claimsEnd(op) {
 /** Records how the prompt's agent ended and says so, or waits for it. */
 function settlePrompt(op) {
   const record = readOp(op);
+
+  // Its place closed while it ran: the close stopped it.
+  if (record === undefined) {
+    working.delete(op);
+
+    return;
+  }
+
   const outcome = agentOutcome(record);
 
   if (outcome === undefined) {
@@ -513,6 +529,9 @@ function settlePrompt(op) {
 
   if (!record.outcome) fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op, ended: outcome.state })}\n`);
   keepEnd(op, { ...record, outcome });
+  const launched = readJson(conversationPath(conversationId(op)), undefined);
+
+  if (outcome.state === 'finished' && launched !== undefined && !launched.isReady) writeJson(conversationPath(conversationId(op)), { ...launched, isReady: true });
 
   if (outcome.state === 'finished' && dieAt('prompt-finished')) return;
   send(promptEnded(op, outcome));
@@ -583,6 +602,8 @@ function prompt(request) {
     const conversation = request.lease.continue === undefined ? undefined : conversationFor(request);
 
     if (conversation?.notice !== undefined) send({ event: 'notice', op: request.op, message: conversation.notice });
+
+    if (conversation?.session === undefined) writeJson(conversationPath(conversationId(request.op)), { place: request.handle, tool: request.lease.tool, cwd: request.cwd, isReady: false });
     writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, cwd: request.cwd, startedAt: Date.now(), ...(conversation?.session !== undefined && { continued: conversation.session }) });
   }
 
@@ -735,8 +756,12 @@ function close(request) {
 
   forget(request.handle);
 
+  // It ends the conversations this place launched, and stops only its own turns of any it continued.
   for (const { op } of opsOf(request.handle)) {
+    clearTimeout(working.get(op));
+    working.delete(op);
     fs.rmSync(opPath(op), { force: true });
+    fs.rmSync(conversationPath(conversationId(op)), { force: true });
     unkept.delete(op);
   }
 

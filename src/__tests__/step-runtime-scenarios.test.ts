@@ -475,7 +475,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
     options: (state, agent) => ({ state, agent }),
     journal: (state) => [path.join(state, 'ops')],
-    forget: (state, op) => fs.rmSync(path.join(state, 'ops', `${op}.json`)),
+    forget: (state, op) => fs.rmSync(path.join(state, 'conversations', `toy-session-${op.slice(3)}.json`)),
   },
   {
     name: 't3 over stdio, on a fake T3 Code server',
@@ -810,6 +810,45 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
       expect(end.kind === 'finished' && end.session.id).not.toBe(first.session.id);
       expect(end.kind === 'finished' ? end.resumed : 'not finished').not.toBe(true);
       expect(noticesFor(warned, request.op)).toHaveLength(1);
+    });
+
+    it('keeps it through the close of a later place whose turn still runs: that close stops only its own turn', async () => {
+      const release = path.join(dir, 'release');
+      const runtime = await start({ release, output: { verdict: 'approve' } });
+      fs.writeFileSync(release, '');
+      const first = await earlier(runtime);
+      fs.rmSync(release);
+      const later = await openedAt(runtime, worktree);
+      let accepted = false;
+      void runtime.prompt(continuing(later, first), { onAccepted: () => { accepted = true; } });
+      expect(await until(() => accepted)).toBe(true);
+
+      expect(await runtime.close(later)).toEqual({ ok: true });
+      fs.writeFileSync(release, '');
+      const third = continuing(await openedAt(runtime, worktree), first);
+
+      expect(await runtime.prompt(third, {})).toMatchObject({ kind: 'finished', session: first.session, resumed: true });
+    });
+
+    it('reattaches a later turn its own restart left running, and that turn ends as one more turn of the conversation', async () => {
+      const release = path.join(dir, 'release');
+      const agent = { release, output: { verdict: 'approve' } };
+      const before = await start(agent);
+      fs.writeFileSync(release, '');
+      const first = await earlier(before);
+      fs.rmSync(release);
+      const later = await openedAt(before, worktree);
+      const request = continuing(later, first);
+      let accepted = false;
+      void before.prompt(request, { onAccepted: () => { accepted = true; } });
+      expect(await until(() => accepted)).toBe(true);
+      await before.dispose();
+      const after = await start(agent);
+
+      expect(await after.reattach(later)).toEqual(alive([{ op: request.op, state: 'running' }]));
+      const reconnected = after.prompt(request, {});
+      fs.writeFileSync(release, '');
+      expect(await reconnected).toMatchObject({ kind: 'finished', session: first.session, resumed: true });
     });
 
     it('continues it after its own restart between the two prompts', async () => {
