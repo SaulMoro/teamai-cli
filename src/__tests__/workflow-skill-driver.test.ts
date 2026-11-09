@@ -166,6 +166,21 @@ steps:
     prompt: Change the code.
 `;
 
+// Step two goes on in step one's conversation.
+const PLAN = `schemaVersion: v1alpha1
+name: plan
+description: Plan a change, then make it in the same conversation
+invoke: allow
+steps:
+  - id: plan
+    prompt: Plan the change.
+  - id: make
+    needs: [plan]
+    session:
+      from: plan
+    prompt: Make the change you planned.
+`;
+
 // Setup passes only when it gets the run mode the start kept, and the command prints the one it gets.
 const MODE = `schemaVersion: v1alpha1
 name: mode
@@ -1488,6 +1503,57 @@ steps:
       message: expect.stringMatching(new RegExp(`^The skill driver's state of run ${run} cannot be read \\(.+\\)\\. The person can continue the run in a terminal with teamai workflow resume ${run} --tools default=claude\\.$`)),
       next: null,
     } });
+  });
+});
+
+describe('a step that continues an earlier step\'s conversation, under the skill driver', () => {
+  /** The dispatch `answer` offers, acked, its result written and reported from `session`. */
+  const work = async (harness: Awaited<ReturnType<typeof skillHarness>>, run: RunId, answer: unknown, session: string) => {
+    const turn = z.object({ data: z.object({ turn: z.object({ actions: z.array(z.object({ kind: z.string() }).passthrough()) }) }) }).parse(answer);
+    const dispatch = DispatchShape.parse(turn.data.turn.actions.find((action) => action.kind === 'dispatch'));
+    await harness.call({ kind: 'ack', run, attempt: dispatch.attempt }, { session });
+    const file = /Write `([^`]+result\.json)`/.exec(fs.readFileSync(dispatch.brief, 'utf8'))?.[1];
+    if (!file) throw new Error(`${dispatch.brief} names no result file`);
+    fs.writeFileSync(file, JSON.stringify({ kind: 'output', output: 'done' }));
+    expect(await harness.call({ kind: 'report', run, attempt: dispatch.attempt, role: 'agent', modelUnavailable: false }, { session })).toMatchObject({ data: { runner: { status: 'reported' } } });
+
+    return { dispatch, next: await harness.call({ kind: 'next', run, wait: false }, { session }) };
+  };
+
+  const DispatchShape = z.object({ attempt: AttemptIdSchema, title: z.string(), brief: z.string(), continue: z.object({ title: z.string() }).optional() }).passthrough();
+
+  const startOn = async (host: 'h1' | 'h4') => {
+    const harness = await skillHarness({ plan: PLAN });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'plan', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+
+    return { harness, run, chosen: await harness.call({ kind: 'choose', run, choice: host }) };
+  };
+
+  it('on h1, dispatches the later step to the child that worked the earlier one, and records no resumed it cannot prove', async () => {
+    const { harness, run, chosen } = await startOn('h1');
+    const plan = await work(harness, run, chosen, 'session-a');
+    expect(plan.dispatch.continue).toBeUndefined();
+
+    const make = await work(harness, run, plan.next, 'session-a');
+
+    expect(make.dispatch.continue).toEqual({ title: plan.dispatch.title });
+    const state = await readRun(harness.config, run);
+    if (typeof state !== 'object') throw new Error('run was not stored');
+    expect(state.steps.find((step) => step.id === 'make')).not.toHaveProperty('resumed');
+  });
+
+  it('on h4, records the session that worked each step, and resumed for the later step the same session reports', async () => {
+    const { harness, run, chosen } = await startOn('h4');
+    const plan = await work(harness, run, chosen, 'session-a');
+    await work(harness, run, plan.next, 'session-a');
+
+    const state = await readRun(harness.config, run);
+    if (typeof state !== 'object') throw new Error('run was not stored');
+    expect(state.steps.find((step) => step.id === 'plan')).toMatchObject({ tool: 'claude', session: 'session-a' });
+    expect(state.steps.find((step) => step.id === 'make')).toMatchObject({ session: 'session-a', resumed: { tool: 'claude', id: 'session-a' } });
   });
 });
 

@@ -92,7 +92,7 @@ Done when you reported `message`.
 
 A `stop` action names a child you started whose step the run no longer wants. `why` says why: `cancelled` or `timeout`. For each one:
 
-1. When the child named `title` still runs, tell it to stop its work and end.
+1. When the child named `title` still runs, tell it to stop its work and end. A stop of a step that went on in an earlier step's child names that child.
 2. Run `report`. The action stays in every turn until you do.
 
 Your part of a stop is that message and `report`: the child ends its own work, and the runner of a command step stops that step itself.
@@ -107,6 +107,8 @@ A `dispatch` action is one prompt step for one child agent. For each one:
 2. Run `ack`. The action stays in every turn until you do.
 
 When your host cannot run `model.name`, run `unavailable` in place of both steps.
+
+A dispatch that carries `continue` goes on in the conversation of an earlier step's child: send the brief's prompt to the child named `continue.title` (Claude Code `SendMessage`, T3 `t3_thread_send`) in place of starting one in step 1. When your host cannot reach that child, start a new one as step 1 says. Then run `ack`.
 
 A dispatch whose `needs.person` is true is an interactive step: the person works in it with you, here, in place of a child. Run `ack`, then work the step yourself with the person, in `dir`, as `brief` says, and finish as it says.
 

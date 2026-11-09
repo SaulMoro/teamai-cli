@@ -34,6 +34,8 @@ const ReportBodySchema = z.object({
    */
   tool: z.string().optional(),
   session: z.string().optional(),
+  /** The session the attempt went on in, when the session that reported is the one its lease continues. */
+  resumed: z.object({ tool: z.string(), id: z.string() }).optional(),
   model: z.string().optional(),
   tokens: TokenUsageSchema.optional(),
   durationMs: z.number().int().nonnegative().optional(),
@@ -71,9 +73,25 @@ const DispatchSchema = z.object({
   brief: z.string(),
   agent: z.string().optional(),
   model: ModelPickSchema,
+  /** The child of an earlier step whose conversation this step goes on in: the host sends it the brief when it can reach it. */
+  continues: z.object({ title: z.string() }).optional(),
+  /** The orchestrating session works the step itself: on a host that starts no child, or an interactive step. */
+  bySession: z.literal(true).optional(),
+  /** The session the lease continues, which a report from that same session records as resumed. */
+  resumes: z.object({ tool: z.string(), id: z.string() }).optional(),
 });
 
 export type Dispatch = z.infer<typeof DispatchSchema>;
+
+/**
+ * The name a child runs under, valid as an agent or teammate name (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`): `<step>-<attempt>`,
+ * each other character of the step path mapped to `-`, the step cut so the whole fits 64 characters.
+ */
+export function childTitle(step: string, attempt: string): string {
+  const suffix = `-${attempt}`;
+
+  return `${step.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64 - suffix.length)}${suffix}`;
+}
 
 /** Why an attempt is stopped: the person cancelled it, or it passed the deadline its lease carries. */
 const STOP_REASONS = ['cancelled', 'timeout'] as const;
@@ -109,7 +127,8 @@ const AttemptStateSchema = z.discriminatedUnion('phase', [
   /** `reissued`: an earlier session was shown this dispatch, and a child it started may still run. */
   z.object({ ...AttemptBase, phase: z.literal('offered'), dispatch: DispatchSchema, reissued: z.literal(true).optional() }),
   z.object({ ...AttemptBase, phase: z.literal('dispatched'), dispatch: DispatchSchema }),
-  z.object({ ...AttemptBase, phase: z.literal('stopping'), by: z.enum(['runner', 'agent']), why: z.enum(STOP_REASONS) }),
+  /** `child`: the title of the child the agent stops, when it is an earlier step's child this attempt went on in. */
+  z.object({ ...AttemptBase, phase: z.literal('stopping'), by: z.enum(['runner', 'agent']), why: z.enum(STOP_REASONS), child: z.string().optional() }),
   /** `stopped`: the report gives up an attempt stopped for this reason. */
   /**
    * `changed`: paths the child result reported, kept so a report sent again still names them. Absent on a report stored

@@ -11,7 +11,7 @@ import {
   ackLiteral, adoptLiteral, chooseHostLiteral, localStartLiteral, nextLiteral, personRespondLiteral, pollLiteral, reportLiteral, respondLiteral, resumeLiteral,
   skillResumeLiteral, takeoverLiteral, unavailableLiteral, type Invocation, type Literal,
 } from './literals.js';
-import type { AttemptState, Dispatch, Gate, ModelPick, SkillState, StopReason, TurnEvent } from './skill-state.js';
+import { childTitle, type AttemptState, type Dispatch, type Gate, type ModelPick, type SkillState, type StopReason, type TurnEvent } from './skill-state.js';
 import { childCap, reportedByAgent, type Answer, type Refusal } from './transitions.js';
 
 /**
@@ -73,6 +73,8 @@ export interface DispatchAction {
   unavailable?: Literal;
   /** Present when an earlier session was shown this dispatch: what to do about the child it may have started. */
   reissued?: string;
+  /** The child of an earlier step whose conversation this step goes on in: send it the brief when your host can reach it. */
+  continue?: { title: string };
 }
 
 /**
@@ -354,14 +356,8 @@ function reference(name: 'hosts.md' | 'places.md'): string {
   return path.join(packagedSkillRoots().dataRoot, 'workflow', 'references', name);
 }
 
-/**
- * The name a child runs under, valid as an agent or teammate name (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`): `<step>-<attempt>`,
- * each other character of the step path mapped to `-`, the step cut so the whole fits 64 characters.
- */
 function titleOf(open: AttemptState): string {
-  const suffix = `-${open.attempt}`;
-
-  return `${open.step.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64 - suffix.length)}${suffix}`;
+  return childTitle(open.step, open.attempt);
 }
 
 function dispatchOf(state: SkillState, open: Extract<AttemptState, { phase: 'offered' | 'dispatched' }>): DispatchAction {
@@ -380,6 +376,8 @@ function dispatchOf(state: SkillState, open: Extract<AttemptState, { phase: 'off
   };
 
   if (dispatch.agent !== undefined) action.agent = dispatch.agent;
+
+  if (dispatch.continues) action.continue = dispatch.continues;
 
   if (dispatch.model.by !== 'definition') action.unavailable = unavailableLiteral(invocation, run, attempt);
 
@@ -414,7 +412,7 @@ function gateAction(state: SkillState, gate: Gate): GateAction | PersonAction {
 
 function stopsOf(state: SkillState): StopAction[] {
   return state.attempts.flatMap((open): StopAction[] => (open.phase === 'stopping' && open.by === 'agent'
-    ? [{ kind: 'stop', attempt: open.attempt, step: open.step, title: titleOf(open), why: open.why, report: reportLiteral(state.invocation, state.run, open.attempt) }]
+    ? [{ kind: 'stop', attempt: open.attempt, step: open.step, title: open.child ?? titleOf(open), why: open.why, report: reportLiteral(state.invocation, state.run, open.attempt) }]
     : []));
 }
 

@@ -700,7 +700,7 @@ export async function agentReport(context: SkillContext, run: RunId, call: { att
     const { state } = read;
     const result = await readChildResult({ config: context.config, run, attempt });
     await AttemptResult.mask(attemptResultPath(context.config, run, attempt), context.env.secrets);
-    const taken = traced(context, reportRow(state, { attempt, modelUnavailable: call.modelUnavailable, result }));
+    const taken = traced(context, reportRow(state, { attempt, modelUnavailable: call.modelUnavailable, result, session: context.session }));
 
     if (!taken) return { data: { runner: { attempt, status: 'gone' } } };
 

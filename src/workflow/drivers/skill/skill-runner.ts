@@ -16,11 +16,11 @@ import { redact } from '@teamai/shared/redact';
 import { attemptEnv } from '../../attempt-marker.js';
 import { runConfinedStep, type ConfinedStepEnd, type ConfinedStepLease } from '../../confined-step.js';
 import { STALE_WINDOW_MS } from '../../handoff.js';
-import { commandEnd, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
+import { commandEnd, continuedAttempt, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
 import { attemptDir, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { HOST_PROFILES } from './host-profiles.js';
-import { writeSkillState, readSkillState, type AttemptState, type Dispatch, type ReportBody, type SkillState } from './skill-state.js';
+import { childTitle, writeSkillState, readSkillState, type AttemptState, type Dispatch, type ReportBody, type SkillState } from './skill-state.js';
 import { pickChildModel } from './child-model.js';
 import { writeChildBrief } from './child-brief.js';
 import { reportLiteral, runnerArgs } from './literals.js';
@@ -199,6 +199,18 @@ async function fail(context: SkillContext, lock: RunLock, input: { state: SkillS
 }
 
 /** Under the lock: prepares the attempt's place (C4 to C7), or sends the report it already has. */
+/**
+ * The child of the earlier step whose conversation `step` goes on in (`session.from`), on a host that starts children:
+ * the one this run dispatched that step's settled attempt to. The run records no session of such a child, whose session
+ * is its orchestrator's, so the earlier step's attempt names it.
+ */
+async function continuedChild(config: LocalConfig, state: SkillState, step: string): Promise<{ title: string } | undefined> {
+  if (state.host.kind !== 'chosen' || !HOST_PROFILES[state.host.id].startsChildAgent) return undefined;
+  const earlier = await continuedAttempt(config, state.run, step);
+
+  return earlier && state.settled.includes(earlier.attempt) ? { title: childTitle(earlier.step, earlier.attempt) } : undefined;
+}
+
 async function prepare(context: SkillContext, lock: RunLock, attempt: AttemptId): Promise<Stage> {
   const state = await readState(context, lock);
   const open = state && openAttempt(state, attempt);
@@ -292,7 +304,7 @@ async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, p
     return stage;
   }
 
-  const { agent, model, defaultModel, output, place, writes, interactive, readOnly, isolation, confined } = lease;
+  const { agent, model, defaultModel, output, place, writes, interactive, readOnly, isolation, confined, session } = lease;
 
   // D28 leased the step to this machine's confined tool, which runs it here, as the local driver does (C12).
   if (open.runs === 'here' && confined) {
@@ -317,11 +329,12 @@ async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, p
 
   // A child of a confined step works in its directory, which holds everything it may read.
   const workDir = confined ? confined.dir : dir;
+  const by = interactive ? 'person' : state.host.kind === 'chosen' && !HOST_PROFILES[state.host.id].startsChildAgent ? 'self' : 'child';
 
   const brief = await writeChildBrief({
     config: context.config, run: lock.run, attempt, step: open.step, dir: workDir, prompt: prepared.prompt ?? lease.prompt,
     changes: confined ? 'confined' : writes ? 'commit' : interactive && place === 'checkout' && !readOnly ? 'keep' : 'none',
-    by: interactive ? 'person' : state.host.kind === 'chosen' && !HOST_PROFILES[state.host.id].startsChildAgent ? 'self' : 'child',
+    by,
     output, report: reportLiteral(state.invocation, lock.run, attempt), secrets: context.env.secrets,
   });
 
@@ -336,6 +349,13 @@ async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, p
   if (isolation) dispatch.isolation = isolation;
 
   if (agent !== undefined) dispatch.agent = agent;
+
+  if (by !== 'child') dispatch.bySession = true;
+
+  if (session) dispatch.resumes = session;
+  const continues = interactive || confined ? undefined : await continuedChild(context.config, state, open.step);
+
+  if (continues) dispatch.continues = continues;
   const offered = traced(context, offerRow(state, { attempt, dispatch }));
 
   if (offered) await writeSkillState(context.config, lock, offered.state, context.env.secrets);

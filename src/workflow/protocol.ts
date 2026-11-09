@@ -15,7 +15,7 @@ import { loadCachedWorkflow, loadWorkflowTree } from './cache.js';
 import { describeWorkflow, type WorkflowDescription } from './describe.js';
 import { ConfinedLeaseSchema, LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
 import { carriedRun, claimOffered, leaseRefusal, offerToPerson, reconcileTakenCopies, resumeRun, settledSteps, takeoverFor, takeoverRefusal, type Takeover } from './handoff.js';
-import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput, type SoleDriver } from './engine.js';
+import { leaseNext, locateStep, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput, type SoleDriver } from './engine.js';
 import {
   abandonPlace, adoptedPlaceOf, finishPlace, keepPlace, releaseUnlaunchedPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparedCopyTeam, preparePlace, refuseDirtyAdoptedCommand, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
   type PlacePrepared,
@@ -351,6 +351,24 @@ export async function resumeRefusal(
  */
 export function startAsCli(client: Pick<WorkflowClient, 'start'>, name: string, { mode, ...options }: Omit<Parameters<WorkflowClient['start']>[1], 'caller' | 'startedBy' | 'instead'> & { mode: RunMode }): Promise<WorkflowEnvelope> {
   return client.start(name, { ...options, caller: { evidence: { kind: 'none' }, confirmed: false, mode }, startedBy: 'cli' });
+}
+
+/**
+ * The settled attempt of the earlier step whose conversation step `step` of run `run` goes on in (`session.from`), for
+ * a driver whose report records no session of it, as the skill driver records none of a child's.
+ */
+export async function continuedAttempt(config: LocalConfig, run: RunId, step: string): Promise<{ step: string; attempt: AttemptId } | undefined> {
+  const state = await readRun(config, run);
+
+  if (state === 'missing' || state === 'corrupt') return undefined;
+  const located = locateStep(state, step);
+  const from = located?.step.session && 'from' in located.step.session ? located.step.session.from : undefined;
+
+  if (!located || from === undefined) return undefined;
+  const earlier = state.steps.find((item) => item.id === `${located.scope.prefix}${from}`);
+  const attempt = AttemptIdSchema.safeParse(earlier && 'attempt' in earlier ? earlier.attempt : undefined);
+
+  return earlier && attempt.success ? { step: earlier.id, attempt: attempt.data } : undefined;
 }
 
 export function workflowNotFound(name: string): WorkflowFailure {
