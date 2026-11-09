@@ -18,6 +18,8 @@ rule.invalid('rejects restricted store symbols', `import { readRun as read } fro
 rule.valid('allows what the confined tools of this machine can do', `import { confinedAccess, isConfinedTool } from '../../../tool-launch/confined.js';`);
 rule.invalid('rejects the scorer judge the confined tools moved out of', `import { runLocalJudge } from '../../../scorers/judge.js';`);
 rule.invalid('rejects a confined launch it does not name', `import { runConfined } from '../../../tool-launch/confined.js';`);
+rule.valid('allows the usage limits the skill driver keeps between calls', `import { UsageLimits, KeptLimitSchema, type KeptLimit, type WhenIdle } from '../../usage-limits.js';`);
+rule.invalid('rejects a usage-limit name the skill driver does not keep', `import { UsageLimits, isUsageLimited } from '../../usage-limits.js';`);
 rule.valid('allows named protocol schemas and approved values', `import { LeaseWireSchema } from '../../lease-wire.js'; import { envAdvice } from '../../requirements.js';`);
 rule.valid('allows types in transitions', `import type { Tick } from './tick.js';`, { filename: 'src/workflow/drivers/skill/transitions.ts' });
 rule.valid('allows the skill driver entry', `import { drive } from './workflow/drivers/skill/skill-driver.js';`, { filename: 'src/workflow-commands.ts' });
