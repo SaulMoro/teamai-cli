@@ -523,6 +523,8 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
   // cancel goes through the record, and waits for the member's answer as long as for its progress.
   let lastSeen: { write: string; at: number } | undefined;
   let isCancelWritten = false;
+  // When this wait first saw the cancel, on this machine's clock.
+  let cancelledAt: number | undefined;
   // The gate the member asks, put to this driver's person once: `answer` once the person answered.
   let asked: Asked | undefined;
   // A record that does not change is read less often, down to a third of stale_after, so a staleness is seen in time.
@@ -615,9 +617,15 @@ async function offerAndWait(input: WaitInput, { cancel, leave }: { cancel: Abort
     }
 
     if (cancel.aborted && !isCancelWritten) {
-      if (record === undefined) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read, so no member was asked to stop it.${read.ok ? '' : ` ${read.error.message}`}` });
+      cancelledAt ??= Date.now();
 
-      if (record.state === 'offered' || isHeld(record)) {
+      // A read that failed shows nothing: the cancel is written once a read shows the record again, for as long as a
+      // member's answer is waited on, so the offer does not stay out for a member to take.
+      if (record === undefined) {
+        if (read.ok) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and its attempt has no record on fleet pool ${pool}, so no member was asked to stop it.` });
+
+        if (Date.now() - cancelledAt > staleAfterMs) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${read.error.message}` });
+      } else if (record.state === 'offered' || isHeld(record)) {
         const written = await cancelAttempt(config, record);
 
         if (written.ok) {
