@@ -200,6 +200,8 @@ export interface FakeT3 {
   addThread(thread: { threadId: string; title: string; status: string; parentThreadId?: string; updatedAt?: string; instanceId?: string; model?: string; runtimeMode?: string }): void;
   /** The person deletes the thread in T3 Code: T3 answers every later call on it `thread_not_found`. */
   deleteThread(threadId: string): void;
+  /** The person sends the thread a message in T3 Code: it runs again until the test changes it. */
+  runAgain(threadId: string): void;
   /** Starts the fake server, or starts it again on the same state. */
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -265,6 +267,11 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
       fs.writeFileSync(path.join(state, 'threads', `${encodeURIComponent(thread.threadId)}.json`), JSON.stringify({ updatedAt: new Date().toISOString(), ...thread, provider: 'claudeAgent', settled: false, runCount: 1 }));
     },
     deleteThread: (threadId) => fs.rmSync(path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`)),
+    runAgain(threadId) {
+      const file = path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`);
+      const thread = z.object({ runCount: z.number() }).loose().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+      fs.writeFileSync(file, JSON.stringify({ ...thread, status: 'running', settled: false, runCount: thread.runCount + 1 }));
+    },
     async start() {
       fs.rmSync(runtimeFile, { force: true });
       // The command line names the state, so a leak check of the test's directory sees the server.

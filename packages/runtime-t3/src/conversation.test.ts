@@ -1785,6 +1785,22 @@ describe('teamai-runtime-t3', () => {
       }]);
     });
 
+    it('starts a new thread, saying why, when the earlier thread runs again in T3 Code', async () => {
+      const { runtime, handle, threadId, later } = await finishedFirst();
+      t3.runAgain(threadId);
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+
+      const end = await ended(runtime, 'op-000000b2');
+      expect(end).toMatchObject({ event: 'finished' });
+      expect(end['resumed']).toBeUndefined();
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_send')).toEqual([]);
+      expect(noticeOf(runtime, 'op-000000b2')).toEqual([{
+        event: 'notice', op: 'op-000000b2', handle: later.handle,
+        message: `Runtime t3 starts a new T3 thread for step "fix" rather than continue the conversation of op-000000b1: the T3 thread ${linkTo(threadId)} ("review · teamai ${RUN}") of op-000000b1 runs in T3 Code (running).`,
+      }]);
+    });
+
     it('starts a new thread, saying why, when the step works in another folder than the earlier thread', async () => {
       const other = path.join(checkout, '.teamai', 'workflow-worktrees', `${RUN}-a5e6f7a8`);
       execFileSync('git', ['-C', checkout, 'worktree', 'add', '-q', '--detach', other]);

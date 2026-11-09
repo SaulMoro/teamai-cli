@@ -12,7 +12,7 @@ import type { Reach, Reached, Serving, Session } from './runtime.js';
 import { driverOf, isDefaultToolHome, sessionSince, DRIVERS } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider } from './tool-instances.js';
-import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Provider, type T3, type ThreadShell, type Waited } from './t3.js';
+import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Provider, type T3, type ThreadShell, type Waited, isActive } from './t3.js';
 import { sleep, within } from './within.js';
 
 // ─── A step's conversation ───
@@ -434,6 +434,9 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       return { ok: false, why: `T3 Code did not say whether it still has ${where}: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}` };
     }
 
+    // A turn sent to a thread that runs, such as one the person sent a message to, would wait behind that run.
+    if (isActive(shell.status)) return { ok: false, why: `${where} runs in T3 Code (${shell.status})` };
+
     // A chain names its first prompt, and a turn between may have set the thread to another model: T3 says which it
     // runs now, though not its options.
     const moved = shell.model !== undefined && shell.model !== null && shell.model !== selection?.model;
@@ -484,9 +487,20 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       const ended = settledStatus(waited);
 
       // A turn sent to a thread whose earlier run ended has ended only once T3 shows a run of its own.
-      if (ended !== undefined && thread.turnOf && (await s.t3.thread(thread.threadId)).runCount <= thread.turnOf.runsBefore) {
-        await sleep(TURN_POLL_MS);
-        continue;
+      if (ended !== undefined && thread.turnOf) {
+        let runs: number | undefined;
+
+        try {
+          runs = (await s.t3.thread(thread.threadId)).runCount;
+        } catch (error) {
+          // Asked again a few times, as a wait that failed.
+          if (++errors > 5) return { state: unconfirmed(request.op, `${where} could not be followed, so it may still run: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${state.run} to stop it.`), threadEnded: false };
+        }
+
+        if (runs === undefined || runs <= thread.turnOf.runsBefore) {
+          await sleep(TURN_POLL_MS);
+          continue;
+        }
       }
 
       if (ended === undefined || ended === 'idle') {
