@@ -1089,7 +1089,8 @@ describe('workflow start --driver local scores the passes it settles', () => {
     await syncScorersThenWorkflows(config);
     state.config = config;
     // The run works in a directory of its own, not the checkout the suite runs in, whose origin it would read, and
-    // finds git and node only, not the AI tools of the machine the suite runs on, which picking a judge would probe.
+    // finds git, node and the system's own commands, not the AI tools of the machine the suite runs on, which picking a
+    // judge would probe.
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workflow-scored-'));
     dirs.push(work);
     vi.spyOn(process, 'cwd').mockReturnValue(work);

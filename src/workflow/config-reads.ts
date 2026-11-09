@@ -172,11 +172,14 @@ export interface ConfigReads<TAnswer, TFailure> {
    * learns them, keeps none.
    */
   answer(dir: string, read: () => Promise<{ answer: TAnswer; read: ConfigRead } | { failure: TFailure }>): Promise<{ answer: TAnswer } | { failure: TFailure }>;
-  /** git ran `args`: unless the command is read-only, every answer kept is read again. */
+  /** git ran `args`: unless the command is read-only, every answer kept is read again through git, whatever its inputs hold now. */
   ran(args: readonly string[]): void;
 }
 
-/** The subcommands that write neither config, nor an index, nor a submodule checkout. */
+/**
+ * The subcommands that write no config and check out no submodule. An index `status` or `diff` refreshes is one of the
+ * inputs each reuse reads again.
+ */
 const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set(['status', 'diff', 'log', 'rev-parse', 'ls-files', 'show', 'cat-file', 'merge-base', 'for-each-ref', 'rev-list', 'ls-tree', 'diff-tree']);
 
 /** The subcommand of git `args`, after the global options; `-c`, `-C` and the path options spelled without `=` take the next one. */
