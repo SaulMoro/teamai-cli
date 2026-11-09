@@ -244,4 +244,26 @@ describe('the evidence a step left beside a pushed session', () => {
     expect(prompt).toContain('LOG-END');
     expect(fs.readFileSync(path.join(dir, 'evidence', 'run.log'), 'utf8')).toBe(log);
   });
+
+  it('writes each evidence file under a name every platform can hold, also two whose masked names are the same', async () => {
+    const session: Session = {
+      sessionId: SESSION, title: 'check', cwd: '/tmp/proj', platform: 'claude-code', createdAt: NOW, updatedAt: NOW,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'check it' }], timestamp: NOW }],
+    };
+    const masked = 'tok-<REDACTED:GITHUB_TOKEN>.log';
+    const evidence: ArchivedEvidence = { version: 1, files: [
+      { kind: 'text', path: masked, type: 'text/plain', size: 5, text: 'first', cut: false },
+      { kind: 'text', path: masked, type: 'text/plain', size: 6, text: 'second', cut: false },
+    ] };
+    const dir = path.join(root, 'masked-names');
+
+    await writeSessionEvidence(dir, judgeSession({ platform: 'claude-code', found: { session }, captures: [], mask: (text) => text, evidence }), rubrics);
+
+    const written = fs.readdirSync(path.join(dir, 'evidence'));
+    expect(written).toHaveLength(2);
+    expect(written.filter((name) => /[<>:"|?*]/.test(name))).toEqual([]);
+    expect(written.map((name) => fs.readFileSync(path.join(dir, 'evidence', name), 'utf8')).sort()).toEqual(['first', 'second']);
+    const prompt = fs.readFileSync(path.join(dir, 'prompt.md'), 'utf8');
+    for (const name of written) expect(prompt).toContain(`evidence/${name}`);
+  });
 });

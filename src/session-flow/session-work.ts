@@ -230,18 +230,40 @@ function stepPromptSections(files: JudgedSession['stepEvidence']): Array<{ title
   return files.map((file) => ({ title: file.path, body: keepEnds(file.text, share) }));
 }
 
+/** What a file name may not hold on Windows: control characters, and what a masked name's placeholders (`<REDACTED:…>`, `<repo>`) carry. */
+const UNWRITABLE_NAME_CHARS = /[<>:"|?*\\\p{Cc}]/gu;
+
 /**
- * `evidence` as a judge reads it, each text and path masked with `mask`: its text files under `evidence/`, and every
- * file listed for `evidence.json`.
+ * Where masked path `masked` goes in the judge's directory so every platform can write it: each segment without what
+ * Windows refuses in a name, and, when that path or a directory on it is taken by an earlier file, as one numbered name.
+ */
+function judgeDirPath(masked: string, taken: { files: Set<string>; dirs: Set<string> }): string {
+  const segments = masked.split('/').map((segment) => segment.replace(UNWRITABLE_NAME_CHARS, '_') || '_');
+  const dirsOf = (parts: readonly string[]): string[] => parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'));
+  const isFree = (parts: readonly string[]): boolean => !taken.files.has(parts.join('/')) && !taken.dirs.has(parts.join('/')) && dirsOf(parts).every((dir) => !taken.files.has(dir));
+  let chosen = segments;
+
+  for (let number = 2; !isFree(chosen); number++) chosen = [`${segments.join('_')}~${number}`];
+  taken.files.add(chosen.join('/'));
+
+  for (const dir of dirsOf(chosen)) taken.dirs.add(dir);
+
+  return chosen.join('/');
+}
+
+/**
+ * `evidence` as a judge reads it, each text and path masked with `mask`: its text files under `evidence/`, each at a
+ * path every platform can write, and every file listed for `evidence.json`.
  */
 function stepEvidenceOf(evidence: ArchivedEvidence | undefined, mask: (text: string) => string) {
   const files: JudgedSession['stepEvidence'] = [];
   const listing: StepEvidenceListing[] = [];
+  const taken = { files: new Set<string>(), dirs: new Set<string>() };
 
   for (const file of evidence?.files ?? []) {
     switch (file.kind) {
       case 'text': {
-        const at = `evidence/${mask(file.path)}`;
+        const at = `evidence/${judgeDirPath(mask(file.path), taken)}`;
         files.push({ path: at, text: mask(file.text) });
         listing.push({ kind: 'text', path: at, type: file.type, size: file.size, cut: file.cut });
         break;
