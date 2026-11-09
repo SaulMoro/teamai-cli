@@ -40,7 +40,7 @@ import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../tool-
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';
-import { answerTool, runAnswerStep } from './answer-step.js';
+import { answerCallTool, runAnswerStep } from './answer-step.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, stepWorkflow, unattendedChoice } from '../../types.js';
 import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
@@ -600,13 +600,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return choice.ok ? choice.target.name : undefined;
   };
 
-  const toolFor = toolForOn(undefined);
+  // The pick with no runtime's default: the member's own tools here.
+  const toolForHere = toolForOn(undefined);
 
   // It launches a step that names its tool on the tools this machine has: those the run's steps name, or every one when a
   // step's output may bring a workflow later. It is the run's only driver, so a step whose tool it cannot launch fails
   // rather than waits. A tool it picks for a step that names none, and that no step names, it offers without looking it
   // up, as it always launched it: launching it says if it is missing.
-  const { named, picked } = isStarted ? runTools(started, toolFor) : { named: undefined, picked: new Set<string>() };
+  const { named, picked } = isStarted ? runTools(started, toolForHere) : { named: undefined, picked: new Set<string>() };
   const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
   const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
   const tools = [...found, ...pickedUnlooked];
@@ -1134,7 +1135,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const resolved = await resolveWorkflowEnv(config);
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
-      answerToolNow = Object.keys(limits.held(Date.now())).length > 0 ? await answerTool({ config, ...lookup }) : undefined;
+      answerToolNow = Object.keys(limits.held(Date.now())).length > 0 ? await answerCallTool({ config, ...lookup }) : undefined;
 
       // A runtime's notice is masked as the step's output is, with the team's secrets too.
       for (const entry of defined.runtimes) if (entry.kind === 'external') rememberSecrets(entry.masks, turn.secrets);

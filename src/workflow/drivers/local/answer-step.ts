@@ -50,7 +50,7 @@ function failed(failure: WorkflowFailure): AnswerReport {
  * The tool an answer step's call runs on now, picked as the call picks it, so a usage limit on that tool holds the step.
  * Undefined when no tool can be picked: the step's call then fails on its own.
  */
-export async function answerTool({ config, resolveTool }: { config: LocalConfig; resolveTool?: ToolCallerDeps['resolveTool'] }): Promise<string | undefined> {
+export async function answerCallTool({ config, resolveTool }: { config: LocalConfig; resolveTool?: ToolCallerDeps['resolveTool'] }): Promise<string | undefined> {
   try {
     return await createToolCaller(resolveTool ? { resolveTool } : {}).toolFor(config);
   } catch (cause) {
