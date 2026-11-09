@@ -46,4 +46,15 @@ describe('the gates a fleet member asks its owner', () => {
     expect(await asked).toEqual({ refused: 'The question holds a secret.' });
     expect(gates.asking).toBeUndefined();
   });
+
+  it('ends a question still waiting when another is asked, so no ask waits on an answer that never comes', async () => {
+    const gates = gateQuestions();
+    const first = gates.ask(GO_ON);
+    const second = gates.ask(SHIP);
+
+    expect(await settled(first)).toEqual({ value: { refused: 'Another question of the nested run replaced it before the owner answered.' } });
+    expect(gates.asking).toEqual(SHIP);
+    expect(gates.take({ write: 'w2', question: SHIP, answer: { choice: 'yes' } })).toBe(true);
+    expect(await second).toEqual({ choice: 'yes' });
+  });
 });

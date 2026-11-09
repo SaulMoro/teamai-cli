@@ -12,7 +12,7 @@ export type HeardAnswer = { write: string; question: ExecQuestion; answer: ExecA
 export type GateQuestions = {
   /** The question asked and not yet answered, which each progress of the claim carries. */
   readonly asking: ExecQuestion | undefined;
-  /** Asks the owner `question`: the owner's answer, or why none comes. */
+  /** Asks the owner `question`, ending any question still waiting: the owner's answer, or why none comes. */
   ask(question: ExecQuestion): Promise<ExecAnswer>;
   /** Hands `heard`, from a record read at any time, to the question asked when it answers that question. Whether it did. */
   take(heard: HeardAnswer): boolean;
@@ -37,6 +37,9 @@ export function gateQuestions(): GateQuestions {
     },
 
     ask(question) {
+      // One question waits at a time: one still waiting is ended, so its ask does not wait on an answer that never comes.
+      end({ refused: 'Another question of the nested run replaced it before the owner answered.' });
+
       return new Promise<ExecAnswer>((resolve) => {
         waiting = { question, answer: resolve };
       });
