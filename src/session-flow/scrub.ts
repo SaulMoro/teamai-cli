@@ -24,6 +24,7 @@ import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema } from '../types.js';
 import { maskCutSecret } from '@teamai/tool-core/sessions/title';
+import { claudeProjectDirName } from '@teamai/tool-core/sessions/fs';
 import { mapStrings } from '../utils/json.js';
 
 export interface ScrubResult {
@@ -72,9 +73,6 @@ const ASCII_NAME_CHAR = '[A-Za-z0-9_@%+~#$-]';
  */
 const SEGMENT_START = `(?:(?<!${ASCII_NAME_CHAR})|(?<=(?:^|(?!${ASCII_NAME_CHAR}).)__?))`;
 const SEGMENT_END = `(?:(?!${NAME_CHAR}|\\.${NAME_CHAR})|(?=__?(?!${NAME_CHAR}|\\.${NAME_CHAR})))`;
-
-/** The directory name Claude Code encodes a path as (`/Users/alice/app` → `-Users-alice-app`). */
-const encodedDir = (dir: string): string => dir.replace(/[^a-zA-Z0-9]/g, '-');
 
 /**
  * Each spelling `root` may appear in, and whether it is matched ignoring case. A POSIX root as written and as a file URL
@@ -132,7 +130,7 @@ function pathRewriter({ repo, home, tmp, workdir }: LocalPathRoots, cwd: string)
   const nameOf = (root: string): string | undefined => named.get(root) ?? named.get(root.toLowerCase());
 
   const encoded = (dirs: readonly string[]): string[] =>
-    [...new Set(dirs.flatMap((dir) => (isBelowFilesystemRoot(dir) && /^(?:\/|[A-Za-z]:[\\/])/.test(dir) ? [encodedDir(dir)] : [])))].sort(byLength);
+    [...new Set(dirs.flatMap((dir) => (isBelowFilesystemRoot(dir) && /^(?:\/|[A-Za-z]:[\\/])/.test(dir) ? [claudeProjectDirName(dir)] : [])))].sort(byLength);
 
   const slug = (dirs: string[], after: string): RegExp | undefined =>
     dirs.length > 0 ? new RegExp(`(?<=[\\\\/])(?:${dirs.map(escapeRegExp).join('|')})(?=${after})`, 'g') : undefined;
