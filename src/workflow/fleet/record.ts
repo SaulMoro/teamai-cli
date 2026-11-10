@@ -812,15 +812,24 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
   if (result.value && !result.value.ok) return result.value;
 
   if (result.status === 'published' || result.status === 'already-present') return { ok: true, value: undefined };
+
+  // Still held at the end of its wait: the write never ran, so a record moved meanwhile is not why it did not land.
+  if (result.status === 'busy' && wait !== undefined) return { ok: false, error: heldError(record) };
+
   // The write may still have landed, or another one first, as when two members race for an offer: origin decides.
   const now = await readAttemptRecord(config, record.run, record.attempt);
 
   if (now.ok && now.value !== 'absent' && now.value.write === record.write) return { ok: true, value: undefined };
 
   if (now.ok && (now.value === 'absent' ? undefined : now.value.write) !== replaces) return { ok: false, error: moved };
-  const reason = result.status === 'failed' ? ` (${sanitizeGitUrl(result.reason)})` : ' (another write held teamai-reports)';
 
-  return { ok: false, error: { code: 'reports_failed', message: `Attempt ${record.attempt} of run ${record.run} could not be written to teamai-reports${reason}. Try again.` } };
+  if (result.status === 'busy') return { ok: false, error: heldError(record) };
+
+  return { ok: false, error: { code: 'reports_failed', message: `Attempt ${record.attempt} of run ${record.run} could not be written to teamai-reports (${sanitizeGitUrl(result.reason)}). Try again.` } };
+}
+
+function heldError(record: FleetRecord): FleetError {
+  return { code: 'reports_failed', message: `Attempt ${record.attempt} of run ${record.run} could not be written to teamai-reports (another write held teamai-reports). Try again.` };
 }
 
 /** `attempts/<attempt>/fleet.json` in this install's data home: the pool the owner offered the attempt to. */
