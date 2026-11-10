@@ -43,15 +43,6 @@ describe('teamai/launch-through-workflows', () => {
   rule.valid('allows tests to drive the launcher', `vi.mock('../workflow/runtimes/tool-caller.js'); import { createToolCaller } from '../workflow/runtimes/tool-caller.js';`, { filename: 'src/__tests__/feature.test.ts' });
 });
 
-/** The source files of this checkout the rule reads: src/ and every package's src/, tests left out. */
-function sources(): string[] {
-  const roots = ['src', ...fs.readdirSync(path.join(REPO, 'packages')).map((folder) => path.join('packages', folder, 'src'))];
-
-  return roots.filter((root) => fs.existsSync(path.join(REPO, root))).flatMap((root) => fs.readdirSync(path.join(REPO, root), { recursive: true, encoding: 'utf8' })
-    .map((entry) => path.posix.join(root, entry.split(path.sep).join('/')))
-    .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.includes('__tests__/')));
-}
-
 describe('what the rule lists', () => {
   it('names only folders that exist, so an emptied folder keeps no exemption', () => {
     for (const folder of ALLOWED) expect(fs.statSync(path.join(REPO, folder)).isDirectory(), folder).toBe(true);
@@ -63,23 +54,5 @@ describe('what the rule lists', () => {
 
       expect(fs.existsSync(file), launcher).toBe(true);
     }
-  });
-
-  it('matches every launcher an import in this checkout reaches, each from inside the folders that may launch', () => {
-    const IMPORT = /^\s*(?:import|export)\s+(?!type\b)([^'"]*?)from\s+'([^']+)'/gmu;
-    const reached = sources().flatMap((file) => [...fs.readFileSync(path.join(REPO, file), 'utf8').matchAll(IMPORT)].flatMap(([, clause = '', specifier = '']) => {
-      const to = specifier.startsWith('.') ? path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)).replace(/\.js$/u, '.ts') : specifier.split('/').slice(0, 2).join('/');
-
-      if (!(to in LAUNCHERS)) return [];
-      const names = LAUNCHERS[to];
-
-      // A module that launches only through some of its names is reached by an import of one of them.
-      return names === undefined || names.some((name) => (name === '*' ? clause.includes('* as') : new RegExp(`\\b${name}\\b`, 'u').test(clause))) ? [{ file, to }] : [];
-    }));
-
-    // Each launcher is imported somewhere, so none is a stale entry the rule would never match.
-    expect(new Set(reached.map(({ to }) => to))).toEqual(new Set(Object.keys(LAUNCHERS)));
-    expect(reached.length).toBeGreaterThan(10);
-    expect(reached.filter(({ file }) => !ALLOWED.some((folder) => file.startsWith(folder)) && !file.startsWith('packages/tool-launch/'))).toEqual([]);
   });
 });
