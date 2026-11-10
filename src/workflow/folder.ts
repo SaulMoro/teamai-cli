@@ -147,6 +147,7 @@ async function pin(config: LocalConfig, { sourceHash, files }: { sourceHash: str
 
     return;
   }
+
   const staging = path.join(path.dirname(target), `.${sourceHash}.${randomBytes(4).toString('hex')}`);
 
   try {
