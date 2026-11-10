@@ -19,13 +19,16 @@ const RUN_MS = 30_000;
 vi.setConfig({ testTimeout: RUN_MS });
 /** The shipped tool ids check-docs generates for teamai/tool-facts. */
 const TOOL_IDS = 'oxlint-plugin-teamai/tool-ids.generated.json';
+/** The source that declares DriverCan. */
+const DRIVER_CAN = 'src/workflow/requirements.ts';
 
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
   // The shipped driver definitions are checked against the guide blocks that show them.
   // package.json's `bin` lists the runtimes teamai ships, whose options the guide examples are checked against.
-  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'package.json', 'AGENTS.md', '.github', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  // workflow-engine.md names the keys DriverCan declares in requirements.ts.
+  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
@@ -231,4 +234,16 @@ it('check refuses a quoted glossary Avoid spelling in prose and ignores it in co
   expect(checked.status).toBe(1);
   expect(checked.output).toContain('docs/guide/workflow.md uses "folder resource" 1 times.');
   expect(checked.output).not.toContain('docs/guide/sharing.md');
+});
+it('check refuses a DriverCan key the workflow engine page does not name', () => {
+  const root = checkout();
+  const source = path.join(root, DRIVER_CAN);
+  const text = fs.readFileSync(source, 'utf8');
+  const keys = 'workflow?: true;\n};';
+  expect(text).toContain(keys);
+  fs.writeFileSync(source, text.replace(keys, 'workflow?: true; queue?: true;\n};'));
+  const checked = run(root, '--only=driver-can');
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('Documentation check failed: docs/dev/workflow-engine.md names every key DriverCan adds to the protocol\'s can');
+  expect(checked.output).toContain('queue');
 });
