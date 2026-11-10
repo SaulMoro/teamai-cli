@@ -1275,6 +1275,25 @@ steps:
   }, 30_000);
 });
 
+describe('a fleet wake option that names an in-process runtime', () => {
+  it.each(['local', 'tools'])('refuses %s as it refuses every runtime in teamai\'s own process, whatever its name', async (use) => {
+    const { config, workspace } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Build the project.
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+`);
+    fs.mkdirSync(personalDir('drivers'), { recursive: true });
+    onTestFinished(() => fs.rmSync(personalDir('drivers'), { recursive: true, force: true }));
+    fs.writeFileSync(path.join(personalDir('drivers'), 'pool.yaml'), `schemaVersion: v1alpha1\nname: pool\nruntimes:\n  - use: fleet\n    options:\n      pool: gpu\n      wake:\n        use: ${use}\n`);
+
+    const opened = await openDriver(config, 'pool', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: workspace });
+
+    expect(opened).toMatchObject({ ok: false, failure: { message: expect.stringContaining(`${use} runs in teamai's own process and wakes no fleet member`) } });
+  });
+});
+
 describe('the driver a run on --driver local remembers', () => {
   it('remembers none, so a resume opens local again and says which teamai-local it took', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1

@@ -769,7 +769,7 @@ function cancelWriteCause(error: FleetError): string {
 async function openWaker(wake: { use: string; options?: RuntimeOptions | undefined }, openWake: OpenWake | undefined): Promise<{ waker: Waker } | { failure: { code: 'bad_option'; key: string; message: string } }> {
   const refused = (message: string) => ({ failure: { code: 'bad_option' as const, key: 'wake', message } });
 
-  if (wake.use === 'fleet' || wake.use === 'local') return refused(`${wake.use} wakes no fleet member: name a runtime that does, such as t3`);
+  if (wake.use === 'fleet') return refused('fleet wakes no fleet member: name a runtime that does, such as t3');
 
   if (openWake === undefined) return refused(`this teamai cannot open runtime "${wake.use}" to wake fleet members`);
   const opened = await openWake({ use: wake.use, options: wake.options ?? {} });

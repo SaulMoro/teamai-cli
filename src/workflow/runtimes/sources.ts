@@ -424,7 +424,7 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
 
     if (!opened.ok) return opened;
 
-    if (opened.opened.kind !== 'external') return { ok: false, failure: { code: 'bad_option', message: `${use} runs in teamai's own process and wakes no fleet member` } };
+    if (opened.opened.kind !== 'external') return { ok: false, failure: { code: 'bad_option', message: `${use} runs in teamai's own process and wakes no fleet member: name a runtime that does, such as t3` } };
 
     return { ok: true, runtime: opened.opened.runtime, wakes: opened.opened.wakes === true };
   };
