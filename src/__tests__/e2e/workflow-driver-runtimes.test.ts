@@ -3044,6 +3044,14 @@ span('end');
       expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'driver_invalid', message: expect.stringContaining('runs toy through sandboxtoy, and toy launches no agents of its own') } });
     });
 
+    it('refuses an entry whose inner runtime runs each tool itself on the attempt\'s tool home, as a sandbox does, before any step runs', async () => {
+      writeDefinition('throughhome', [{ use: 'toy', through: 'sandboxtoy', options: { toy: { state: innerState, agent: { output: { ok: true } }, prompt_tool_home: true }, sandboxtoy: { state: outerState } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'throughhome'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'driver_invalid', message: expect.stringContaining('runs toy through sandboxtoy, and toy runs each tool itself, in its own place') } });
+    });
+
     it('reattaches the outer, with the prompt\'s credential again, then the inner, when a killed teamai resumes', async () => {
       throughDefinition('throughdie', { die_at: 'prompt-finished' });
 
