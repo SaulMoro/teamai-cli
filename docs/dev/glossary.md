@@ -149,7 +149,7 @@ A YAML file `--driver <name>` selects: the **step runtimes** that run each step,
 _Avoid_: driver for the file, profile
 
 **Step runtime**:
-Where and how a step's work runs, as one entry of a **driver definition** names it with `use`: the **host slot**, the **`tools` runtime** and `fleet`, in teamai's process, or an external program that speaks the **runtime protocol**, such as `t3`, `paseo` or `sandbox`. Short form: runtime, where nothing else could be meant.
+Where and how a step's work runs: the **host slot**, or what one entry of a **driver definition** names with `use`: the **`tools` runtime** and `fleet`, in teamai's process, or an external program that speaks the **runtime protocol**, such as `t3`, `paseo` or `sandbox`. Short form: runtime, where nothing else could be meant.
 _Avoid_: runtime for a tool's bundled runtime (the Node that WorkBuddy unpacks), backend
 
 **Runtime protocol**:
@@ -181,7 +181,7 @@ What `teamai workflow next` grants a **driver**: one **attempt** of a step, unti
 _Avoid_: claim (that takes over a run), ticket
 
 **Step workspace**:
-The copy of the repository a step works in, as its `workspace` key picks: `new`, `continue`, `read-only` or `clone`.
+The copy of the repository a step works in, as its `workspace` key picks: `new`, `continue`, `read-only`, `{ clone: … }` or `{ team: … }`. A step with `{ confined: … }` works in that directory instead, with no copy.
 _Avoid_: bare workspace where a **workspace** could be meant
 
 **Place**:

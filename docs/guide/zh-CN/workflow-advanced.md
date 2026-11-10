@@ -1574,7 +1574,7 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 
 步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。这期间，等你回答的审批或选择仍会照常提问。没有其他步骤在运行、也没有等待回答的问题时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
 
-每个定义都在本机留一个 `host` 位置，给留在这里的步骤，所以你的运行时不能叫 `host`。它用 teamai、git 和 shell 运行命令，不启动任何 AI 工具。定义列出 `tools` 时，它占 `tools` 条目在顺序中的位置，否则排在最后。它不启动提示步骤的工具：那是 `tools` 的事。这个位置接下：
+每个定义都在本机留一个 `host` 槽位，给留在这里的步骤，所以你的运行时不能叫 `host`。它用 teamai、git 和 shell 运行命令，不启动任何 AI 工具。定义列出 `tools` 时，它占 `tools` 条目在顺序中的位置，否则排在最后。它不启动提示步骤的工具：那是 `tools` 的事。这个位置接下：
 
 - 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
 - teamai 自带的每个工作流（如 `teamai-score` 和 `teamai-share-session`）的命令步骤，它们在本机规划、检查和写入标签；以同名团队文件替换某个自带工作流时，其命令步骤同样如此；

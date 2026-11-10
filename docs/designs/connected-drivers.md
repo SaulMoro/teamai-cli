@@ -256,7 +256,7 @@ A `workflow:` step goes to the fleet as one attempt when a member can run its su
 |---|---|
 | `start` and `resume` resolve `--driver` through definitions; `local` and `skill` reserved | `src/workflow-commands.ts` |
 | Driver definitions as delivered resources with namespaces, canonical names and shipped defaults | reuse the workflow cache and `default-workflows.ts` |
-| `Runtime` interface with `local` in process and a stdio client; place view, operation ids and handles in the attempt directory, `collect` | `src/workflow/drivers/local/`, `src/workflow/place/` |
+| `Runtime` interface with `host` and `tools` in process and a stdio client; place view, operation ids and handles in the attempt directory, `collect` | `src/workflow/drivers/local/`, `src/workflow/place/` |
 | the argv each family's step profile builds, shared; `sessionStoreDir` takes a tool home and `AgentSession` a store directory, so resume, skill use, scoring and publishing read the store in the attempt's tool home; the report keeps the transcript `filePath` | `packages/tool-launch`, `local-driver.ts`, `src/scorers/scoring-evidence.ts`, `session-publish.ts` |
 | Result file in `attempts/<attempt>/out/` | `src/workflow/store.ts` |
 | `through` entries: ordered open, cancel, close and reattach of two handles; the outer's handle in `open`; per-key `can` | `src/workflow/drivers/local/` |

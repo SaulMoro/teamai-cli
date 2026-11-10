@@ -238,7 +238,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `interactive` | 有人在步骤中工作时为 `true`；只有声明了 `can.hitl` 的运行时会收到 |
 | `maxTurns` | 智能体的轮数上限，在你的 `can.max_turns` 提供时才有 |
 | `continue` | 这个提示所延续的先前提示的对话，以 `handle` 和 `op` 给出，在你的 `init` 回答了 `"conversations":true` 时才有。你仍然持有它、且工具和工作目录相同时延续它，并回答 `"resumed":true`；否则开始新的对话，并为这个 `op` 发一条 `notice` 说明原因 |
-| `limits` | 步骤的 token `budget`、`timeoutMs` 和 `idleMs`，在你自己启动的进程上运行工具时据此停下它。做不到的就忽略：提示结束后 teamai 仍会检查预算 |
+| `limits` | 步骤的 token `budget`（已降到运行的预算还剩的额度）、`timeoutMs` 和 `idleMs`，在你自己启动的进程上运行工具时据此停下它。在其中一个上停下它时，在 `finished.stopped` 里说明是哪一个（`budget`、`timeout` 或 `idle`）：teamai 在 `budget` 或 `timeout` 时结束步骤，在 `idle` 时让它失败为 `tool_failed`。做不到的就忽略：提示结束后 teamai 仍会检查预算 |
 
 `init` 的另外两个回答会改变 teamai 对你的提示所做的事。`"conversations":true` 表示提示的对话在它的位置里比提示本身活得更久：之后的步骤延续它时，teamai 会让这个位置保持打开，并给那个步骤发送 `continue`。没有它时，每个提示都开始新的对话。`"toolHome":true` 表示你在这次尝试的工具主目录（`open.view.toolHome`）里运行每个工具，就像执行工具命令的运行时那样：teamai 准备这个目录、把登录复制进去，并从那里读取会话。没有它时，你的工具把会话保存在 `tools` 运行时保存的位置。
 
