@@ -65,7 +65,9 @@ export function prompts({ journal, ledger, env, execs, creation }: {
     const profile = stepToolOf(extended);
 
     if (profile === undefined || !can.tools?.includes(lease.tool)) {
-      finish(op, { state: 'failed', failure: { code: 'tool_unavailable', message: `The sandbox runs no ${lease.tool} prompt here: it runs prompt steps on ${can.tools?.join(', ') || 'no tool'}.` } });
+      const stepped = (can.tools ?? []).filter((tool) => stepToolOf(instances.get(tool)?.tool ?? tool) !== undefined);
+
+      finish(op, { state: 'failed', failure: { code: 'tool_unavailable', message: `The sandbox starts no ${lease.tool} prompt step: it starts them only on ${stepped.join(', ') || 'no tool'}. Run the step on a runtime listed after the sandbox in the driver definition.` } });
 
       return;
     }

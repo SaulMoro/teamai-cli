@@ -1,6 +1,6 @@
 # Sandbox runtime
 
-The `sandbox` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each attempt of a workflow step in a sandbox of its own: a Docker Sandboxes microVM, or a container from an image your team builds. The agent works on the step's worktree and cannot touch the rest of your machine. teamai still builds the tool's command, reads the result, meters the budget, and commits and pushes on the host.
+The `sandbox` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each attempt of a workflow step in a sandbox of its own: a Docker Sandboxes microVM, or a container from an image your team builds. The agent works on the step's worktree and cannot touch the rest of your machine. The sandbox starts the tool there and keeps the step's limits; teamai reads the result, and commits and pushes on the host.
 
 This version runs `sbx` ([Docker Sandboxes](#sbx-docker-sandboxes)), `docker` and `podman`. It ships with teamai as the executable `teamai-runtime-sandbox`.
 

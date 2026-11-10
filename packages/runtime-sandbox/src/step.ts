@@ -2,9 +2,9 @@ import { PromptResultSchema, type PromptRequestSchema } from '@teamai/runtime-pr
 import { redact, redactJson } from '@teamai/shared/redact';
 import type { StepLaunch } from '@teamai/tool-core/launch';
 import { stepLaunchOf } from '@teamai/tool-definitions';
-import { runStepLaunch, type StepFamily, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import { runStepLaunch, type StepFamily, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepStop, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 import type { z } from 'zod';
-import { boundedTail } from './bounded-tail.js';
+import { boundedTail, STDERR_CHARS } from './bounded-tail.js';
 import type { Outcome } from './journal.js';
 import type { Provider } from './provider.js';
 import type { LAUNCHABLE } from './providers/cli.js';
@@ -51,9 +51,6 @@ const IN_SANDBOX: StepLaunchHost = {
   agyGatewayEnv: () => ({}),
   writeResult: async () => {},
 };
-
-/** The last chars of a tool's stderr kept for a failure that names why it ended. */
-const STDERR_CHARS = 4_000;
 
 /**
  * The process port of a step's tool in sandbox `id`: the provider's exec, with the environment the launch gives and the
@@ -131,7 +128,26 @@ function leaseInput(request: PromptRequest, env: Record<string, string>): StepLa
  * status that is not 0 failed, with what it said and the end of its stderr; one that exited 0, or that a limit stopped,
  * and named its session, finished, with whatever result it wrote, and resumed when that is the session `resume` named.
  */
-function outcomeOf(tool: string, resume: string | undefined, ran: StepLaunchResult, stderr: string, masks: Record<string, string>): Outcome {
+/**
+ * The limit of the lease a stop answers as `stopped`: a turn cap is the tool's own end, which the lease does not name.
+ */
+function stoppedAt(stop: StepStop | undefined): 'budget' | 'timeout' | undefined {
+  switch (stop) {
+    case 'budget':
+    case 'timeout':
+      return stop;
+    case 'max_turns':
+    case undefined:
+      return undefined;
+    default: {
+      const unhandled: never = stop;
+
+      return unhandled;
+    }
+  }
+}
+
+function outcomeOf({ tool, resume, ran, stderr, masks }: { tool: string; resume: string | undefined; ran: StepLaunchResult; stderr: string; masks: Record<string, string> }): Outcome {
   const masked = (text: string): string => redact(text, { envSecrets: masks, patterns: false });
   const failed = (failure: { code: string; message: string }): Outcome => ({ state: 'failed', failure: { code: failure.code, message: masked(failure.message) } });
 
@@ -146,7 +162,7 @@ function outcomeOf(tool: string, resume: string | undefined, ran: StepLaunchResu
   }
 
   if (ran.session === undefined) return failed(ran.failure ?? { code: 'tool_failed', message: `${tool} named no session` });
-  const stopped = ran.stoppedBy === 'budget' || ran.stoppedBy === 'timeout' ? ran.stoppedBy : undefined;
+  const stopped = stoppedAt(ran.stoppedBy);
   const result = PromptResultSchema.parse(redactJson({ ...('output' in ran && { output: ran.output }), ...(ran.failure && { failure: ran.failure }) }, masks));
 
   // A tool that continued the session the lease names states that session again.
@@ -181,5 +197,5 @@ export async function runStep({ request, tool, command, provider, id, env, masks
     host: IN_SANDBOX,
   });
 
-  return outcomeOf(tool.name, request.lease.resume, ran, stderr(), masks);
+  return outcomeOf({ tool: tool.name, resume: request.lease.resume, ran, stderr: stderr(), masks });
 }

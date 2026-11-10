@@ -436,7 +436,20 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
 
         // A limit the runtime stopped the tool at ends the step there, as teamai's own launch does; an idle tool the
         // runtime stopped has no such end.
-        if (end.stopped === 'budget' || end.stopped === 'timeout') ran.stoppedBy = end.stopped;
+        switch (end.stopped) {
+          case 'budget':
+          case 'timeout':
+            ran.stoppedBy = end.stopped;
+            break;
+          case 'idle':
+          case undefined:
+            break;
+          default: {
+            const unhandled: never = end.stopped;
+
+            return unhandled;
+          }
+        }
 
         return ran;
       }

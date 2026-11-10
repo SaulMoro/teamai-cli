@@ -779,6 +779,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
           if (state.resumed === true) end.resumed = true;
 
+          if (state.stopped) end.stopped = state.stopped;
+
           return keptIn(end);
         }
 

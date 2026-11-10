@@ -429,6 +429,8 @@ function agentOutcome(record) {
   fs.mkdirSync(path.dirname(record.lease.result), { recursive: true });
   fs.writeFileSync(record.lease.result, JSON.stringify(result));
   const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
+  // `agent.stopped` names the limit of the lease at which it says it stopped its tool.
+  const stopped = options.agent.stopped === undefined ? {} : { stopped: options.agent.stopped };
 
   // A lease that names a conversation is a turn of it, as the prompt's first send found it, or else a new one.
   const continues = record.lease.continue !== undefined;
@@ -448,9 +450,9 @@ function agentOutcome(record) {
 
   // A fresh session where the lease named one to continue says so, as `resumed: false`; one that names a conversation
   // it did not continue says nothing of `resumed`, its notice said why.
-  if (continues) return { state: 'finished', session, result, ...usage, ...(resumes && { resumed: true }) };
+  if (continues) return { state: 'finished', session, result, ...usage, ...stopped, ...(resumes && { resumed: true }) };
 
-  return { state: 'finished', session, result, ...usage, ...(record.lease.resume !== undefined && { resumed: resumes }) };
+  return { state: 'finished', session, result, ...usage, ...stopped, ...(record.lease.resume !== undefined && { resumed: resumes }) };
 }
 
 /** The id of the conversation prompt `op` launches: the session its agent reports. */

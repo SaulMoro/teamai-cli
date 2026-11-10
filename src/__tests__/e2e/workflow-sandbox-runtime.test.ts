@@ -232,7 +232,6 @@ it('stops a prompt step past its budget in the container, and ends its turn ther
   expect(spend).toMatchObject({ status: 'succeeded', limit: 'budget', session: expect.stringMatching(/^sess-/) });
 });
 
-
 it("signs a Codex prompt step in on the login teamai keeps, copied into the attempt's tool home, and writes the login the tool refreshed back", async () => {
   const dedicated = path.join(os.homedir(), '.teamai', 'logins', 'codex', 'auth.json');
   const login = (refresh: string): string => JSON.stringify({ OPENAI_API_KEY: null, tokens: { account_id: 'acct-1', refresh_token: refresh, access_token: 'access', id_token: 'id' } });
@@ -256,12 +255,17 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, o
   }));
   const before = engineCalls().length;
 
-  const ran = await runCLI(['workflow', 'start', 'codexreview', '--driver', 'codexlogin'], repo, engineEnv);
+  try {
+    const ran = await runCLI(['workflow', 'start', 'codexreview', '--driver', 'codexlogin'], repo, engineEnv);
 
-  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
-  expect(engineCalls().slice(before).filter(([command, ...rest]) => command === 'exec' && rest.includes('codex'))).toHaveLength(1);
-  expect(fs.readFileSync(dedicated, 'utf8')).toBe(login('r1-next'));
-  expect(fs.existsSync(path.join(os.homedir(), '.teamai', 'logins', 'codex.lock'))).toBe(false);
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(engineCalls().slice(before).filter(([command, ...rest]) => command === 'exec' && rest.includes('codex'))).toHaveLength(1);
+    expect(fs.readFileSync(dedicated, 'utf8')).toBe(login('r1-next'));
+    expect(fs.existsSync(path.join(os.homedir(), '.teamai', 'logins', 'codex.lock'))).toBe(false);
+  } finally {
+    fs.rmSync(path.join(dir, 'image-bin', 'codex'), { force: true });
+    fs.rmSync(path.dirname(dedicated), { recursive: true, force: true });
+  }
 });
 
 it("signs a Claude prompt step in on the gateway the member's environment names, at the host alias the container reaches this machine by", async () => {
