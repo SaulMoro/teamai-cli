@@ -10,7 +10,6 @@ import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types
 import { JsonValueSchema } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
 import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
-import { log } from '@teamai/shared/log';
 import type { WorkflowFailure } from '../types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
@@ -91,6 +90,8 @@ export interface ResolvedDriver {
   file: string;
   /** The config whose team repo holds the definition's team runtimes. */
   config: LocalConfig;
+  /** For `host`: the files named host that teamai did not read, which a run's open says once. */
+  unread?: string[];
 }
 
 /** The member's own directories, which teamai reads and never writes, so team code it caches never reads as the member's. */
@@ -241,11 +242,7 @@ async function hostDriver(config: LocalConfig, { personal, user }: { personal: b
     return found.kind === 'found' ? [found.at] : found.kind === 'conflict' ? [found.first, found.second] : [];
   }));
 
-  for (const file of [...own, ...teams.flat()]) {
-    log.warn(`Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`);
-  }
-
-  return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', file: 'teamai\'s built-in host driver', config };
+  return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', file: 'teamai\'s built-in host driver', config, unread: [...own, ...teams.flat()] };
 }
 
 /**

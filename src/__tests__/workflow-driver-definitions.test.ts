@@ -142,7 +142,7 @@ describe('the host driver, which teamai builds in', () => {
     expect(await open(team, 'host')).toMatchObject({ ok: true, opened: { asked: 'host', driver: { name: 'host', source: 'builtin', definition: { runtimes: [] } }, runtimes: [] } });
   });
 
-  it('refuses a definition named host, and says it read neither the member\'s nor the team\'s drivers/host.yaml', async () => {
+  it('refuses a definition named host, and says once, as a run opens it, that it read neither the member\'s nor the team\'s drivers/host.yaml', async () => {
     const team = teamWith(['host']);
     const personal = path.join(getTeamaiHomeDir(), 'drivers', 'host.yaml');
     fs.mkdirSync(path.dirname(personal), { recursive: true });
@@ -150,6 +150,7 @@ describe('the host driver, which teamai builds in', () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
 
     expect(parseDriverDefinition('drivers/host.yaml', definition('host'))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('"host" is a name teamai keeps for its own driver') } });
+    expect(await resolveDriver(team, 'host', { personal: true })).toMatchObject({ ok: true, driver: { name: 'host', source: 'builtin' } });
     expect(await open(team, 'host')).toMatchObject({ ok: true, opened: { driver: { name: 'host', source: 'builtin' }, runtimes: [] } });
     expect(warn.mock.calls.map(([line]) => line)).toEqual([personal, path.join(team.repo.localPath, 'drivers', 'host.yaml')].map((file) => (
       `Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`

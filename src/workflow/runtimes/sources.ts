@@ -657,6 +657,12 @@ export async function openDriver(
 
   if (purpose === 'run') for (const warning of shadowedFleetEntries(driver.definition.runtimes)) log.warn(`Driver definition ${driver.file}: ${warning}`);
 
+  if (purpose === 'run') {
+    for (const file of driver.unread ?? []) {
+      log.warn(`Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`);
+    }
+  }
+
   // A member's or the team's teamai-local replaces every run's default driver, which a run never does silently.
   if (purpose === 'run' && name === LOCAL_DRIVER && driver.source !== 'shipped') {
     log.info(`Driver local runs ${driver.file}, ${driver.source === 'personal' ? 'your own' : 'the team\'s'} teamai-local, in place of teamai's.`);
