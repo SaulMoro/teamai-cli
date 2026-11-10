@@ -27,6 +27,7 @@
  */
 import path from 'node:path';
 import fse from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import type { SimpleGit, StatusResult } from 'simple-git';
 import { createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
@@ -716,11 +717,11 @@ async function commonDirFromFiles(dir: string): Promise<string | null> {
 
   try {
     if ((await fse.stat(dotGit)).isDirectory()) return await fse.realpath(dotGit);
-    const pointer = /^gitdir:\s*(.+)$/m.exec(await fse.readFile(dotGit, 'utf-8'));
+    const pointer = /^gitdir:\s*(.+)$/m.exec(await readRegularFile(dotGit, 'utf-8'));
 
     if (!pointer) return null;
     const gitDir = path.resolve(dir, pointer[1].trim());
-    const common = await fse.readFile(path.join(gitDir, 'commondir'), 'utf-8').catch(() => null);
+    const common = await readRegularFile(path.join(gitDir, 'commondir'), 'utf-8').catch(() => null);
 
     if (common !== null) return await fse.realpath(path.resolve(gitDir, common.trim()));
 

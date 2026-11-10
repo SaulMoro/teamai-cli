@@ -93,26 +93,36 @@ describe('jsonl store', () => {
     await appendJsonl(file(), { n: 2 }, { wait: { budgetMs: 0, delayMs: 0 } });
     const [side] = await sideRecords();
     await fs.promises.rm(lockPath());
-    const realReadFile = fs.promises.readFile.bind(fs.promises);
+    const realOpen = fs.promises.open.bind(fs.promises);
     let folded = false;
-    const read = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (...args: Parameters<typeof fs.promises.readFile>) => {
+    const read = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
       if (!folded && during === 'pending' && args[0] === path.join(dir, side)) {
         folded = true;
         await appendJsonl(file(), { n: 3 });
       }
 
-      const content = await realReadFile(...args);
+      const handle = await realOpen(...args);
 
-      if (!folded && during === 'main' && args[0] === file()) {
-        folded = true;
-        await appendJsonl(file(), { n: 3 });
+      if (during === 'main' && args[0] === file()) {
+        const realRead = handle.readFile.bind(handle);
+        vi.spyOn(handle, 'readFile').mockImplementation(async (options) => {
+          const content = await realRead(options);
+
+          if (!folded) {
+            folded = true;
+            await appendJsonl(file(), { n: 3 });
+          }
+
+          return content;
+        });
       }
 
-      return content;
+      return handle;
     });
 
     try {
       const records = await readJsonl(file());
+      expect(folded).toBe(true);
       expect(records.filter((record) => record.n === 1)).toStrictEqual([{ n: 1 }]);
       expect(records.filter((record) => record.n === 2)).toStrictEqual([{ n: 2 }]);
       expect(await sideRecords()).toEqual([]);

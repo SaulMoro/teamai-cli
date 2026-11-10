@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { parseYaml } from '@teamai/shared/yaml';
@@ -367,7 +368,7 @@ export async function writeAnchorFile(partitionDir: string, anchor: string): Pro
 /** Read a partition's `anchor` file (trimmed), or null when absent/unreadable. */
 export async function readAnchorFile(partitionDir: string): Promise<string | null> {
   try {
-    const raw = await fs.promises.readFile(path.join(partitionDir, 'anchor'), 'utf-8');
+    const raw = await readRegularFile(path.join(partitionDir, 'anchor'), 'utf-8');
     const trimmed = raw.trim();
 
     return trimmed || null;

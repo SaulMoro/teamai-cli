@@ -710,10 +710,10 @@ describe('publishing what maintenance changed (#823)', () => {
     // A read that fails, as on a permission or I/O error, says nothing about the record itself.
     const unreadable = path.join(records, '0-unreadable.json');
     fs.writeFileSync(unreadable, JSON.stringify({ message: '[teamai] Prune', files: [] }));
-    const readFile = fs.promises.readFile;
-    vi.spyOn(fs.promises, 'readFile').mockImplementation(async (file, options) => {
-      if (file === unreadable) throw Object.assign(new Error(`EACCES: permission denied, open '${unreadable}'`), { code: 'EACCES' });
-      return readFile(file, options);
+    const open = fs.promises.open;
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+      if (args[0] === unreadable) throw Object.assign(new Error(`EACCES: permission denied, open '${unreadable}'`), { code: 'EACCES' });
+      return open(...args);
     });
     const warned = watchWarnings();
 

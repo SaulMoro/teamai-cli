@@ -1,10 +1,1 @@
-{
-  "src/utils/branch-worktree.ts": 2,
-  "src/utils/git-answers.ts": 1,
-  "src/utils/git.ts": 1,
-  "src/utils/jsonl-store.ts": 3,
-  "src/utils/learnings-publish.ts": 3,
-  "src/utils/partition.ts": 1,
-  "src/utils/search-index.ts": 1,
-  "src/wiki-engine/knowledge-reconciler.ts": 2
-}
+{}

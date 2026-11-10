@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
@@ -117,7 +118,7 @@ async function keptFileInProfile(tmp: string): Promise<string | null> {
 
 /** The answers kept in `file`: none when it is missing, unreadable, or not in their shape. */
 async function readKept(file: string): Promise<Kept> {
-  const text = await fs.promises.readFile(file, 'utf8').catch(() => '');
+  const text = await readRegularFile(file, 'utf8').catch(() => '');
   let json: JsonValue = null;
 
   try {

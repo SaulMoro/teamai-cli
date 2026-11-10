@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { openRegularFileSync } from '@teamai/shared/regular-file';
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
 import { execCommand } from '@teamai/shared/exec';
@@ -113,7 +114,7 @@ const NATIVE_MAGIC = new Set(['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'c
 function isNativeExecutable(file: string): boolean {
   try {
     fs.accessSync(file, fs.constants.X_OK);
-    const fd = fs.openSync(file, 'r');
+    const fd = openRegularFileSync(file);
 
     try {
       const head = Buffer.alloc(4);

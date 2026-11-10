@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { readFile, readdir, rm, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import matter from 'gray-matter';
@@ -584,7 +585,7 @@ async function entryFromMdFile(
   let content: string;
 
   try {
-    content = await readFile(expandHome(absPath), 'utf-8');
+    content = await readRegularFile(expandHome(absPath), 'utf-8');
   } catch (e) {
     reads.unreadable.push({ path: absPath, reason: failureReason(e) });
 
