@@ -130,6 +130,18 @@ describe('a pull and the homes the env moves', () => {
     expect(await fse.readFile(path.join(home, '.config', 'opencode', 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
   });
 
+  it('delivers none of the folders a pre-push sync cut short leaves beside a skill, as a skill of its own', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'opencode'));
+    for (const left of ['.deploy.4242.0123456789ab.teamai-sync', '.deploy.4242.0123456789ab.teamai-prev']) {
+      await fse.outputFile(path.join(repo, 'skills', left, 'SKILL.md'), '---\nname: deploy\ndescription: d\n---\nHalf synced.\n');
+    }
+
+    await pull({});
+
+    expect(await fse.readdir(path.join(home, '.config', 'opencode', 'skills'))).not.toContainEqual(expect.stringMatching(/\.teamai-(?:sync|prev)$/));
+    expect(await fse.readFile(path.join(home, '.config', 'opencode', 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+  });
+
   it('removes a staging folder a copy cut short left beside a skill an hour ago, and keeps a newer one a copy may still be writing', async () => {
     const skills = path.join(home, '.config', 'opencode', 'skills');
     const [stale, fresh] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging'].map((name) => path.join(skills, name));

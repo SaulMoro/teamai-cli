@@ -16,12 +16,16 @@ const IGNORED_NAMES = new Set([
   '.git',
 ]);
 
-/** A copy's staging folder beside its destination (`copyDir`, and `moveRegularTree` across filesystems): `.<name>.<8 hex>.staging`. */
-const STAGING_NAME = /^\..+\.[0-9a-f]{8}\.staging$/;
+/**
+ * The working folders teamai's own copies leave beside their destination when cut short, each holding a whole skill:
+ * a copy's staging folder (`copyDir`, and `moveRegularTree` across filesystems), `.<name>.<8 hex>.staging`, and the
+ * pre-push sync's update and backup of a skill (`replaceSkillDir`), `.<name>.<pid>.<12 hex>.teamai-sync` and `-prev`.
+ */
+const WORKING_NAMES = [/^\..+\.[0-9a-f]{8}\.staging$/, /^\..+\.\d+\.[0-9a-f]{12}\.teamai-(?:sync|prev)$/];
 
-/** Whether a scan or a copy passes `name` over: caches, git's folder, and a staging folder a copy cut short left. */
+/** Whether a scan or a copy passes `name` over: caches, git's folder, and a working folder a copy cut short left. */
 export function isIgnored(name: string): boolean {
-  return IGNORED_NAMES.has(name) || name.endsWith('.pyc') || STAGING_NAME.test(name);
+  return IGNORED_NAMES.has(name) || name.endsWith('.pyc') || WORKING_NAMES.some((working) => working.test(name));
 }
 
 /**
