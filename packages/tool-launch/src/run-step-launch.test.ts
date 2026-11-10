@@ -80,6 +80,23 @@ describe('runStepLaunch', () => {
     expect(stops()).toBeGreaterThan(0);
   });
 
+  it('stops nothing at the timeout once the port\'s process end rejected', async () => {
+    let stops = 0;
+    const start: ToolLauncher = ({ onStart }) => {
+      const closed = Promise.resolve().then((): ToolClosed => {
+        onStart();
+        throw new Error('the port lost the process');
+      });
+
+      return { closed, started: () => true, stop: async () => { stops++; } };
+    };
+
+    await expect(runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, limits: { timeoutMs: 20 }, interactive: false, host })).rejects.toThrow('the port lost the process');
+    await new Promise((resolve) => { setTimeout(resolve, 60); });
+
+    expect(stops).toBe(0);
+  });
+
   it('fails usage_limited, in the tool\'s own words, when the tool says it hit its usage limit', async () => {
     const { start } = fakeLauncher([
       JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-sonnet' }),

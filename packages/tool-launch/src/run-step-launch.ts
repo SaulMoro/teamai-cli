@@ -379,12 +379,18 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
   signal?.addEventListener('abort', abort, { once: true });
 
   if (signal?.aborted) abort();
-  const completed = await processRun.closed;
-  clearTimeout(timer);
-  clearTimeout(idleTimer);
+  let completed: ToolClosed;
+
+  // A port whose end rejects leaves no limit armed to stop, later, whatever then runs where the tool ran.
+  try {
+    completed = await processRun.closed;
+  } finally {
+    clearTimeout(timer);
+    clearTimeout(idleTimer);
+    signal?.removeEventListener('abort', abort);
+  }
 
   if (stopCause !== undefined) await processRun.stop();
-  signal?.removeEventListener('abort', abort);
 
   if (stopCause === 'idle' && idleMs !== undefined) {
     return {
