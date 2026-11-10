@@ -339,6 +339,20 @@ export async function processStartTicks(pid: number): Promise<number | undefined
   }
 }
 
+/**
+ * The pid namespace of this process, as `/proc/self/ns/pid` links it (`pid:[4026531836]`): a pid names a process only
+ * inside it, so a container and its host each read the other's pids as their own. Only Linux has it.
+ */
+export async function ownPidNamespace(): Promise<string | undefined> {
+  if (process.platform !== 'linux') return undefined;
+
+  try {
+    return await fs.promises.readlink('/proc/self/ns/pid');
+  } catch {
+    return undefined;
+  }
+}
+
 /** The clock ticks per second `/proc` counts in (USER_HZ), 100 on every architecture Linux exposes to Node. */
 const USER_HZ = 100;
 

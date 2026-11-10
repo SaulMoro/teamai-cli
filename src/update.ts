@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { readRegularFile, readRegularFileSync, NotRegularFileError } from '@teamai/shared/regular-file';
-import { processStartedAt, processStartTicks } from '@teamai/shared/process-group';
+import { ownPidNamespace, processStartedAt, processStartTicks } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -458,20 +458,26 @@ interface LockPayload {
   owner: string;
   /** On Linux, when the holder started, in clock ticks since boot (`processStartTicks`): tells it from a later process given its pid. */
   startTicks?: number;
+  /** On Linux, the pid namespace `pid` and `startTicks` belong to (`ownPidNamespace`). */
+  pidNamespace?: string;
 }
 
-/** This process's `startTicks`, read once: it never changes. */
-let ownStartTicks: Promise<number | undefined> | undefined;
+/** This process's `startTicks` and `pidNamespace`, read once: they never change. */
+let ownIdentity: Promise<{ startTicks?: number; pidNamespace?: string }> | undefined;
 
-/** What a lock, a reclaim sentinel or a claim holds: who wrote it, when, and on Linux when that process started. */
+async function readOwnIdentity(): Promise<{ startTicks?: number; pidNamespace?: string }> {
+  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(process.pid), ownPidNamespace()]);
+
+  return { ...(startTicks !== undefined && { startTicks }), ...(pidNamespace !== undefined && { pidNamespace }) };
+}
+
+/** What a lock, a reclaim sentinel or a claim holds: who wrote it, when, and on Linux when that process started, and where. */
 async function lockPayload(owner: string): Promise<string> {
-  const startTicks = await (ownStartTicks ??= processStartTicks(process.pid));
-
   return JSON.stringify({
     pid: process.pid,
     startedAt: new Date().toISOString(),
     owner,
-    ...(startTicks !== undefined && { startTicks }),
+    ...await (ownIdentity ??= readOwnIdentity()),
   } satisfies LockPayload);
 }
 
@@ -487,6 +493,7 @@ interface LockHolder {
   owner?: string;
   startedAt?: string;
   startTicks?: number;
+  pidNamespace?: string;
 }
 
 /** A lock file's JSON: the legacy bare integer PID, or the payload with a numeric pid. */
@@ -497,7 +504,8 @@ const LockContentSchema = z.union([
     owner: z.string().optional().catch(undefined),
     startedAt: z.string().optional().catch(undefined),
     startTicks: z.number().int().optional().catch(undefined),
-  }).transform(({ pid, owner, startedAt, startTicks }): LockHolder => ({ pid, owner, startedAt, startTicks })),
+    pidNamespace: z.string().optional().catch(undefined),
+  }).transform(({ pid, owner, startedAt, startTicks, pidNamespace }): LockHolder => ({ pid, owner, startedAt, startTicks, pidNamespace })),
 ]);
 
 function parseLockContent(content: string): LockHolder | null {
@@ -578,7 +586,8 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
 /**
  * Whether the process `holder` names is gone. A live process with its pid is the holder only if it is the process that
  * wrote the lock, not a later one given the pid, as a container hands pids out again: by the start the lock records on
- * Linux, else by a start after the lock was written. Without either to compare, a live pid holds it.
+ * Linux, else by a start after the lock was written. Without either to compare, or when the lock comes from another
+ * pid namespace, a live pid holds it.
  */
 async function isHolderGone(holder: LockHolder): Promise<boolean> {
   try {
@@ -587,6 +596,10 @@ async function isHolderGone(holder: LockHolder): Promise<boolean> {
     // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
     if (errnoCode(err) !== 'EPERM') return true;
   }
+
+  // Written in another pid namespace, as by a container sharing this home: the live process with that pid here is not
+  // the one the lock names, and its start says nothing about the holder.
+  if (holder.pidNamespace !== undefined && holder.pidNamespace !== (await (ownIdentity ??= readOwnIdentity())).pidNamespace) return false;
 
   if (holder.startTicks !== undefined) {
     const ticks = await processStartTicks(holder.pid);

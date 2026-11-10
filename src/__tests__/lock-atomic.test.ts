@@ -122,6 +122,13 @@ describe('acquireLock (real fs)', () => {
     expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
   });
 
+  it.runIf(process.platform === 'linux')('keeps a lock another pid namespace wrote, such as a container sharing this home, whose pid names another process here', async () => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: unrelatedProcess(), owner: 'theirs', startedAt: AN_HOUR_AGO(), startTicks: 1, pidNamespace: 'pid:[1]' }));
+
+    expect(await acquireLock(lockPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');
+  });
+
   it('keeps a lock whose live holder was already running when it wrote the lock', async () => {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'live', startedAt: new Date().toISOString() }));
 
