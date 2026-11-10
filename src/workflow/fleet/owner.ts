@@ -41,7 +41,7 @@ const RECORD_POLL_MS = 1_000;
 const RECORD_POLL_MAX_MS = 30_000;
 
 /**
- * How long a cancel keeps trying to reach the attempt's record, from its first write that did not land: longer than
+ * How long a cancel keeps trying to reach the attempt's record, from when its first write began: longer than
  * `workflow cancel` holds teamai-reports while it publishes the run. Past it, the cancel ends `cancel_failed`.
  */
 export const CANCEL_WRITE_MS = 60_000;
@@ -699,6 +699,9 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
       if (record === undefined) {
         if (read.ok) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and its attempt has no record on fleet pool ${pool}, so no member was asked to stop it.` });
 
+        // A cancel write already tried keeps its deadline while origin cannot be read.
+        if (cancelTriedAt !== undefined && Date.now() >= cancelTriedAt + CANCEL_WRITE_MS) return failed(cancelNotWritten({ step, run, attempt, pool }, read.error));
+
         if (Date.now() - cancelledAt > staleAfterMs) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${read.error.message}` });
       } else if (record.state === 'offered' || isHeld(record)) {
         cancelTriedAt ??= Date.now();
@@ -747,16 +750,16 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 }
 
 /** The failure a cancel ends with when it could not be written into the attempt's record by the deadline, for `error`. */
-function cancelNotWritten({ step, run, attempt, pool }: { step: string; run: RunId; attempt: AttemptId; pool: string }, error: FleetError): WorkflowFailure {
+function cancelNotWritten({ step, run, attempt, pool }: Pick<WaitInput, 'run' | 'attempt' | 'pool'> & { step: string }, error: FleetError): WorkflowFailure {
   return {
     code: CANCEL_FAILED,
     message: `Step "${step}" was cancelled, and its cancel could not be written to the record of attempt ${attempt} on teamai-reports for ${CANCEL_WRITE_MS / 1_000} s, so a member of fleet pool ${pool} may still take or run it. ${cancelWriteCause(error)} The attempt's place and records are kept. Run teamai workflow cancel ${run} again.`,
   };
 }
 
-/** Why the last write of a cancel did not land, for the person. */
+/** Why the last write of a cancel did not land, for the person, whose next step the cancel's message gives instead. */
 function cancelWriteCause(error: FleetError): string {
-  return error.code === 'state_moved' ? 'Another write, such as the member\'s progress, landed on the record before each one.' : error.message;
+  return error.code === 'state_moved' ? 'Another write, such as the member\'s progress, landed on the record before each one.' : error.message.replace(/ Try again\.$/, '');
 }
 
 /**

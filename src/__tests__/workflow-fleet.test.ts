@@ -1301,6 +1301,27 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     expect(await recordIn(alice, run, attempt, 'claimed')).toMatchObject({ member: { user: 'bob' } });
   }, 60_000);
 
+  it('ends the owner\'s cancel cancel_failed at the deadline when origin cannot be read after a cancel write failed', async () => {
+    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '30m' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await recordIn(bob, run, attempt, 'offered');
+    receiveHook(origin, 'while read old new ref; do git log --format=%s "$old..$new" | grep -q "^\\[teamai\\] Cancel attempt" && exit 1; done; exit 0');
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+    await sleep(3_000);
+    // Origin goes away after the first cancel write was refused.
+    const away = `${origin}.away`;
+    fs.renameSync(origin, away);
+    releases.push(async () => fs.renameSync(away, origin));
+
+    expect(await within(ended, 3_000)).toBe('waiting');
+    passTheDeadline();
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/teamai-reports could not be read .* Run teamai workflow cancel r[0-9a-f]+ again\.$/) } });
+    await cancelled;
+  }, 60_000);
+
   it('names the held teamai-reports, not the member\'s progress, when a publish holds it past the deadline while the member beats', async () => {
     const { alice, bob, run, attempt, open } = await ownerOffering(opened, undefined, { staleAfter: '30m' });
     const { runtime, exec } = await open();
@@ -1323,6 +1344,8 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     const failed = await within(ended, 15_000);
     expect(failed).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('another write held teamai-reports') } });
     expect(failed).not.toMatchObject({ failure: { message: expect.stringContaining('progress') } });
+    // One next step: the cancel's own.
+    expect(failed).not.toMatchObject({ failure: { message: expect.stringContaining('Try again.') } });
     await cancelled;
   }, 60_000);
 
