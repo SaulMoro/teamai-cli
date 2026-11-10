@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { appendRegularFile, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
+import { appendRegularFile, copyRegularFile, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
@@ -131,6 +131,21 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
 
     expect(settled).toEqual({ rejected: expect.any(NotRegularFileError) });
     expect(settled).toMatchObject({ rejected: { kind: 'a pipe', message: `${at} is a pipe, not a regular file, so teamai does not write it` } });
+  });
+
+  it('copies a regular file over another with its bytes and its mode, as a plain copy does, and refuses a FIFO to copy', async () => {
+    const dir = scratch();
+    const from = path.join(dir, 'hook.sh');
+    const to = path.join(dir, 'copy.sh');
+    fs.writeFileSync(from, Buffer.from([0x89, 0x50, 0x0a]), { mode: 0o755 });
+    fs.writeFileSync(to, 'old and longer\n', { mode: 0o600 });
+    const at = fifo();
+
+    await copyRegularFile(from, to);
+
+    expect(fs.readFileSync(to).equals(Buffer.from([0x89, 0x50, 0x0a]))).toBe(true);
+    expect(fs.statSync(to).mode & 0o777).toBe(0o755);
+    expect(await settledSoon(at, () => copyRegularFile(at, to))).toMatchObject({ rejected: { kind: 'a pipe' } });
   });
 
   it('refuses a FIFO another process holds open for reading, which a plain open would write into', async () => {

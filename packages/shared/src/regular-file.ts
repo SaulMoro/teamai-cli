@@ -163,3 +163,25 @@ export async function writeRegularFile(file: string, data: string | Uint8Array, 
     await handle.close();
   }
 }
+
+/**
+ * Copies `from`, a regular file as `openRegularFile` checks, over `to`, a regular file or none yet as
+ * `openRegularFileForWrite` checks, keeping `from`'s mode as `fs.copyFile` does.
+ */
+export async function copyRegularFile(from: string, to: string): Promise<void> {
+  const source = await openRegularFile(from);
+
+  try {
+    const [bytes, { mode }] = await Promise.all([source.readFile(), source.stat()]);
+    const target = await openRegularFileForWrite(to, { append: false, mode });
+
+    try {
+      await target.writeFile(bytes);
+      await target.chmod(mode & 0o7777);
+    } finally {
+      await target.close();
+    }
+  } finally {
+    await source.close();
+  }
+}
