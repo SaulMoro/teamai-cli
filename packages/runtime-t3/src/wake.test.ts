@@ -157,6 +157,32 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
+    it('says the member may have launched, and to check that machine\'s thread list before waking again, when the launch\'s reply is lost', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, agent: { hold: true, output: {} }, launchReplyLost: true });
+      const { runtime } = await initialized();
+
+      runtime.send(wake('op-000000f1'));
+
+      expect(await woke(runtime, 'op-000000f1')).toEqual({
+        op: 'op-000000f1', event: 'failed',
+        failure: { code: 'wake_unavailable', message: 'T3 Code may have launched the member on sams-laptop before the call failed: MCP error -32603: The connection closed before T3 answered. Check the thread list of sams-laptop in T3 Code for "teamai fleet r7f3a91c2 · gpu" before waking again.' },
+      });
+    });
+
+    it('says T3 Code did not launch the member when a check a new launch runs refused it', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, launchInvalid: true });
+      const { runtime } = await initialized();
+
+      runtime.send(wake('op-000000f2'));
+
+      expect(await woke(runtime, 'op-000000f2')).toMatchObject({
+        op: 'op-000000f2', event: 'failed',
+        failure: { code: 'wake_unavailable', message: expect.stringMatching(/^T3 Code did not launch the member on the linked machine: .*is not a worktree of project/) },
+      });
+    });
+
     it('launches one member for an op teamai sends twice, and answers both with it', async () => {
       signIn(t3);
       t3.config({ ...LINKED, launchMs: 300 });
