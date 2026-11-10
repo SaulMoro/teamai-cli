@@ -9,11 +9,7 @@ import { isWriteChecked } from './step-path-writes.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** A file the fixtures list as still appending, and one listed whose file is gone. */
-const LISTED = 'src/workflow/listed/journal.ts';
-const GONE = 'src/workflow/gone/gone.ts';
-
-const rule = ruleHarness('teamai/step-path-writes', { filename: 'src/workflow/steps/outcome.ts', options: [{ stillWrites: [LISTED, GONE] }] });
+const rule = ruleHarness('teamai/step-path-writes', { filename: 'src/workflow/steps/outcome.ts' });
 
 const MESSAGE = 'Write a file in src/workflow with writeRegularFile, appendRegularFile or openRegularFileForWrite';
 
@@ -89,17 +85,6 @@ export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: 'sr
 rule.valid('allows writes in tests', `import fs from 'node:fs/promises';
 export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: 'src/workflow/steps/outcome.test.ts' });
 
-rule.valid('leaves a file listed in stillWrites alone while it still writes plainly', `import fs from 'node:fs/promises';
-export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: LISTED });
-
-rule.invalid('fails a file left on stillWrites once it no longer writes plainly', `export const add = () => 1;`, (output) => {
-  expect(output).toContain(`${LISTED} no longer opens a file for writing. Remove it from stillWrites`);
-}, { filename: LISTED });
-
-rule.invalid('fails a listed file that no longer exists, from any file of its folder', `export const nothing = 1;`, (output) => {
-  expect(output).toContain(`${GONE} is listed in stillWrites but does not exist`);
-}, { filename: 'src/workflow/gone/other.ts' });
-
 it('matches the production source of src/workflow in this checkout, and nothing outside it', () => {
   const files = fs.readdirSync(path.join(REPO, 'src'), { recursive: true, encoding: 'utf8' }).map((file) => `src/${file.split(path.sep).join('/')}`);
   const matched = files.filter(isWriteChecked);
@@ -108,10 +93,9 @@ it('matches the production source of src/workflow in this checkout, and nothing 
   expect(matched.filter((file) => !file.startsWith('src/workflow/') || /\.test\.|\/__tests__\/|\/testing\//.test(file))).toEqual([]);
 });
 
-it('lists in its stillWrites option only files that exist in this checkout', () => {
+it('is an error in this checkout, with no file let off', () => {
   const config = fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
   const rules = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(JSON.parse(config)).rules;
-  const [, options] = z.tuple([z.literal('error'), z.object({ stillWrites: z.array(z.string()) })]).parse(rules['teamai/step-path-writes']);
 
-  for (const file of options.stillWrites) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
+  expect(rules['teamai/step-path-writes']).toBe('error');
 });

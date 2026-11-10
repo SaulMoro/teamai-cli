@@ -101,8 +101,7 @@
     // Files that still read teamai's own config or state with a plain read are counted in the baseline, which only shrinks.
     "teamai/regular-file-reads": ["error", { "baseline": "oxlint-plugin-teamai/rules/regular-file-reads.baseline.json" }],
     // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.
-    // Files not converted yet go in stillAppends, a list that only shrinks.
-    "teamai/step-path-writes": ["error", { "stillWrites": [] }],
+    "teamai/step-path-writes": "error",
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
     "teamai/home-env": "error",
     "teamai/learnings-root": "error",
