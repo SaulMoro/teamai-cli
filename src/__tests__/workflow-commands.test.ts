@@ -264,6 +264,16 @@ describe('workflow start and resume --driver', () => {
     });
   });
 
+  it('takes a run with no --driver on the team\'s teamai-local, as --driver local does', async () => {
+    state.config = testConfig();
+    fs.mkdirSync(path.join(state.config.repo.localPath, 'drivers'), { recursive: true });
+    fs.writeFileSync(path.join(state.config.repo.localPath, 'drivers', 'teamai-local.yaml'), 'schemaVersion: v1alpha1\nname: teamai-local\nruntimes:\n  - use: acme-missing\n');
+    const asLocal = await capture(() => workflowResume(undefined, { driver: 'local', next: true }));
+
+    expect(asLocal).toMatchObject({ error: { message: expect.stringContaining('acme-missing') } });
+    expect(await capture(() => workflowResume(undefined, { next: true }))).toEqual(asLocal);
+  });
+
   it.each(['fleet', 'none', 'acme sandbox'])('refuses --driver %s, which no driver of this machine is', async (named) => {
     state.config = testConfig();
     const refused = { error: { code: 'unsupported_driver', message: `Driver "${named}" is not available. Use --driver local or --driver skill.` } };

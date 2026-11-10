@@ -1603,7 +1603,7 @@ async function resumeOffered(runId: string | undefined, options: ResumeOptions, 
   }
 
   // A run taken from another member runs on the team's definition, never on one of this member's own.
-  const defined = isSkill ? { ok: true as const, opened: undefined } : await openNamedDriver(loaded.config, options.driver, { personal: false });
+  const defined = isSkill ? { ok: true as const, opened: undefined } : await openNamedDriver(loaded.config, options.driver ?? LOCAL_DRIVER, { personal: false });
 
   if (!defined.ok) {
     answer({ error: defined.failure });
@@ -1667,7 +1667,7 @@ async function takeFleetNext({ config, secrets }: Ready, pool: string, driver: s
 
   // A member runs an attempt on the team's or a shipped definition it names, never on one of its own (D4), so where the
   // step runs does not depend on what this machine defines.
-  const defined = await openNamedDriver(config, driver, { personal: false });
+  const defined = await openNamedDriver(config, driver ?? LOCAL_DRIVER, { personal: false });
 
   if (!defined.ok) {
     refuse({ error: defined.failure });
