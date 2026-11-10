@@ -265,7 +265,7 @@ runtimes:
       image: ghcr.io/acme/agent:1
       credentials:
         codex: login                                          # 只是登录：容器里不评判
-  - use: local                                                # 接手评判
+  - use: tools                                                # 接手评判
 ```
 
 **本机上的网关可以直接用。** 凭据里的 `localhost`、`127.0.0.1` 或 `::1` 在容器里会是容器自己的回环地址，所以 teamai 会把它改成你的机器在容器里的名字，协议、端口和路径保持不变。评判的过滤器也只放行你机器上的那个端口。
@@ -509,7 +509,7 @@ runtimes:
     options:
       t3: { environment: local, runtime_mode: full-access }
       sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
-  - use: local
+  - use: tools
 ```
 
 每个 prompt 步骤的过程：

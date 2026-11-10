@@ -265,7 +265,7 @@ runtimes:
       image: ghcr.io/acme/agent:1
       credentials:
         codex: login                                          # a login: no judge in a container
-  - use: local                                                # takes the judge
+  - use: tools                                                # takes the judge
 ```
 
 **A gateway on this machine works as it is.** `localhost`, `127.0.0.1` or `::1` in a credential would be the container's own loopback, so teamai points it at the name your machine has in the container, keeping scheme, port and path. A judge's filter then lets through only that port of your machine.
@@ -509,7 +509,7 @@ runtimes:
     options:
       t3: { environment: local, runtime_mode: full-access }
       sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
-  - use: local
+  - use: tools
 ```
 
 What happens on each prompt step:

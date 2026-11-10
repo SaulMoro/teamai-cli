@@ -167,7 +167,7 @@ description: T3 threads in full access, for a T3 that runs inside its own VM.
 runtimes:
   - use: t3
     options: { environment: local, runtime_mode: full-access }
-  - use: local
+  - use: tools
 ```
 
 运行开始时会提示一次，并把这些步骤的隔离级别记为 `none`：
@@ -193,7 +193,7 @@ workflows:
           max_parallel: 2
 ```
 
-只想改一个工具的实例时，在 `instances` 下映射它，例如 `instances: { claude: claude-work }`：Claude 步骤在 `claude-work` 上运行，Codex 步骤仍用原来的实例。映射到 T3 无法运行的实例时，T3 不提供这个工具：它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机），没有这样的运行时则在调用 T3 之前失败并说明要设置什么。这里的名字既不是 `claude`、`codex`，也不是你拥有的[团队工具](reference.md#团队工具tools)时，它不映射任何东西，运行开始时会说明。其他工具照常运行：
+只想改一个工具的实例时，在 `instances` 下映射它，例如 `instances: { claude: claude-work }`：Claude 步骤在 `claude-work` 上运行，Codex 步骤仍用原来的实例。映射到 T3 无法运行的实例时，T3 不提供这个工具：它的步骤在定义中下一个拥有它的运行时上运行，没有这样的运行时（如 `teamai-t3`）则在调用 T3 之前失败并说明要设置什么。这里的名字既不是 `claude`、`codex`，也不是你拥有的[团队工具](reference.md#团队工具tools)时，它不映射任何东西，运行开始时会说明。其他工具照常运行：
 
 ```text
 ⚠ Step runtime "t3": instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.
@@ -225,7 +225,7 @@ workflows:
 
 teamai 以你的身份写入 T3 的设置文件，有人值守和无人值守的运行都一样，就像它用 `t3` 命令添加项目那样。它不会向 T3 申请更大的登录权限：每个线程仍按原来的模式启动。如果 T3 Code 同时也在写这个文件，teamai 会重新读取，并保留 T3 写入的内容。
 
-T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它、运行它的实例被关掉了，或者 T3 已有一个同名实例），它的步骤在定义中下一个拥有它的运行时上运行（在 `teamai-t3` 上就是本机）；在没有其他运行时能运行它的定义上，会在任何线程启动之前失败，并给出原因：
+T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都运行它、运行它的实例被关掉了，或者 T3 已有一个同名实例），它的步骤在定义中下一个拥有它的运行时上运行；在没有其他运行时能运行它的定义上（如 `teamai-t3`），会在任何线程启动之前失败，并给出原因：
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.

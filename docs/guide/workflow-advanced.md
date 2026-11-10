@@ -1640,7 +1640,7 @@ runtimes:
     options:
       my-app: { mode: full-access }
       my-sandbox: { image: acme/agent:1 }
-  - use: local
+  - use: tools
 ```
 
 The entry is one runtime to the run, named `my-app through my-sandbox` in its messages. Where the tool runs comes from the outer runtime (`my-sandbox`): the isolation, env credentials, setup and command steps. How the tool is launched comes from the inner one (`my-app`): its tools, workspaces, HITL and turn ending. The entry also takes the `clone` and `team` workspaces the outer prepares. It offers `permissions: unattended` only for a tool the inner runs in full access, and runs no confined step. The step's sign-in goes to the outer, which hands it to the tool; the inner gets only its own credentials.
@@ -1663,7 +1663,7 @@ runtimes:
       pool: build          # optional; default
       stale_after: 30m     # optional; 30m
       max_parallel: 4      # at most 4 attempts out at once
-  - use: local
+  - use: tools
 ```
 
 A member takes the oldest attempt a pool offers for the checkout's origin:
@@ -1698,7 +1698,7 @@ runtimes:
         use: t3            # the runtime that starts the member
         options:           # its options, as a driver gives them; your workflows.drivers.gpu-fleet.runtimes.t3 goes over them
           environment: local
-  - use: local
+  - use: tools
 ```
 
 The first time your driver reads the attempt offered, it asks that runtime once to run `teamai workflow resume --next --pool gpu` in a checkout of the business repository on a machine it reaches. The member it starts takes an attempt as any member does. Your driver wakes once per attempt, also after it restarts, and stops a wake still under way once the attempt is taken or the wait ends. A wake that fails is said once, with that command, and the attempt waits for a member someone starts. The member runs the `teamai` on its own machine's PATH, so that machine needs a teamai release with fleet support: an older one stops at the unknown `--pool` option. A woken member that fails says why on its own thread or agent, on that machine, and the attempt waits. `teamai workflow resume` lists where a member was woken, under WOKEN, on your install only. A runtime whose init offers no wake fails the start with `bad_option`. A woken member runs the step on that machine's tool and login, so it spends that machine's account, and runs what the step runs there: name a runtime that reaches only machines you trust with your pool's steps.
@@ -1770,7 +1770,7 @@ runtimes:
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # from `claude setup-token`
         NPM_TOKEN: env:ACME_NPM_TOKEN                          # the private registry, under another name in your shell
-  - use: local
+  - use: tools
 ```
 
 ```sh
@@ -2031,7 +2031,7 @@ name: threads
 tool: claude
 runtimes:
   - use: threads          # prompt steps, each as an agent thread
-  - use: local            # commands, setup, and prompts threads cannot take
+  - use: tools            # prompts threads cannot take
 ```
 
 teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole prompt, with the agent definition's instructions when the step names one, and the line that says where to write the result. The agent writes `lease.result`; the runtime reads it back and sends it in `finished`, with the tool's session and the tokens it billed:

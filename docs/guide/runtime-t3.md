@@ -167,7 +167,7 @@ description: T3 threads in full access, for a T3 that runs inside its own VM.
 runtimes:
   - use: t3
     options: { environment: local, runtime_mode: full-access }
-  - use: local
+  - use: tools
 ```
 
 The run says so once, as it starts, and records the steps' isolation as `none`:
@@ -193,7 +193,7 @@ workflows:
           max_parallel: 2
 ```
 
-To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A mapping to an instance T3 cannot run leaves that tool out of T3: its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`, or fail before T3 is called, saying what to set, when none has it. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) you have maps nothing, and the run says so as it starts. The other tools still run:
+To move one tool alone, map it under `instances`, for example `instances: { claude: claude-work }`: Claude steps run on `claude-work`, and Codex steps keep their instance. A mapping to an instance T3 cannot run leaves that tool out of T3: its steps run on the next runtime of the definition that has it, or fail before T3 is called, saying what to set, when none has it, as on `teamai-t3`. A name there that is neither `claude`, `codex` nor a [team tool](reference.md#team-tools-tools) you have maps nothing, and the run says so as it starts. The other tools still run:
 
 ```text
 ⚠ Step runtime "t3": instances names acme-cluade, which is neither claude, codex nor a tool instance teamai has here. Remove instances.acme-cluade, or name the instance as its tool definition does.
@@ -225,7 +225,7 @@ The instance is named after the tool. Its Binary path is the tool's command as y
 
 teamai writes T3's settings file as you, in attended and unattended runs alike, as it adds a project with the `t3` command. It asks T3 for no wider sign-in: each thread still starts in the mode it would. When T3 Code writes the file at the same moment, teamai reads it again and keeps what T3 wrote.
 
-When T3 does not offer the tool (the command is not on your PATH, two instances run it, one that runs it is turned off, or T3 already has an instance of its name), its steps run on the next runtime of the definition that has it, this machine on `teamai-t3`; on a definition with no other runtime for it they fail before any thread starts, with that reason:
+When T3 does not offer the tool (the command is not on your PATH, two instances run it, one that runs it is turned off, or T3 already has an instance of its name), its steps run on the next runtime of the definition that has it; on a definition with no other runtime for it, such as `teamai-t3`, they fail before any thread starts, with that reason:
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: t3: No T3 Code provider instance runs acme-claude, and teamai cannot add one: acme-claude is not on PATH here. Install acme-claude, or add one in T3 Code under Settings → Providers, with driver Claude and Binary path the absolute path of acme-claude (command -v acme-claude), or map one with instances: { acme-claude: <its id> } in the definition's t3 options. Or remove tool from the step.

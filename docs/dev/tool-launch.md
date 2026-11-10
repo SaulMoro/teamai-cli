@@ -1,7 +1,9 @@
 # Tool launch
 
-Maintainer notes on `src/tool-launch/`, the code that starts a coding tool headless. Workflow drivers call it: for a
-step that prompts a tool, a step that answers a prompt, and a scorer's judge. Nothing else launches one.
+Maintainer notes on the code that starts a coding tool headless: `@teamai/tool-launch`, the tools runtime
+(`packages/runtime-tools`), and what `src/tool-launch/` keeps (the tools a member names, their adapters and levels).
+Workflow drivers call it: for a step that prompts a tool, a step that answers a prompt, and a scorer's judge. Nothing
+else launches one.
 
 Each rule below spans more than one file. The rule names the code that owns it, so you can read the details there.
 

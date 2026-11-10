@@ -249,7 +249,7 @@ runtimes:
   - use: paseo
     options:
       url: ws://127.0.0.1:7070/ws
-  - use: local
+  - use: tools
 ```
 
 ## 工具、模型和模式
@@ -270,7 +270,7 @@ runtimes:
   - use: paseo
     options:
       mode: { claude: bypassPermissions }
-  - use: local
+  - use: tools
 ```
 
 ```text
@@ -401,7 +401,7 @@ runtimes:
   - use: paseo
     options:
       providers: { acme-claude: claude-acme }
-  - use: local
+  - use: tools
 ```
 
 ## 通过沙箱运行
@@ -417,7 +417,7 @@ runtimes:
     through: sandbox
     options:
       sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
-  - use: local
+  - use: tools
 ```
 
 ```json

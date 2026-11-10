@@ -1634,7 +1634,7 @@ runtimes:
     options:
       my-app: { mode: full-access }
       my-sandbox: { image: acme/agent:1 }
-  - use: local
+  - use: tools
 ```
 
 对运行来说，这个条目是一个运行时，消息里叫 `my-app through my-sandbox`。工具在哪里运行由外层运行时（`my-sandbox`）决定：隔离、env 凭据、setup 和命令步骤。工具怎样启动由内层运行时（`my-app`）决定：它的工具、工作区、HITL 和结束轮次的方式。条目还提供外层准备的 `clone` 和 `team` 工作区。只有内层以完全访问运行的工具才提供 `permissions: unattended`，并且不运行受限步骤。步骤的登录交给外层，由外层交给工具；内层只得到它自己的凭据。
@@ -1657,7 +1657,7 @@ runtimes:
       pool: build          # 可选；默认 default
       stale_after: 30m     # 可选；默认 30m
       max_parallel: 4      # 同时最多发出 4 个尝试
-  - use: local
+  - use: tools
 ```
 
 成员领取某个池为当前检出的 origin 发布的最早的尝试：
@@ -1692,7 +1692,7 @@ runtimes:
         use: t3            # 启动成员的运行时
         options:           # 它的选项，与驱动中给它的一样；你的 workflows.drivers.gpu-fleet.runtimes.t3 会覆盖它们
           environment: local
-  - use: local
+  - use: tools
 ```
 
 你的驱动第一次读到该尝试处于已发布状态时，会请求那个运行时一次：在它能到达的某台机器上、业务仓库的一个检出里运行 `teamai workflow resume --next --pool gpu`。它启动的成员像其他成员一样领取尝试。每个尝试只唤醒一次，驱动重启后也一样；尝试被领取或等待结束时，还在进行中的唤醒会被停止。唤醒失败时会提示一次，并附上那条命令，尝试继续等待有人启动的成员。成员运行的是它自己那台机器 PATH 上的 `teamai`，所以那台机器需要一个支持 fleet 的 teamai 版本：旧版本会在不认识的 `--pool` 选项上停下。被唤醒的成员失败时，原因显示在那台机器上它自己的线程或 agent 里，尝试继续等待。`teamai workflow resume` 会在 WOKEN 一列列出成员是在哪里被唤醒的，只在你的安装上可见。init 不提供 wake 的运行时会让启动以 `bad_option` 失败。被唤醒的成员用那台机器的工具和登录运行步骤，所以消耗的是那台机器的账号，并在那里运行步骤要运行的内容：只指定能到达你信任其运行本池步骤的机器的运行时。
@@ -1764,7 +1764,7 @@ runtimes:
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # 来自 `claude setup-token`
         NPM_TOKEN: env:ACME_NPM_TOKEN                          # 私有仓库，在你 shell 里用另一个名字
-  - use: local
+  - use: tools
 ```
 
 ```sh
@@ -2025,7 +2025,7 @@ name: threads
 tool: claude
 runtimes:
   - use: threads          # 提示步骤，每个都作为一个智能体线程
-  - use: local            # 命令、setup，以及 threads 接不了的提示
+  - use: tools            # threads 接不了的提示
 ```
 
 teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 是完整的提示：步骤指定了智能体定义时包含它的说明，还有告诉智能体把结果写到哪里的那一行。智能体写入 `lease.result`，运行时把它读回来，在 `finished` 中连同工具的会话和计费的 token 一起发送：
