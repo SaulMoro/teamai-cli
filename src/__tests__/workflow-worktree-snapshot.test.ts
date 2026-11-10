@@ -44,7 +44,7 @@ it('lists the index entries of every changed path in one git call, however many 
   const snapshot = await snapshotWorktree(repo, run);
 
   expect(snapshot.files.size).toBe(12);
-  expect(calls.filter((args) => args[0] === 'ls-files')).toHaveLength(1);
+  expect(calls.filter((args) => args.includes('ls-files'))).toHaveLength(1);
   expect(calls).toHaveLength(4);
 });
 
@@ -104,7 +104,7 @@ it('splits a list of paths too long for one command line, and still reads every 
 
   const { files } = await snapshotWorktree(repo, run);
 
-  const listing = calls.filter((args) => args[0] === 'ls-files');
+  const listing = calls.filter((args) => args.includes('ls-files'));
   expect(listing.length).toBeGreaterThan(1);
   expect(listing.length).toBeLessThan(10);
   expect(listing.every((args) => args.join(' ').length < 10_000)).toBe(true);
@@ -116,4 +116,40 @@ it('sees an edit of a tracked file between two snapshots', async () => {
   fs.writeFileSync(path.join(repo, 'README.md'), 'edited\n');
 
   expect(changedPaths(before, await snapshotWorktree(repo, git))).toEqual(['README.md']);
+});
+
+it('gives each path an entry once when the paths that hold it fall in different batches', async () => {
+  fs.mkdirSync(path.join(repo, 'folder'));
+  fs.writeFileSync(path.join(repo, 'folder', 'inside.txt'), 'inside\n');
+  const names = Array.from({ length: 300 }, (_, index) => `${'long-name-'.repeat(8)}${index}.txt`);
+  for (const name of names) fs.writeFileSync(path.join(repo, name), 'tracked\n');
+  sh('add', '-A');
+  sh('commit', '-q', '-m', 'folder and many');
+  const inside = indexEntries('folder/inside.txt');
+  for (const name of names) fs.writeFileSync(path.join(repo, name), 'edited\n');
+  fs.rmSync(path.join(repo, 'folder'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'folder'), 'now a file\n');
+
+  const { files } = await snapshotWorktree(repo, git);
+
+  expect(files.get('folder')?.startsWith(`??:${inside}:`)).toBe(true);
+  expect(files.get('folder/inside.txt')?.startsWith(` D:${inside}:`)).toBe(true);
+});
+
+it('lists only the entry of a path whose name is a glob', async () => {
+  for (let index = 0; index < 20; index += 1) fs.writeFileSync(path.join(repo, `other-${index}.txt`), 'tracked\n');
+  fs.writeFileSync(path.join(repo, '*'), 'tracked\n');
+  sh('add', '-A');
+  sh('commit', '-q', '-m', 'star');
+  fs.writeFileSync(path.join(repo, '*'), 'edited\n');
+  const listed: string[] = [];
+  const run: Git = async (cwd, args, options) => {
+    const read = await git(cwd, args, options);
+    if (args.includes('ls-files')) listed.push(read.stdout);
+    return read;
+  };
+
+  await snapshotWorktree(repo, run);
+
+  expect(listed.join('').split('\0').filter((record) => record !== '').map((record) => record.split('\t')[1])).toEqual(['*']);
 });
