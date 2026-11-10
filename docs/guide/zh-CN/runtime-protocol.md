@@ -15,6 +15,8 @@ teamai 仓库中的 toy 运行时 `src/__tests__/fixtures/runtime-toy/runtime.mj
 | `@teamai/runtime-protocol` | 每个请求和回复的 zod schema：teamai 发送的内容用 `RuntimeRequestSchema`，你写出的内容用 `RuntimeMessageSchema`。用它解析读到的每一行。 |
 | `@teamai/runtime-protocol/step-runtime` | `StepRuntime`，teamai 驱动每个运行时所用的接口，通过 stdio 连接的你的运行时也一样。它的结果类型，比如 `ExecEnd` 和 `PromptEnd`，说明你的每个回答在运行中变成什么。 |
 
+teamai 自带的运行时则建立在 `@teamai/runtime-kit` 之上：它的请求循环（`serve`）只在 teamai 启动它时运行（`TEAMAI_RUNTIME_PROTOCOL=1`），不把这个变量传给它启动的进程，并让每个操作只结束一次。用它代替 toy 自己的循环，并去掉 toy 的测试选项，比如会杀掉启动它的进程的 `die_at`。
+
 把打包好的文件放在 teamai 查找运行时的位置，比如团队仓库中的 `runtimes/<name>/runtime`（[teamai 在哪里查找](workflow-advanced.md#驱动定义和步骤运行时)），再在驱动定义中用 `use: <name>` 指定它。
 
 ## 用场景测试套件测试它
@@ -233,6 +235,10 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `permissions` | `approval-required`；你的 `can.unattended` 接下这类步骤时为 `unattended` |
 | `interactive` | 有人在步骤中工作时为 `true`；只有声明了 `can.hitl` 的运行时会收到 |
 | `maxTurns` | 智能体的轮数上限，在你的 `can.max_turns` 提供时才有 |
+| `continue` | 这个提示所延续的先前提示的对话，以 `handle` 和 `op` 给出，在你的 `init` 回答了 `"conversations":true` 时才有。你仍然持有它、且工具和工作目录相同时延续它，并回答 `"resumed":true`；否则开始新的对话，并为这个 `op` 发一条 `notice` 说明原因 |
+| `limits` | 步骤的 token `budget`、`timeoutMs` 和 `idleMs`，在你自己启动的进程上运行工具时据此停下它。做不到的就忽略：提示结束后 teamai 仍会检查预算 |
+
+`init` 的另外两个回答会改变 teamai 对你的提示所做的事。`"conversations":true` 表示提示的对话在它的位置里比提示本身活得更久：之后的步骤延续它时，teamai 会让这个位置保持打开，并给那个步骤发送 `continue`。没有它时，每个提示都开始新的对话。`"toolHome":true` 表示你在这次尝试的工具主目录（`open.view.toolHome`）里运行每个工具，就像执行工具命令的运行时那样：teamai 准备这个目录、把登录复制进去，并从那里读取会话。没有它时，你的工具把会话保存在 `local` 保存的位置。
 
 `env` 包含尝试的标记，例如 `TEAMAI_WORKFLOW_ATTEMPT` 和 `TEAMAI_RUN_DIR`，以及步骤 `requires.env` 的键的值。`provided` 列出这些键。如果你的运行时的工具以明文保存 env，例如它保存的智能体配置，就丢掉这些键，保留标记：
 
