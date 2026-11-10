@@ -89,3 +89,23 @@ export function ruleHarness(rule: `teamai/${string}`, defaults: { filename: stri
     },
   };
 }
+
+/**
+ * Run the real oxlint with `rule` configured with `options` on an empty fixture, and return its exit status and what it
+ * printed, so a test can show that a rule refuses an option it no longer takes.
+ */
+export function lintWithOptions(rule: `teamai/${string}`, options: readonly object[]): { status: number | null; output: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-oxlint-options-'));
+  try {
+    const config = path.join(dir, '.oxlintrc.json');
+    fs.writeFileSync(config, JSON.stringify({ jsPlugins: [path.join(PLUGIN_ROOT, 'index.js')], categories: { correctness: 'off' }, rules: { [rule]: ['error', ...options] } }));
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    const file = path.join(dir, 'src', 'x.ts');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'export const x = 1;\n');
+    const lint = spawnSync(OXLINT, ['-c', config, '--format', 'json', file], { encoding: 'utf8', shell: process.platform === 'win32' });
+    return { status: lint.status, output: lint.stdout + lint.stderr };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}

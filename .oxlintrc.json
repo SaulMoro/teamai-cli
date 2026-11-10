@@ -98,8 +98,7 @@
     // readline re-emits a socket's or stream's errors on its interface, and throws them when nothing listens there.
     "teamai/readline-error": "error",
     // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
-    // Files that still read teamai's own config or state with a plain read are counted in the baseline, which only shrinks.
-    "teamai/regular-file-reads": ["error", { "baseline": "oxlint-plugin-teamai/rules/regular-file-reads.baseline.json" }],
+    "teamai/regular-file-reads": "error",
     // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.
     "teamai/step-path-writes": "error",
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
@@ -116,8 +115,7 @@
     "teamai/workflow-failure-codes": "error",
     "teamai/tool-facts": "error",
     // A tool family builds argv and reads output, and never starts a process; its index.ts exports only `family`.
-    // Files that still start one to read the tool's sessions go in stillSpawns, a list that only shrinks.
-    "teamai/tool-family-shape": ["error", { "stillSpawns": [] }],
+    "teamai/tool-family-shape": "error",
     // packages/* never imports src/, src/ never imports a runtime package, and a package is reached only by its name.
     "teamai/package-boundaries": "error",
     // A runtime serves protocol 1 only through @teamai/runtime-kit: no request loop or op end of its own.

@@ -5,17 +5,13 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { reachesSource, sourceModules } from '../imports.js';
-import { ruleHarness } from '../test/harness.ts';
+import { lintWithOptions, ruleHarness } from '../test/harness.ts';
 import { FAMILY, PROCESS_STARTERS } from '../utils.js';
 import { familySource } from './tool-family-shape.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** A family file the fixtures list as still spawning, and one listed whose file is gone. */
-const LISTED = 'packages/tool-listed/src/store.ts';
-const GONE = 'packages/tool-gone/src/store.ts';
-
-const rule = ruleHarness('teamai/tool-family-shape', { filename: 'packages/tool-claude/src/launch.ts', options: [{ stillSpawns: [LISTED, GONE] }] });
+const rule = ruleHarness('teamai/tool-family-shape', { filename: 'packages/tool-claude/src/launch.ts' });
 
 rule.valid('allows a family\'s launch profile that builds a step\'s argv', `export const launch = { claude: { step: { evidence: 'verified', unattended: 'none', args: (input: { prompt: string }) => ['-p', input.prompt] } } } as const;`);
 
@@ -65,16 +61,17 @@ export const fifo = () => execFileSync('mkfifo', ['x']);`, { filename: 'packages
 rule.valid('leaves a family\'s test support alone', `import { spawn } from 'node:child_process';
 export const fake = () => spawn('claude');`, { filename: 'packages/tool-claude/src/testing/fake-claude.ts' });
 
-rule.valid('leaves a family file listed in stillSpawns alone while it still starts a process', `import { spawnSync } from 'node:child_process';
-export const read = () => spawnSync('sqlite3');`, { filename: LISTED });
+rule.invalid('rejects a process start in any family file, with no list of exceptions', `import { spawnSync } from 'node:child_process';
+export const read = () => spawnSync('sqlite3');`, (output) => {
+  expect(output).toContain('packages/tool-codex/src/store.ts imports node:child_process');
+}, { filename: 'packages/tool-codex/src/store.ts' });
 
-rule.invalid('fails a file left on stillSpawns once it no longer starts a process', `export const read = () => 1;`, (output) => {
-  expect(output).toContain(`${LISTED} no longer starts a process`);
-}, { filename: LISTED });
+it('takes no option, so no file can be listed as still starting a process', () => {
+  const { status, output } = lintWithOptions('teamai/tool-family-shape', [{ stillSpawns: [] }]);
 
-rule.invalid('fails a listed file that no longer exists, from any source of its family', `export const nothing = 1;`, (output) => {
-  expect(output).toContain(`${GONE} is listed in stillSpawns but does not exist`);
-}, { filename: 'packages/tool-gone/src/other.ts' });
+  expect(status, output).not.toBe(0);
+  expect(output).toContain("Rule 'teamai/tool-family-shape' does not accept options");
+});
 
 it('matches every family\'s production source in this checkout, and no infrastructure package', () => {
   const files = fs.readdirSync(path.join(REPO, 'packages'), { recursive: true, encoding: 'utf8' })
@@ -88,14 +85,6 @@ it('matches every family\'s production source in this checkout, and no infrastru
   expect(families).toContain('tool-opencode');
   expect([...families].filter((folder) => /^tool-(?:core|testing|definitions|launch)$/.test(folder))).toEqual([]);
   expect(matched.filter((file) => /\.test\.ts$|\/src\/testing\//.test(file))).toEqual([]);
-});
-
-it('lists in its stillSpawns option only files that exist in this checkout', () => {
-  const config = fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
-  const rules = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(JSON.parse(config)).rules;
-  const [, options] = z.tuple([z.literal('error'), z.object({ stillSpawns: z.array(z.string()) })]).parse(rules['teamai/tool-family-shape']);
-
-  for (const file of options.stillSpawns) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
 });
 
 /**

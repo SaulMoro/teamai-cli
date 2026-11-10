@@ -2,26 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { z } from 'zod';
 
-import { ruleHarness } from '../test/harness.ts';
-import { BaselineSchema, isReadChecked } from './regular-file-reads.js';
+import { lintWithOptions, ruleHarness } from '../test/harness.ts';
+import { isReadChecked } from './regular-file-reads.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Where the fixtures keep their baseline, from the fixture's root, as the repository keeps its own. */
-const BASELINE = 'lint/regular-file-reads.json';
-/** A fixture file the baseline lists with two reads, and one it lists whose file is gone. */
-const LISTED = 'src/config/listed.ts';
-const GONE = 'src/config/gone.ts';
-const files = { [BASELINE]: JSON.stringify({ [LISTED]: 2, [GONE]: 1 }) };
-
-const rule = ruleHarness('teamai/regular-file-reads', { filename: 'src/workflow/steps/result.ts', options: [{ baseline: BASELINE }] });
-
-type Options = { filename?: string; files?: Readonly<Record<string, string>> };
-/** Every fixture lints beside a baseline file, as the repository does. */
-const valid = (name: string, source: string, options: Options = {}) => rule.valid(name, source, { files, ...options });
-const invalid = (name: string, source: string, assertion?: (output: string) => void, options: Options = {}) => rule.invalid(name, source, assertion, { files, ...options });
+const rule = ruleHarness('teamai/regular-file-reads', { filename: 'src/workflow/steps/result.ts' });
+const { valid, invalid } = rule;
 
 const MESSAGE = 'Read a file with readRegularFile or openRegularFile';
 
@@ -80,10 +68,10 @@ export const texts = (files: string[]) => Promise.all(files.map(readFile));`, (o
   expect(output).toContain(MESSAGE);
 });
 
-invalid('counts each call of a named import, not the import once, against the baseline', `import { readFileSync } from 'node:fs';
+invalid('reports each call of a named import, not the import once', `import { readFileSync } from 'node:fs';
 export const all = (file: string) => [readFileSync(file), readFileSync(file), readFileSync(file)];`, (output) => {
-  expect(output).toContain(`${LISTED} has 3 plain reads; the baseline allows 2.`);
-}, { filename: LISTED });
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(3);
+});
 
 valid('allows the read wrappers of src/utils/fs.ts, which open through the helper', `import { readFileSafe, readJson, fileHash } from '../../utils/fs.js';
 export const all = (file: string) => Promise.all([readFileSafe(file), readJson(file), fileHash(file)]);`);
@@ -114,32 +102,29 @@ export const list = (dir: string) => fs.readdir(dir);`);
 invalid('rejects a read in src/ outside src/workflow, such as a scorer reading evidence a step wrote', `import fs from 'node:fs';
 export const read = (file: string) => fs.readFileSync(file, 'utf8');`, (output) => {
   expect(output).toContain(MESSAGE);
-}, { filename: 'src/scorers/x.ts', files });
+}, { filename: 'src/scorers/x.ts' });
 
 invalid('rejects a read in a package folder no rule names, so a new package is in scope', `import { readFile } from 'node:fs/promises';
 export const read = (file: string) => readFile(file, 'utf8');`, (output) => {
   expect(output).toContain(MESSAGE);
-}, { filename: 'packages/tool-zzz/src/x.ts', files });
+}, { filename: 'packages/tool-zzz/src/x.ts' });
 
 valid('allows the helper in a package', `import { readRegularFileSync } from '@teamai/shared/regular-file';
-export const read = (file: string) => readRegularFileSync(file, 'utf8');`, { filename: 'packages/tool-zzz/src/x.ts', files });
+export const read = (file: string) => readRegularFileSync(file, 'utf8');`, { filename: 'packages/tool-zzz/src/x.ts' });
 
-valid('allows a baselined file its counted reads', `import fs from 'node:fs';
-export const read = (file: string) => [fs.readFileSync(file, 'utf8'), fs.readFileSync(\`\${file}.bak\`, 'utf8')];`, { filename: LISTED, files: { [BASELINE]: JSON.stringify({ [LISTED]: 2 }) } });
+for (const filename of ['src/config/listed.ts', 'src/utils/migrate.ts', 'packages/runtime-zzz/src/place.ts']) {
+  invalid(`rejects a raw read in ${filename}, with no file exempt`, `import fs from 'node:fs';
+export const read = (file: string) => fs.readFileSync(file, 'utf8');`, (output) => {
+    expect(output).toContain(MESSAGE);
+  }, { filename });
+}
 
-invalid('rejects a read added to a baselined file past its count', `import fs from 'node:fs';
-export const read = (file: string) => [fs.readFileSync(file), fs.readFileSync(file), fs.readFileSync(file)];`, (output) => {
-  expect(output).toContain(`${LISTED} has 3 plain reads; the baseline allows 2`);
-}, { filename: LISTED, files: { [BASELINE]: JSON.stringify({ [LISTED]: 2 }) } });
+it('takes no option, so no file can be given an allowance of plain reads', () => {
+  const { status, output } = lintWithOptions('teamai/regular-file-reads', [{ baseline: 'oxlint-plugin-teamai/rules/regular-file-reads.baseline.json' }]);
 
-invalid('rejects a baselined file whose reads fell below its entry, until the entry is lowered', `import fs from 'node:fs';
-export const read = (file: string) => fs.readFileSync(file);`, (output) => {
-  expect(output).toContain(`${LISTED} has 1 plain read; lower its entry in ${BASELINE} from 2 to 1`);
-}, { filename: LISTED, files: { [BASELINE]: JSON.stringify({ [LISTED]: 2 }) } });
-
-invalid('rejects a baseline entry for a file that no longer exists', `export const nothing = 1;`, (output) => {
-  expect(output).toContain(`${GONE} is in ${BASELINE} but does not exist`);
-}, { filename: 'src/config/other.ts', files });
+  expect(status, output).not.toBe(0);
+  expect(output).toContain("Rule 'teamai/regular-file-reads' does not accept options");
+});
 
 valid('allows reads in tests', `import fs from 'node:fs/promises';
 export const read = (file: string) => fs.readFile(file, 'utf8');`, { filename: 'src/workflow/steps/result.test.ts' });
@@ -153,16 +138,4 @@ it('matches the production source of src/ and of every package in this checkout'
   expect(matched.filter((file) => file.startsWith('src/')).length).toBeGreaterThan(500);
   expect(matched.filter((file) => file.startsWith('packages/')).length).toBeGreaterThan(150);
   expect(matched.filter((file) => /\.test\.|\/__tests__\/|\/testing\//.test(file))).toEqual([]);
-});
-
-it('lists in its baseline only files that exist, each with a positive count', () => {
-  const config = fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
-  const rules = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(JSON.parse(config)).rules;
-  const [, options] = z.tuple([z.literal('error'), z.object({ baseline: z.string() })]).parse(rules['teamai/regular-file-reads']);
-  const baseline = BaselineSchema.parse(JSON.parse(fs.readFileSync(path.join(REPO, options.baseline), 'utf8')));
-
-  for (const [file, count] of Object.entries(baseline)) {
-    expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
-    expect(count, file).toBeGreaterThan(0);
-  }
 });
