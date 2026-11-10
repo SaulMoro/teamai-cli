@@ -197,16 +197,41 @@ export interface CopyTreeOptions {
   readonly existing?: 'replace' | 'keep' | 'fail';
 }
 
-/** Whether to copy a file or link to `to`, making way for it as `existing` says: false when `keep` finds one there. */
-async function makeWay(to: string, existing: 'replace' | 'keep' | 'fail'): Promise<boolean> {
+async function lstatOrMissing(file: string): Promise<fs.Stats | undefined> {
   try {
-    await fs.promises.lstat(to);
+    return await fs.promises.lstat(file);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+/** Where `file` is, with the links of the folders above it resolved, as far as they exist; `file` itself may be a link. */
+async function placeOf(file: string): Promise<string> {
+  const parent = path.dirname(file);
+
+  if (parent === file) return file;
+
+  try {
+    return path.join(await fs.promises.realpath(parent), path.basename(file));
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+
+    return path.join(await placeOf(parent), path.basename(file));
+  }
+}
+
+/** Whether to copy a file or link to `to`, making way for it as `existing` says: false when `keep` finds one there. */
+async function makeWay(from: string, to: string, existing: 'replace' | 'keep' | 'fail'): Promise<boolean> {
+  const there = await lstatOrMissing(to);
+
+  if (there === undefined) {
     await fs.promises.mkdir(path.dirname(to), { recursive: true });
 
     return true;
   }
+
+  if (there.isDirectory()) throw new Error(`${to} is a folder, so teamai does not copy ${from} over it`);
 
   switch (existing) {
     case 'keep':
@@ -229,15 +254,26 @@ async function makeWay(to: string, existing: 'replace' | 'keep' | 'fail'): Promi
  * Copies `from`, a file or a folder, to `to`, as fs-extra's `copy` does: folders are merged into, links are copied as
  * links, and each file keeps its mode. Anything but a regular file, a folder or a link, such as a FIFO or a device,
  * rejects with `NotRegularFileError`, and each file is read as `openRegularFile` opens it, so nothing waits on a writer.
+ * As fs-extra does, it refuses `to` at or inside `from`, a folder over anything but a folder, and a file over a folder,
+ * so a copy never makes way by removing what it copies from.
  */
 export async function copyRegularTree(from: string, to: string, options: CopyTreeOptions = {}): Promise<void> {
+  const [source, target] = await Promise.all([placeOf(from), placeOf(to)]);
+
+  if (target === source || target.startsWith(`${source}${path.sep}`)) throw new Error(`${to} is ${from} or a folder inside it, so teamai does not copy ${from} there`);
+
+  await copyEntry(from, to, options);
+}
+
+async function copyEntry(from: string, to: string, options: CopyTreeOptions): Promise<void> {
   if (options.filter !== undefined && !(await options.filter(from))) return;
   const stats = await fs.promises.lstat(from);
 
   if (stats.isDirectory()) {
+    if ((await lstatOrMissing(to))?.isDirectory() === false) throw new Error(`${to} is not a folder, so teamai does not copy the folder ${from} over it`);
     const created = await fs.promises.mkdir(to, { recursive: true });
 
-    for (const entry of await fs.promises.readdir(from)) await copyRegularTree(path.join(from, entry), path.join(to, entry), options);
+    for (const entry of await fs.promises.readdir(from)) await copyEntry(path.join(from, entry), path.join(to, entry), options);
 
     if (created !== undefined) await fs.promises.chmod(to, stats.mode & 0o7777);
 
@@ -246,7 +282,7 @@ export async function copyRegularTree(from: string, to: string, options: CopyTre
 
   if (!stats.isFile() && !stats.isSymbolicLink()) throw new NotRegularFileError(from, stats);
 
-  if (!(await makeWay(to, options.existing ?? 'replace'))) return;
+  if (!(await makeWay(from, to, options.existing ?? 'replace'))) return;
 
   if (stats.isSymbolicLink()) await fs.promises.symlink(await fs.promises.readlink(from), to);
   else await copyRegularFile(from, to);

@@ -220,4 +220,23 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     await copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'b.md'), { existing: 'keep' });
     expect(fs.readFileSync(path.join(dir, 'b.md'), 'utf8')).toBe('kept\n');
   });
+
+  it('refuses to copy onto itself, into a folder inside itself, a folder over a link back into it, or a file over a folder, and keeps the source', async () => {
+    const dir = scratch();
+    const from = path.join(dir, 'skill');
+    fs.mkdirSync(path.join(from, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(from, 'scripts', 'run.sh'), 'echo hi\n');
+    const to = path.join(dir, 'out');
+    fs.mkdirSync(to);
+    fs.symlinkSync(path.join(from, 'scripts'), path.join(to, 'scripts'));
+    fs.mkdirSync(path.join(dir, 'taken', 'run.sh'), { recursive: true });
+
+    await expect(copyRegularTree(from, from)).rejects.toThrow('inside');
+    await expect(copyRegularTree(path.join(from, 'scripts', 'run.sh'), path.join(from, 'scripts', 'run.sh'))).rejects.toThrow('inside');
+    await expect(copyRegularTree(from, path.join(from, 'scripts', 'copy'))).rejects.toThrow('inside');
+    await expect(copyRegularTree(from, to)).rejects.toThrow('not a folder');
+    await expect(copyRegularTree(path.join(from, 'scripts', 'run.sh'), path.join(dir, 'taken', 'run.sh'), { existing: 'keep' })).rejects.toThrow('is a folder');
+    expect(fs.readFileSync(path.join(from, 'scripts', 'run.sh'), 'utf8')).toBe('echo hi\n');
+    expect(fs.existsSync(path.join(from, 'scripts', 'copy'))).toBe(false);
+  });
 });
