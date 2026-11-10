@@ -76,7 +76,7 @@ import type {
   WorkflowFailure,
   WorkflowStep,
 } from './types.js';
-import { hasAction, onlyPersonAnswers, stepWorkflow, workflowRunBy } from './types.js';
+import { hasAction, isWorkflowFile, onlyPersonAnswers, stepWorkflow, workflowRunBy } from './types.js';
 import { wholeFit } from './whole-workflow.js';
 import { Writes } from './writes.js';
 import { describeWorkflow } from './describe.js';
@@ -2007,6 +2007,37 @@ async function confinedFor(
 }
 
 /**
+ * Fails each `workflow: { from }` step whose workflow, admitted from its producer's output, the run's only driver `sole`
+ * could never run, as `strictlyUnmet` refuses at `workflow start` a workflow known then, such as a scored step on the
+ * built-in `host`. It runs once the step started its workflow and before any step of it does: those are skipped.
+ * Whether it failed any.
+ */
+function refuseProducedWorkflows(run: RunState, sole: SoleDriver, now: string): boolean {
+  let refused = false;
+
+  for (const state of run.steps) {
+    if (state.status !== 'running') continue;
+    const located = locateStep(run, state.id);
+
+    if (located === undefined || stepWorkflow(located.step)?.kind !== 'from' || (located.step.forEach !== undefined && !isItem(state))) continue;
+    const under = isUnder(state.id);
+
+    // Only a step that runs a workflow, or the items of one, is `running` without having been leased.
+    if (run.steps.some((step) => under(step.id) && step.status !== 'pending' && step.status !== 'running')) continue;
+    const produced = workflowRunBy(run, located.step, located.scope.prefix);
+    const unmet = produced !== undefined && isWorkflowFile(produced) ? strictlyUnmet(produced, run.workflows ?? {}, sole) : undefined;
+
+    if (unmet === undefined) continue;
+    const failure = { code: 'requirement_unmet', message: unmet };
+    stopWhere(run, under, failure, run.revision, now);
+    finishStep(run, state, located.step, { outcome: 'failed', failure, settledAt: run.revision });
+    refused = true;
+  }
+
+  return refused;
+}
+
+/**
  * Why the run's only driver could never take a step of `definition`: none of its runtimes takes the prompt or answer
  * it is, or every one lacks a strict `isolation` or `network` for it. A step one runtime can take for them is judged at
  * `next`.
@@ -2409,8 +2440,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   const settle: Settle = (run, now) => {
     restartQueued(run, driver, unstarted, now);
     run.takesWhole = options.can?.workflow === true || options.alone?.offers.some((offer) => offer.can.workflow === true) === true;
+    const reconciled = reconcileRun(run, now);
 
-    return reconcileRun(run, now);
+    // A workflow a step produced is known only now: refused as a start refuses one it knows, the run settles again.
+    return options.alone !== undefined && refuseProducedWorkflows(run, options.alone, now) ? reconcileRun(run, now) : reconciled;
   };
 
   await drainDeliveries(config, runId, env.secrets, settle);
