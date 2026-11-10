@@ -164,6 +164,10 @@ _Avoid_: bare offer where an **offer** to other installs could be meant, capabil
 The **step runtime** in teamai's process that every **driver definition** keeps without listing it, recorded as `host`. It runs teamai's own command steps, a command step with `requires.host`, an `answer:` step, `deliver: publish`, and command steps when no runtime of the definition runs commands. It launches no prompt step's tool.
 _Avoid_: bare host where a **session host** or a **repo provider** could be meant
 
+**Host driver**:
+The built-in **driver definition** `--driver host` selects: the **host slot** alone, with no **step runtime** listed, so it runs commands, gates and workflows whose steps need no AI tool, and refuses a prompt, `interactive` or `answer:` step. No file defines or replaces it.
+_Avoid_: bare host where the **host slot** could be meant
+
 **`tools` runtime**:
 The **step runtime** in teamai's process that launches this machine's **tools** for prompt steps and judges, in the member's own home: `use: tools`, whose old name is `use: local`. `local` names the default definition, `teamai-local`: `tools` plus the **host slot**.
 _Avoid_: local for this runtime, "local runtime"
