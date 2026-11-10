@@ -44,7 +44,7 @@ export const launch = {
     signIn: { variables: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
     call: { evidence: 'verified', prompt: 'stdin', args: ({ lastMessageFile }) => ['exec', '--json', '--skip-git-repo-check', '-o', lastMessageFile, '-'], read: readCodexExec, streams: { evidence: 'docs' } },
     // `codex exec --help` of codex-cli 0.165.0: "Intended solely for running in environments that are externally sandboxed".
-    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'docs' }, args: stepArgs },
+    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'docs' }, args: stepArgs, agentInPrompt: () => true },
     // Codex also signs in with CODEX_API_KEY ("run codex login or set CODEX_API_KEY").
     confined: { evidence: 'verified', env: ['CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY'], homeEnv: 'CODEX_HOME', verified: /^codex-cli 0\.163\.0$/, access: 'read' },
   },

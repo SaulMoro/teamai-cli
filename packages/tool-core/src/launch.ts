@@ -83,11 +83,16 @@ export interface StepArgsHow {
   readonly opencodeMajor: number;
 }
 
-/** A workflow step: a session the tool starts and resumes, launched with the argv `args` builds. */
+/**
+ * A workflow step: a session the tool starts and resumes, launched with the argv `args` builds. `agentInPrompt` says
+ * whether a step that runs as an agent definition gets its instructions in the prompt, for a launch with no flag that
+ * starts the definition; absent, never.
+ */
 export interface StepLaunch {
   readonly evidence: Evidence;
   readonly unattended: UnattendedLaunch;
   args(input: StepArgsInput, how: StepArgsHow): string[];
+  agentInPrompt?(how: { readonly opencodeMajor: number; readonly isSubagent: boolean }): boolean;
 }
 
 /**
@@ -104,7 +109,7 @@ export function resultDirRule(resultDir: string): string {
   return `--allowedTools=Edit(/${rulePath}/**)`;
 }
 
-/** A run confined to one directory, in `src/tool-launch/confined.ts`: what judges a scorer. */
+/** A run confined to one directory, in `src/workflow/confined-launch.ts`: what judges a scorer. */
 export interface ConfinedLaunch {
   readonly evidence: Evidence;
   /** The member's variables the run keeps, beyond the common ones. */

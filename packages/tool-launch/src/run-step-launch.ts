@@ -153,14 +153,14 @@ export function stepPrompt(input: Pick<StepLaunchInput, 'prompt' | 'resultPath' 
   return resultInstruction(input, inPrompt && input.agent?.instructions ? `${input.agent.instructions}\n\n${input.prompt}` : input.prompt);
 }
 
-/** Codex, and OpenCode 1 for a subagent, which `opencode run --agent` does not start, get the definition's instructions in the prompt. */
-function promptHandoff(family: StepFamily, input: StepLaunchInput, opencodeMajor: number): boolean {
-  return family === 'codex' || (family === 'opencode' && opencodeMajor < 2 && input.agent?.settings?.['mode'] === 'subagent');
+/** Whether the step's agent definition goes in the prompt, as the family's step profile says (`agentInPrompt`). */
+function promptHandoff(tool: StepTool, input: StepLaunchInput, opencodeMajor: number): boolean {
+  return tool.step.agentInPrompt?.({ opencodeMajor, isSubagent: input.agent?.settings?.['mode'] === 'subagent' }) ?? false;
 }
 
 /** The argv that launches the step, which the tool's family builds. */
 function stepArgv(tool: StepTool, input: StepLaunchInput, { opencodeMajor, interactive, streamsUsage }: { opencodeMajor: number; interactive: boolean; streamsUsage: boolean }): string[] {
-  const inPrompt = promptHandoff(tool.family, input, opencodeMajor);
+  const inPrompt = promptHandoff(tool, input, opencodeMajor);
 
   return tool.step.args({
     prompt: stepPrompt(input, { inPrompt }),
@@ -277,7 +277,7 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
 
   if (opencode && input.agent) {
     const { name: agent, model, settings = {} } = input.agent;
-    const viaPrompt = promptHandoff(tool.family, input, opencodeMajor);
+    const viaPrompt = promptHandoff(tool, input, opencodeMajor);
 
     // OpenCode 1 applies an agent's variant to a launch on the agent's own model that passes none.
     if (opencodeMajor < 2 && !viaPrompt && settings['variant'] !== undefined && input.model && input.model.name === model && input.model.effort === undefined) {
@@ -306,7 +306,7 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
 
   const { budget, timeoutMs, idleTimeoutMs } = limits;
   const args = stepArgv(tool, input, { opencodeMajor, interactive, streamsUsage: budget !== undefined });
-  const applied = input.agent ? { applied: promptHandoff(tool.family, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
+  const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
   const meter = budget !== undefined ? tokenMeter(tool.family) : undefined;
   let metered: TokenUsage | undefined;
   // The first reason a stop was sent, so a limit crossed while the tool shuts down does not replace it.

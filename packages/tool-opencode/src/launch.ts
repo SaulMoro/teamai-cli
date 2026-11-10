@@ -58,7 +58,7 @@ export const launch = {
       streams: { evidence: 'verified' },
     },
     // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
-    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'docs' }, args: stepArgs },
+    step: { evidence: 'verified', unattended: { args: UNATTENDED, evidence: 'docs' }, args: stepArgs, agentInPrompt: ({ opencodeMajor, isSubagent }) => opencodeMajor < 2 && isSubagent },
     confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
   },
 } as const satisfies Record<string, LaunchAdapter>;
