@@ -41,7 +41,8 @@ export async function resolveDefaultDriver(config: LocalConfig, team: Pick<Teama
 type DriverHere = 'drives' | 'unaccepted' | 'absent';
 
 async function driverHere(config: LocalConfig, name: DriverName): Promise<DriverHere> {
-  // This machine always drives local: a teamai-local it cannot open fails the drive, which names the file and why.
+  // A teamai-local this machine cannot open is driven here, and the drive fails naming the file and why. One whose team
+  // runtime no one accepted here waits, as any driver's does.
   const absent: DriverHere = name === LOCAL_DRIVER ? 'drives' : 'absent';
   const resolved = await resolveDriver(config, name, { personal: true });
 
