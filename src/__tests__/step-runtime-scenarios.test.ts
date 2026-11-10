@@ -452,6 +452,8 @@ interface PromptSubject {
   options(state: string, agent: JsonValue): RuntimeOptions;
   /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
   display?: RuntimeDisplay;
+  /** `place`: it shows that display for the place alone, so a prompt's acceptance carries none. Absent: a prompt shows it too. */
+  displays?: 'place';
   /** Whether a finished prompt carries the tokens the agent billed; absent: it does. */
   reportsUsage?: false;
   /** The failure a prompt ends with when its agent fails with `failure`; absent: that failure as it is. */
@@ -472,6 +474,11 @@ interface PromptSubject {
   forget?(state: string, op: OpId): void | Promise<void>;
   /** Lays out `at` as another working directory of the scenario's project, a later place's. Absent: an empty folder. */
   elsewhere?(state: string, at: string): void;
+  /**
+   * It also runs commands, as the sandbox does, and runs each tool on the attempt's tool home, which the suite's place
+   * then names. Absent: it offers no `exec`, and its places get no tool home.
+   */
+  execsOnToolHome?: true;
 }
 
 const T3 = await t3OnFakeServer();
@@ -482,8 +489,8 @@ const paseo = await paseoOnFakeDaemon();
  * does: waits for `release`, holds for `hold_ms`, ends failed with `fail`, writes `result` or `output` to the result file
  * the prompt names, and states `usage`.
  */
-function fakeClaudeAgent(state: string, agent: JsonValue): void {
-  fakeAgent(claudeFake, { bin: path.join(state, 'bin'), before: `
+function fakeClaudeAgent(bin: string, agent: JsonValue): void {
+  fakeAgent(claudeFake, { bin, before: `
     const told = ${JSON.stringify(agent)};
     const session = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : randomUUID();
     if (told.release) while (!fs.existsSync(told.release)) await sleep(20);
@@ -510,13 +517,31 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
       launcher: stepLauncher(toolsLaunchDeps(), { resolveTool: () => path.join(state, 'bin', 'claude') }),
     }),
     options: (state, agent) => {
-      fakeClaudeAgent(state, agent);
+      fakeClaudeAgent(path.join(state, 'bin'), agent);
 
       return {};
     },
     // A tool that exits failing is a failed launch, whatever it printed: the launch names its exit.
     failure: () => ({ code: 'tool_failed', message: expect.any(String) }),
   },
+  // The sandbox launches the tool of its image itself, on the attempt's tool home.
+  ...([['docker', docker], ['sbx', sbx]] as const).map(([provider, on]): PromptSubject => {
+    const { display } = SUBJECTS.find((subject) => subject.name === `sandbox on a fake ${provider}`) ?? {};
+
+    return {
+      name: `sandbox on a fake ${provider}, on its image's fake claude`,
+      start: (state) => stdioStepRuntime({ name: 'sandbox', command: on.command, args: on.args(state) }),
+      options: (_, agent) => {
+        fakeClaudeAgent(on.bin, agent);
+
+        return on.options;
+      },
+      ...(display && { display, displays: 'place' as const }),
+      failure: () => ({ code: 'tool_failed', message: expect.any(String) }),
+      journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox')],
+      execsOnToolHome: true,
+    };
+  }),
   {
     name: 'toy over stdio, prompt only',
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
@@ -573,7 +598,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const runtime = subject.start(state);
     started.push(runtime);
     const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended' });
-    expect(ready).toMatchObject({ ok: true, launchesAgents: true, can: { exec: false } });
+    expect(ready).toMatchObject({ ok: true, launchesAgents: true, ...(subject.execsOnToolHome ? { runsOnToolHome: true } : { can: { exec: false } }) });
 
     return runtime;
   };
@@ -581,7 +606,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   const opened = async (runtime: StepRuntime<DriverCan>): Promise<string> => {
     const place = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-      view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
+      view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: subject.execsOnToolHome ? { CLAUDE_CONFIG_DIR: path.join(dir, 'tool-home') } : {} },
     }, async () => {});
 
     if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
@@ -603,6 +628,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     state = path.join(dir, 'state');
     fs.mkdirSync(worktree);
     fs.mkdirSync(path.join(dir, 'out'));
+    fs.mkdirSync(path.join(dir, 'tool-home'));
   });
 
   afterEach(async () => {
@@ -697,7 +723,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(await runtime.reattach(handle)).toEqual(alive([{ op: request.op, state: 'cancelled' }]));
   });
 
-  it('runs no command: an exec fails, naming the runtime\'s offer', async () => {
+  it.runIf(subject.execsOnToolHome !== true)('runs no command: an exec fails, naming the runtime\'s offer', async () => {
     const runtime = await start();
     const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], credentials: {}, cwd: worktree }, {}, 'command');
 
@@ -715,7 +741,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     let shown = false;
     const ended = runtime.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
     // A runtime that shows its agent has journaled that agent by then: only the end is left to journal.
-    expect(await until(() => accepted && (subject.display === undefined || shown))).toBe(true);
+    expect(await until(() => accepted && (subject.display === undefined || subject.displays === 'place' || shown))).toBe(true);
     const journal = subject.journal?.(state) ?? [];
 
     try {
@@ -790,7 +816,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     let shown = false;
     void first.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
     // A runtime that shows its agent has journaled that agent by then, so the restart reattaches to it.
-    expect(await until(() => accepted && (subject.display === undefined || shown))).toBe(true);
+    expect(await until(() => accepted && (subject.display === undefined || subject.displays === 'place' || shown))).toBe(true);
     await first.dispose();
     const second = await start(agent);
 
