@@ -1272,10 +1272,10 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     if (offered.state !== 'offered') throw new Error(`no offer: ${offered.state}`);
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
     if (!claimed.ok) throw new Error(claimed.error.message);
-    let isBeating = true;
+    const beating = new AbortController();
 
     const beats = (async () => {
-      for (let held: HeldAttempt = claimed.value; isBeating;) {
+      for (let held: HeldAttempt = claimed.value; !beating.signal.aborted;) {
         const beat = await recordProgress(bob.config, held, held.pushed);
         if (!beat.ok) return beat.error.code;
         held = beat.value;
@@ -1295,7 +1295,7 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     passTheDeadline();
     expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(`Run teamai workflow cancel ${run} again.`) } });
     await cancelled;
-    isBeating = false;
+    beating.abort();
     expect(await beats).toBe('stopped');
     receiveHook(origin, 'exit 0');
     expect(await recordIn(alice, run, attempt, 'claimed')).toMatchObject({ member: { user: 'bob' } });

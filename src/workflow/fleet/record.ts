@@ -800,11 +800,13 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
   let result = await update();
 
   // Busy: the write did not run, so it is tried again as it was.
-  while (result.status === 'busy' && wait !== undefined && Date.now() < wait.until && !isAborted(wait.signal)) {
-    await sleep(Math.min(LOCK_RETRY_MS, wait.until - Date.now()), undefined, wait.signal && { signal: wait.signal }).catch(() => undefined);
+  if (wait !== undefined) {
+    while (result.status === 'busy' && Date.now() < wait.until && !isAborted(wait.signal)) {
+      await sleep(Math.min(LOCK_RETRY_MS, wait.until - Date.now()), undefined, wait.signal && { signal: wait.signal }).catch(() => undefined);
 
-    if (isAborted(wait.signal)) break;
-    result = await update();
+      if (isAborted(wait.signal)) break;
+      result = await update();
+    }
   }
 
   if (result.value && !result.value.ok) return result.value;
