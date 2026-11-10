@@ -47,6 +47,19 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
+  it('gives the agent of a step of a workflow folder the folder\'s path too, so its shell finds the files the folder carries', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const runtime = start();
+    await ready(runtime);
+    const folder = path.join(dir, 'folders', 'a'.repeat(64));
+    const request = promptRequest(await opened(runtime), 'op-0000000b');
+
+    runtime.send({ ...request, env: { ...request.env, TEAMAI_WORKFLOW_DIR: folder } });
+
+    await runtime.next(isEnd('op-0000000b'));
+    expect(received()[0]).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run'), TEAMAI_WORKFLOW_DIR: folder });
+  });
+
   it('labels a step\'s agent with the Paseo agent the run was started from, and opens its prompt with a link to that agent', async () => {
     behave({ output: { verdict: 'approve' } });
     // The agent the member started the run from: one the same daemon runs.
@@ -183,7 +196,9 @@ describe('teamai-runtime-paseo', () => {
     await ready(runtime);
     const handle = await opened(runtime);
 
-    runtime.send(promptRequest(handle, 'op-0000000b', { resume: 'session-of-another-driver', model: { name: 'claude-opus-5-5', effort: 'high' } }));
+    const folder = path.join(dir, 'folders', 'b'.repeat(64));
+    const resuming = promptRequest(handle, 'op-0000000b', { resume: 'session-of-another-driver', model: { name: 'claude-opus-5-5', effort: 'high' } });
+    runtime.send({ ...resuming, env: { ...resuming.env, TEAMAI_WORKFLOW_DIR: folder } });
 
     expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
       op: 'op-0000000b', event: 'finished', session: { tool: 'claude', id: 'session-of-another-driver' }, result: { output: { verdict: 'approve' } }, resumed: true,
@@ -204,7 +219,7 @@ describe('teamai-runtime-paseo', () => {
     ]);
     // An import carries no env, so the turn names the run's scratch directory.
     const text = String(crossed.find((request) => request.type === 'send_agent_message_request')?.text);
-    expect(text.split('\n\n')[0]).toBe(`This agent resumes an earlier session, so its shell has no TEAMAI_RUN_DIR: the run's scratch directory is ${path.join(dir, 'run')}.`);
+    expect(text.split('\n\n')[0]).toBe(`This agent resumes an earlier session, so its shell has no TEAMAI_RUN_DIR or TEAMAI_WORKFLOW_DIR: the run's scratch directory is ${path.join(dir, 'run')}, and the workflow's folder ${folder}.`);
     expect(text).toContain('Review the change.');
   });
 

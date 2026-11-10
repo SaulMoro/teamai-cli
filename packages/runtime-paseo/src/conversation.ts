@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import {
-  CANCEL_FAILED, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, WORKFLOW_DIR_ENV, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
@@ -230,6 +230,13 @@ export const withoutDaemon = (failure: RuntimeFailure | undefined, cannot: strin
   : { code: 'daemon_unreachable', message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot ${cannot}. Start the daemon with \`paseo start\`, then ${then}.` });
 
 /** The create a new prompt sends, on one of `models`, in `how`'s mode with its prompt and options, or the failure that keeps it from being sent. */
+/** The workflow folder's path a step of a workflow folder gets, so its agent's shell finds the folder's files; none for a single file. */
+function folderEnv(env: Readonly<Record<string, string>>): Partial<Record<typeof WORKFLOW_DIR_ENV, string>> {
+  const folder = env[WORKFLOW_DIR_ENV];
+
+  return folder === undefined ? {} : { [WORKFLOW_DIR_ENV]: folder };
+}
+
 function createFor(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, { name: tool, provider }: Target, models: Model[], how: Launch): AgentCreate | RuntimeFailure {
   const { place } = how;
   const { lease } = request;
@@ -517,8 +524,12 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       return { why: `Paseo did not set the agent ${agentId} it imported to run as the step asks (${error instanceof Error ? error.message : String(error)}), so that agent stays idle` };
     }
 
-    // An import carries no env, so the turn names the run's scratch directory the agent's shell does not.
-    const scratch = `This agent resumes an earlier session, so its shell has no ${RUN_DIR_ENV}: the run's scratch directory is ${place.runDir}.`;
+    // An import carries no env, so the turn names the paths the agent's shell does not.
+    const folder = create.env?.[WORKFLOW_DIR_ENV];
+
+    const scratch = folder === undefined
+      ? `This agent resumes an earlier session, so its shell has no ${RUN_DIR_ENV}: the run's scratch directory is ${place.runDir}.`
+      : `This agent resumes an earlier session, so its shell has no ${RUN_DIR_ENV} or ${WORKFLOW_DIR_ENV}: the run's scratch directory is ${place.runDir}, and the workflow's folder ${folder}.`;
 
     return { create: { ...create, agentId }, turn: { prompt: `${scratch}\n\n${how.prompt}`, of: { session } } };
   }
@@ -642,7 +653,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
       const brief = [origin, lease.interactive && INTERACTIVE_BRIEF, lease.prompt].filter(Boolean).join('\n\n');
 
       await launch(live, request, following, target, {
-        place, modeId: modeIds.get(tool), prompt: brief, env: { [RUN_DIR_ENV]: place.runDir }, ...(startedFrom && { parent: startedFrom }),
+        place, modeId: modeIds.get(tool), prompt: brief, env: { [RUN_DIR_ENV]: place.runDir, ...folderEnv(request.env) }, ...(startedFrom && { parent: startedFrom }),
         options: stepGrant(target.tool, lease.result, place.runDir), answer: { kind: 'result-file', file: lease.result, ...(lease.interactive && { interactive: true }) }, cwd: place.cwd,
       });
     } finally {

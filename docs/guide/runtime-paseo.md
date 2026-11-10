@@ -454,7 +454,7 @@ An OpenCode agent may write the same two places: the runtime allows them through
 { "provider": "opencode", "providerOptions": { "permission": { "external_directory": { "~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out/*": "allow", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch/*": "allow" } } } }
 ```
 
-Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, so a prompt that names a file in the directory `$TEAMAI_RUN_DIR` names works as it does on this machine.
+Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, and `TEAMAI_WORKFLOW_DIR` for a step of a workflow folder, so a prompt that names a file in either directory works as it does on this machine.
 
 In an attended run, any other permission prompt waits for you in the Paseo app, or on the command line:
 
@@ -488,7 +488,7 @@ A prompt step with `session.from` or `session: continue` goes on in the earlier 
 - the step runs the same provider, model, effort and Paseo mode;
 - neither step runs through a sandbox.
 
-When the step cannot go on in that agent, or the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory is, since an imported agent gets no `TEAMAI_RUN_DIR`.
+When the step cannot go on in that agent, or the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory and the workflow's folder are, since an imported agent gets no `TEAMAI_RUN_DIR` or `TEAMAI_WORKFLOW_DIR`.
 
 Otherwise the step starts a new agent, and says why:
 

@@ -14,6 +14,7 @@ rule.valid('scopes to src/ of the checkout, not of a parent directory', `const n
 rule.invalid('rejects the run directory variable, which the runtime protocol owns', `const name = 'TEAMAI_RUN_DIR';`, (output) => expect(output).toContain('Import RUN_DIR_ENV from @teamai/runtime-protocol'));
 rule.invalid('rejects the run directory variable in launch-context, which no longer owns it', `const name = 'TEAMAI_RUN_DIR';`, undefined, { filename: 'src/launch-context.ts' });
 rule.valid('allows the run directory variable in the runtime protocol', `export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';`, { filename: 'packages/runtime-protocol/src/protocol.ts' });
+rule.invalid('rejects the workflow folder variable outside the runtime protocol', `const name = 'TEAMAI_WORKFLOW_DIR';`, (output) => expect(output).toContain('Import WORKFLOW_DIR_ENV from @teamai/runtime-protocol'), { filename: 'src/launch-context.ts' });
 const unlisted = { filename: 'packages/runtime-unlisted/src/runtime.ts' };
 rule.invalid('rejects any teamai variable a runtime package spells, listed or not', `const name = 'TEAMAI_WORKFLOW_RESULT';`, (output) => expect(output).toContain('A runtime package spells no TEAMAI_ variable'), unlisted);
 rule.invalid('rejects reading any teamai variable in a runtime package', 'const kept = process.env.TEAMAI_NEXT_THING;', undefined, unlisted);

@@ -454,7 +454,7 @@ OpenCode 智能体也可以写这两处：运行时通过 OpenCode 的 `external
 { "provider": "opencode", "providerOptions": { "permission": { "external_directory": { "~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out/*": "allow", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch/*": "allow" } } } }
 ```
 
-步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，所以提示词写明 `$TEAMAI_RUN_DIR` 所指目录中的某个文件时，它的效果与在本机相同。
+步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，工作流目录的步骤还拿到 `TEAMAI_WORKFLOW_DIR`，所以提示词写明这两个目录中的某个文件时，它的效果与在本机相同。
 
 有人值守的运行里，其他权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
 
@@ -488,7 +488,7 @@ paseo permit allow 7c483fce --all
 - 这个步骤使用相同的 provider、模型、effort 和 Paseo 模式；
 - 两个步骤都不通过沙箱运行。
 
-这个步骤无法在那个智能体里继续，或者前面的步骤不是在这个运行时的智能体里运行的（例如它在另一个驱动或另一台机器上运行）时，如果 Paseo 在这个步骤的 worktree 里列出了那个会话，teamai 会把会话导入到一个新智能体中。这个智能体随后按步骤的要求运行，并被告知运行的临时目录在哪里，因为导入的智能体拿不到 `TEAMAI_RUN_DIR`。
+这个步骤无法在那个智能体里继续，或者前面的步骤不是在这个运行时的智能体里运行的（例如它在另一个驱动或另一台机器上运行）时，如果 Paseo 在这个步骤的 worktree 里列出了那个会话，teamai 会把会话导入到一个新智能体中。这个智能体随后按步骤的要求运行，并被告知运行的临时目录和工作流目录在哪里，因为导入的智能体拿不到 `TEAMAI_RUN_DIR` 和 `TEAMAI_WORKFLOW_DIR`。
 
 否则步骤会启动一个新智能体，并说明原因：
 

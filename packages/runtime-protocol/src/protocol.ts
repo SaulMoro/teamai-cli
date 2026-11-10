@@ -107,6 +107,12 @@ export function boundedStdout(stdout: string): string {
 export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
 
 /**
+ * The variable every process of a step of a workflow written as a folder gets: the run's copy of the folder that defines
+ * the step, under the data home, which the place lists read-only. Unset for a step of a workflow written as a single file.
+ */
+export const WORKFLOW_DIR_ENV = 'TEAMAI_WORKFLOW_DIR';
+
+/**
  * Why a runtime process is started. `attended`: a person launched the run; `unattended`: in CI or a cloud agent.
  * `recover`: only to cancel, reattach, collect and close the handles teamai recorded, which teamai opens it in to stop
  * them, so that a provider that is down, stalls or signed it out cannot hold the stop: it runs no sign-in or tool check,

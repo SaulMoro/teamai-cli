@@ -3,6 +3,7 @@ import { inProductionSource, inTestSupport, isOneOf, lintedPath, stringLiteralVa
 
 const LAUNCH_CONTEXT = 'Import RUN_MODE_ENV, LAUNCHED_BY_ENV or ATTEMPT_ENV from launch-context.ts instead of repeating launch variable names.';
 const RUNTIME_PROTOCOL = 'Import RUN_DIR_ENV from @teamai/runtime-protocol instead of repeating launch variable names.';
+const RUNTIME_PROTOCOL_FOLDER = 'Import WORKFLOW_DIR_ENV from @teamai/runtime-protocol, or from launch-context.ts, instead of repeating launch variable names.';
 const RUNTIME_PACKAGE = 'A runtime package spells no TEAMAI_ variable: import the name from @teamai/runtime-protocol, and export it there first if it is new.';
 
 /** A step runtime's own package: any but the protocol's, which owns the names runtimes may read. */
@@ -15,6 +16,7 @@ const OWNERS = new Map([
   ['TEAMAI_LAUNCHED_BY', { file: 'src/launch-context.ts', message: LAUNCH_CONTEXT }],
   ['TEAMAI_WORKFLOW_ATTEMPT', { file: 'src/launch-context.ts', message: LAUNCH_CONTEXT }],
   ['TEAMAI_RUN_DIR', { file: 'packages/runtime-protocol/src/protocol.ts', message: RUNTIME_PROTOCOL }],
+  ['TEAMAI_WORKFLOW_DIR', { file: 'packages/runtime-protocol/src/protocol.ts', message: RUNTIME_PROTOCOL_FOLDER }],
 ]);
 
 export default defineRule({

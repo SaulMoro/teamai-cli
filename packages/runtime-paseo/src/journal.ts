@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { hold } from '@teamai/runtime-kit/journal';
-import { ConfinedKeptSchema, OpIdSchema, OpStateSchema, RUN_DIR_ENV, type OpId } from '@teamai/runtime-protocol';
+import { ConfinedKeptSchema, OpIdSchema, OpStateSchema, RUN_DIR_ENV, WORKFLOW_DIR_ENV, type OpId } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 
 // ─── The journal ─────────────────────────────────────────
@@ -69,8 +69,8 @@ const AgentCreateSchema = z.object({
   title: z.string(),
   prompt: z.string(),
   labels: z.record(z.string(), z.string()),
-  /** The agent's environment: the run directory's name and nothing else, since Paseo keeps it in plain text. */
-  env: z.strictObject({ [RUN_DIR_ENV]: z.string() }).optional(),
+  /** The agent's environment: the run directory's and the workflow folder's paths and nothing else, since Paseo keeps it in plain text. */
+  env: z.strictObject({ [RUN_DIR_ENV]: z.string(), [WORKFLOW_DIR_ENV]: z.string().optional() }).optional(),
   config: z.object({
     provider: z.string(),
     /** Absent: the mode Paseo starts the tool in when it sets no default for it. */
