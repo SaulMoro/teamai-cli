@@ -37,6 +37,7 @@ steps:
   - id: calibration-subjects
     needs: [score]
     if: steps.score.outcome != 'skipped'
+    requires: { host: true }
     command: teamai score subjects --calibration --run "$RUN" --step trials
     env: { RUN: "{{ run.id }}" }
     output: { list: [{ subject: string, scorer: string }] }
