@@ -451,11 +451,15 @@ describe('running a workflow folder', () => {
     await WorkflowFolder.pin(config, cachedFolder);
     const old = await pinned('no longer used', 2 * 60 * 60 * 1000);
     const fresh = await pinned('a run is starting', 0);
+    // A fleet member pins the folder of each step it takes, which no run record of its own names.
+    const retaken = await pinned('a member takes a step of it', 2 * 60 * 60 * 1000);
+    const retakenFiles = [{ path: 'plan.txt', executable: false, content: 'a member takes a step of it' }];
+    await WorkflowFolder.pin(config, { sourceHash: WorkflowFolder.hash(retakenFiles), files: retakenFiles });
 
     await sweepLeftovers(config, null, { now: Date.now(), checkout: workspace });
 
     expect(fs.readdirSync(path.join(getDataHome(config), 'workflows', 'folders')).sort()).toEqual(
-      [ran?.sourceHash, cached?.sourceHash, path.basename(fresh)].sort(),
+      [ran?.sourceHash, cached?.sourceHash, path.basename(fresh), path.basename(retaken)].sort(),
     );
     expect(fs.existsSync(old)).toBe(false);
   });
