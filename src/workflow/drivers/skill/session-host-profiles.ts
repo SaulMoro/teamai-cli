@@ -60,7 +60,7 @@ export const SESSION_HOST_PROFILES: Record<SessionHostChoice, SessionHostProfile
 
 export const SESSION_HOST_QUESTION = 'Pick how your session host runs a child agent, the most specialized way it has: app orchestration tools, then team agents, then native subagents, else none, and you work each step yourself.';
 
-/** What the skill driver declares on every `next` of a run whose session host answered `sessionHost`; a run without prompt steps declares h1's. */
+/** What the skill driver declares on every `next` of a run whose agent answered the session host question with `sessionHost`; a run without prompt steps declares h1's. */
 export function canFor(sessionHost: SessionHostChoice | undefined): DecidedCan {
   return SESSION_HOST_PROFILES[sessionHost ?? 'h1'].can;
 }

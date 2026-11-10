@@ -78,8 +78,8 @@ export interface DispatchAction {
 }
 
 /**
- * A step whose child works in a place the session host makes: shown in every foreground turn until `adopt` runs. The host
- * makes a worktree of this repository named `name`, on `branch` from commit `start`, and `adopt`, with its directory
+ * A step whose child works in a place the session host makes: shown in every foreground turn until `adopt` runs. The
+ * session host makes a worktree of this repository named `name`, on `branch` from commit `start`, and `adopt`, with its directory
  * in the `{dir}` slot, hands it to TeamAI.
  */
 export interface PlaceAction {

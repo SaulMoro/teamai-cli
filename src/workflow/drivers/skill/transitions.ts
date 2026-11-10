@@ -829,19 +829,19 @@ export function replyRow(state: SkillState, input: { reply: EngineReply; at: str
     case 'lease': {
       const { lease } = engine;
       const { attempt, step: id, revision, expiresAt } = lease;
-      const isSessionHosted = lease.executor === 'prompt' && lease.writes && !lease.team && state.host.kind === 'chosen' && state.host.places === 'host';
+      const sessionHostMakesPlace = lease.executor === 'prompt' && lease.writes && !lease.team && state.host.kind === 'chosen' && state.host.places === 'host';
       const runsHere = lease.executor === 'prompt' && lease.confined !== undefined && state.judging !== undefined;
 
       const attemptState: AttemptState = { attempt, step: id, revision, spawnedAt: at, phase: 'preparing' };
 
       if (expiresAt !== undefined) attemptState.expiresAt = expiresAt;
 
-      if (isSessionHosted) attemptState.request = { kind: 'host' };
+      if (sessionHostMakesPlace) attemptState.request = { kind: 'host' };
 
       if (runsHere) attemptState.runs = 'here';
       const preparing = withAttempt(state, attemptState);
 
-      return { row: lease.executor === 'command' ? 'D6' : runsHere ? 'D28' : isSessionHosted ? 'D8' : 'D7', state: withEvent(preparing, { kind: 'started', step: id, attempt }), effects: [{ kind: 'spawn', attempt, job: { lease: engine.raw } }] };
+      return { row: lease.executor === 'command' ? 'D6' : runsHere ? 'D28' : sessionHostMakesPlace ? 'D8' : 'D7', state: withEvent(preparing, { kind: 'started', step: id, attempt }), effects: [{ kind: 'spawn', attempt, job: { lease: engine.raw } }] };
     }
 
     case 'wait': {
