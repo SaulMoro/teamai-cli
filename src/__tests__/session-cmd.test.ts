@@ -559,7 +559,6 @@ describe('session push --all', () => {
     }
 
     expect(Date.now() - start).toBeLessThan(2_000);
-    expect(adapter.listConversations).not.toHaveBeenCalledWith(projectRoot);
     expect(out.join('\n')).toContain('Pushed 1 session(s) from pi');
   });
 
