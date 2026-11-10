@@ -30,7 +30,7 @@ import { parseTemplate, renderLeaseText, renderStrings, renderText, templatedTex
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 import { inlineReads, wholeInputs } from '../whole-workflow.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** The pool a fleet offers to when its definition names none, which `resume --next --pool` takes when given no name. */
 export const DEFAULT_FLEET_POOL = 'default';
@@ -490,7 +490,7 @@ export async function claimAttempt(config: LocalConfig, offered: Offered, member
   const claim: Claimed = { ...offered, write: randomUUID(), state: 'claimed', member, claimedAt: now, progressAt: now, pushed: offered.start };
   const marker = claimedMarker(config, offered.run, offered.attempt);
   await fs.mkdir(path.dirname(marker), { recursive: true });
-  await fs.writeFile(marker, `${JSON.stringify({ write: claim.write })}\n`, 'utf8');
+  await writeRegularFile(marker, `${JSON.stringify({ write: claim.write })}\n`);
   const written = await writeRecord(config, claim, { replaces: offered.write, message: `[teamai] Claim attempt ${offered.attempt} of run ${offered.run}` });
 
   if (!written.ok && written.error.code === 'state_moved') await fs.rm(marker, { force: true });
@@ -792,7 +792,7 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
 
     if ((held?.value.write) !== replaces) return { value: { ok: false, error: moved }, write: null };
     await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-    await fs.writeFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }), 'utf8');
+    await writeRegularFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }));
 
     return { value: { ok: true, value: undefined }, write: { files: [rel], message } };
   });
@@ -845,7 +845,7 @@ function offeredMarker(config: LocalConfig, run: RunId, attempt: AttemptId): str
 export async function markOffered(config: LocalConfig, run: RunId, attempt: AttemptId, pool: string, offer?: { op: OpId; staleAfterMs: number }): Promise<void> {
   const file = offeredMarker(config, run, attempt);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, `${JSON.stringify({ pool, ...offer })}\n`, 'utf8');
+  await writeRegularFile(file, `${JSON.stringify({ pool, ...offer })}\n`);
 }
 
 /** `attempts/<attempt>/fleet-claim.json` in this install's data home: this install claimed the attempt as a member. */

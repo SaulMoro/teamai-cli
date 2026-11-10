@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import type { RunMode } from '../launch-context.js';
 import { acquireLock, releaseLock } from '../update.js';
@@ -678,6 +678,26 @@ describe('skill driver', () => {
     ]);
     expect(journal).not.toContain('the-input-topic');
     expect(JSON.stringify(answers)).not.toContain('journal');
+  });
+
+  it('answers a call on a run whose journal a step replaced with a FIFO, without waiting for a reader of it', async () => {
+    const harness = await skillHarness({ note: NOTE });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'note', answers: { confirmed: false }, inputs: { topic: 'a-topic' } });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    // The journal is beside the run's $TEAMAI_RUN_DIR, which a step's command reaches.
+    const journal = path.join(path.dirname(skillStatePath(harness.config, run)), 'journal.jsonl');
+    fs.rmSync(journal);
+    execFileSync('mkfifo', [journal]);
+    // A writer blocked on the FIFO is let go at the end, so the test process can exit either way.
+    onTestFinished(() => {
+      if (fs.existsSync(journal)) fs.closeSync(fs.openSync(journal, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK));
+    });
+    const settled = harness.call({ kind: 'choose', run, choice: 'h1' }).then(() => 'settled', () => 'settled');
+
+    expect(await Promise.race([settled, new Promise((resolve) => setTimeout(() => resolve('blocked'), 5_000))])).toBe('settled');
+    expect(fs.statSync(journal).isFIFO()).toBe(true);
   });
 
   it('journals a person action once, however many turns show it', async () => {

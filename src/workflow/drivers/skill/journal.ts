@@ -5,7 +5,6 @@
  * prints it. A describe, a start the protocol refused, and a runner's report have no line: the first two have no run,
  * and a runner is TeamAI's own process, whose work shows as skill.json's events.
  */
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { redactJson } from '@teamai/shared/redact';
@@ -14,7 +13,7 @@ import type { SkillCall, SkillContext } from './skill-driver.js';
 import { readSkillState } from './skill-state.js';
 import { TICK_LOCK_WAIT_MS } from './tick.js';
 import type { Action, SkillAnswer } from './turn.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { appendRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 
 const CallLineSchema = z.object({
   at: z.string(),
@@ -178,14 +177,14 @@ export async function journalCall(context: SkillContext, call: SkillCall, answer
       return [entry];
     });
 
-    await fs.appendFile(file, lines([line, ...fresh], context.env.secrets));
+    await appendRegularFile(file, lines([line, ...fresh], context.env.secrets));
   }, TICK_LOCK_WAIT_MS);
 
   switch (taken.kind) {
     case 'held':
       return;
     case 'busy':
-      await fs.appendFile(file, lines([line], context.env.secrets));
+      await appendRegularFile(file, lines([line], context.env.secrets));
 
       return;
     default: {

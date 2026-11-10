@@ -43,8 +43,8 @@ const SKILL_IMPORTS = {
   'src/env-resolution.ts': {},
   'src/env-exec.ts': { names: ['stepEnvironment', 'withRunningCli'] },
   '@teamai/shared/redact': {},
-  // The read that refuses a FIFO a step left where the driver reads a file.
-  '@teamai/shared/regular-file': { names: ['readRegularFile'] },
+  // The read and the append that refuse a FIFO a step left where the driver reads or journals a file.
+  '@teamai/shared/regular-file': { names: ['readRegularFile', 'appendRegularFile'] },
   'src/utils/session-id.ts': {},
   // Equal values as equal text, so a kept end is compared with the engine's latest one.
   'src/utils/canonical-json.ts': {},

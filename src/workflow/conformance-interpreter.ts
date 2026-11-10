@@ -14,7 +14,7 @@ import { callerProvenance } from './run-controls.js';
 import { AttemptIdSchema } from './store.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from './types.js';
 import { git } from './worktree.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 export const PARALLEL_ROOTS = `schemaVersion: v1alpha1
 name: build
@@ -512,13 +512,13 @@ export async function runConformanceScenario(scenario: ConformanceScenario, runn
           if (made.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${made.stderr}`);
         }
 
-        for (const [file, text] of Object.entries(operation.files ?? {})) await fs.writeFile(path.join(dir, file), text);
+        for (const [file, text] of Object.entries(operation.files ?? {})) await writeRegularFile(path.join(dir, file), text);
         sessionHostPlaces.set(operation.name, dir);
         break;
       }
 
       case 'edit':
-        for (const [file, text] of Object.entries(operation.files)) await fs.writeFile(path.join(placeOf(operation.lease), file), text);
+        for (const [file, text] of Object.entries(operation.files)) await writeRegularFile(path.join(placeOf(operation.lease), file), text);
         break;
       case 'runFiles': {
         if (!runner.runDir) throw new Error('A scenario that writes run files needs a runner with a runDir');
@@ -526,7 +526,7 @@ export async function runConformanceScenario(scenario: ConformanceScenario, runn
 
         for (const [file, text] of Object.entries(operation.files)) {
           await fs.mkdir(path.dirname(path.join(dir, file)), { recursive: true });
-          await fs.writeFile(path.join(dir, file), text);
+          await writeRegularFile(path.join(dir, file), text);
         }
 
         break;

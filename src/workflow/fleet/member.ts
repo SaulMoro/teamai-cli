@@ -53,7 +53,7 @@ import { AgentSession } from '../../session-flow/agent-session.js';
 import { JsonValueSchema, type JsonValue } from '../../utils/json.js';
 import { isJsonObject } from '../../types.js';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
 const CANCEL_READ_MS = 30_000;
@@ -762,7 +762,7 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
     if (!id.success) return failed({ code: 'run_unreadable', message: `The nested run of step "${claim.lease.step}" started with no run id this teamai reads.` });
     nested = id.data;
     // Recorded before any of its steps starts, so a restart of this member finds it and stops what it left.
-    await fs.writeFile(nestedRunPath(config, claim.run, claim.attempt), nested);
+    await writeRegularFile(nestedRunPath(config, claim.run, claim.attempt), nested);
 
     if (isStopped) {
       await endNestedRun(config, nested, STOPPED_NESTED);
