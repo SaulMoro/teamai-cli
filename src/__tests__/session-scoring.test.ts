@@ -31,7 +31,7 @@ import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import { tryScorer } from './helpers/score-run.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
-import * as cliPaths from '../utils/cli-path.js';
+import * as cliPaths from '@teamai/shared/cli-path';
 import { whileLabelsLocked } from './helpers/label-lock.js';
 import { CONFINED_TOOLS } from '../tool-launch/tools.js';
 

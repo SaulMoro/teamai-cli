@@ -6,7 +6,7 @@ import type { createPaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { buildAgentDeepLink } from '@getpaseo/protocol/agent-deep-link';
 import { getUserHome } from '@teamai/shared/home';
-import { findOnPath } from '@teamai/tool-core/lookpath';
+import { findOnPath } from '@teamai/shared/lookpath';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type WebSocket from 'ws';
 import { z } from 'zod';

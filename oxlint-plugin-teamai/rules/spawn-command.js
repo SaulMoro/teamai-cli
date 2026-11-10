@@ -5,9 +5,9 @@ import { importedName } from '../imports.js';
 import { inProductionSource, isOneOf, scopedFiles, stringLiteralValue, variableOf } from '../utils.js';
 
 /** The one module that starts a process through cross-spawn, behind `spawnCommand`, `spawnCommandSync` and `execCommand`. */
-const OWNER = scopedFiles(['packages/tool-core/src/exec.ts']);
+const OWNER = scopedFiles(['packages/shared/src/exec.ts']);
 
-const MESSAGE = 'Start a process with spawnCommand or spawnCommandSync from @teamai/tool-core/exec, not cross-spawn: on Windows they run an npm .cmd shim under the system cmd.exe with its arguments escaped twice, and refuse arguments cmd.exe cannot carry, where cross-spawn escapes a shim outside node_modules/.bin once.';
+const MESSAGE = 'Start a process with spawnCommand or spawnCommandSync from @teamai/shared/exec, not cross-spawn: on Windows they run an npm .cmd shim under the system cmd.exe with its arguments escaped twice, and refuse arguments cmd.exe cannot carry, where cross-spawn escapes a shim outside node_modules/.bin once.';
 
 /** The modules `createRequire` comes from. */
 const MODULE = new Set(['module', 'node:module']);

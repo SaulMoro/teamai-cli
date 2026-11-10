@@ -21,7 +21,7 @@ vi.mock('cross-spawn', () => ({
 // the exec went through the resolver: `expect(cmd).toBe('cnb')` would also pass
 // for a direct spawn of the command name, i.e. the bug.
 const resolveCliPathMock = vi.fn<(...args: unknown[]) => string | null>(() => RESOLVED_CNB);
-vi.mock('@teamai/tool-core/cli-path', () => ({
+vi.mock('@teamai/shared/cli-path', () => ({
   resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
 }));
 

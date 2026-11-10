@@ -1,4 +1,4 @@
-import { resolveCliPath, resolvePathCommand } from '@teamai/tool-core/cli-path';
+import { resolveCliPath, resolvePathCommand } from '@teamai/shared/cli-path';
 import { descriptorOf, toolOf, type DescriptorOf } from '../tool-registry.js';
 import type { ResolvedToolInstance } from '../tool-instances.js';
 import type { ToolId } from '../tools.js';

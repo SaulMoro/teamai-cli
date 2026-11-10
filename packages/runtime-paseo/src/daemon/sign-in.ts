@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 import { z } from 'zod';
 
 // ─── A tool's sign-in on the daemon's host ───────────────

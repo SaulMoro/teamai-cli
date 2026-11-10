@@ -13,8 +13,8 @@ import * as path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { openRegularFile } from '@teamai/shared/regular-file';
-import { WIN_EXEC_EXTENSIONS } from '../cli-path.js';
-import { execCommand } from '../exec.js';
+import { WIN_EXEC_EXTENSIONS } from '@teamai/shared/cli-path';
+import { execCommand } from '@teamai/shared/exec';
 
 /** Locate the sqlite3 CLI: PATH first, then well-known install locations off Windows.
  *  On Windows a PATH entry holds `sqlite3.exe`, so the name carries the extension.

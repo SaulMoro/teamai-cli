@@ -20,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { resolveCliEntry } from './builtin-hooks.js';
-import { captureTail } from './utils/exec.js';
+import { captureTail } from '@teamai/shared/exec';
 import { createDispatcher, HookStdinSchema, stdinString, type Dispatcher, type HookStdin } from './hook-dispatch.js';
 import { buildHandlerRegistry, filterHandlersForConfig } from './hook-handlers.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';

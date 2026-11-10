@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { batchLaunchOf, spawnCommand, spawnCommandSync } from '@teamai/tool-core/exec';
+import { batchLaunchOf, spawnCommand, spawnCommandSync } from '@teamai/shared/exec';
 import { runTool } from '@teamai/runtime-tools/headless';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../tool-launch/tools.js';
 

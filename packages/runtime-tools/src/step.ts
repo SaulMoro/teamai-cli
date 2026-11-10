@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { stopProcess } from '@teamai/shared/process-group';
-import { resolveCliPath, resolvePathCommand } from '@teamai/tool-core/cli-path';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { resolveCliPath, resolvePathCommand } from '@teamai/shared/cli-path';
+import { spawnCommand } from '@teamai/shared/exec';
 import { runStepLaunch, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepLimits, type StepTool, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 
 /** A step's launch as the engine asks for it: what the launch takes, and its limits. */

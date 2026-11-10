@@ -241,9 +241,9 @@ export const start = () => spawn('claude');`, (output) => {
   expect(output).toContain('packages/tool-launch/src/step.ts -> node:child_process');
 }, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
 
-rule.invalid('rejects the launch library starting a process through tool-core\'s exec helpers', `import { spawnCommand } from '@teamai/tool-core/exec';
+rule.invalid('rejects the launch library starting a process through the shared exec helpers', `import { spawnCommand } from '@teamai/shared/exec';
 export const run = () => spawnCommand('x', [], {});`, (output) => {
-  expect(output).toContain('packages/tool-launch/src/step.ts -> @teamai/tool-core/exec');
+  expect(output).toContain('packages/tool-launch/src/step.ts -> @teamai/shared/exec');
 }, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));
 
 rule.valid('allows the launch library\'s tests to start a process', `import { execFileSync } from 'node:child_process';

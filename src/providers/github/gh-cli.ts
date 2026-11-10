@@ -1,9 +1,9 @@
 import { spawnSync, type SpawnSyncOptions, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
-import { spawnCommand, spawnCommandSync } from '@teamai/tool-core/exec';
+import { spawnCommand, spawnCommandSync } from '@teamai/shared/exec';
 import { z } from 'zod';
 import type { JsonValue } from '../../types.js';
 import { log } from '../../utils/logger.js';
-import { resolveCliPath } from '../../utils/cli-path.js';
+import { resolveCliPath } from '@teamai/shared/cli-path';
 import { isInteractive } from '../../utils/prompt.js';
 import { endedRequest, mergedAs, type CiStatus, type CommitRef, type PullRequestRecord, type PullRequestRef } from '../types.js';
 

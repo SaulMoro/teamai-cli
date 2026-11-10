@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { addTokenUsage, emptyTokenUsage } from '@teamai/tool-core/tokens';
-import { execCommand } from '@teamai/tool-core/exec';
+import { execCommand } from '@teamai/shared/exec';
 import { log } from '@teamai/tool-core/log';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 

@@ -7,7 +7,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
-import { execCommand } from './exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { errnoCode } from './fs.js';
 import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';

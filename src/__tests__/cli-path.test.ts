@@ -37,7 +37,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import crossSpawn from 'cross-spawn';
-import { pickWindowsCommand, resolveCliPath, resolvePathCommand } from '../utils/cli-path.js';
+import { pickWindowsCommand, resolveCliPath, resolvePathCommand } from '@teamai/shared/cli-path';
 import { ghExec, isGhInstalled } from '../providers/github/gh-cli.js';
 import { cnbExec, isCnbInstalled } from '../providers/cnb/cnb-cli.js';
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
-import { execCommand, type ExecResult } from './utils/exec.js';
+import { execCommand, type ExecResult } from '@teamai/shared/exec';
 import { pathExists, readFileIfExists, readFileSafe, symlinkTarget, writeFileAtomic } from './utils/fs.js';
 import { gitFindsNoRepository } from './utils/git-discovery.js';
 import { checkoutLocation } from './utils/git.js';

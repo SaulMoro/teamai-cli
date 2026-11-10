@@ -24,9 +24,9 @@ export const run = () => spawn('codex', ['exec']);`, (output) => {
   expect(output).toContain('A tool family builds argv and reads output, and never starts a process: packages/tool-codex/src/launch.ts imports node:child_process');
 }, { filename: 'packages/tool-codex/src/launch.ts' });
 
-rule.invalid('rejects every value of tool-core\'s exec module, and child_process loaded at run time', `import { execCommand } from '@teamai/tool-core/exec';
+rule.invalid('rejects every value of the shared exec module, and child_process loaded at run time', `import { execCommand } from '@teamai/shared/exec';
 export const run = () => [execCommand('sqlite3', []), require('child_process')];`, (output) => {
-  expect(output).toContain('imports @teamai/tool-core/exec');
+  expect(output).toContain('imports @teamai/shared/exec');
   expect(output).toContain('imports child_process');
 }, { filename: 'packages/tool-codex/src/launch.ts' });
 
@@ -38,7 +38,7 @@ export const run = () => spawn('zzz');`, (output) => {
   expect(output).toContain('imports cross-spawn');
 }, { filename: 'packages/tool-zzz/src/detect.ts' });
 
-rule.valid('allows the types of tool-core\'s exec module', `import type { ExecResult } from '@teamai/tool-core/exec';
+rule.valid('allows the types of the shared exec module', `import type { ExecResult } from '@teamai/shared/exec';
 export const ok = (result: ExecResult) => result.code === 0;`, { filename: 'packages/tool-codex/src/launch.ts' });
 
 rule.invalid('rejects an index.ts exporting more than family', `export const family = {} as const;
@@ -126,6 +126,6 @@ it('lists every workspace module that starts a process, so a new wrapper of one 
   const starts = (file: string) => sourceModules(file, false).some((specifier) => NODE_STARTERS.has(specifier));
   const starters = workspaceModules().filter(([, file]) => reachesSource(file, starts, false) !== undefined).map(([name]) => name);
 
-  expect(starters).toContain('@teamai/tool-core/exec');
+  expect(starters).toContain('@teamai/shared/exec');
   expect(starters.filter((name) => !PROCESS_STARTERS.has(name))).toEqual([]);
 });

@@ -22,7 +22,7 @@ import type { LocalConfig } from '../types.js';
 import { providerForRemote } from '../providers/registry.js';
 import type { PullRequestRecord } from '../providers/types.js';
 import { canonicalJson } from '../utils/canonical-json.js';
-import { execCommand } from '../utils/exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { getConfiguredRemoteUrl } from '../utils/git.js';
 import { loadCachedWorkflow } from '../workflow/cache.js';
 import type { ResolvedWorkflow } from '../workflow/types.js';

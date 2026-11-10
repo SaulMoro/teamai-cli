@@ -20,7 +20,7 @@ import { DIMENSIONS_OFFERED, FAILING_MAX, SCORER_WINDOWS, ScorerResults, type Re
 import { sessionArchiveRoot } from '../session-flow/session-cmd-shared.js';
 import { SyncManager } from '../session-flow/sync.js';
 import { getReportsDir, isSelfMode, usesBranchWorktree, type DashboardEvent, type LocalConfig } from '../types.js';
-import { execCommand } from '../utils/exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import { HttpError } from './http.js';

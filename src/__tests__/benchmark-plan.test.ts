@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
-import * as cliPaths from '../utils/cli-path.js';
+import * as cliPaths from '@teamai/shared/cli-path';
 import { trialsOf } from '../benchmark/plan.js';
 import { planBenchmark } from '../benchmark/start.js';
 import { ScoreVerbs } from '../score-verbs.js';

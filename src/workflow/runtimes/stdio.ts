@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 import { redact } from '@teamai/shared/redact';
 import { log } from '../../utils/logger.js';
 import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';

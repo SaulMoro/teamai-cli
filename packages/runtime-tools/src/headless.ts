@@ -1,5 +1,5 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 import { runHeadless, type HeadlessRun, type HeadlessStarter } from '@teamai/tool-launch/call-launch';
 import { recordGroup, stopProcess } from '@teamai/shared/process-group';
 

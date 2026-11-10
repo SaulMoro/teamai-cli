@@ -12,8 +12,8 @@ vi.mock('@teamai/tool-core/log', () => ({
 const failCheckIgnore = vi.hoisted(() => ({ on: false }));
 const failLsFiles = vi.hoisted(() => ({ on: false }));
 const failVerboseCheckIgnore = vi.hoisted(() => ({ on: false }));
-vi.mock('@teamai/tool-core/exec', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils/exec.js')>();
+vi.mock('@teamai/shared/exec', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@teamai/shared/exec')>();
   return {
     ...actual,
     execCommand: (cmd: string, args: string[], opts?: Parameters<typeof actual.execCommand>[2]) =>

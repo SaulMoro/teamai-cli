@@ -59,7 +59,7 @@ import { isPlainJson, mapStrings, parseJson, parseJsonAs, type JsonSyntax } from
 import { log } from './utils/logger.js';
 import { warnOnce } from './utils/warn-once.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
-import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
+import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from '@teamai/shared/lookpath';
 import {
   carriesLocalAgentCredential,
   carriesResolvedValue,

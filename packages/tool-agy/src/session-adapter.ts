@@ -27,7 +27,7 @@ import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3, snapshotSqlite } from '@teamai/tool-core/sessions/sqlite';
-import { execCommand, type ExecResult } from '@teamai/tool-core/exec';
+import { execCommand, type ExecResult } from '@teamai/shared/exec';
 import { log } from '@teamai/tool-core/log';
 import { parseJson } from '@teamai/tool-core/json';
 

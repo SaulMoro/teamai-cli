@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 import { z } from 'zod';
 import { getTeamaiHomeDir } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';

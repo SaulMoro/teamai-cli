@@ -5,7 +5,7 @@ const rule = ruleHarness('teamai/spawn-command', { filename: 'src/tool-launch/ru
 rule.valid('allows tool-core\'s exec module to start processes through cross-spawn', `
 import spawn from 'cross-spawn';
 export const start = (command: string) => spawn(command, []);
-`, { filename: 'packages/tool-core/src/exec.ts' });
+`, { filename: 'packages/shared/src/exec.ts' });
 
 rule.valid('allows a test to mock cross-spawn', `
 import { vi } from 'vitest';
@@ -15,7 +15,7 @@ export const spawned = crossSpawn;
 `, { filename: 'src/__tests__/tool-launch-run.test.ts' });
 
 rule.valid('allows starting a process through spawnCommand', `
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 export const start = (command: string) => spawnCommand(command, [], {});
 `);
 

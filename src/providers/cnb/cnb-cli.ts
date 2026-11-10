@@ -1,7 +1,7 @@
 import { execSync, spawnSync, type SpawnSyncOptions, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
-import { spawnCommandSync } from '@teamai/tool-core/exec';
+import { spawnCommandSync } from '@teamai/shared/exec';
 import { log, spinner } from '../../utils/logger.js';
-import { resolveCliPath } from '../../utils/cli-path.js';
+import { resolveCliPath } from '@teamai/shared/cli-path';
 import { isInteractive } from '../../utils/prompt.js';
 import type { RepoInfo } from '../types.js';
 import { OrganizationNotFoundError, RepoCreatePermissionError } from '../types.js';

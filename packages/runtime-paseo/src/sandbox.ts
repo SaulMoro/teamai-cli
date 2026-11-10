@@ -1,6 +1,6 @@
 import { CANCEL_FAILED, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { socketOf, WRAPPER_PREFIX, type Registration } from '@teamai/runtime-kit/outer';
-import { findOnPath } from '@teamai/tool-core/lookpath';
+import { findOnPath } from '@teamai/shared/lookpath';
 import type { Daemon, Target } from './daemon/connect.js';
 import type { AgentPrompt, Place } from './journal.js';
 import type { ProcessState } from './process-state.js';

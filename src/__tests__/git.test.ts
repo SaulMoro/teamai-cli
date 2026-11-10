@@ -28,7 +28,7 @@ const mockGit = {
 // can assert the hang guards (block timeout + GIT_TERMINAL_PROMPT) are present.
 const simpleGitCalls: unknown[][] = [];
 const mockExecCommand = vi.hoisted(() => vi.fn());
-vi.mock('@teamai/tool-core/exec', () => ({ execCommand: mockExecCommand }));
+vi.mock('@teamai/shared/exec', () => ({ execCommand: mockExecCommand }));
 vi.mock('simple-git', async (importOriginal) => ({
   ...await importOriginal<typeof import('simple-git')>(),
   simpleGit: (...args: unknown[]) => {

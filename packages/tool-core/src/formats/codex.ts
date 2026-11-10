@@ -38,7 +38,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import { spawnCommand } from '../exec.js';
+import { spawnCommand } from '@teamai/shared/exec';
 import { z } from 'zod';
 import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '../sessions/base.js';
 import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../sessions/ir.js';
@@ -48,8 +48,8 @@ import { typedTitle, visibleUserText } from '../sessions/title.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '../sessions/ids.js';
 import { findSqlite3 } from '../sessions/sqlite.js';
 import { log } from '../log.js';
-import { execCommand, probeBinary } from '../exec.js';
-import { isOnPath } from '../lookpath.js';
+import { execCommand, probeBinary } from '@teamai/shared/exec';
+import { isOnPath } from '@teamai/shared/lookpath';
 import { desktopCodexBinaries } from './codex-desktop.js';
 import {
   resolveRealCwd,

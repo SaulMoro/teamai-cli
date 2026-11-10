@@ -29,7 +29,7 @@ import { getReportsDir, REPORTS_LOCK_FILENAME, type LocalConfig } from '../types
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
-import * as cliPaths from '../utils/cli-path.js';
+import * as cliPaths from '@teamai/shared/cli-path';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { projectRun } from '../workflow/snapshot.js';
 import { runPasses } from '../workflow/loop.js';

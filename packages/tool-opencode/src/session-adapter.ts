@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { createServer } from 'node:net';
 import * as path from 'node:path';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
@@ -30,7 +30,7 @@ import { imagePlaceholderText, ToolArgumentsSchema, type ContentBlock, type Imag
 import { JsonValueSchema } from '@teamai/tool-core/json';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { execCommand, probeBinary, type ExecResult } from '@teamai/tool-core/exec';
+import { execCommand, probeBinary, type ExecResult } from '@teamai/shared/exec';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
   ['read', 'read_file'],

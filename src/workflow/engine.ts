@@ -11,7 +11,7 @@ import { DefaultWorkflows } from '../default-workflows.js';
 import { DriverSchema, sameDriver } from '../driver-identity.js';
 import { resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
 import { log } from '../utils/logger.js';
-import { execCommand } from '../utils/exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
 import { getDataHome, JsonObjectSchema, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';

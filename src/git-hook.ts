@@ -25,7 +25,7 @@ import { ensureTeamaiWrapper, TEAMAI_BIN_DIR } from './builtin-hooks.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDataHome, type LocalConfig } from './types.js';
-import { execCommand } from './utils/exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { GIT_REPOSITORY_ENV } from './utils/git-env.js';
 import { readFileIfExists, readJson, remove, writeJson } from './utils/fs.js';
 import { gitFindsNoRepository } from './utils/git-discovery.js';

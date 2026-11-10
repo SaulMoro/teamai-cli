@@ -16,7 +16,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 
 import { resolveAnchors, listWorktrees } from '../utils/git.js';
 import { resetBundledRuntimeCache } from '../bundled-runtime.js';
-import { findOnPath } from '../utils/lookpath.js';
+import { findOnPath } from '@teamai/shared/lookpath';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { claudeHookOtherHostSkip, reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig } from '../hooks.js';
 import * as gitHook from '../git-hook.js';

@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
-import { resolveCliPath } from '../../utils/cli-path.js';
+import { resolveCliPath } from '@teamai/shared/cli-path';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';

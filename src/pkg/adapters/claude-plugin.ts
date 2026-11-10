@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { formatCommand } from '../../utils/exec.js';
+import { formatCommand } from '@teamai/shared/exec';
 import { log } from '../../utils/logger.js';
 import type {
   ClaudeEcosystem,

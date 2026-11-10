@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { probeBinary } from './exec.js';
+import { probeBinary } from '@teamai/shared/exec';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Reads the version of a tool installed here, or '' when it reads none. */

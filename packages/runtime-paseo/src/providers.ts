@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { OpId, RuntimeFailure } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/shared/home';
-import { findOnPath } from '@teamai/tool-core/lookpath';
+import { findOnPath } from '@teamai/shared/lookpath';
 import type { InitInstance } from '@teamai/runtime-protocol';
 import { paseoHome } from './daemon/address.js';
 import type { Daemon } from './daemon/connect.js';

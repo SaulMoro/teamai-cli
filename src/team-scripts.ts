@@ -17,7 +17,7 @@ import { loadTeamConfig } from './config.js';
 import { POST_PULL_BUDGET_SEC } from './post-pull.js';
 import type { LocalConfig, TeamaiConfig } from './types.js';
 import { withTimeout } from './utils/async.js';
-import { captureTail, detachChild } from './utils/exec.js';
+import { captureTail, detachChild } from '@teamai/shared/exec';
 import { resolveAnchors } from './utils/git.js';
 import { log } from './utils/logger.js';
 import { assertSafePath } from './utils/path-safety.js';

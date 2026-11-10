@@ -1,16 +1,16 @@
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { spawnCommand } from '@teamai/tool-core/exec';
+import { spawnCommand } from '@teamai/shared/exec';
 import semver from 'semver';
 import { z } from 'zod';
 import { desktopCodexBinaries } from '@teamai/tool-core/formats/codex-desktop';
 import { getCurrentVersion } from './package-info.js';
 import type { CodexBuild, CodexBuildSkew, JsonValue } from './types.js';
 import { JsonValueSchema, JsonObjectSchema } from './types.js';
-import { probeBinary } from './utils/exec.js';
+import { probeBinary } from '@teamai/shared/exec';
 import { lenientList } from './utils/json.js';
 import { log } from './utils/logger.js';
-import { findOnPath } from './utils/lookpath.js';
+import { findOnPath } from '@teamai/shared/lookpath';
 
 /**
  * Trusting what teamai writes into Codex (#955).

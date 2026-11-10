@@ -102,7 +102,7 @@ function runCommand(
 
         let stdout = '';
         let stderr = '';
-        // Same split-chunk UTF-8 handling as execCommand in utils/exec.ts.
+        // Same split-chunk UTF-8 handling as execCommand in @teamai/shared/exec.
         const stdoutDecoder = new StringDecoder('utf8');
         const stderrDecoder = new StringDecoder('utf8');
 

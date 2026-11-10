@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import fse from 'fs-extra';
 import { z } from 'zod';
 import { log } from './utils/logger.js';
-import { detachChild } from './utils/exec.js';
+import { detachChild } from '@teamai/shared/exec';
 import { parseFrontmatter } from './utils/frontmatter.js';
 import {
   ensureDir,

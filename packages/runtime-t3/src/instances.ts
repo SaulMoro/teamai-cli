@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fitReason, type OpId } from '@teamai/runtime-protocol';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
-import { findOnPath } from '@teamai/tool-core/lookpath';
+import { findOnPath } from '@teamai/shared/lookpath';
 import { addProviderInstance, findProviderInstance, isInstanceId, type NewInstance } from './add-instance.js';
 import type { ServeOptions, Serving, Session } from './runtime.js';
 import { DRIVERS, driverOf, type Driver } from './sessions.js';

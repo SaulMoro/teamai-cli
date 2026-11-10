@@ -30,7 +30,7 @@ describe('teamai/launch-through-workflows', () => {
   rule.valid('allows the tools runtime the launch library', `import { callLaunch } from '@teamai/tool-launch/call-launch';`, { filename: 'packages/runtime-tools/src/answer.ts' });
   rule.valid('allows a workflow driver to launch', `import { runConfined } from '../../confined-launch.js'; import { answerLaunch } from '@teamai/runtime-tools/answer';`, { filename: 'src/workflow/drivers/local/feature.ts' });
   rule.valid('allows the types of the launch library and of the tools runtime anywhere', `import type { CallEnd } from '@teamai/tool-launch/call-launch'; import type { StepLauncher } from '@teamai/runtime-tools';`, { filename: 'src/scorers/x.ts' });
-  rule.valid('allows other workspace packages', `import { spawnCommand } from '@teamai/tool-core/exec';`);
+  rule.valid('allows other workspace packages', `import { spawnCommand } from '@teamai/shared/exec';`);
   rule.invalid('rejects a print-mode call of a tool binary', `spawn('claude', ['-p', prompt]);`);
   rule.invalid('rejects a call of a tool binary through any process helper', `await execCommand('codex', ['exec', prompt], { cwd });`);
   rule.invalid('rejects a tool binary whose arguments it cannot read', `crossSpawn('cursor-agent', args);`);

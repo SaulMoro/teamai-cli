@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import type { JsonValue } from '../../types.js';
 import { pathExists, readJson } from '../../utils/fs.js';
-import { formatCommand } from '../../utils/exec.js';
+import { formatCommand } from '@teamai/shared/exec';
 import { log } from '../../utils/logger.js';
 import type { NpmLockEntry, NpmSpec, PackageStatus } from '../types.js';
 import {

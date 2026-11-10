@@ -15,7 +15,7 @@ vi.mock('@teamai/tool-core/sessions/sqlite', async (importOriginal) => ({
   ...await importOriginal<typeof import('@teamai/tool-core/sessions/sqlite')>(),
   findSqlite3: () => mocks.sqlite3 || null,
 }));
-vi.mock('@teamai/tool-core/exec', () => ({
+vi.mock('@teamai/shared/exec', () => ({
   execCommand: async (_command: string, args: string[]) => {
     mocks.commands.push(args);
     if (args[1]?.startsWith('.backup ')) return { code: 0, stdout: '', stderr: '', signal: null };

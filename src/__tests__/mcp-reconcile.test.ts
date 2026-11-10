@@ -25,8 +25,8 @@ vi.mock('@teamai/tool-core/log', () => ({
 
 // Makes every `git ls-files` spawn fail, as a process table at its limit does.
 const failLsFilesSpawn = vi.hoisted(() => ({ on: false }));
-vi.mock('@teamai/tool-core/exec', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils/exec.js')>();
+vi.mock('@teamai/shared/exec', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@teamai/shared/exec')>();
   return {
     ...actual,
     execCommand: (cmd: string, args: string[], opts?: Parameters<typeof actual.execCommand>[2]) =>
