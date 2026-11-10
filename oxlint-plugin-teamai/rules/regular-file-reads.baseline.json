@@ -1,12 +1,4 @@
 {
-  "src/resources/delivered-copies.ts": 3,
-  "src/resources/docs.ts": 2,
-  "src/resources/env.ts": 1,
-  "src/resources/repo-resource.ts": 1,
-  "src/session-flow/sync.ts": 15,
-  "src/skill-content.ts": 2,
-  "src/todowrite-hint.ts": 1,
-  "src/update.ts": 9,
   "src/utils/branch-worktree.ts": 2,
   "src/utils/git-answers.ts": 1,
   "src/utils/git.ts": 1,

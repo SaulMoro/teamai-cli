@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import fse from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { ResourceHandler } from './base.js';
 import { installScopeName, isSelfMode, resolveBaseDir, type ResourceItem, type TeamaiConfig, type LocalConfig } from '../types.js';
 import { expandHome, isDraft, listDirs, pruneEmptyDirs } from '../utils/fs.js';
@@ -117,7 +118,7 @@ async function editDocsSearchWhitelist(
 ): Promise<{ change: 'write' | 'remove' | null; teamaiOnly: boolean }> {
   const lines = wanted ? WHITELIST : [];
 
-  const content = await fs.readFile(file, 'utf8').catch((e: NodeJS.ErrnoException) => {
+  const content = await readRegularFile(file, 'utf8').catch((e: NodeJS.ErrnoException) => {
     if (e.code === 'ENOENT') return null;
     throw e;
   });
@@ -669,7 +670,7 @@ async function passesThroughLink(root: string, rel: string): Promise<boolean> {
 /** The file's bytes, or null when it is not a file this process can read. */
 async function readBytes(filePath: string): Promise<Buffer | null> {
   try {
-    return await fs.readFile(filePath);
+    return await readRegularFile(filePath);
   } catch {
     return null;
   }

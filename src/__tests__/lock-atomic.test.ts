@@ -3,14 +3,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { acquireLock, releaseLock, sweepHeldLocksOnExit, listZombieLocks, removeZombieLocks } from '../update.js';
+
+vi.mock('@teamai/shared/regular-file', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@teamai/shared/regular-file')>();
+
+  return { ...actual, readRegularFile: vi.fn(actual.readRegularFile) };
+});
+
+const readLock = vi.mocked(readRegularFile);
+const realReadLock = async () => (await vi.importActual<typeof import('@teamai/shared/regular-file')>('@teamai/shared/regular-file')).readRegularFile;
 
 // ─── Real-filesystem tests for the atomic lock (issue #374 P0) ──────────────
 //
 // These exercise acquireLock/releaseLock against a real temp directory, so the
 // OS-level exclusivity (link's EEXIST, O_CREAT|O_EXCL without hard links) and the
 // on-disk owner token are genuinely tested — the thing the previous
-// check-then-write lock got wrong. Spies on fs-extra only stage the interleavings
+// check-then-write lock got wrong. Spies on fs-extra and on the lock read only stage the interleavings
 // a single process cannot produce on its own (#760).
 
 let tmpDir: string;
@@ -131,7 +141,7 @@ describe('acquireLock never takes over a lock another live process may hold (#76
     // the previous holder released it and a third process re-created it between
     // this process's failed create and its read.
     fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'other', startedAt: 'x' }));
-    const readFile = vi.spyOn(fse, 'readFile').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    const readFile = readLock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     try {
       expect(await acquireLock(lockPath)).toBe(false);
     } finally {
@@ -142,7 +152,7 @@ describe('acquireLock never takes over a lock another live process may hold (#76
 
   it('takes a lock released between its failed create and its read, instead of reporting busy', async () => {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'other', startedAt: 'x' }));
-    const readFile = vi.spyOn(fse, 'readFile').mockImplementationOnce(async () => {
+    const readFile = readLock.mockImplementationOnce(async () => {
       fs.rmSync(lockPath); // the holder releases it
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -160,7 +170,7 @@ describe('acquireLock never takes over a lock another live process may hold (#76
     // the dead lock was cleared and another process re-created it.
     const dead = JSON.stringify({ pid: 999999, owner: 'dead', startedAt: 'x' });
     fs.writeFileSync(lockPath, dead);
-    const readFile = vi.spyOn(fse, 'readFile')
+    const readFile = readLock
       .mockImplementationOnce(async () => dead)
       .mockImplementationOnce(async () => {
         fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'other', startedAt: 'x' }));
@@ -206,11 +216,11 @@ describe('acquireLock never takes over a lock another live process may hold (#76
     const sentinel = `${lockPath}.sentinel`;
     fs.writeFileSync(lockPath, deadLock);
     fs.writeFileSync(sentinel, deadSentinel);
-    const realReadFile = fse.readFile.bind(fse);
+    const realReadFile = await realReadLock();
     let sentinelReads = 0;
-    const readFile = vi.spyOn(fse, 'readFile').mockImplementation(async (...args: Parameters<typeof fse.readFile>) => {
-      const content = await realReadFile(...args);
-      if (args[0] === sentinel && ++sentinelReads === 2) fs.writeFileSync(sentinel, liveSentinel);
+    const readFile = readLock.mockImplementation(async (file, encoding) => {
+      const content = await realReadFile(file, encoding);
+      if (file === sentinel && ++sentinelReads === 2) fs.writeFileSync(sentinel, liveSentinel);
       return content;
     });
     try {
@@ -305,7 +315,7 @@ describe('acquireLock never takes over a lock another live process may hold (#76
 
   it('does not reclaim a lock it cannot read (EACCES: e.g. a root-owned 0600 lock)', async () => {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: 424242, owner: 'root-owned', startedAt: 'x' }));
-    const readFile = vi.spyOn(fse, 'readFile').mockRejectedValue(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
+    const readFile = readLock.mockRejectedValue(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
     try {
       expect(await acquireLock(lockPath)).toBe(false);
     } finally {
@@ -392,11 +402,11 @@ describe('acquireLock filesystem failures (#999)', () => {
     const sentinel = `${lockPath}.sentinel`;
     fs.writeFileSync(lockPath, dead);
     fs.writeFileSync(sentinel, JSON.stringify({ pid: 999998, owner: DEAD_RECLAIMER, startedAt: 'x' }));
-    const realReadFile = fse.readFile.bind(fse);
+    const realReadFile = await realReadLock();
     let sentinelReads = 0;
-    const readFile = vi.spyOn(fse, 'readFile').mockImplementation(async (...args: Parameters<typeof fse.readFile>) => {
-      const content = await realReadFile(...args);
-      if (args[0] === sentinel && ++sentinelReads === 2) fs.rmSync(sentinel);
+    const readFile = readLock.mockImplementation(async (file, encoding) => {
+      const content = await realReadFile(file, encoding);
+      if (file === sentinel && ++sentinelReads === 2) fs.rmSync(sentinel);
       return content;
     });
     try {
@@ -426,7 +436,7 @@ describe('acquireLock filesystem failures (#999)', () => {
 describe('acquireLock dry-run filesystem errors (#999)', () => {
   it.each(['ENOTDIR', 'EISDIR', 'EIO'])('reports a read failure (%s) without writing a lock', async (code) => {
     const error = Object.assign(new Error(`${code}: cannot read lock`), { code });
-    const read = vi.spyOn(fse, 'readFile').mockRejectedValueOnce(error);
+    const read = readLock.mockRejectedValueOnce(error);
     try {
       await expect(acquireLock(lockPath, { dryRun: true })).rejects.toMatchObject({
         cause: error, message: expect.stringContaining(`Cannot acquire lock ${lockPath}:`),
@@ -449,7 +459,7 @@ describe('acquireLock dry-run filesystem errors (#999)', () => {
   it.each(['EACCES', 'EPERM'])('still treats a permission-denied existing lock as held (%s)', async (code) => {
     const payload = JSON.stringify({ pid: process.pid, owner: 'other', startedAt: 'x' });
     fs.writeFileSync(lockPath, payload);
-    const read = vi.spyOn(fse, 'readFile').mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+    const read = readLock.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
     try {
       expect(await acquireLock(lockPath, { dryRun: true })).toBe(false);
       await releaseLock(lockPath);

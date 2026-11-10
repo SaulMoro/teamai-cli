@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { readFile, realpath } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 import YAML from 'yaml';
 import { parseYaml } from '@teamai/shared/yaml';
@@ -253,7 +254,7 @@ export async function readEnvBackup(localConfig: LocalConfig): Promise<Record<st
   let content: string;
 
   try {
-    content = await readFile(backupPath, 'utf-8');
+    content = await readRegularFile(backupPath, 'utf-8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return table;
     const reason = error instanceof Error ? error.message : String(error);

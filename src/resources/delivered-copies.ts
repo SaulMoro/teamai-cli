@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { gitTracks, gitUntracked } from '../git-exclude.js';
 import type { DeliveryRecorder } from '../git-exclude-delivered.js';
 import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
@@ -171,7 +172,7 @@ async function nextHashes(previous: DeliveredHashes, item: ResourceItem, target:
 
   for (const file of await listFilesRecursive(item.sourcePath)) {
     if (path.basename(file) === CONTRIBUTORS_FILE) continue;
-    const bytes = await fse.readFile(path.join(item.sourcePath, file));
+    const bytes = await readRegularFile(path.join(item.sourcePath, file));
     const text = bytes.toString('utf-8');
     const written = file === 'SKILL.md' ? withSkillFrontmatter(text, item.name) : text;
     next.set(path.join(target.dest, file), contentHash(written === text ? bytes : written));
@@ -271,7 +272,7 @@ async function withDisk(previous: DeliveredHashes, next: Iterable<[string, strin
 export async function isTeamaiCopy(file: string, origin: CopyOrigin): Promise<boolean> {
   // teamai writes files, never links: a link is the member's, whatever its target holds.
   if (await isLink(file)) return false;
-  const bytes = await fse.readFile(file).catch(() => null);
+  const bytes = await readRegularFile(file).catch(() => null);
 
   if (bytes === null) return false;
 
@@ -653,7 +654,7 @@ async function overwritesMembersFile(previous: DeliveredHashes, item: ResourceIt
     const disk = await fileHash(file);
 
     if (disk === null) continue;
-    const bytes = await fse.readFile(path.join(item.sourcePath, rel));
+    const bytes = await readRegularFile(path.join(item.sourcePath, rel));
     const text = bytes.toString('utf-8');
     const written = rel === SKILL_MD ? withSkillFrontmatter(text, item.name) : text;
 

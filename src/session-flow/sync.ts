@@ -28,6 +28,7 @@
  */
 
 import * as fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -418,7 +419,7 @@ const SyncPushedAtSchema = z.object({ sync: z.object({ pushedAt: z.string().null
 
 /** A meta.json as read from the archive: an `agent` that is not an observation is left out, as if absent. */
 function readSyncMeta(file: string): SessionSyncMeta {
-  const { agent, commits, ...rest } = SessionSyncMetaSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
+  const { agent, commits, ...rest } = SessionSyncMetaSchema.parse(JSON.parse(readRegularFileSync(file, 'utf-8')));
   const meta: SessionSyncMeta = rest;
 
   if (agent !== undefined) meta.agent = agent;
@@ -902,7 +903,7 @@ export class SyncManager {
 
     const pushedAt = (metaPath: string): string => {
       try {
-        return SyncPushedAtSchema.parse(JSON.parse(fs.readFileSync(metaPath, 'utf-8'))).sync.pushedAt ?? '';
+        return SyncPushedAtSchema.parse(JSON.parse(readRegularFileSync(metaPath, 'utf-8'))).sync.pushedAt ?? '';
       } catch {
         return ''; // unreadable: the folded copy replaces it
       }
@@ -993,7 +994,7 @@ export class SyncManager {
   private readIndexFile(p: string, repoIdentity: string | null): RepoIndex {
     try {
       if (fs.existsSync(p)) {
-        return RepoIndexSchema.parse(JSON.parse(fs.readFileSync(p, 'utf-8')));
+        return RepoIndexSchema.parse(JSON.parse(readRegularFileSync(p, 'utf-8')));
       }
     } catch {
       // A silent rebuild of a corrupt index (parse failure) drops the dedup key, so pushing the same session again
@@ -1024,7 +1025,7 @@ export class SyncManager {
     // `session pull` kept the team checkout modified, and the next pull that
     // brought index changes then refused to merge.
     try {
-      const previous = fs.readFileSync(target, 'utf-8');
+      const previous = readRegularFileSync(target, 'utf-8');
       const { updatedAt } = z.object({ updatedAt: JsonValueSchema.optional() }).parse(JSON.parse(previous));
 
       if (JSON.stringify({ ...index, updatedAt }, null, 2) === previous) return;
@@ -1072,7 +1073,7 @@ export class SyncManager {
         this.rebuildIndexLocked(repoIdentity);
 
         if (fs.existsSync(p)) {
-          return RepoIndexSchema.parse(JSON.parse(fs.readFileSync(p, 'utf-8')));
+          return RepoIndexSchema.parse(JSON.parse(readRegularFileSync(p, 'utf-8')));
         }
       }
 
@@ -1080,12 +1081,12 @@ export class SyncManager {
     }
 
     try {
-      return RepoIndexSchema.parse(JSON.parse(fs.readFileSync(p, 'utf-8')));
+      return RepoIndexSchema.parse(JSON.parse(readRegularFileSync(p, 'utf-8')));
     } catch {
       this.rebuildIndexLocked(repoIdentity);
 
       try {
-        return RepoIndexSchema.parse(JSON.parse(fs.readFileSync(p, 'utf-8')));
+        return RepoIndexSchema.parse(JSON.parse(readRegularFileSync(p, 'utf-8')));
       } catch {
         throw new Error(
           `corrupted session index at ${p}; run 'teamai session pull --all --repo-root <repo-root>' to rebuild it`,
@@ -1210,7 +1211,7 @@ export class SyncManager {
     // name; a rename carries it along.
     const keptEvidence = evidence === 'none' ? undefined
       : evidence ? `${JSON.stringify(evidence, null, 2)}\n`
-        : retiredPaths && fs.existsSync(retiredPaths.evidence) ? fs.readFileSync(retiredPaths.evidence, 'utf-8') : undefined;
+        : retiredPaths && fs.existsSync(retiredPaths.evidence) ? readRegularFileSync(retiredPaths.evidence, 'utf-8') : undefined;
 
     const droppedEvidence = evidence === 'none' && fs.existsSync(paths.evidence);
     const evidenceFiles = [...(keptEvidence !== undefined || droppedEvidence ? [paths.evidence] : []), ...(retiredPaths && fs.existsSync(retiredPaths.evidence) ? [retiredPaths.evidence] : [])];
@@ -1322,7 +1323,7 @@ export class SyncManager {
     const meta = readSyncMeta(paths.meta);
 
     // Read JSONL → rebuild Session
-    const content = fs.readFileSync(paths.jsonl, 'utf-8');
+    const content = readRegularFileSync(paths.jsonl, 'utf-8');
 
     const messages = content
       .split('\n')
@@ -1365,7 +1366,7 @@ export class SyncManager {
     const { evidence } = this.sessionPaths(repoIdentity, author ?? this.findAuthor(repoIdentity, sessionName), sessionName);
 
     if (!fs.existsSync(evidence)) return undefined;
-    const parsed = ArchivedEvidenceSchema.safeParse(parseJson(fs.readFileSync(evidence, 'utf-8')));
+    const parsed = ArchivedEvidenceSchema.safeParse(parseJson(readRegularFileSync(evidence, 'utf-8')));
 
     if (!parsed.success) throw new Error(`Evidence file ${evidence} does not hold evidence teamai archived: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
 
@@ -1488,7 +1489,7 @@ export class SyncManager {
           const idxPath = path.join(full, '_index.json');
 
           if (!fs.existsSync(idxPath)) continue;
-          const index = IndexIdentitySchema.parse(JSON.parse(fs.readFileSync(idxPath, 'utf-8')));
+          const index = IndexIdentitySchema.parse(JSON.parse(readRegularFileSync(idxPath, 'utf-8')));
 
           if (index.repoIdentity) identities.push(index.repoIdentity);
         } catch {
@@ -1574,7 +1575,7 @@ export class SyncManager {
           const meta = readSyncMeta(metaPath);
 
           const msgCount = fs.existsSync(jsonlPath)
-            ? fs.readFileSync(jsonlPath, 'utf-8').split('\n').filter((l) => l.trim()).length
+            ? readRegularFileSync(jsonlPath, 'utf-8').split('\n').filter((l) => l.trim()).length
             : 0;
 
           entries.push({
@@ -1609,7 +1610,7 @@ export class SyncManager {
     let known: KnownSessions = [];
 
     try {
-      const sessions = KnownSessionsSchema.parse(JSON.parse(fs.readFileSync(path.join(dir, '_index.json'), 'utf-8'))).sessions;
+      const sessions = KnownSessionsSchema.parse(JSON.parse(readRegularFileSync(path.join(dir, '_index.json'), 'utf-8'))).sessions;
 
       if (sessions !== undefined) known = sessions;
     } catch {
@@ -1636,7 +1637,7 @@ export class SyncManager {
     // an index rebuild, not a session change, so retain the committed bytes
     // when its session projection is already identical.
     try {
-      const current = parseJson(fs.readFileSync(indexPath, 'utf-8'));
+      const current = parseJson(readRegularFileSync(indexPath, 'utf-8'));
 
       if (isJsonObject(current) && JSON.stringify({ ...current, updatedAt: undefined }) === JSON.stringify({ ...rebuilt, updatedAt: undefined })) {
         return entries.length;
@@ -1730,7 +1731,7 @@ export class SyncManager {
       const idxPath = path.join(dir, '_index.json');
 
       if (!fs.existsSync(idxPath)) return null;
-      const index = IndexIdentitySchema.parse(JSON.parse(fs.readFileSync(idxPath, 'utf-8')));
+      const index = IndexIdentitySchema.parse(JSON.parse(readRegularFileSync(idxPath, 'utf-8')));
 
       return index.repoIdentity ?? null;
     } catch {

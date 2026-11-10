@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
+import { readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -286,7 +287,7 @@ const ManifestWithBinMap = z.object({ bin: z.record(z.string(), z.string()) });
 /** Shims named in the restored manifest; `teamai` when it cannot be read. */
 function binNames(pkgDir: string): string[] {
   try {
-    const raw: unknown = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+    const raw: unknown = JSON.parse(readRegularFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
     const single = ManifestWithSingleBin.safeParse(raw);
 
     if (single.success) return [single.data.name];
@@ -513,7 +514,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
   let content: string;
 
   try {
-    content = await fse.readFile(resolved, 'utf-8');
+    content = await readRegularFile(resolved, 'utf-8');
   } catch (err) {
     const code = errnoCode(err);
 
@@ -545,7 +546,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
   // The owner may have released the lock and exited after the read, and
   // another process created a fresh one: only the dead owner's own file is stale.
   try {
-    return (await fse.readFile(resolved, 'utf-8')) === content ? { state: 'stale', holder: parsed } : { state: 'live' };
+    return (await readRegularFile(resolved, 'utf-8')) === content ? { state: 'stale', holder: parsed } : { state: 'live' };
   } catch (err) {
     if (errnoCode(err) === 'ENOENT') return { state: 'missing' };
     throw err;
@@ -615,7 +616,7 @@ async function exclusiveCreateInPlace(target: string, payload: string): Promise<
  */
 async function removeIfOwner(target: string, owner: string): Promise<void> {
   try {
-    const content = await fse.readFile(target, 'utf-8').catch(() => null);
+    const content = await readRegularFile(target, 'utf-8').catch(() => null);
 
     if (content !== null) {
       const parsed = parseLockContent(content);
@@ -691,7 +692,7 @@ async function removeDeadFile(target: string, owner: string): Promise<boolean> {
     let current: string;
 
     try {
-      current = await fse.readFile(target, 'utf-8');
+      current = await readRegularFile(target, 'utf-8');
     } catch (err) {
       if (errnoCode(err) === 'ENOENT') return false;
       throw err;
@@ -809,7 +810,7 @@ export async function releaseLock(lockPath?: string): Promise<void> {
   if (!ourOwner) return;
 
   try {
-    const content = await fse.readFile(resolved, 'utf-8').catch(() => null);
+    const content = await readRegularFile(resolved, 'utf-8').catch(() => null);
 
     if (content !== null) {
       const parsed = parseLockContent(content);
@@ -867,7 +868,7 @@ export async function withFileLock<T>(
 export function sweepHeldLocksOnExit(): void {
   for (const [resolved, owner] of heldLockOwners) {
     try {
-      const content = fs.readFileSync(resolved, 'utf-8');
+      const content = readRegularFileSync(resolved, 'utf-8');
       const parsed = parseLockContent(content);
 
       if (parsed?.owner && parsed.owner !== owner) continue; // someone else's now
@@ -962,7 +963,7 @@ export async function listZombieLocks(roots: string[]): Promise<string[]> {
 
   for (const p of await walkLockCandidates(roots)) {
     try {
-      if (isDeadPidLock(await fse.readFile(p, 'utf-8'))) zombies.push(p);
+      if (isDeadPidLock(await readRegularFile(p, 'utf-8'))) zombies.push(p);
     } catch {
       // unreadable: leave it alone
     }
@@ -1262,7 +1263,7 @@ export async function doUpdate(runningScope: LocalConfig | null, options?: { for
     // here is exactly how self-update silently stops working.
     if (updatedEntry) {
       try {
-        const installed = InstalledPackageSchema.parse(JSON.parse(fs.readFileSync(
+        const installed = InstalledPackageSchema.parse(JSON.parse(readRegularFileSync(
           path.join(path.dirname(path.dirname(updatedEntry)), 'package.json'), 'utf-8',
         )));
 
