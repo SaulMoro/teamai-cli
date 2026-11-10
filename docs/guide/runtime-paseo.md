@@ -114,7 +114,7 @@ The step's record has its output and Claude's session id:
 
 ## Judge a scored pass
 
-A step with `scorers` is judged by the `teamai-score` workflow: its bookkeeping commands run on this machine, and its judge is a confined prompt, which reads one evidence directory and nothing else. Paseo answers it, so a definition with only `paseo` runs and judges a scored step on a machine with no agent CLI:
+A step with `scorers` is judged by the `teamai-score` workflow: its bookkeeping commands run on this machine, and its judge is a confined prompt, which reads one evidence directory and nothing else. Paseo answers it, so a definition with only `paseo` runs and judges a scored step on a machine where teamai launches no tool itself:
 
 ```yaml
 # drivers/paseo-only.yaml

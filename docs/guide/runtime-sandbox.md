@@ -188,7 +188,7 @@ teamai then checks on the host what setup left in the worktree, as it does on `l
 
 ## Judging in the sandbox
 
-A scored pass is judged by its `teamai-score` run, whose judge step reads only the evidence teamai gathered. The sandbox runs that judge too, so a definition with only `sandbox` judges with no agent CLI on your machine. Each judge gets a fresh container:
+A scored pass is judged by its `teamai-score` run, whose judge step reads only the evidence teamai gathered. The sandbox runs that judge too, so a definition with only `sandbox` judges with no AI tool installed on your machine. Each judge gets a fresh container:
 
 ```text
 judge container teamai-<run>-<attempt>                  from the host

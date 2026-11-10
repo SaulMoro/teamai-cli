@@ -156,7 +156,7 @@ description: Run each prompt step as a T3 Code thread in a worktree teamai prepa
 runtimes:
   - use: t3
     options: { environment: local, max_parallel: 4 }
-  - use: local            # commands, and prompts T3 cannot take
+  - use: tools            # prompts T3 cannot take; commands run on the host slot
 ```
 
 ```yaml
@@ -170,7 +170,7 @@ runtimes:
       provider: sbx                                            # no agent: each attempt starts from its own tool's template
       # Each member signs in once: Claude with `sbx run claude <dir>`, then /login; Codex with `sbx secret set openai --oauth`
       max_parallel: 4
-  - use: local
+  - use: tools
 ```
 
 ```yaml
@@ -186,7 +186,7 @@ runtimes:
         VERCEL_TEAM_ID: env:VERCEL_TEAM_ID
         VERCEL_PROJECT_ID: env:VERCEL_PROJECT_ID
       credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN }
-  - use: local
+  - use: tools
 ```
 
 ```yaml
@@ -213,7 +213,7 @@ runtimes:
     options:
       t3: { instance: claude-t3-sandbox }        # a T3 provider instance whose Binary path is teamai's wrapper
       sandbox: { provider: sbx, agent: claude }  # any bind-mount provider: sbx, docker, podman, bwrap
-  - use: local
+  - use: tools
 ```
 
 `sandbox` opens the attempt's sandbox on the place view at the same absolute paths and owns its lifecycle. `t3` launches the child with `modelSelection.instanceId` set to a T3 provider instance (T3 Settings → Providers, for example "Claude (t3-sandbox)") whose Binary path is a wrapper teamai ships inside `teamai-runtime-sandbox` (its `tool-exec` mode). The wrapper knows no tool: it is one multicall executable that takes the tool from the name it was called by (`teamai-sandbox-<tool>`), resolves that tool's `command` from the tool registry, finds the sandbox open for its working directory by the attempt's label (`teamai-<run>-<attempt>`), and runs that command there with its argv, stdio, exit status and signals passed through. teamai ships one `bin` per shipped tool, generated from the registry; a team or personal instance is a symlink named after it. A tool it serves must be in the sandbox runtime's `tools`, be installed in the sandbox, and be one T3 drives over stdio; a T3 provider reached on a local port cannot cross the sandbox. With no attempt for its working directory, or a tool it cannot resolve, it exits non-zero and never runs a session on the host. Parallel children share the instance: each runs in its own attempt's worktree, so each wrapper lands in its own sandbox. The child lives in the member's own T3 while the tool runs in the sandbox, and teamai finishes the place on the host as for any runtime. Paths must match, so only bind-mount providers serve as the outer. The wrapper gets the prompt's scoped env from the sandbox runtime over a per-attempt unix socket (mode 0600, in a 0700 directory under the attempt directory), never from T3's env and never on disk, including the tool-home variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CODEBUDDY_CONFIG_DIR`) aimed at the attempt's bind-mounted tool home, so the transcript lands where resume, scoring and `score --drain` read it. `t3` launches the child idle and sends the prompt (`t3_thread_send`) only after the wrapper connects on that socket; a wrapper that never connects fails the attempt with `isolation_unproven` and nothing is sent, so an instance whose Binary path is not the wrapper runs no prompt on the host. The `instance` option names the instance; `init` fails, naming the setup step, when it is missing. teamai knows the isolation is real because the wrapper is its own.
@@ -233,7 +233,7 @@ runtimes:
       stale_after: 30m
       can: { isolation: sandbox, env: true, unattended: true, workspace: [new, continue] }
       max_parallel: 10
-  - use: local
+  - use: tools
 ```
 
 A member is any install that runs `teamai workflow resume --next --pool build --driver <its definition>` in a checkout of the business repository.

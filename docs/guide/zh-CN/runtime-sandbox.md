@@ -188,7 +188,7 @@ docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e NPM_TOKEN -e 
 
 ## 在 sandbox 里评判
 
-被评分的一轮由它的 `teamai-score` 运行评判，其中的评判步骤只读取 teamai 收集的证据。sandbox 也运行这个评判，所以只有 `sandbox` 的驱动定义不需要你机器上有任何 agent CLI 就能评判。每次评判都有一个全新的容器：
+被评分的一轮由它的 `teamai-score` 运行评判，其中的评判步骤只读取 teamai 收集的证据。sandbox 也运行这个评判，所以只有 `sandbox` 的驱动定义不需要你机器上装有任何 AI 工具就能评判。每次评判都有一个全新的容器：
 
 ```text
 评判容器 teamai-<run>-<attempt>                         来自主机
