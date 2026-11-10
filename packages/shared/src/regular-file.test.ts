@@ -184,7 +184,8 @@ describe('copying a folder a step may have planted something in', () => {
     await copyRegularTree(from, to, { filter: (source) => path.basename(source) !== 'cache' });
 
     expect(fs.readFileSync(path.join(to, 'SKILL.md'), 'utf8')).toBe('# skill\n');
-    expect(fs.statSync(path.join(to, 'scripts', 'run.sh')).mode & 0o777).toBe(0o755);
+    // Windows keeps no POSIX mode to copy.
+    if (process.platform !== 'win32') expect(fs.statSync(path.join(to, 'scripts', 'run.sh')).mode & 0o777).toBe(0o755);
     expect(fs.readlinkSync(path.join(to, 'README.md'))).toBe('SKILL.md');
     expect(fs.readFileSync(path.join(dir, 'outside.md'), 'utf8')).toBe('outside\n');
     expect(fs.existsSync(path.join(to, 'scripts', 'cache'))).toBe(false);
@@ -287,6 +288,18 @@ describe('moving a folder teamai staged', () => {
     await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
 
     expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it('retries a rename Windows refuses for a moment, as while a scanner holds a file, instead of failing at once', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }));
+
+    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
+
     expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
   });
 

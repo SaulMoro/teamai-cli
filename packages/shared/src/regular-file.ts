@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -300,6 +301,31 @@ async function copyEntry(from: string, to: string, options: CopyTreeOptions): Pr
   else await copyRegularFile(from, to);
 }
 
+/** How long a rename Windows refuses for a moment is tried again, as graceful-fs, under fs-extra's `move`, tries it. */
+const RENAME_RETRY_MS = 60_000;
+
+/**
+ * Renames `from` to `to`. On Windows a scanner or an indexer holding a file under `from` makes a rename fail EACCES,
+ * EPERM or EBUSY for a moment, so it is tried again, backing off, while nothing has taken `to`.
+ */
+async function renameRetrying(from: string, to: string): Promise<void> {
+  const started = Date.now();
+
+  for (let backoff = 0; ; backoff = Math.min(backoff + 10, 100)) {
+    try {
+      await fs.promises.rename(from, to);
+
+      return;
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      const isMomentary = process.platform === 'win32' && (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY');
+
+      if (!isMomentary || Date.now() - started >= RENAME_RETRY_MS || await lstatOrMissing(to) !== undefined) throw error;
+      await new Promise((resolve) => { setTimeout(resolve, backoff); });
+    }
+  }
+}
+
 /**
  * Moves `from`, a file or a folder, to `to`, where nothing is yet, as fs-extra's `move` does: a rename, or across
  * filesystems a copy through `copyRegularTree` and then a removal of `from`. The copy goes into a folder beside `to`,
@@ -312,18 +338,18 @@ export async function moveRegularTree(from: string, to: string): Promise<void> {
   await fs.promises.mkdir(path.dirname(to), { recursive: true });
 
   try {
-    await fs.promises.rename(from, to);
+    await renameRetrying(from, to);
 
     return;
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'EXDEV')) throw error;
   }
 
-  const staging = `${to}.${process.pid}.${Date.now()}.moving`;
+  const staging = path.join(path.dirname(to), `.${path.basename(to)}.${randomBytes(4).toString('hex')}.staging`);
 
   try {
     await copyRegularTree(from, staging, { existing: 'fail' });
-    await fs.promises.rename(staging, to);
+    await renameRetrying(staging, to);
   } finally {
     await fs.promises.rm(staging, { recursive: true, force: true });
   }
