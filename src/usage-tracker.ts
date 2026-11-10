@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 import { log } from './utils/logger.js';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';
@@ -313,7 +314,7 @@ async function ignoreUsageSideFiles(config: LocalConfig, usagePath: string): Pro
   const gitignorePath = path.join(path.dirname(usagePath), '.gitignore');
 
   try {
-    const lines = (await fs.promises.readFile(gitignorePath, 'utf-8')).split('\n');
+    const lines = (await readRegularFile(gitignorePath, 'utf-8')).split('\n');
     const missing = USAGE_SIDE_FILE_PATTERNS.filter((p) => !lines.some((l) => l.trim() === p));
 
     if (!missing.length) return;
