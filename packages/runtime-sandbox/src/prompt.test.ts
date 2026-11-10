@@ -24,7 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log('2.1.0 (Claude Code)'); process.exit(0); }
-const prompt = args[args.length - 1] ?? '';
+const prompt = args.includes('-p') ? args[args.indexOf('-p') + 1] : '';
 const home = process.env.CLAUDE_CONFIG_DIR;
 const id = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 'session-' + process.pid;
 const say = (line) => process.stdout.write(JSON.stringify(line) + '\n');
@@ -158,4 +158,93 @@ describe('a prompt step in the attempt\'s container', () => {
     expect(await prompt(connection, at, { resume: 'session-earlier' })).toMatchObject({ event: 'finished', session: { tool: 'claude', id: 'session-earlier' }, resumed: true });
     expect(launched(at).args).toEqual(expect.arrayContaining(['--resume', 'session-earlier']));
   });
+
+  it('gives the tool only the environment the lease names, never one of the runtime\'s own, whatever this machine sets', async () => {
+    const connection = start({ RUNTIME_OWN_SECRET: 'runtime-value-1' });
+    await init(connection);
+    const at = await openPlace(connection);
+
+    expect(await prompt(connection, at, {}, { env: { STEP_VALUE: 'from-teamai' } })).toMatchObject({ event: 'finished' });
+    const { env } = launched(at);
+    expect(env).toEqual(expect.arrayContaining(['STEP_VALUE', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'TEAMAI_WORKFLOW_RESULT']));
+    expect(env).not.toContain('RUNTIME_OWN_SECRET');
+    expect(env).not.toContain('FAKE_ENGINE_STATE');
+  });
 });
+
+describe('the limits a prompt lease names', () => {
+  it('stops the tool in the container once its stdout states more tokens than the budget, and finishes stopped at the budget', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+
+    const end = await prompt(connection, at, { prompt: 'spend tokens', limits: { budget: { tokens: 250 } } });
+
+    expect(end).toMatchObject({ event: 'finished', stopped: 'budget', session: { tool: 'claude' }, usage: { input: expect.any(Number) } });
+    expect(Number((end.usage as Message).input)).toBeGreaterThan(250);
+  });
+
+  it('stops a tool still working at the timeout, and finishes stopped at it', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+
+    expect(await prompt(connection, at, { prompt: 'hang on', limits: { timeoutMs: 800 } })).toMatchObject({ event: 'finished', stopped: 'timeout', session: { tool: 'claude' } });
+  });
+
+  it('fails a tool that prints nothing for longer than the idle limit, naming the limit', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+
+    expect(await prompt(connection, at, { prompt: 'hang on', limits: { idleMs: 500 } })).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('idle limit') } });
+  });
+});
+
+describe('how a prompt step\'s tool fails', () => {
+  it('fails usage_limited with the tool\'s own words, which name the reset', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+
+    expect(await prompt(connection, at, { prompt: 'limit reached' })).toMatchObject({ event: 'failed', failure: { code: 'usage_limited', message: expect.stringContaining('resets 3pm') } });
+  });
+
+  it('fails tool_failed with the end of what the tool printed on stderr, masked of every credential it got', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+    const end = await prompt(connection, at, { prompt: 'fail now' });
+
+    expect(end).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('Its stderr in the sandbox ends: auth failed for') } });
+    expect(JSON.stringify(end)).not.toContain('sk-ant-secret-1');
+  });
+
+  it('masks a credential the tool put in its result, on the wire and in the journal', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+    const end = await prompt(connection, at, { prompt: 'echo it' });
+
+    expect(end).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
+    expect(JSON.stringify(end)).not.toContain('sk-ant-secret-1');
+    const journal = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox');
+    const kept = fs.readdirSync(journal, { recursive: true }).map(String).filter((file) => file.endsWith('.json')).map((file) => fs.readFileSync(path.join(journal, file), 'utf8'));
+    expect(kept.join('\n')).not.toContain('sk-ant-secret-1');
+  });
+
+  it('stops the tool on a cancel, and ends the prompt cancelled', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+    const op = newOp();
+    const ending = prompt(connection, at, { prompt: 'hang on' }, {}, op);
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    // Once the tool started in the container, so the cancel stops a running process.
+    for (let waited = 0; !fs.existsSync(path.join(at.toolHome, 'launch.json')) && waited < 10_000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+    connection.send({ type: 'cancel', op });
+
+    expect(await ending).toMatchObject({ op, event: 'cancelled' });
+  });
+});
+

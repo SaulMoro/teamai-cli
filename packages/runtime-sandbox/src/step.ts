@@ -128,7 +128,7 @@ function leaseInput(request: PromptRequest, env: Record<string, string>): StepLa
 
 /**
  * A launch's result as the prompt's end, every text in it masked with `masks`: a tool that exited on its own with a
- * status that is not 0 failed, with what it said or the end of its stderr; one that exited 0, or that a limit stopped,
+ * status that is not 0 failed, with what it said and the end of its stderr; one that exited 0, or that a limit stopped,
  * and named its session, finished, with whatever result it wrote, and resumed when that is the session `resume` named.
  */
 function outcomeOf(tool: string, resume: string | undefined, ran: StepLaunchResult, stderr: string, masks: Record<string, string>): Outcome {
@@ -138,11 +138,11 @@ function outcomeOf(tool: string, resume: string | undefined, ran: StepLaunchResu
   if (!ran.started) return failed(ran.failure);
 
   if (ran.exitCode !== 0 && ran.stoppedBy === undefined) {
+    const failure = ran.failure ?? { code: 'tool_failed', message: `${tool} exited with status ${ran.exitCode}` };
     const lastStderr = stderr.trim().split('\n').at(-1);
 
-    return failed(ran.failure && ran.failure.message !== `${tool} exited with status ${ran.exitCode}`
-      ? ran.failure
-      : { code: 'tool_failed', message: `${tool} exited with status ${ran.exitCode} in the sandbox: ${lastStderr || 'it printed nothing on stderr'}` });
+    // What the tool said on stderr is often the only why, as a sign-in it was refused.
+    return failed(failure.code === 'tool_failed' && lastStderr ? { ...failure, message: `${failure.message.replace(/\.$/, '')}. Its stderr in the sandbox ends: ${lastStderr}` } : failure);
   }
 
   if (ran.session === undefined) return failed(ran.failure ?? { code: 'tool_failed', message: `${tool} named no session` });
