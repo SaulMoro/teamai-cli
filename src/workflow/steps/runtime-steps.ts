@@ -8,7 +8,7 @@ import type { AttemptRun } from '../runtimes/attempt.js';
 import { type ExecEvents } from '@teamai/runtime-protocol/step-runtime';
 import { withRetry } from '../runtimes/retry-command.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { MAX_TIMER_MS } from '../../utils/timer.js';
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { AttemptResult } from '../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';

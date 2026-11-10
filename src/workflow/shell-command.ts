@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { commandShell } from '../command-shell.js';
 import { recordGroup, stopProcess } from '@teamai/shared/process-group';
-import { MAX_TIMER_MS } from '../utils/timer.js';
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 
 /** How a shell command this process ran ended. */
 export type CommandExit =

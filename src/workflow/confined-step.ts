@@ -13,7 +13,7 @@ import { JsonValueSchema, type JsonValue, type LocalConfig } from '../types.js';
 import { AttemptResult } from './attempt-result.js';
 import type { ReportInput } from './engine.js';
 import type { ConfinedLease, LeaseWire } from './lease-wire.js';
-import { MAX_TIMER_MS } from '../utils/timer.js';
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { chooseStepModel, type StepModel } from './step-model.js';
 import { attemptDir, attemptResultPath, type RunId } from './store.js';
 import type { WorkflowFailure } from './types.js';

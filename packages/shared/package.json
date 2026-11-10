@@ -7,6 +7,7 @@
     "./process-group": "./src/process-group.ts",
     "./redact": "./src/redact.ts",
     "./regular-file": "./src/regular-file.ts",
+    "./timer": "./src/timer.ts",
     "./type-of-service": "./src/type-of-service.ts"
   }
 }

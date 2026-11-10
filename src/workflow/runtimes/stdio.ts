@@ -6,7 +6,7 @@ import { log } from '../../utils/logger.js';
 import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { Accepted, ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from '@teamai/runtime-protocol/step-runtime';
-import { MAX_TIMER_MS } from '../../utils/timer.js';
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import type { DriverCan } from '../requirements.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */

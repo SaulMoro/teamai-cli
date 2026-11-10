@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { stopProcess } from '@teamai/shared/process-group';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
-import { MAX_TIMER_MS } from '../utils/timer.js';
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { appendRegularFile, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */

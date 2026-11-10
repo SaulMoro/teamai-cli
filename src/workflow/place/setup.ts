@@ -13,7 +13,7 @@ import { redact } from '@teamai/shared/redact';
 import type { WorkflowFailure } from '../types.js';
 import { untrustedGit } from '../worktree.js';
 import { changedPaths, snapshotWorktree } from './worktree-snapshot.js';
-import { MAX_TIMER_MS } from '../../utils/timer.js';
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 export interface SetupRun {

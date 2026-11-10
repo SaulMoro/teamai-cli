@@ -4,9 +4,7 @@ import type { StepLaunch } from '@teamai/tool-core/launch';
 import { log } from '@teamai/tool-core/log';
 import { stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '@teamai/tool-core/stdout';
 import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
-
-/** The longest delay a Node timer waits; it fires a longer one at once, so a longer limit is not timed. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 
 /** The families that run a workflow step: those whose launch adapter has a `step` profile. */
 export type StepFamily = 'claude' | 'codebuddy' | 'codex' | 'opencode' | 'agy';

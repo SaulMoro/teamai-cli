@@ -4,9 +4,7 @@ import path from 'node:path';
 import type { CallLaunch } from '@teamai/tool-core/launch';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from '@teamai/tool-core/stdout';
 import { readRegularFile } from '@teamai/shared/regular-file';
-
-/** The longest delay a Node timer waits; it fires a longer one at once, so a longer limit is not timed. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
+import { MAX_TIMER_MS } from '@teamai/shared/timer';
 
 /** What a headless run of a tool printed and ended with, and why teamai stopped it, when it did. */
 export interface HeadlessRun {
