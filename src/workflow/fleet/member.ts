@@ -30,8 +30,8 @@ import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-re
 import { sameEnvName } from '../../resources/env-key.js';
 import { runCopyBranch } from '../workspace.js';
 import { wholeFit, wholeRunDefinition, type WholeRun } from '../whole-workflow.js';
-import { budgeted, spentUsage } from '../limits.js';
-import type { TokenUsage } from '../../tool-launch/stdout.js';
+import { spentUsage } from '../limits.js';
+import { budgeted, type TokenUsage } from '../../tool-launch/stdout.js';
 import { gateQuestions } from './gate.js';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';

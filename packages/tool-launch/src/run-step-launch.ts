@@ -2,7 +2,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { StepLaunch } from '@teamai/tool-core/launch';
 import { log } from '@teamai/tool-core/log';
-import { stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '@teamai/tool-core/stdout';
+import { budgeted, stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '@teamai/tool-core/stdout';
 import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 
@@ -349,7 +349,7 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
 
     for (const line of lines) metered = meter(line);
 
-    if ((metered?.input ?? 0) + (metered?.output ?? 0) > budget) stopAt('budget');
+    if (budgeted(metered) > budget) stopAt('budget');
   };
 
   // The timeout counts from the tool's start, as the idle limit does: a place and setup a runtime makes first take none of it.

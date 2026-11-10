@@ -7,7 +7,7 @@ import { isUnder, passesWithin, runPasses } from './loop.js';
 import type { Limit, TurnLimits } from './requirements.js';
 import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './scope.js';
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
-import type { TokenUsage } from '../tool-launch/stdout.js';
+import { budgeted, type TokenUsage } from '../tool-launch/stdout.js';
 import type { LocalConfig } from '../types.js';
 import { durationMs } from './parse.js';
 import { z } from 'zod';
@@ -94,11 +94,6 @@ function spentUnder(run: RunState, state: StepState): number {
   while (end < run.steps.length && under(run.steps[end]?.id ?? '')) end += 1;
 
   return spentBy(run.steps.slice(at, end), run, under);
-}
-
-/** What a budget counts of `tokens`: input plus output. Cached input is shown, never counted. */
-export function budgeted(tokens: TokenUsage | undefined): number {
-  return (tokens?.input ?? 0) + (tokens?.output ?? 0);
 }
 
 /**

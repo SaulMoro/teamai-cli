@@ -207,6 +207,11 @@ function tokenUsage(event: MetadataEvent): TokenUsage | undefined {
   return Object.keys(tokens).length > 0 ? tokens : undefined;
 }
 
+/** What a budget counts of `tokens`: input plus output. Cached input is shown, never counted. */
+export function budgeted(tokens: TokenUsage | undefined): number {
+  return (tokens?.input ?? 0) + (tokens?.output ?? 0);
+}
+
 /** The tokens of two runs together, by kind. */
 export function addTokens(current: TokenUsage | undefined, next: TokenUsage): TokenUsage {
   const sum = (left?: number, right?: number) => (
