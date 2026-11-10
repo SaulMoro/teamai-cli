@@ -129,6 +129,18 @@ describe('acquireLock (real fs)', () => {
     expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');
   });
 
+  it('keeps a lock this process took while its Date reads a time before it started, as under a faked clock', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));
+    try {
+      expect(await acquireLock(lockPath)).toBe(true);
+      expect(await acquireLock(lockPath)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      await releaseLock(lockPath);
+    }
+  });
+
   it('keeps a lock whose live holder was already running when it wrote the lock', async () => {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'live', startedAt: new Date().toISOString() }));
 

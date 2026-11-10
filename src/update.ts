@@ -475,7 +475,9 @@ async function readOwnIdentity(): Promise<{ startTicks?: number; pidNamespace?: 
 async function lockPayload(owner: string): Promise<string> {
   return JSON.stringify({
     pid: process.pid,
-    startedAt: new Date().toISOString(),
+    // By the process's own clock, which neither a faked Date nor a wall-clock step since it started moves, so it compares
+    // with when /proc or ps says the process started (isHolderGone).
+    startedAt: new Date(performance.timeOrigin + performance.now()).toISOString(),
     owner,
     ...await (ownIdentity ??= readOwnIdentity()),
   } satisfies LockPayload);
