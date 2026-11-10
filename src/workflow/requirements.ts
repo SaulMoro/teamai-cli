@@ -439,8 +439,8 @@ export function inProcessRuntimeOf({ isPrompt, isAnswer }: { isPrompt: boolean; 
  *   sessions and the team repo;
  * - a step that publishes to a teamai data branch;
  * - a step that declares `requires.host`, or whose file's `defaults.requires` does: each shipped workflow sets it once
- *   there when every step it reaches runs here, and on each command step otherwise, so a team copy of one under another
- *   name keeps the pin. The pins above stay as a floor for a shipped step that forgets the key.
+ *   there when every step it reaches runs here and it runs no workflow by name, which a team may replace, and on each
+ *   command step otherwise, so a team copy of one under another name keeps the pin. The pins above stay as a floor for a shipped step that forgets the key.
  */
 export function isPinnedToHost({ step, executor, inShippedWorkflow, requires }: {
   step: Pick<WorkflowStep, 'answer' | 'deliver'>; executor: Executor; inShippedWorkflow: boolean; requires: Pick<InEffect, 'host'>;

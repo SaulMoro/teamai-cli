@@ -10,13 +10,13 @@ inputs:
   # The largest S, M and L solution diffs, as lines,files; anything larger is XL.
   sizes: string
 defaults:
-  requires: { host: true }
   inputs: { sizes: "S=40,3 M=200,10 L=800,30" }
 steps:
   - id: local
     # This machine's finished sessions with a recorded end, a clean start and end, both commits in the suite's repo,
     # and no task of the suite coming from them; left_out counts the others by reason. --within 30d: Claude Code keeps
     # a transcript 30 days by default; widen it when your agents keep them longer.
+    requires: { host: true }
     command: teamai session list --finished --all --within 30d --suite "$SUITE" --sizes "$SIZES" --json
     env: { SUITE: "{{ inputs.suite }}", SIZES: "{{ inputs.sizes }}" }
     output:
@@ -25,6 +25,7 @@ steps:
   - id: pushed
     needs: []
     # The sessions the team pushed for the suite's repository, weighed the same way.
+    requires: { host: true }
     command: teamai session list --all --suite "$SUITE" --sizes "$SIZES" --json
     env: { SUITE: "{{ inputs.suite }}", SIZES: "{{ inputs.sizes }}" }
     output:

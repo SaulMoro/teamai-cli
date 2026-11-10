@@ -123,14 +123,14 @@ describe('the workflows teamai ships', () => {
     expect(trials?.requires).toMatchObject({ host: true, isolation: 'sandbox' });
   });
 
-  it('pin every command step, by the file\'s defaults.requires where every step it reaches belongs here and by the step\'s own key otherwise, so a team copy under another name keeps the pin teamai derives by name', async () => {
+  it('pin every command step, by the file\'s defaults.requires where every step it reaches belongs here and it runs no workflow by name, a team may replace that file, and by the step\'s own key otherwise, so a team copy under another name keeps the pin teamai derives by name', async () => {
     const shipped = await shippedWorkflows();
-    const byName = new Map(shipped.map((definition) => [definition.name, definition]));
     /** The steps written in `definition` itself, inline workflows included and files it runs by name left out. */
     const ownSteps = (definition: Shipped): Reached[] => reached(definition, new Map());
     const shape = shipped.map((definition) => {
-      const wholeHere = !reached(definition, byName).some(movable);
-      const declared = ownSteps(definition).filter((at) => at.step.requires?.host === true).map((at) => at.path);
+      const own = ownSteps(definition);
+      const wholeHere = !own.some((at) => movable(at) || stepWorkflow(at.step)?.kind === 'named');
+      const declared = own.filter((at) => at.step.requires?.host === true).map((at) => at.path);
 
       return { file: definition.name, wholeHere, fileDefault: definition.defaults?.requires?.host === true, declared };
     });
