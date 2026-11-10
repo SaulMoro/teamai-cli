@@ -7,7 +7,7 @@ import { type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HomeMove } from '@teamai/tool-core/definition';
 import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
-import { getUserHome, normalizeHomePath, usesInstallHome } from './utils/home.js';
+import { getUserHome, normalizeHomePath, usesInstallHome } from '@teamai/shared/home';
 import { RELOCATABLE_TOOLS } from './types.js';
 
 export type Host = {

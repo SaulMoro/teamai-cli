@@ -31,7 +31,7 @@ import {
 } from './types.js';
 import { readFileIfExists, readFileSafe, readJson, writeFileAtomic, writeJsonAtomic, expandHome, pathExists } from './utils/fs.js';
 import { nearestGitEntry, resolveAnchors } from './utils/git.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { EPHEMERAL_CONFIG_ENV } from './launch-context.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from './utils/logger.js';

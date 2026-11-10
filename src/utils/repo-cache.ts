@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import fs from 'fs-extra';
 
-import { getUserHome } from './home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { assertSafePath, assertWithinRoot } from './path-safety.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

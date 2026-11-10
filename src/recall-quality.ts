@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { z } from 'zod';
 import type { SearchResult } from './utils/search-index.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Recall quality tracking ─────────────────────────────

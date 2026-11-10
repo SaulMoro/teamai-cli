@@ -4,7 +4,7 @@ import { parseYaml } from '../utils/yaml.js';
 import { loadLocalConfigForScope, readConfigFrom } from '../config.js';
 import { ATTEMPT_ENV } from '../launch-context.js';
 import { LocalConfigSchema, getDataHome, type LocalConfig } from '../types.js';
-import { memberHome } from '../utils/home.js';
+import { memberHome } from '@teamai/shared/home';
 import { projectsRootDir } from '../utils/partition.js';
 import type { LeasedStep } from './step-state.js';
 import { isRunId, readRun } from './store.js';

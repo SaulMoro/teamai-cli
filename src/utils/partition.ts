@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { parseYaml } from './yaml.js';
 import { z } from 'zod';
-import { getUserHome } from './home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { readFileSafe, writeFileAtomic, expandHome, errnoCode } from './fs.js';
 import { managedMcpWorkspaceId, type JsonValue } from '../types.js';
 import { completeWorktreeList, gitCommonDir, isLiveCheckout, isLiveProjectCheckout, resolveAnchors } from './git.js';

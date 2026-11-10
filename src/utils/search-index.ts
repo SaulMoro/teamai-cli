@@ -22,7 +22,7 @@ import {
   UserVotesSchema,
   UserVotesV2Schema,
 } from '../types.js';
-import { getUserHome } from './home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { walkLearningsTree } from './learnings-roots.js';
 import { parseRelatedBlock, relationsFromLinks } from '../resource-relations.js';
 import type { StoredRelation } from '../resource-relations.js';

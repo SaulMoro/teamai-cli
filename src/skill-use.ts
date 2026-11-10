@@ -42,7 +42,7 @@ import { resolvePath } from './utils/agent-path.js';
 import { listFilesAtRev } from './utils/git.js';
 import { pathExists, readFileSafe, readJson, writeJson } from './utils/fs.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { log } from './utils/logger.js';
 import { deriveSessionId } from './utils/session-id.js';

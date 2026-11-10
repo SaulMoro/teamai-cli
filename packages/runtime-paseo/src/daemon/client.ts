@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import type { createPaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { buildAgentDeepLink } from '@getpaseo/protocol/agent-deep-link';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import { findOnPath } from '@teamai/tool-core/lookpath';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type WebSocket from 'ws';

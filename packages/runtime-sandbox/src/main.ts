@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { isStartedByTeamai } from '@teamai/runtime-kit/serve';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import { journal } from './journal.js';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { SandboxOptions } from './options.js';

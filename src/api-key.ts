@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir } from './utils/fs.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** Absolute path to the local API key file. */

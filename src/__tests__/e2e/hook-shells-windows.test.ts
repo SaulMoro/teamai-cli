@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { findGitBashWindows } from '../../bundled-runtime.js';
 import { builtinHookDefs } from '../../builtin-hooks.js';
-import { getUserHome } from '../../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 
 /** The SessionStart command teamai writes for `tool` on this machine. */
 function sessionStartCommand(tool: string): string {

@@ -8,7 +8,7 @@
  */
 
 import path from 'node:path';
-import { getUserHome } from '../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { shellQuoteValue } from '../utils/shell-profile.js';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 

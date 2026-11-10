@@ -17,7 +17,7 @@ import {
   type RunModeSplit,
 } from './types.js';
 import { getDashboardHtml } from './dashboard-html.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import type { VizSummary } from './viz.js';
 import { aggregateDailySessions, computeDailyStatsDelta, summarizeTrendWindow, summarizeSessionCosts } from './session-trends.js';
 import { HttpError, isLocalWrite, readJsonBody } from './dashboard/http.js';

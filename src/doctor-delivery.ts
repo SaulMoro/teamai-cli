@@ -27,7 +27,7 @@ import {
   sameFile,
   SHELL_PROFILE_CANDIDATE_NAMES,
 } from './utils/shell-profile.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { installOf, isInstalledFor, locate, ownOf, unreadWrites, workspaceHooksOf, writable, writesOf, type DirPlace, type FilesChannel, type Install, type Location, type ReadGate, type Session, type Unread } from './locate.js';
 import { readGateCheckName, readGateVerdict, type Held } from './read-gates.js';
 import { amongPlaces, placesRecordOf, samePlaces } from './resources/places.js';

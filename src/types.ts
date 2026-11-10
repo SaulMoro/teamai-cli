@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { getUserHome, expandHome } from './utils/home.js';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { log } from './utils/logger.js';
 import { parseYaml } from './utils/yaml.js';
 import { type ToolId } from './tools.js';

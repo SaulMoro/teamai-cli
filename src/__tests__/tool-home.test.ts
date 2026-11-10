@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveOpenclawStateDir } from '../openclaw-home.js';
 import type { LocalConfig } from '../types.js';
 import { skillRoots } from '../usage-tracker.js';
-import { getUserHome } from '../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { realHost, reloadToolHomesHistory, saveToolHomes, toolHome, toolHomesHistoryPath, toolHomesPath } from '../tool-home.js';
 import { recordToolHomes } from '../tool-home-record.js';
 

@@ -4,7 +4,7 @@ This repository's own lint rules. `npm run lint` loads them through `jsPlugins` 
 
 | Rule | What it stops |
 |---|---|
-| `teamai/home-env` | HOME reads outside `src/utils/home.ts`. |
+| `teamai/home-env` | HOME reads outside `packages/shared/src/home.ts`. |
 | `teamai/learnings-root` | Manual learnings-root joins outside their owner. |
 | `teamai/configured-tool-paths` | Manual configured skill, rules, and instruction-file joins outside `src/locate.ts`. |
 | `teamai/launch-env` | A launch variable spelled outside its owner (`src/launch-context.ts`, or `@teamai/runtime-protocol` for `TEAMAI_RUN_DIR`), and any `TEAMAI_` variable spelled in a runtime package. |

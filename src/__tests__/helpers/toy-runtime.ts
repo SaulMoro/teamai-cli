@@ -7,7 +7,7 @@ import { buildSync } from 'esbuild';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SOURCE = path.join(ROOT, 'src', '__tests__', 'fixtures', 'runtime-toy', 'runtime.mjs');
-const BUNDLED = [path.join(ROOT, 'packages', 'runtime-protocol', 'src', 'protocol.ts'), ...['home.ts', 'launch.ts', 'json.ts', 'definition.ts', 'stdout.ts', 'sessions/fs.ts'].map((file) => path.join(ROOT, 'packages', 'tool-core', 'src', file))];
+const BUNDLED = [path.join(ROOT, 'packages', 'runtime-protocol', 'src', 'protocol.ts'), path.join(ROOT, 'packages', 'shared', 'src', 'home.ts'), ...['launch.ts', 'json.ts', 'definition.ts', 'stdout.ts', 'sessions/fs.ts'].map((file) => path.join(ROOT, 'packages', 'tool-core', 'src', file))];
 
 /**
  * The toy built as one executable file, as a runtime ships: its source with @teamai/runtime-protocol bundled in. One

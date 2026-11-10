@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import { z } from 'zod';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';

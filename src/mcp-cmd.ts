@@ -23,7 +23,7 @@ import { resolvesTeamEnv, resolveTeamEnv } from './env-resolution.js';
 import { carriesResolvedValue, ensureExcludedFromGit } from './mcp-git-exclude.js';
 import { log } from './utils/logger.js';
 import type { GlobalOptions } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 
 function displayPath(p: string): string {
   const home = getUserHome();

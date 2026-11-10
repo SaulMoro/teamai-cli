@@ -5,7 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { isJsonObject } from '../types.js';
 import { log } from './logger.js';
-import { expandHome } from './home.js';
+import { expandHome } from '@teamai/shared/home';
 import { editJsonText, isPlainJson, parseJson, parseJsonAs, type JsonSyntax } from './json.js';
 
 const IGNORED_NAMES = new Set([
@@ -31,7 +31,7 @@ export function isDraft(file: string): boolean {
   return file.endsWith(DRAFT_SUFFIX);
 }
 
-export { expandHome } from './home.js';
+export { expandHome } from '@teamai/shared/home';
 
 const ErrnoErrorSchema = z.object({ code: z.string() });
 

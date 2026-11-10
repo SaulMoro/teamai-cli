@@ -34,7 +34,7 @@ import { z } from 'zod';
 import { writeIfChanged, pathExists, readFileSafe, writeJsonAtomic, remove, symlinkTarget } from './utils/fs.js';
 import { isPlainJson, parseJsonAs } from './utils/json.js';
 import { log } from './utils/logger.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { OPENCLAW_TEAM_HOOK_PLUGIN, openclawTeamHookPluginIn, resolveOpenclawConfigPath, resolveOpenclawStateDir } from './openclaw-home.js';
 import { resolveCliEntry } from './builtin-hooks.js';
 import { openclawWorkspaceDir } from './locate.js';

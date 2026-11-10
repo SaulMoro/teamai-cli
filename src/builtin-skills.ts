@@ -10,7 +10,7 @@ import { resolveBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writable } from './locate.js';
 import { CODEX_TOOL, skillTargetsFor } from './resources/skills.js';
 import { allowsSkillDirectory, describeSkippedSkillDirectory, findSkillDirectoryBlock } from './skill-directory.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { packagedSkillRoots } from './skill-content.js';
 import { PACKAGED_SKILL_DIGESTS } from './packaged-skill-digests.js';
 import { LEGACY_BUILTIN_SKILL_NAMES } from './cli-skill-names.js';

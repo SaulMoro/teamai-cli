@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { expandHome } from '@teamai/tool-core/home';
+import { expandHome } from '@teamai/shared/home';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { readRegularFileSync } from '@teamai/shared/regular-file';

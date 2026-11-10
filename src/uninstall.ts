@@ -97,7 +97,7 @@ import {
 import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
 import { askConfirmation } from './utils/prompt.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { gitCommonDir, listWorktrees } from './utils/git.js';
 import {
   envLoaderProfiles,

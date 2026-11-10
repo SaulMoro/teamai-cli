@@ -38,7 +38,7 @@ import { resolveOpenclawWorkspace } from './openclaw-home.js';
 import { TOOL_ORDER } from './tool-registry.js';
 import { toolHome } from './tool-home.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './cli-skill-names.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { acquireLock, releaseLock } from './update.js';
 import { assertSafeResourceName, assertWithinRoot } from './utils/path-safety.js';
 import type {

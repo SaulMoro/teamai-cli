@@ -13,7 +13,7 @@ import { redactWithEnv } from '@teamai/shared/redact';
 import type { ContributeState, DashboardEvent, LocalConfig, SessionShareOffered, SessionFriction } from './types.js';
 import { CONTRIBUTE_FASTPATH_TTL_MS, CONTRIBUTE_GIT_COMMIT_DOWNWEIGHT, SessionShareOfferedSchema } from './types.js';
 import { DefaultHooks, type DefaultHook, type DefaultHookParams, type HintLanguage } from './default-hooks.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { HookStdinSchema, stdinString, type HookStdin } from './hook-dispatch.js';
 
 // ─── Contribute check data flow (Stop hook) ────────────────

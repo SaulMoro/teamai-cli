@@ -6,7 +6,7 @@ import { log } from '../utils/logger.js';
 import { RESOURCE_LAYOUTS, Resources, type ResourceDiagnostic } from './resolver.js';
 import { RuleFolders } from './rule-folders.js';
 import { FolderFiles } from './folder-files.js';
-import { getUserHome } from '../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { debugOnce, warnOnce } from '../utils/warn-once.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolRootDir, isAgentExcluded, SELF_KNOWLEDGE_SCAN_KEY, installScopeName } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, RECALL_RULE_NAME, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';

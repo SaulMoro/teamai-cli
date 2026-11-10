@@ -1,4 +1,4 @@
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import type { TokenUsage, ToolReport } from '@teamai/tool-core/stdout';
 import { z } from 'zod';

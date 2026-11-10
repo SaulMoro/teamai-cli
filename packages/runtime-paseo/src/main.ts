@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { RuntimeMessageSchema, type RuntimeMessage } from '@teamai/runtime-protocol';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import { journal } from './journal.js';
 import { serve } from './runtime.js';
 

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import { z } from 'zod';
 import { addedProjects } from './added-projects.js';
 import { attendedSignIn, signInOf, signInSilently, unattendedAuth, validToken } from './auth.js';

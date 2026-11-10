@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import { z } from 'zod';
 
 import { errnoCode } from './fs.js';
-import { getUserHome } from './home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { log } from './logger.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

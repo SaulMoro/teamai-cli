@@ -58,7 +58,7 @@ const IN_PROCESS = new Set(['runtime-tools']);
  * The workspace imports the protocol may make: the levels and the home it names, and the usage it carries. Anything
  * more would put a tool's or a runtime's facts in the contract every runtime and teamai parse with.
  */
-const PROTOCOL_IMPORTS = new Set(['@teamai/shared', '@teamai/tool-core/home', '@teamai/tool-core/launch', '@teamai/tool-core/stdout']);
+const PROTOCOL_IMPORTS = new Set(['@teamai/shared', '@teamai/shared/home', '@teamai/tool-core/launch', '@teamai/tool-core/stdout']);
 
 /** The workspace packages the kit may import: it is bundled into every runtime, so it stays below all of them. */
 const KIT_IMPORTS = new Set([RUNTIME_PROTOCOL, 'shared']);

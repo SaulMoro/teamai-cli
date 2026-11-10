@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { getTGitToken, tgitFetch } from './providers/tgit/rest-auth.js';
 import { log } from './utils/logger.js';
 import { lenientList } from './utils/json.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { type LocalConfig, JsonObjectSchema } from './types.js';
 import type { SessionRun } from './launch-context.js';
 import { WorkflowOffers, type Proposal } from './workflow-offers.js';

@@ -46,7 +46,7 @@ import { DeliveredFolders } from './resources/delivered-folders.js';
 import { deliverHookFolders, historicalFolderHookDef, pruneHookFolders, parseTeamHooks, readBuiltinOverride, resolveTeamHooks, teamHookToDef } from './resources/hooks.js';
 import { entryLayout } from './namespaced-entries.js';
 import { historicalContents } from './utils/team-history.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { LEGACY_CLAUDE_HOOK_OTHER_HOST_SKIP, claudeHookOtherHostSkip, claudeHookUsesPowerShell, copilotRunsEntries } from './claude-hook-host.js';
 import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { staleWorkspaces } from './utils/partition.js';

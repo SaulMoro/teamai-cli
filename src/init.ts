@@ -196,7 +196,7 @@ import {
   installScopeName,
   selfModeGitignorePath,
 } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { loadProjectsManifest, listProjectIds, type ProjectsManifest } from './projects.js';

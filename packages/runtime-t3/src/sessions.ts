@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 
 // ─── The tool session a T3 thread ran ───

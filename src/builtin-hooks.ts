@@ -6,7 +6,7 @@ import { isCodexTool } from './utils/tool-names.js';
 import type { HookDef } from './types.js';
 import { type HookAdapterId } from '@teamai/tool-core/definition';
 import { channelsOf } from './tool-registry.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { log } from './utils/logger.js';
 import { bundledShellFor, findGitBashWindows, resetBundledRuntimeCache, resolveCodebuddyNode, resolveWorkbuddyNode } from './bundled-runtime.js';
 

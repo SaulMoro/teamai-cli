@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getUserHome, legacyUserHome } from '../../utils/home.js';
+import { getUserHome, legacyUserHome } from '@teamai/shared/home';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /**

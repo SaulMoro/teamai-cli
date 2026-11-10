@@ -16,7 +16,7 @@ import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 import { acquireLock, releaseLock } from './update.js';
 import { DASHBOARD_COMPACTION_THRESHOLD, DASHBOARD_IDLE_TIMEOUT_MS, DASHBOARD_STALE_TIMEOUT_MS, DASHBOARD_STOPPED_DISPLAY_MS, CORRECTION_WINDOW_MS, CORRECTION_KEYWORDS, TRANSCRIPT_INTERRUPT_PREFIX, TRANSCRIPT_SYSTEM_PREFIXES, stripInjectedPrompt, TRANSCRIPT_REJECT_MARKERS, COPILOT_TOOL_ID, getDataHome, type DashboardEvent, type DashboardEventType, type DashboardSession, type SessionMetrics, type RequestCostMetrics, type LocalConfig, type JsonValue } from './types.js';
 import { INTERVENTION_SCAN_MAX_BYTES, emptyTokenUsage, addTokenUsage, totalTokens, type TokenUsage } from '@teamai/tool-core/tokens';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import type { HeadState } from './utils/git.js';
 import type { SessionRun } from './launch-context.js';
 import { SessionOutcomeEventSchema, uniqueOutcomes, type SessionOutcomeEvent, type WorkOutcome } from './outcomes.js';

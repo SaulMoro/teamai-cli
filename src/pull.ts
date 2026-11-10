@@ -85,7 +85,7 @@ import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, keptFromUserScope, resolvesTeamEnv, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
 import { reservedTeamEnvWarning } from './env-reserved.js';
 import { describeEnvAdvisory, envAdvisories } from './env-advisories.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';

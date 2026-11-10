@@ -10,7 +10,7 @@ import { toolHome } from './tool-home.js';
 import { withFileLock } from './update.js';
 import { pathExists, readFileSafe, readJsonObject, writeFile, writeJson, writeJsonAtomic, writeJsonKeepingComments } from './utils/fs.js';
 import type { JsonObjectRead } from './utils/fs.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 
 // ─── Auto-compact reconcile engine ───────────────────────────
 //

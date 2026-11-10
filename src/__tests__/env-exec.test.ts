@@ -14,7 +14,7 @@ import { envShMarker } from '../env-sh-exports.js';
 import { getMachineSecretsPath, getTeamSecretsPath, writeSecretStore, type SecretStore } from '../secret-store.js';
 import { resolveAnchors } from '../utils/git.js';
 import { setStderrOnly } from '../utils/logger.js';
-import { _resetState, _setLogFilePath } from '@teamai/tool-core/debug-log';
+import { _resetState, _setLogFilePath } from '@teamai/shared/debug-log';
 import { projectDataHome } from '../utils/partition.js';
 import { getDataHome, type LocalConfig, type TeamaiConfig } from '../types.js';
 

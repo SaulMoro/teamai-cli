@@ -16,7 +16,7 @@ import {
 } from './types.js';
 import { readJson, writeJson, writeFileAtomic, pathExists } from './utils/fs.js';
 import { appendJsonl, readJsonl, rewriteJsonl, type JsonlStoreOptions } from './utils/jsonl-store.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { withFileLock } from './update.js';
 import { loadTeamConfig, resolveConfigForDir } from './config.js';
 import { samePath } from './utils/agent-path.js';

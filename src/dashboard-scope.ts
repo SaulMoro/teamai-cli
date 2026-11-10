@@ -9,7 +9,7 @@ import { dataHomeKey, resolveCopilotUsageTranscript } from './dashboard-collecto
 import { pathExists } from './utils/fs.js';
 import type { DashboardEvent, LocalConfig } from './types.js';
 import { getDataHome } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { readSessionOwners, readSnapshotsIn } from './session-owners.js';
 
 /** The fields of a logged event that split the log into runs. The log is hand-editable: a field of the wrong type reads as absent. */

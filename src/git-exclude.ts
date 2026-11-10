@@ -7,7 +7,7 @@ import { pathExists, readFileIfExists, readFileSafe, symlinkTarget, writeFileAto
 import { gitFindsNoRepository } from './utils/git-discovery.js';
 import { checkoutLocation } from './utils/git.js';
 import { withoutGitRepositoryEnv } from './utils/git-env.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { z } from 'zod';
 import { isJsonObject, type JsonObject, type JsonValue } from './types.js';
 

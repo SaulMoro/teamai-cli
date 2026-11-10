@@ -111,7 +111,7 @@ import {
   type ResourceItem,
   type TeamaiConfig,
 } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { checkoutForRepoAnchor, gitCommonDir, isLiveCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
 import {
   ensure as ensureGitExclude, gitExcludeFile, gitTracks, gitUntracked, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { endedRequest, type PullRequestRecord, type PullRequestRef } from '../types.js';
 import { GITCODE_HOST } from './repo-url.js';
-import { getUserHome, legacyUserHome } from '../../utils/home.js';
+import { getUserHome, legacyUserHome } from '@teamai/shared/home';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 

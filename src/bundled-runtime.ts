@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { isOnPath, pathDirs } from './utils/lookpath.js';
 import { log } from './utils/logger.js';
 import { type ToolId } from './tools.js';

@@ -29,7 +29,7 @@ import {
   sameFile,
   type EnvBlock,
 } from '../utils/shell-profile.js';
-import { expandHome, getUserHome } from '../utils/home.js';
+import { expandHome, getUserHome } from '@teamai/shared/home';
 import { isReservedTeamEnvKey, reservedTeamEnvWarning } from '../env-reserved.js';
 
 // ─── Schema for env.yaml ────────────────────────────────

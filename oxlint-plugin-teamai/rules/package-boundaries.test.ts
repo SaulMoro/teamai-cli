@@ -200,10 +200,10 @@ rule.invalid('rejects the protocol importing the kit', `import { serveRuntime } 
 rule.invalid('rejects the protocol importing a tool fact beyond its levels, home and usage', `import { SIGN_INS } from '@teamai/tool-core/sign-in';`, undefined, inWorkspace('packages/runtime-protocol/src/protocol.ts'));
 
 rule.valid('allows the protocol its levels, home, usage and shared', [
-  `import { ACCESS_LEVELS } from '@teamai/tool-core/launch';`, `import { getUserHome } from '@teamai/tool-core/home';`, `import type { TokenUsage } from '@teamai/tool-core/stdout';`, `import { redact } from '@teamai/shared';`,
+  `import { ACCESS_LEVELS } from '@teamai/tool-core/launch';`, `import { getUserHome } from '@teamai/shared/home';`, `import type { TokenUsage } from '@teamai/tool-core/stdout';`, `import { redact } from '@teamai/shared';`,
 ].join('\n'), inWorkspace('packages/runtime-protocol/src/protocol.ts'));
 
-rule.invalid('rejects the kit importing a tool package', `import { getUserHome } from '@teamai/tool-core/home';`, (output) => {
+rule.invalid('rejects the kit importing a tool package', `import { ACCESS_LEVELS } from '@teamai/tool-core/launch';`, (output) => {
   expect(output).toContain('@teamai/runtime-kit imports only @teamai/runtime-protocol and @teamai/shared');
 }, inWorkspace('packages/runtime-kit/src/serve.ts'));
 

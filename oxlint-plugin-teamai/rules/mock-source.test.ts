@@ -31,8 +31,8 @@ rule.valid('allows mocking a module with code of its own', `vi.mock('../utils/ya
 });
 
 rule.invalid('rejects a module that re-exports named bindings', `vi.mock('../utils/home.js');`, (output) => {
-  expect(output).toContain(`vi.mock('@teamai/tool-core/home')`);
-}, { files: { 'src/utils/home.ts': `export { homeDir } from '@teamai/tool-core/home';\nexport type { Home } from '@teamai/tool-core/home';\n` } });
+  expect(output).toContain(`vi.mock('@teamai/shared/home')`);
+}, { files: { 'src/utils/home.ts': `export { homeDir } from '@teamai/shared/home';\nexport type { Home } from '@teamai/shared/home';\n` } });
 
 rule.valid('allows mocking a barrel over several modules', `vi.mock('../session-flow/index.js');`, {
   files: { 'src/session-flow/index.ts': `export * from './sync.js';\nexport * from './scrub.js';\n` },

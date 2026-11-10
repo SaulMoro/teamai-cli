@@ -17,7 +17,7 @@ import {
     resolveHookScope,
     scopedToolPaths,
 } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { pathExists } from './utils/fs.js';
 import { hasPiHooks, removePiHooks, PI_HOOK_FILE } from './pi-hooks.js';
 import { hasKiroHooks, kiroHookFile, removeKiroHooks } from './kiro-hooks.js';

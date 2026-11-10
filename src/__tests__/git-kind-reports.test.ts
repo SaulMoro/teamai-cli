@@ -19,7 +19,7 @@ import { listMembers } from '../members.js';
 import { resolveProjectDataHome, saveLocalConfigForScope } from '../config.js';
 import { buildHandlerRegistry } from '../hook-handlers.js';
 import YAML from 'yaml';
-import { getUserHome } from '../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 
 let tmp: string;
 let originalHome: string;

@@ -10,7 +10,7 @@ import { realpath } from 'node:fs/promises';
 import { expandHome, listFilesRecursive, pathExists, readFileIfExists, readFileSafe, remove, writeFile } from './utils/fs.js';
 import { acquireLock, releaseLock } from './update.js';
 import { detectProjectConfig, readConfigFrom } from './config.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { log } from './utils/logger.js';
 import { acquireQueueLock, countQueued, pendingLearningsDir, queueOwner, sameQueueOwner, setAsideCheckoutQueue, withQueueLock, type QueueOwner } from './utils/pending-learnings.js';
 

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseYaml } from '../utils/yaml.js';
 import { LocalConfigSchema, getDataHome, type LocalConfig, type DashboardEvent } from '../types.js';
-import { getUserHome } from '../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { checkoutForRepoAnchor, resolveAnchors } from '../utils/git.js';
 import { readConfigFrom, loadLocalConfigForScope } from '../config.js';
 import { projectCheckouts } from '../pull.js';

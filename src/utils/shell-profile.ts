@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { pathExists, readFileSafe } from './fs.js';
-import { expandHome, getUserHome } from './home.js';
+import { expandHome, getUserHome } from '@teamai/shared/home';
 import { isOnPath } from './lookpath.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
 

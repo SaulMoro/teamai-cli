@@ -7,7 +7,7 @@ import { parseYaml } from '../utils/yaml.js';
 import { z } from 'zod';
 import { parse as parseToml, type TomlTable, type TomlValue } from 'smol-toml';
 import { withoutTomlBom } from '../utils/toml.js';
-import { getUserHome } from '../utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { agyGatewayOf, agyKeyFilePath, agyKeyFunction } from './agy-gateway.js';
 import { toolHome } from '../tool-home.js';
 import { errnoCode, pathExists, writeFileAtomic, writeJsonAtomic, writeJsonKeepingComments } from '../utils/fs.js';

@@ -15,7 +15,7 @@ import { reconcilePlacementRecords, dropClosedPendingPushes,
 import { syncTeamUpdatesToLocal } from './utils/pre-push-sync.js';
 import { getProvider } from './providers/index.js';
 import { log, spinner } from './utils/logger.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { getHandler } from './resources/index.js';
 import { createSkillPushItem, scanTeamRepoNamespaces } from './resources/skills.js';
 import { AgentsHandler } from './resources/agents.js';

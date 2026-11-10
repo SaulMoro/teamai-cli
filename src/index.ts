@@ -12,7 +12,7 @@ import type { ScoreOptions } from './score-commands.js';
 import type { EvidenceOptions, LabelOptions, PlanOptions, ReportOptions, StageOptions, SubjectsOptions, WriteOptions } from './score-verbs.js';
 import { GLOBAL_OPTIONS } from './global-options.js';
 import { ATTEMPT_ENV } from './launch-context.js';
-import { useInstallHome } from './utils/home.js';
+import { useInstallHome } from '@teamai/shared/home';
 import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';
 import { dryRunRefusal } from './dry-run-guard.js';
 import { parseIntOption } from './cli-int.js';

@@ -14,15 +14,15 @@ export const UNCACHED = new Set(scopedFiles([
   'src/bin.ts',
   'src/hook-fast-path.ts',
   'src/utils/hook-stdin.ts',
-  'packages/tool-core/src/debug-log.ts',
-  'packages/tool-core/src/home.ts',
+  'packages/shared/src/debug-log.ts',
+  'packages/shared/src/home.ts',
 ]));
 
 const ExportsSchema = z.object({ name: z.string(), exports: z.record(z.string(), z.unknown()).optional() });
 
 /**
  * The file a workspace package specifier names through its package's exports map, from the repository root
- * (`@teamai/tool-core/home` → `packages/tool-core/src/home.ts`); undefined for any other specifier.
+ * (`@teamai/shared/home` → `packages/shared/src/home.ts`); undefined for any other specifier.
  * @param {string} root
  * @param {string} specifier
  */

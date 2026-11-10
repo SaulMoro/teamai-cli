@@ -12,7 +12,7 @@ import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-re
 import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { log } from './utils/logger.js';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
 import { parseYaml } from './utils/yaml.js';

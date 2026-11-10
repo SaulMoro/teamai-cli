@@ -46,8 +46,8 @@ import { log } from '../utils/logger.js';
 // Isolate getUserHome() so ensureTeamaiWrapper / bundled-shell detection read
 // a per-test home directory instead of the real one.
 const homeState = vi.hoisted(() => ({ home: '' }));
-vi.mock('@teamai/tool-core/home', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../utils/home.js')>()),
+vi.mock('@teamai/shared/home', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@teamai/shared/home')>()),
   getUserHome: () => homeState.home,
 }));
 
