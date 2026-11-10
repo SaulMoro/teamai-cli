@@ -1241,6 +1241,40 @@ steps:
   });
 });
 
+describe('a prompt a runtime stopped at the idle limit', () => {
+  it('fails as a tool teamai stopped for the same silence fails, with no limit to end at', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    config.workflows = { tools: { default: 'claude' }, idle_timeout: '1s' };
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, stopped: 'idle' } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'mine', asked: 'mine',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    await runLocalDriver(config, runId, workspace, { toolPaths, runtimes });
+
+    // The same record as "stops a Claude prompt step that prints nothing for workflows.idle_timeout" above, where
+    // teamai's own launch stopped the tool.
+    const run = await readRun(config, runId);
+    expect(run).toMatchObject({
+      steps: [{ id: 'review', status: 'failed', failure: { code: 'tool_failed', message: 'claude printed nothing for 1s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.' } }],
+    });
+    expect(typeof run === 'string' ? undefined : run.steps[0]).not.toHaveProperty('stoppedBy');
+  }, 30_000);
+});
+
 describe('the driver a run on --driver local remembers', () => {
   it('remembers none, so a resume opens local again and says which teamai-local it took', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
