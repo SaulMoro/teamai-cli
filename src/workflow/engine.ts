@@ -405,7 +405,6 @@ export function respondCommand(run: string, step: string, choice: string, pass: 
   return `teamai workflow respond ${run} ${stepArgument(step)} ${choice} --pass ${pass}`;
 }
 
-
 /** The first gate of `run` that waits, as a driver with HITL is asked it; with `byAgent`, only one an agent may answer. */
 function waitingHitl(run: RunState, { byAgent }: { byAgent: boolean }) {
   const state = run.steps.find((step) => {

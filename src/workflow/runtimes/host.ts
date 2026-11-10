@@ -42,7 +42,6 @@ const FAILURE_OF = {
   call_failed: 'tool_failed',
 } as const satisfies Record<CallErrorKind, WorkflowFailure['code']>;
 
-
 function failed(failure: WorkflowFailure): AnswerReport {
   return { outcome: 'failed', message: failure.message, failure };
 }
