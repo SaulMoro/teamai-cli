@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseYaml } from '@teamai/shared/yaml';
@@ -22,7 +23,7 @@ export interface DashboardWorkspace {
 }
 
 async function configAt(home: string): Promise<LocalConfig | null> {
-  try { return LocalConfigSchema.parse(parseYaml(await fs.readFile(path.join(home, 'config.yaml'), 'utf8'))); }
+  try { return LocalConfigSchema.parse(parseYaml(await readRegularFile(path.join(home, 'config.yaml'), 'utf8'))); }
   catch { return null; }
 }
 
@@ -99,7 +100,7 @@ export async function dashboardWorkspaces(events: DashboardEvent[]): Promise<Das
   for (const entry of await fs.readdir(partitions, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isDirectory()) continue;
     const dataHome = path.join(partitions, entry.name);
-    const root = (await fs.readFile(path.join(dataHome, 'anchor'), 'utf8').catch(() => '')).trim();
+    const root = (await readRegularFile(path.join(dataHome, 'anchor'), 'utf8').catch(() => '')).trim();
 
     if (path.isAbsolute(root)) await add(root, dataHome);
   }

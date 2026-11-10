@@ -3,6 +3,7 @@
  * run's trials exist, so `teamai benchmark run` leaves no run. Each refusal says what happened and what to do.
  */
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import os from 'node:os';
 
 import path from 'node:path';
@@ -679,7 +680,7 @@ export async function tryBenchmarkTask(file: string, options: { checkout: string
 
   if (held.kind === 'invalid') return error('benchmark_invalid', held.message);
   const suiteFile = path.join(suiteDir, held.kind === 'folder' ? held.marker : RESOURCE_LAYOUTS.benchmarks.marker);
-  const read = (at: string): Promise<string | undefined> => fs.readFile(at, 'utf8').catch(() => undefined);
+  const read = (at: string): Promise<string | undefined> => readRegularFile(at, 'utf8').catch(() => undefined);
   const [suiteText, taskText] = [await read(suiteFile), await read(file)];
 
   if (taskText === undefined) return error('benchmark_not_found', `The task file ${file} could not be read. Pass the path of a task file, such as benchmarks/<suite>/tasks/<task>.yaml in a checkout of the team repo.`);

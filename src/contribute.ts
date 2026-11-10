@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import YAML from 'yaml';
 import matter from 'gray-matter';
@@ -339,7 +340,7 @@ export async function contribute(
   let content: string;
 
   try {
-    content = await fs.promises.readFile(options.file, 'utf-8');
+    content = await readRegularFile(options.file, 'utf-8');
   } catch (e) {
     log.error(`Cannot read file: ${options.file} — ${e instanceof Error ? e.message : String(e)}`);
 

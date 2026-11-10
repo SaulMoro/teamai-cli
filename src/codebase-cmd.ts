@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 import chalk from 'chalk';
 import { z } from 'zod';
@@ -200,7 +200,7 @@ export async function codebaseCmd(opts: CodebaseCmdOptions): Promise<void> {
         let componentCount = 0;
 
         try {
-            const manifest = EvidenceComponentsSchema.parse(JSON.parse(await readFile(path.join(evidenceDir, '_manifest.json'), 'utf-8')));
+            const manifest = EvidenceComponentsSchema.parse(JSON.parse(await readRegularFile(path.join(evidenceDir, '_manifest.json'), 'utf-8')));
 
             componentCount = manifest.components?.length ?? 0;
         } catch {
@@ -372,7 +372,7 @@ async function printCodebaseStatus(opts: CodebaseCmdOptions): Promise<void> {
     };
 
     try {
-        manifest = JSON.parse(await readFile(manifestPath, 'utf-8'));
+        manifest = JSON.parse(await readRegularFile(manifestPath, 'utf-8'));
     } catch {
         if (opts.json) {
             console.log(JSON.stringify({ error: 'no-manifest', manifestPath }));

@@ -5,7 +5,7 @@
  * so two arms that run one workflow on different tools get two copies, and a copy runs the keys of its sub-workflows.
  */
 import { createHash } from 'node:crypto';
-import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { z } from 'zod';
 import { getKnowledgeDir, isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue, type LocalConfig } from '../types.js';
@@ -169,7 +169,7 @@ async function namespaceConflict(config: LocalConfig, name: string, synced: Pick
   if (conflict) return { workflow: name, message: conflict.message };
   const cached = await loadCachedWorkflow(config, name);
   const unrunnable = cached ? undefined : synced.unrunnable.find((file) => path.posix.basename(file, '.yaml') === name);
-  const content = unrunnable === undefined ? undefined : await fs.readFile(path.join(getKnowledgeDir(config), unrunnable), 'utf8').catch(() => undefined);
+  const content = unrunnable === undefined ? undefined : await readRegularFile(path.join(getKnowledgeDir(config), unrunnable), 'utf8').catch(() => undefined);
   const parsed = content === undefined ? undefined : parseWorkflow(unrunnable ?? '', content);
   const definition = cached?.definition ?? (parsed?.ok ? parsed.definition : undefined);
 

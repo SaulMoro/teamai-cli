@@ -4,6 +4,7 @@
  * diagnostics and the scorers it lists that do not exist join the workflows' own.
  */
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { z } from 'zod';
 import { isModelAlias, loadTeamModelAliases } from '../models/aliases.js';
@@ -69,7 +70,7 @@ export async function readSuiteFiles(dir: string, relativeDir: string, tasks: re
     const stat = await fs.lstat(full).catch(() => undefined);
 
     if (stat?.isFile()) {
-      const bytes = await fs.readFile(full).catch(() => undefined);
+      const bytes = await readRegularFile(full).catch(() => undefined);
 
       if (bytes) files.push({ relativePath: `${relativeDir}/${relative}`, base64: bytes.toString('base64'), mode: (stat.mode & 0o100) !== 0 ? '100755' : '100644' });
     } else if (stat?.isDirectory()) {
