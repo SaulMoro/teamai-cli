@@ -1184,6 +1184,26 @@ steps:
   });
 });
 
+describe('the driver a run on --driver local remembers', () => {
+  it('remembers none, so a resume opens local again and says which teamai-local it took', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Build the project.
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+`);
+    const opened = await openDriver(config, 'local', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
+    if (!opened.ok) throw new Error(opened.failure.message);
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes: { driver: opened.opened.driver.name, asked: opened.opened.asked, runtimes: opened.opened.runtimes } }))
+      .toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const run = await readRun(config, runId);
+    expect(typeof run === 'string' ? run : run.driveOptions?.driver).toBeUndefined();
+  });
+});
+
 describe('a step an earlier driver leased in teamai\'s process', () => {
   it('goes back to the tools runtime of a definition that lists an external runtime before it, not to that runtime', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1

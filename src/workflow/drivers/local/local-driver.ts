@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { driverIdentity } from '../../../driver-identity.js';
+import { LOCAL_DRIVER } from '../../driver-name.js';
 import { commandSignalPolicy, exitLike, stepEnvironment, terminalReachesCommand, withRunningCli } from '../../../env-exec.js';
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, type RunMode } from '../../../launch-context.js';
@@ -543,7 +544,7 @@ export function personAnswers(mode: RunMode): boolean {
 /**
  * The flags a drive runs with: those `given`, over the ones the run `remembered` from this install's last drive, a
  * `--tools` name at a time. A flag left out keeps what the run remembers. The driver definition is the one this drive
- * runs on, which `workflow resume` reopens when it names none; plain `local` records none.
+ * runs on, which `workflow resume` reopens when it names none; `local`, whichever teamai-local it opened, records none.
  */
 function drivenWith(given: Pick<LocalDriverOptions, 'tools' | 'autoApprove' | 'sandbox' | 'runtimes'>, remembered: DriveOptions | undefined): DriveOptions {
   const driven: DriveOptions = {};
@@ -557,7 +558,7 @@ function drivenWith(given: Pick<LocalDriverOptions, 'tools' | 'autoApprove' | 's
 
   if (given.sandbox ?? remembered?.sandbox) driven.sandbox = true;
 
-  if (given.runtimes) driven.driver = given.runtimes.driver;
+  if (given.runtimes && given.runtimes.asked !== LOCAL_DRIVER) driven.driver = given.runtimes.driver;
 
   return driven;
 }
