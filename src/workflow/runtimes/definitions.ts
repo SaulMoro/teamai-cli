@@ -14,7 +14,7 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Driver definitions ──────────────────────────────────
 //
-//  A driver definition is a YAML asset `--driver <name>` selects: the runtimes a run's steps go to, their options, and
+//  A driver definition is a YAML resource `--driver <name>` selects: the runtimes a run's steps go to, their options, and
 //  an optional default tool. It is found, first match wins, in the member's own ~/.teamai/drivers/<name>.yaml, in the
 //  team repo's drivers/ (and drivers/<namespace>/ for each active namespace), in the user scope's team repo when the
 //  start is in a project, and in the definitions teamai ships (drivers/ in the package, every name prefixed teamai-).
@@ -150,7 +150,7 @@ async function namespaceDirs(dir: string): Promise<string[]> {
 }
 
 /**
- * The namespaces the member receives workflow assets from: the workflow namespaces their roles and projects activate,
+ * The namespaces the member receives workflows from: the workflow namespaces their roles and projects activate,
  * or, with no manifest to filter by, every namespace directory `onDisk` holds. A manifest that cannot be read activates
  * none.
  */

@@ -271,7 +271,7 @@ export const ScoreVerbs = { plan, evidence, stage, label, write, publish, settle
 
 /**
  * The scope of this directory: none where teamai is not set up, and none, with why, where its config names a team repo
- * without teamai.yaml, as publish runs in a checkout of teamai-reports, which a single-repo team's config does not
+ * without teamai.yaml, as publish runs in a checkout of teamai-reports, which the config of a team in self mode does not
  * resolve from. A config that exists and does not load refuses, so no verb goes on without the team's policy.
  */
 async function currentConfig(): Promise<{ ok: true; context: Pick<ScoreVerbContext, 'current' | 'unloaded'> } | Refused> {

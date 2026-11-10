@@ -239,7 +239,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
         ...(Object.keys(unavailable).length > 0 && { unavailable }),
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
-          // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own assets, and
+          // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own resources, and
           // this runtime cannot point it at the tool home teamai delivers a role into.
           workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools, ...(defaultTool && { default_tool: defaultTool }),
           ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),

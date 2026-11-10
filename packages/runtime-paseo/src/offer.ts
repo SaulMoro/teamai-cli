@@ -144,7 +144,7 @@ export function offerOf(found: Found & { mode: 'attended' | 'unattended' }): Off
       // starts here, not even in a mode the member opted into that never asks.
       // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
       // role: Paseo runs a project's worktree setup only in a worktree it creates itself, or when asked to run it; this
-      // runtime only opens the copy teamai prepared, so nothing delivers the member's own assets over the role's.
+      // runtime only opens the copy teamai prepared, so nothing delivers the member's own resources over the role's.
       exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: tools.map(({ name }) => name),
       ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
     },
