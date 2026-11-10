@@ -67,7 +67,7 @@ const STDERR_KEPT = 4_000;
 type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime<DriverCan>; labels?: readonly string[]; tools?: string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
-type PromptRuntimePlace = RuntimePlace & PromptOffer;
+type PromptRuntimePlace = RuntimePlace & { offer: PromptOffer };
 
 /**
  * Where the member's driver runs each kind of step: a command step's command, a prompt step's tool, and a whole
@@ -110,7 +110,7 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
     if (entry.can.exec !== false) place.command ??= runtime;
 
     if (entry.can.prompt !== false) {
-      place.prompt ??= { ...runtime, ...promptOfferOf(entry) };
+      place.prompt ??= { ...runtime, offer: promptOfferOf(entry) };
     }
   }
 
@@ -665,7 +665,7 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
     const body = await runPromptStep({
       config, lock, driver: driverIdentity('local', root), lease, archive: openSessionArchive(config), signal: stopping.signal, mode: resolveRunMode(process.env),
       secrets: { ...teamEnv.secrets, ...secrets },
-      ...(running && place.kind === 'runtime' && { onRuntime: promptRuntimeOn({ run: running, offered: place, teamEnv }) }),
+      ...(running && place.kind === 'runtime' && { onRuntime: promptRuntimeOn({ run: running, offered: place.offer, teamEnv }) }),
     });
 
     const unclosed = await running?.close();

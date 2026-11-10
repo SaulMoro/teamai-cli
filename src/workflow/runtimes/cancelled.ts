@@ -109,7 +109,8 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
     const attempt = AttemptIdSchema.safeParse(name);
 
     if (!attempt.success || leased.has(attempt.data)) continue;
-    // One in teamai's process holds no place: the cancel stops its process group instead.
+    // One in teamai's process holds no place: the cancel stops its process group instead. An unreadable record names
+    // no place to stop.
     const placement = await readAttemptPlacement(config, run, attempt.data);
 
     if (placement.kind === 'external' && placement.record.phase !== 'closed') open.push(attempt.data);
@@ -151,7 +152,7 @@ export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, atte
 async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<Stopped> {
   const placement = await readAttemptPlacement(config, run, attempt);
 
-  // One in teamai's process holds no place on a step runtime.
+  // One in teamai's process holds no place on a step runtime, and an unreadable record names none.
   if (placement.kind !== 'external' || placement.record.phase === 'closed') return { ended: 'none' };
   const { record } = placement;
 

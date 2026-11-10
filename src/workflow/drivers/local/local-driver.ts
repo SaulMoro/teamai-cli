@@ -331,7 +331,8 @@ async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { c
   const id = AttemptIdSchema.safeParse(attempt);
   const placement = id.success ? await readAttemptPlacement(config, run, id.data) : undefined;
 
-  // One in teamai's process left its process group, which staging stops; it holds no place elsewhere.
+  // One in teamai's process left its process group, which staging stops; it holds no place elsewhere. An unreadable
+  // record names no place to stop.
   if (!id.success || placement?.kind !== 'external' || placement.record.phase === 'closed' || placement.record.runtime === runsOn) return undefined;
   const notStopped = await stopOnRecordedDriver(config, run, id.data, { checkout });
 

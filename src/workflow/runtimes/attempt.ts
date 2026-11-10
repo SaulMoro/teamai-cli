@@ -63,7 +63,7 @@ const PHASES = ['opening', 'ready', 'running', 'collected', 'closed'] as const;
 /** A tool's home: the tool, and the directory its sessions are kept under. */
 const ToolHomeSchema = z.object({ tool: z.string(), dir: z.string() });
 
-export const AttemptRuntimeRecordSchema = z.object({
+const AttemptRuntimeRecordSchema = z.object({
   /** The runtime the attempt runs on, as the definition's `use` names it. */
   runtime: z.string(),
   /** The driver definition that chose it. */

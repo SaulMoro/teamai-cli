@@ -490,7 +490,7 @@ async function withRuntimes(config: LocalConfig, run: RunState, steps: StepRow[]
     const [placement, loginWait] = await Promise.all([readAttemptPlacement(config, runId.data, attempt.data), readLoginWait(attemptDir(config, runId.data, attempt.data))]);
     const waiting = loginWait ? { ...row, loginWait } : row;
 
-    // A step in teamai's process ran on no step runtime the details show.
+    // A step in teamai's process ran on no step runtime the details show, and an unreadable record names none.
     if (placement.kind !== 'external') return waiting;
     const { record } = placement;
     const runtime: NonNullable<StepRow['runtime']> = { name: record.runtime, driver: record.driver, phase: record.phase };
