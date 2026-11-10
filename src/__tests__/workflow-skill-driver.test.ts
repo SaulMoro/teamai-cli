@@ -808,7 +808,7 @@ describe('skill driver', () => {
       then: { kind: 'wake', run: `teamai workflow next ${run} --driver skill` },
     }) } });
 
-    // The host makes a place on a branch of its own: it is refused, and the attempt waits for another.
+    // The session host makes a place on a branch of its own: it is refused, and the attempt waits for another.
     const hosts = path.join(harness.root, 'hosts');
     execFileSync('git', ['worktree', 'add', '-q', '-b', 'host/other', path.join(hosts, 'other'), start], { cwd: harness.work });
     const refused = await harness.call({ kind: 'adopt', run, attempt: place.attempt, dir: path.join(hosts, 'other') });
