@@ -57,6 +57,34 @@ export const copy = async (from: string, to: string) => [await fs.copyFile(from,
   expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(3);
 });
 
+invalid('rejects an open for reading, with no flag, a read flag or read constants', `import fs from 'node:fs';
+export const open = async (file: string) => [await fs.promises.open(file), fs.openSync(file, 'r'), fs.openSync(file, fs.constants.O_RDONLY)];`, (output) => {
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(3);
+});
+
+valid('allows an open for writing, which the write rule guards where a step writes', `import fs from 'node:fs';
+export const open = (file: string) => fs.openSync(file, 'w');`);
+
+invalid('rejects a read under computed access, destructured from a file module, or off one imported at run time', `import fs from 'node:fs';
+const { readFileSync: readNow } = fs;
+export const all = async (file: string) => {
+  const fsp = await import('node:fs/promises');
+  const { readFile } = await import('node:fs/promises');
+  return [fs['readFileSync'](file), readNow(file), await fsp.readFile(file), await readFile(file), await (await import('node:fs/promises')).readFile(file)];
+};`, (output) => {
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(5);
+});
+
+invalid('rejects a read passed on as a value, which a later call makes', `import { readFile } from 'node:fs/promises';
+export const texts = (files: string[]) => Promise.all(files.map(readFile));`, (output) => {
+  expect(output).toContain(MESSAGE);
+});
+
+invalid('counts each call of a named import, not the import once, against the baseline', `import { readFileSync } from 'node:fs';
+export const all = (file: string) => [readFileSync(file), readFileSync(file), readFileSync(file)];`, (output) => {
+  expect(output).toContain(`${LISTED} has 3 plain reads; the baseline allows 2.`);
+}, { filename: LISTED });
+
 valid('allows the read wrappers of src/utils/fs.ts, which open through the helper', `import { readFileSafe, readJson, fileHash } from '../../utils/fs.js';
 export const all = (file: string) => Promise.all([readFileSafe(file), readJson(file), fileHash(file)]);`);
 

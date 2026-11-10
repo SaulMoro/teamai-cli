@@ -86,7 +86,7 @@ export async function readLastAssistantOutput(transcriptPath: string): Promise<s
     const readSize = Math.min(fileSize, TRANSCRIPT_TAIL_BYTES);
     const offset = Math.max(0, fileSize - readSize);
 
-    const fh = await fs.promises.open(transcriptPath, 'r');
+    const fh = await openRegularFile(transcriptPath);
 
     try {
       const buffer = Buffer.alloc(readSize);
@@ -514,7 +514,7 @@ async function readLatestCopilotUsageFromTail(
     if (stat.size === 0) return { shutdownObserved: false };
     const readSize = Math.min(stat.size, COPILOT_USAGE_TAIL_BYTES);
     const offset = stat.size - readSize;
-    const fh = await fs.promises.open(transcriptPath, 'r');
+    const fh = await openRegularFile(transcriptPath);
 
     try {
       const buffer = Buffer.alloc(readSize);
@@ -610,7 +610,7 @@ async function findCopilotRunMarkerAfter(
 
     const readSize = stat.size - startOffset;
     const offset = startOffset;
-    const fh = await fs.promises.open(transcriptPath, 'r');
+    const fh = await openRegularFile(transcriptPath);
 
     try {
       const buffer = Buffer.alloc(readSize);
@@ -1238,7 +1238,7 @@ export async function parseHookEvent(
         if (boundary > 0) {
           const tailSize = Math.min(boundary, COPILOT_USAGE_TAIL_BYTES);
           const tail = Buffer.alloc(tailSize);
-          const fh = await fs.promises.open(transcriptPath, 'r');
+          const fh = await openRegularFile(transcriptPath);
 
           try {
             await fh.read(tail, 0, tailSize, boundary - tailSize);

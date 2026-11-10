@@ -5,8 +5,7 @@ import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
 import { z } from 'zod';
 
-import { FS, isFsModule } from '../fs-calls.js';
-import { importedName } from '../imports.js';
+import { fsFunctionOf, openKindOf } from '../fs-calls.js';
 import { repositoryPath, scopedFiles } from '../utils.js';
 
 /** The calls that open a path to read it as they find it, and so wait on a FIFO there: reads, copies, and fs-extra's JSON reads. */
@@ -14,6 +13,41 @@ const READS = new Set([
   'readFile', 'readFileSync', 'createReadStream', 'copyFile', 'copyFileSync',
   'readJson', 'readJsonSync', 'readJSON', 'readJSONSync',
 ]);
+
+/** The calls that open a path, reading when their flags say so. */
+const OPENS = new Set(['open', 'openSync']);
+
+/**
+ * Whether `node` is used as a value where it stands, rather than naming something: not an import, a declared name, a
+ * property key, the object or property of a longer member access.
+ * @param {ESTree.Node} node
+ * @returns {boolean}
+ */
+function refersToValue(node) {
+  const { parent } = node;
+
+  switch (parent?.type) {
+    case 'ImportSpecifier': case 'ImportDefaultSpecifier': case 'ImportNamespaceSpecifier':
+      return false;
+    case 'MemberExpression':
+      return parent.object !== node && parent.computed;
+    case 'Property':
+      return parent.value === node && parent.parent?.type !== 'ObjectPattern';
+    case 'VariableDeclarator':
+      return parent.init === node;
+    default:
+      return true;
+  }
+}
+
+/**
+ * Whether `node`, a reference to a file module function, is that call's callee rather than the function passed on.
+ * @param {ESTree.Node} node
+ * @returns {boolean}
+ */
+function isCalled(node) {
+  return node.parent?.type === 'CallExpression' && node.parent.callee === node;
+}
 
 /**
  * The helper itself, which reads only the descriptor it opened without blocking and checked. Only this file reads
@@ -92,21 +126,17 @@ export default defineRule({
           context.report({ node, message: `${relative} has ${reads(found.length)}; lower its entry in ${baselineFile} from ${allowed} to ${found.length}${found.length === 0 ? ' by removing it' : ''}.` });
         }
       },
-      ImportDeclaration(node) {
-        if (!FS.has(String(node.source.value)) || node.importKind === 'type') return;
-
-        for (const specifier of node.specifiers) {
-          if (specifier.type !== 'ImportSpecifier' || specifier.importKind === 'type') continue;
-
-          if (READS.has(importedName(specifier))) found.push(specifier);
-        }
-      },
+      // Each call counts, as does a read passed on as a value, such as `.then(readFile)`, which a later call makes.
       CallExpression(node) {
-        const { callee } = node;
+        const called = fsFunctionOf(sourceCode, node.callee);
 
-        if (callee.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier' || !READS.has(callee.property.name)) return;
+        if (called !== undefined && (READS.has(called) || (OPENS.has(called) && openKindOf(node.arguments[1]) !== 'write'))) found.push(node);
+      },
+      'Identifier, MemberExpression'(/** @type {ESTree.Node} */ node) {
+        if (isCalled(node) || !refersToValue(node)) return;
+        const used = fsFunctionOf(sourceCode, node);
 
-        if (isFsModule(sourceCode, callee.object)) found.push(node);
+        if (used !== undefined && READS.has(used)) found.push(node);
       },
     };
   },
