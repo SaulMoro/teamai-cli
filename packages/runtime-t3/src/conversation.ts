@@ -48,7 +48,7 @@ const TURN_POLL_MS = 250;
  * The refusals of a repeated launch that prove T3 launched nothing for its clientRequestId: the checks a new launch runs
  * (the project, the worktree, the provider instance, the mode the sign-in allows), which T3 skips for a launch it accepted.
  */
-const LAUNCHED_NOTHING: ReadonlySet<string> = new Set(['invalid_request', 'runtime_mode_escalation_denied']);
+export const LAUNCHED_NOTHING: ReadonlySet<string> = new Set(['invalid_request', 'runtime_mode_escalation_denied']);
 
 export const TERMINAL: ReadonlySet<string> = new Set<Waited['status']>(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
 

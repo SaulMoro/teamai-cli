@@ -1,5 +1,5 @@
 import { WAKE_COMMAND, type OpId, type RuntimeFailure, type RuntimeMessage, type WakeRequest } from '@teamai/runtime-protocol';
-import { threadLink } from './conversation.js';
+import { LAUNCHED_NOTHING, threadLink } from './conversation.js';
 import type { Serving, Session } from './runtime.js';
 import { DRIVER_NAMES } from './sessions.js';
 import { T3Error, type EnvironmentLink, type Launch, type Project, type StepMode, type T3 } from './t3.js';
@@ -169,10 +169,20 @@ export function wakes({ serving }: { serving: Serving }) {
     const { runtimeMode, firstLine } = memberMode(s.runtimeMode);
     const message = [firstLine, request.message, END_OF_WAKE].filter((line) => line !== undefined).join('\n\n');
 
-    const launched = await s.t3.launch({
-      title, message, projectId: project.id, workspace: { type: 'root' }, environmentId: link.environmentId,
-      modelSelection, runtimeMode, clientRequestId: request.op, ...(from && { delegatedFrom: from }),
-    });
+    let launched: Awaited<ReturnType<T3['launch']>>;
+
+    try {
+      launched = await s.t3.launch({
+        title, message, projectId: project.id, workspace: { type: 'root' }, environmentId: link.environmentId,
+        modelSelection, runtimeMode, clientRequestId: request.op, ...(from && { delegatedFrom: from }),
+      });
+    } catch (error) {
+      // Only a check a new launch runs proves T3 launched nothing.
+      if (error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code)) throw error;
+
+      // The call timed out, its reply was lost, or T3 failed it after the launch may have gone out: a thread may run there now.
+      return { kind: 'failed', failure: unavailable(`T3 Code may have launched the member on ${link.label} before the call failed: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Check the thread list of ${link.label} in T3 Code for "${title}" before waking again.`) };
+    }
 
     return {
       kind: 'woken',
