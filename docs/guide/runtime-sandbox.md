@@ -134,6 +134,7 @@ in the container                                        from the host
 - `git commit` in the container fails, because the git directories are read-only. teamai commits on the host with hooks turned off, so a hook the step plants never runs.
 - The step runs as you: `--user <your uid>:<gid>` on Docker, `--userns keep-id` on Podman. Files it writes are yours. On a host with SELinux, mounts get the shared label (`:z`).
 - The tool keeps its session in the attempt's tool home, so the pass's `teamai-score` run judges it from its transcript, and a later step with `session: { from: … }` resumes it.
+- The sandbox starts a prompt step's tool itself, in the container, and stops it there at the step's `budget`, `timeout` or idle limit. A step its budget stopped with `on_limit: end_turn` keeps its session.
 - Command steps run in the container too, also in a definition that lists `local` after the sandbox. Only teamai's own bookkeeping, such as a `teamai-score` run's evidence and label steps, runs on this machine.
 
 **A tool runs only where it can sign in.** A Claude login in the macOS Keychain or in `~/.claude`, or your daily `~/.codex`, never crosses into a container. So the sandbox offers a tool only when `credentials` names one of its sign-in keys (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude; `OPENAI_API_KEY`, `CODEX_API_KEY` or `codex: login` for Codex), or, on sbx, when sbx keeps a login for it. A step on a tool it cannot sign in fails before it starts, with how to sign that tool in, instead of at Claude's own "Not logged in":
@@ -497,7 +498,7 @@ A team instance runs through a link named after it, and the wrapper runs that in
 ln -s "$(command -v teamai-runtime-sandbox)" ~/.local/bin/teamai-sandbox-acme-claude
 ```
 
-The sandbox is the outer runtime of the entry. It must mount the place at its host paths, so `sbx`, `docker`, `podman` and `bwrap` serve; `seatbelt` and `vercel` do not.
+The sandbox is the outer runtime of the entry, never the inner one: a definition that runs `sandbox` through another runtime fails with `driver_invalid`. It must mount the place at its host paths, so `sbx`, `docker`, `podman` and `bwrap` serve; `seatbelt` and `vercel` do not.
 
 ```yaml
 # drivers/t3-sandboxed.yaml

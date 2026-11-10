@@ -134,6 +134,7 @@ runtimes:
 - 在容器里 `git commit` 会失败，因为 git 目录是只读的。teamai 在主机上提交时关闭钩子，所以步骤植入的钩子永远不会运行。
 - 步骤以你的身份运行：Docker 上是 `--user <你的 uid>:<gid>`，Podman 上是 `--userns keep-id`。它写的文件归你所有。在启用 SELinux 的主机上，挂载会带上共享标签（`:z`）。
 - 工具把会话保存在这次尝试的工具主目录里，所以这一轮的 `teamai-score` 运行能根据它的记录评判它，带 `session: { from: … }` 的后续步骤也能恢复它。
+- sandbox 自己在容器里启动提示词步骤的工具，并在那里按步骤的 `budget`、`timeout` 或空闲限制停止它。设了 `on_limit: end_turn` 的步骤被预算停下时，会保留它的会话。
 - 命令步骤也在容器里运行，即使驱动定义在 sandbox 之后还列了 `local`。只有 teamai 自己的簿记工作，比如 `teamai-score` 运行收集证据和写标签的步骤，在这台机器上运行。
 
 **工具只在能登录的地方运行。** macOS 钥匙串或 `~/.claude` 里的 Claude 登录、你日常用的 `~/.codex`，都不会进入容器。所以只有当 `credentials` 写了某个工具的登录键（Claude 是 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`；Codex 是 `OPENAI_API_KEY`、`CODEX_API_KEY` 或 `codex: login`），或者在 sbx 上 sbx 替它保存了登录时，sandbox 才提供这个工具。用了登录不了的工具的步骤会在开始之前失败，并说明怎样给这个工具登录，而不是停在 Claude 自己的 "Not logged in"：
@@ -497,7 +498,7 @@ OpenCode 在那里只运行它的免费模型：teamai 不给它任何登录。
 ln -s "$(command -v teamai-runtime-sandbox)" ~/.local/bin/teamai-sandbox-acme-claude
 ```
 
-沙箱是这个条目的外层运行时。它必须把位置挂载在主机上的同一路径，所以 `sbx`、`docker`、`podman` 和 `bwrap` 可以，`seatbelt` 和 `vercel` 不行。
+沙箱是这个条目的外层运行时，从不做内层：让 `sandbox` 经由另一个运行时运行的驱动定义会以 `driver_invalid` 失败。它必须把位置挂载在主机上的同一路径，所以 `sbx`、`docker`、`podman` 和 `bwrap` 可以，`seatbelt` 和 `vercel` 不行。
 
 ```yaml
 # drivers/t3-sandboxed.yaml
