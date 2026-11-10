@@ -702,7 +702,10 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
         // A cancel write already tried keeps its deadline, and only it, while origin cannot be read: the place stays kept.
         if (cancelTriedAt !== undefined) {
           if (Date.now() >= cancelTriedAt + CANCEL_WRITE_MS) return failed(cancelNotWritten({ step, run, attempt, pool }, read.error));
-        } else if (Date.now() - cancelledAt > staleAfterMs) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${read.error.message}` });
+        } else if (Date.now() - cancelledAt > staleAfterMs) {
+          // A member may still take the offer, so the place stays kept for the next `workflow cancel`, as at the deadline.
+          return failed({ code: CANCEL_FAILED, message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${cancelWriteCause(read.error)} The attempt's place and records are kept. Run teamai workflow cancel ${run} again.` });
+        }
       } else if (record.state === 'offered' || isHeld(record)) {
         cancelTriedAt ??= Date.now();
         const until = cancelTriedAt + CANCEL_WRITE_MS;

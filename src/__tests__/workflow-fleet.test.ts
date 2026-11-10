@@ -1325,6 +1325,25 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     await cancelled;
   }, 60_000);
 
+  it('ends the owner\'s cancel cancel_failed past stale_after, keeping the place, when origin cannot be read before any cancel write', async () => {
+    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await recordIn(bob, run, attempt, 'offered');
+    // Origin goes away before the cancel: no read shows the record, so no cancel write is tried.
+    const away = `${origin}.away`;
+    fs.renameSync(origin, away);
+    releases.push(async () => fs.renameSync(away, origin));
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+
+    expect(await within(ended, 3_000)).toBe('waiting');
+    vi.setSystemTime(Date.now() + 21_000);
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/could not be read for 20 s, so no member was asked to stop it, and a member may still take its offer\. .* The attempt's place and records are kept\. Run teamai workflow cancel r[0-9a-f]+ again\.$/) } });
+    await cancelled;
+  }, 60_000);
+
   it('names the held teamai-reports, not the member\'s progress, when a publish holds it past the deadline while the member beats', async () => {
     const { alice, bob, run, attempt, open } = await ownerOffering(opened, undefined, { staleAfter: '30m' });
     const { runtime, exec } = await open();

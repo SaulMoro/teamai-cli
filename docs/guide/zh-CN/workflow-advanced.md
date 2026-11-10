@@ -1708,7 +1708,7 @@ runtimes:
 
 领取尝试的成员每个 `stale_after` 内会写三次自己仍在运行，并附上到目前为止推送的产出。你的驱动超过 `stale_after` 没有收到它的消息时，尝试以 `fleet_member_gone` 失败。它最后一次推送之前的产出留在步骤的位置里，`teamai workflow retry <run> <step>` 会从那里再次发布这个步骤。
 
-`teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。如果取消在 60 秒内都无法写入尝试的记录（例如你的另一个 teamai 命令正占用 `teamai-reports`），teamai 会停止尝试并说明原因，同时保留该尝试；请再次运行 `teamai workflow cancel <run>`。
+`teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。如果取消在 60 秒内都无法写入尝试的记录（例如你的另一个 teamai 命令正占用 `teamai-reports`），或者在 `stale_after` 内完全读不到这条记录，teamai 会停止尝试并说明原因，同时保留该尝试；请再次运行 `teamai workflow cancel <run>`。
 
 成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>`（团队的或 teamai 自带的定义，从不读 `~/.teamai/drivers/`）时，成员在该驱动里第一个能运行命令的运行时上运行命令步骤（例如沙箱），只带步骤自己的 env，在第一个能运行提示词的运行时上运行提示词步骤；不带它，或驱动的第一个运行时是 `local` 时，就在本机运行。成员按它自己那份步骤定义，像本地驱动一样限定步骤的 env：步骤 `requires.env` 列出的每个键取自成员的团队 env，团队的其他键都不给，严格沙箱下也不给代码托管平台的令牌；步骤的 `requires.env` 不在它 `workflows.allow.env` 允许范围内时，成员会跳过它。带 `requires.env` 的步骤只有在 fleet 条目的 `can` 声明 `env: true` 或 `env: member` 时才交给它。`env: true` 还要求你的安装上有每个值；`env: member` 不要求：成员从它自己的团队 env 给出每个值，只有在本机运行的工作流 setup 需要你的安装上有它的值。成员没有某个键的值时，会跳过该尝试并记录原因，例如 `its step requires env DEPLOY_KEY, which has no value here: …`。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。
 
