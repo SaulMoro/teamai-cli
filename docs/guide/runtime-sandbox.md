@@ -135,7 +135,7 @@ in the container                                        from the host
 - The step runs as you: `--user <your uid>:<gid>` on Docker, `--userns keep-id` on Podman. Files it writes are yours. On a host with SELinux, mounts get the shared label (`:z`).
 - The tool keeps its session in the attempt's tool home, so the pass's `teamai-score` run judges it from its transcript, and a later step with `session: { from: … }` resumes it.
 - The sandbox starts a prompt step's tool itself, in the container, and stops it there at the step's `budget`, `timeout` or idle limit. A step its budget stopped with `on_limit: end_turn` keeps its session.
-- Command steps run in the container too, also in a definition that lists `local` after the sandbox. Only teamai's own bookkeeping, such as a `teamai-score` run's evidence and label steps, runs on this machine.
+- Command steps run in the container too, also in a definition that lists `tools` after the sandbox. Only teamai's own bookkeeping, such as a `teamai-score` run's evidence and label steps, runs on this machine.
 
 **A tool runs only where it can sign in.** A Claude login in the macOS Keychain or in `~/.claude`, or your daily `~/.codex`, never crosses into a container. So the sandbox offers a tool only when `credentials` names one of its sign-in keys (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude; `OPENAI_API_KEY`, `CODEX_API_KEY` or `codex: login` for Codex), or, on sbx, when sbx keeps a login for it. A step on a tool it cannot sign in fails before it starts, with how to sign that tool in, instead of at Claude's own "Not logged in":
 
@@ -143,7 +143,7 @@ in the container                                        from the host
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude cannot sign in inside this docker sandbox, so a step there would stop at its "Not logged in": a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again. Or remove tool from the step.
 ```
 
-Command steps still run in the sandbox: they need no sign-in. A `local` listed after the sandbox does not take such a prompt step either: it fails as above, so a step never runs on this machine's tool because its tool could not sign in in the sandbox. `local` still takes the judge and interactive steps.
+Command steps still run in the sandbox: they need no sign-in. A `tools` listed after the sandbox does not take such a prompt step either: it fails as above, so a step never runs on this machine's tool because its tool could not sign in in the sandbox. `tools` still takes the judge and interactive steps.
 
 On sbx, a tool sbx keeps a login for signs in on that login, even when your shell sets one of its variables, such as `ANTHROPIC_BASE_URL` for a gateway. A variable the definition names in `credentials` still goes to the step's tool.
 
@@ -153,7 +153,7 @@ When your shell sets `ANTHROPIC_BASE_URL`, the first Claude step each teamai com
 ⚠ Step runtime "sandbox", operation op-3c1e9a7f2b40: claude signs in here on the login sbx keeps (anthropic in `sbx secret ls`), so the gateway ANTHROPIC_BASE_URL names in your shell is not used in this sandbox. To use it there, add ANTHROPIC_BASE_URL: env:ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN: env:ANTHROPIC_AUTH_TOKEN to the sandbox's credentials.
 ```
 
-**Your team's tool instances run here too.** An instance such as `tools/acme-claude.yaml` (`extends: claude`, `command: acme-claude`) is offered when its tool signs in in the sandbox and the sandbox holds its command, even without the `claude` executable itself: the image, or on sbx a kit (`agent: ./kits/acme`). teamai then runs `acme-claude` in the sandbox, with the instance's home variable at the attempt's tool home. An instance with no `command` of its own, or whose command is its tool's, runs wherever its tool does. sbx's own templates hold only their agent, so on `teamai-sandbox` such a step stops before it starts, rather than running `acme-claude` on this machine through `local`:
+**Your team's tool instances run here too.** An instance such as `tools/acme-claude.yaml` (`extends: claude`, `command: acme-claude`) is offered when its tool signs in in the sandbox and the sandbox holds its command, even without the `claude` executable itself: the image, or on sbx a kit (`agent: ./kits/acme`). teamai then runs `acme-claude` in the sandbox, with the instance's home variable at the attempt's tool home. An instance with no `command` of its own, or whose command is its tool's, runs wherever its tool does. sbx's own templates hold only their agent, so on `teamai-sandbox` such a step stops before it starts, rather than running `acme-claude` on this machine through `tools`:
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: sandbox: acme-claude runs acme-claude, which is not in sbx's claude template: set agent to a kit that brings it, or run the step with --driver local. Or remove tool from the step.
@@ -252,7 +252,7 @@ runtimes:
         OPENAI_BASE_URL: env:OPENAI_BASE_URL                   # https://llm.acme.internal:8443/v1 is let through
 ```
 
-**The sandbox offers a judge only on the tools whose key the definition names.** With only a login, a later runtime of the definition judges instead. This definition scores sessions with `teamai-share-session`, which runs no step in the sandbox: its judge runs on your machine's Claude, through `local`:
+**The sandbox offers a judge only on the tools whose key the definition names.** With only a login, a later runtime of the definition judges instead. This definition scores sessions with `teamai-share-session`, which runs no step in the sandbox: its judge runs on your machine's Claude, through `tools`:
 
 ```yaml
 # drivers/containers.yaml
@@ -359,7 +359,7 @@ A step on a tool you signed in neither way gets the sbx command, and the run's c
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on codex, which the driver of this run cannot launch here: sandbox: codex cannot sign in inside this sbx sandbox, so a step there would stop at its "Not logged in": sign Codex in once with sbx, `sbx secret set openai --oauth` (or store an API key with `sbx secret set openai`), or add OPENAI_API_KEY: env:OPENAI_API_KEY to the sandbox's credentials. Then start again. Or remove tool from the step.
 ```
 
-**3. Score what it did.** sbx offers no judge, so a scored step's judge runs on `local`, on your machine's tool:
+**3. Score what it did.** sbx offers no judge, so a scored step's judge runs on `tools`, on your machine's tool:
 
 ```sh
 teamai workflow start review --driver sandbox
@@ -383,7 +383,7 @@ What differs from a container:
 ✖ Step "fix" failed with runtime_failed: Step runtime "sandbox" could not open attempt a2695fde5 (sandbox_unavailable): ANTHROPIC_BASE_URL points at port 4000 of this machine, which your sbx network policy does not let a sandbox reach. Allow it once with `sbx policy allow network localhost:4000`, and start again.
 ```
 
-**sbx offers no judge.** A confined judge must reach its model provider only, and an sbx sandbox reaches every host your sbx policy allows: a balanced policy allows package registries and code hosts, through which a judge could send what it reads. A per-sandbox rule can only deny hosts it names, and policy profiles come from your organization's sbx governance, so teamai has no way to narrow one sandbox to one host. List `local`, or a `docker` sandbox, after the sbx one to take the judge:
+**sbx offers no judge.** A confined judge must reach its model provider only, and an sbx sandbox reaches every host your sbx policy allows: a balanced policy allows package registries and code hosts, through which a judge could send what it reads. A per-sandbox rule can only deny hosts it names, and policy profiles come from your organization's sbx governance, so teamai has no way to narrow one sandbox to one host. List `tools`, or a `docker` sandbox, after the sbx one to take the judge:
 
 ```yaml
 # drivers/sbx-judged.yaml: steps in sbx, judges in a docker sandbox
@@ -586,7 +586,7 @@ sbx ls -q
 | `sandbox_unavailable` | `sbx`, `docker` or `podman` is not installed, its daemon or machine is not running, sbx has no network policy yet, the image cannot be pulled, or your sbx policy does not let a sandbox reach the port of this machine a base URL names. `bwrap` is missing or AppArmor keeps it from making a namespace (Ubuntu 24.04 or later); `seatbelt` runs on macOS older than 14, or inside another macOS sandbox, which macOS does not nest; `vercel` finds no Vercel sign-in. Nothing runs on the host instead. | Install or start it: `sbx daemon start`, Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For sbx, `sbx policy init balanced`, or the `sbx policy allow network localhost:<port>` the message names. For an image, check its name and `docker login <registry>`. For bwrap, the install command the message names for your distribution, and the AppArmor profile it names; for seatbelt, macOS 14, or start teamai from a terminal outside the app or tool whose sandbox it runs in; for vercel, `VERCEL_TOKEN` with `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID`, or `VERCEL_OIDC_TOKEN` (`vercel link`, then `vercel env pull`). |
 | `tool_unavailable` | The step's tool cannot sign in inside the sandbox | The command the message names: on sbx, `sbx run claude <any dir>` then `/login`, or `sbx secret set openai --oauth`; in a container, `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN` and name it in `credentials` |
 | `credential_missing` | A credential's variable is not set where teamai runs, or a judge got no env credential its tool reads | Set the variable the message names, or add the key it names to `credentials` |
-| `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` or `sbx` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `local` in the definition |
+| `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` or `sbx` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `tools` in the definition |
 | `bad_option` | A key or value in `options` is wrong (for `sbx`, `agent: shell`), or, on Docker Engine on Linux, a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which a container there cannot reach | Fix the definition and push it; for a base URL on Linux, use an address of your machine the container reaches |
 | `sandbox_failed` | The engine could not create or find the attempt's container or sandbox, for example because Docker Desktop quit mid-run. A container it could not find is kept as the attempt's, never taken as gone. | Read the message in the step failure. Start the engine again, then remove what is left: `docker ps -a --filter label=teamai.run=<run>` or `sbx ls` lists it, and the message names the `docker rm --force` or `sbx rm --force` command |
 | `cancel_failed` | A cancel or a limit could not confirm the step stopped: the engine refused the stop, or the stop (a judge's removal included) and the end of the step's process took over 10 s. What ran there may still run, so teamai keeps the container, the work and the login. Example: `docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | Start the engine again, then run `teamai workflow cancel <run>` again: the runtime stops the step and closes its place. Or remove it with the `docker rm --force` or `sbx rm --force` command the message names |

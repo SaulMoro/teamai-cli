@@ -135,7 +135,7 @@ runtimes:
 - 步骤以你的身份运行：Docker 上是 `--user <你的 uid>:<gid>`，Podman 上是 `--userns keep-id`。它写的文件归你所有。在启用 SELinux 的主机上，挂载会带上共享标签（`:z`）。
 - 工具把会话保存在这次尝试的工具主目录里，所以这一轮的 `teamai-score` 运行能根据它的记录评判它，带 `session: { from: … }` 的后续步骤也能恢复它。
 - sandbox 自己在容器里启动提示词步骤的工具，并在那里按步骤的 `budget`、`timeout` 或空闲限制停止它。设了 `on_limit: end_turn` 的步骤被预算停下时，会保留它的会话。
-- 命令步骤也在容器里运行，即使驱动定义在 sandbox 之后还列了 `local`。只有 teamai 自己的簿记工作，比如 `teamai-score` 运行收集证据和写标签的步骤，在这台机器上运行。
+- 命令步骤也在容器里运行，即使驱动定义在 sandbox 之后还列了 `tools`。只有 teamai 自己的簿记工作，比如 `teamai-score` 运行收集证据和写标签的步骤，在这台机器上运行。
 
 **工具只在能登录的地方运行。** macOS 钥匙串或 `~/.claude` 里的 Claude 登录、你日常用的 `~/.codex`，都不会进入容器。所以只有当 `credentials` 写了某个工具的登录键（Claude 是 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`；Codex 是 `OPENAI_API_KEY`、`CODEX_API_KEY` 或 `codex: login`），或者在 sbx 上 sbx 替它保存了登录时，sandbox 才提供这个工具。用了登录不了的工具的步骤会在开始之前失败，并说明怎样给这个工具登录，而不是停在 Claude 自己的 "Not logged in"：
 
@@ -143,7 +143,7 @@ runtimes:
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude cannot sign in inside this docker sandbox, so a step there would stop at its "Not logged in": a Claude login kept in the macOS Keychain or in ~/.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN to the sandbox's credentials (or an API key, ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY). Then start again. Or remove tool from the step.
 ```
 
-命令步骤照样在 sandbox 里运行：它们不需要登录。驱动定义在 sandbox 之后列的 `local` 也不会接手这样的提示词步骤：它照上面那样失败，所以步骤不会因为它的工具在 sandbox 里登录不了，就改到这台机器的工具上运行。评判和交互式步骤仍由 `local` 接手。
+命令步骤照样在 sandbox 里运行：它们不需要登录。驱动定义在 sandbox 之后列的 `tools` 也不会接手这样的提示词步骤：它照上面那样失败，所以步骤不会因为它的工具在 sandbox 里登录不了，就改到这台机器的工具上运行。评判和交互式步骤仍由 `tools` 接手。
 
 在 sbx 上，sbx 保存了登录的工具就用那份登录，即使你的 shell 设置了它的某个变量，比如指向网关的 `ANTHROPIC_BASE_URL`。驱动定义在 `credentials` 里写明的变量照常发给步骤的工具。
 
@@ -153,7 +153,7 @@ runtimes:
 ⚠ Step runtime "sandbox", operation op-3c1e9a7f2b40: claude signs in here on the login sbx keeps (anthropic in `sbx secret ls`), so the gateway ANTHROPIC_BASE_URL names in your shell is not used in this sandbox. To use it there, add ANTHROPIC_BASE_URL: env:ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN: env:ANTHROPIC_AUTH_TOKEN to the sandbox's credentials.
 ```
 
-**团队的工具实例也在这里运行。** 像 `tools/acme-claude.yaml`（`extends: claude`、`command: acme-claude`）这样的实例，只要它的工具能在沙箱里登录、沙箱里也有它的命令（镜像里有，或在 sbx 上由 kit 提供，`agent: ./kits/acme`），就会被提供，即使沙箱里没有 `claude` 本身。teamai 随后在沙箱里运行 `acme-claude`，并把实例的 home 变量指向这次尝试的工具 home。没有自己 `command` 的实例，或者命令就是它的工具本身的实例，在它的工具能运行的地方都能运行。sbx 自带的模板只包含它的 agent，所以在 `teamai-sandbox` 上这样的步骤会在开始前停下，而不是通过 `local` 在这台机器上运行 `acme-claude`：
+**团队的工具实例也在这里运行。** 像 `tools/acme-claude.yaml`（`extends: claude`、`command: acme-claude`）这样的实例，只要它的工具能在沙箱里登录、沙箱里也有它的命令（镜像里有，或在 sbx 上由 kit 提供，`agent: ./kits/acme`），就会被提供，即使沙箱里没有 `claude` 本身。teamai 随后在沙箱里运行 `acme-claude`，并把实例的 home 变量指向这次尝试的工具 home。没有自己 `command` 的实例，或者命令就是它的工具本身的实例，在它的工具能运行的地方都能运行。sbx 自带的模板只包含它的 agent，所以在 `teamai-sandbox` 上这样的步骤会在开始前停下，而不是通过 `tools` 在这台机器上运行 `acme-claude`：
 
 ```text
 ✖ Step "fix" failed with tool_unavailable: Step "fix" runs on acme-claude, which the driver of this run cannot launch here: sandbox: acme-claude runs acme-claude, which is not in sbx's claude template: set agent to a kit that brings it, or run the step with --driver local. Or remove tool from the step.
@@ -252,7 +252,7 @@ runtimes:
         OPENAI_BASE_URL: env:OPENAI_BASE_URL                   # 放行 https://llm.acme.internal:8443/v1
 ```
 
-**sandbox 只为驱动定义里给了密钥的工具提供评判。** 只有登录时，由驱动定义里后面的运行时来评判。这个驱动定义用 `teamai-share-session` 给会话打分，不在 sandbox 里运行步骤：评判经由 `local` 在你机器上的 Claude 上运行：
+**sandbox 只为驱动定义里给了密钥的工具提供评判。** 只有登录时，由驱动定义里后面的运行时来评判。这个驱动定义用 `teamai-share-session` 给会话打分，不在 sandbox 里运行步骤：评判经由 `tools` 在你机器上的 Claude 上运行：
 
 ```yaml
 # drivers/containers.yaml
@@ -359,7 +359,7 @@ runtimes:
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on codex, which the driver of this run cannot launch here: sandbox: codex cannot sign in inside this sbx sandbox, so a step there would stop at its "Not logged in": sign Codex in once with sbx, `sbx secret set openai --oauth` (or store an API key with `sbx secret set openai`), or add OPENAI_API_KEY: env:OPENAI_API_KEY to the sandbox's credentials. Then start again. Or remove tool from the step.
 ```
 
-**3. 给它做的事评分。** sbx 不提供评判，所以评分步骤的评判在 `local` 上、用你机器上的工具运行：
+**3. 给它做的事评分。** sbx 不提供评判，所以评分步骤的评判在 `tools` 上、用你机器上的工具运行：
 
 ```sh
 teamai workflow start review --driver sandbox
@@ -383,7 +383,7 @@ teamai workflow start review --driver sandbox
 ✖ Step "fix" failed with runtime_failed: Step runtime "sandbox" could not open attempt a2695fde5 (sandbox_unavailable): ANTHROPIC_BASE_URL points at port 4000 of this machine, which your sbx network policy does not let a sandbox reach. Allow it once with `sbx policy allow network localhost:4000`, and start again.
 ```
 
-**sbx 不提供评判。** 受限的评判只能访问它的模型提供方，而 sbx 沙箱能访问你的 sbx 策略放行的所有主机：balanced 策略放行包仓库和代码托管站点，评判可以借它们把读到的内容发出去。单个沙箱的规则只能拒绝它点名的主机，策略 profile 来自你所在组织的 sbx 治理设置，所以 teamai 没有办法把一个沙箱收窄到只能访问一个主机。在 sbx 之后列上 `local` 或一个 `docker` sandbox 来负责评判：
+**sbx 不提供评判。** 受限的评判只能访问它的模型提供方，而 sbx 沙箱能访问你的 sbx 策略放行的所有主机：balanced 策略放行包仓库和代码托管站点，评判可以借它们把读到的内容发出去。单个沙箱的规则只能拒绝它点名的主机，策略 profile 来自你所在组织的 sbx 治理设置，所以 teamai 没有办法把一个沙箱收窄到只能访问一个主机。在 sbx 之后列上 `tools` 或一个 `docker` sandbox 来负责评判：
 
 ```yaml
 # drivers/sbx-judged.yaml：步骤在 sbx 里，评判在 docker sandbox 里
@@ -586,7 +586,7 @@ sbx ls -q
 | `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。`bwrap` 没有安装，或者 AppArmor 不让它创建命名空间（Ubuntu 24.04 及更高版本）；`seatbelt` 运行在低于 14 的 macOS 上，或者运行在另一个 macOS 沙箱里（macOS 不支持沙箱嵌套）；`vercel` 找不到 Vercel 登录。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。bwrap 执行信息里给出的、适用于你的发行版的安装命令，并按信息里给出的 AppArmor 配置处理；seatbelt 需要 macOS 14，或者从该沙箱所属的应用或工具之外的终端启动 teamai；vercel 需要 `VERCEL_TOKEN` 加 `VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）。 |
 | `tool_unavailable` | 步骤的工具在 sandbox 里登录不了 | 执行信息里点名的命令：sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`；容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials` |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 设置信息里点名的变量，或者把它点名的密钥加到 `credentials` |
-| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
+| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `tools` |
 | `bad_option` | `options` 里有键或值写错了（`sbx` 写了 `agent: shell`），或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
 | `sandbox_failed` | 无法创建或查找这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
