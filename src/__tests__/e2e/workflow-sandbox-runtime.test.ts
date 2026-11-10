@@ -9,12 +9,31 @@ import { stringify } from 'yaml';
 import { z } from 'zod';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
-import { CLAUDE_SESSIONS, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { CLAUDE_SESSIONS, envelope, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
 // The sandbox runtime teamai ships, on a fake docker whose containers run on the host
 // (packages/runtime-sandbox/src/testing/fake-engine.mjs), driven by the built CLI.
 
 const IMAGE = 'e2e/agent:1';
+
+/**
+ * The image's headless Claude, as the sandbox launches it: in the container it has only the environment the sandbox
+ * gives it, so it keeps its session in the Claude home its variable names, laid out as Claude Code does, continues the
+ * one --resume names, writes the result and states the session.
+ */
+const IMAGE_CLAUDE = `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('2.1.0 (Claude Code)'); process.exit(0); }
+const at = args.indexOf('--resume');
+const session = at === -1 ? 'sess-' + path.basename(process.env.TEAMAI_WORKFLOW_ATTEMPT ?? String(process.pid)) : args[at + 1];
+const project = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', ${CLAUDE_SESSIONS.project});
+fs.mkdirSync(project, { recursive: true });
+fs.appendFileSync(path.join(project, session + '.jsonl'), JSON.stringify(${CLAUDE_SESSIONS.record}) + '\\n');
+fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', session_id: session, usage: { input_tokens: 10, output_tokens: 5 } }));
+`;
 const FAKE_ENGINE = path.join(ROOT, 'packages', 'runtime-sandbox', 'src', 'testing', 'fake-engine.mjs');
 
 let dir: string;
@@ -74,7 +93,7 @@ beforeAll(async () => {
   fs.mkdirSync(engineBin);
   fs.mkdirSync(imageBin);
   fs.writeFileSync(path.join(engineBin, 'docker'), `#!/bin/sh\nFAKE_ENGINE_NAME=docker exec "${process.execPath}" "${FAKE_ENGINE}" "$@"\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(imageBin, 'claude'), fakeTool({ tool: 'claude', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+  fs.writeFileSync(path.join(imageBin, 'claude'), IMAGE_CLAUDE, { mode: 0o755 });
   engineEnv = {
     PATH: `${engineBin}${path.delimiter}${process.env.PATH ?? ''}`,
     FAKE_ENGINE_STATE: path.join(dir, 'engine-state'), FAKE_ENGINE_LOG: engineLog, FAKE_ENGINE_IMAGES: JSON.stringify({ [IMAGE]: imageBin }),
@@ -101,7 +120,13 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'keychain.yaml'), stringify({
     schemaVersion: 'v1alpha1', name: 'keychain', tool: 'claude', runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE } }],
   }));
+  // The sandbox runs its prompt steps itself, and the tools runtime beside it takes what it does not.
+  fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'boxed.yaml'), stringify({
+    schemaVersion: 'v1alpha1', name: 'boxed', tool: 'claude',
+    runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }, { use: 'tools' }],
+  }));
   fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'pair.yaml'), 'schemaVersion: v1alpha1\nname: pair\ndescription: pair\nsteps:\n  - id: plan\n    tool: claude\n    prompt: Plan the change.\n    output:\n      ok: boolean\n  - id: apply\n    needs: [plan]\n    session:\n      from: plan\n    prompt: Make the change you planned.\n    output:\n      ok: boolean\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'review.yaml'), 'schemaVersion: v1alpha1\nname: review\ndescription: review\nsteps:\n  - id: review\n    tool: claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
   // Setup prints the names it gets, then fails, so its output is quoted in the failure.
   writeFlow('setupnames', 'env | cut -d= -f1 | sort | tr "\\n" " "; exit 3');
@@ -163,4 +188,24 @@ it('fails a Claude step whose only login is on this machine, in the Keychain, na
     failure: { code: 'tool_unavailable', message: expect.stringMatching(/a Claude login kept in the macOS Keychain or in ~\/\.claude never crosses into a container; run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN/) },
   }]);
   expect(engineCalls().slice(before).filter(([command, ...rest]) => command === 'run' && rest.includes('-d'))).toEqual([]);
+});
+
+it("runs a Claude prompt step's tool itself in the attempt's container, keeps its session in the attempt's tool home, and resumes it there for a session.from step", async () => {
+  const before = engineCalls().length;
+  const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'boxed'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
+
+  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  const [plan, apply] = readRunState(ran).steps;
+  const session = plan !== undefined && 'session' in plan ? String(plan.session) : '';
+  expect(session).toMatch(/^sess-/);
+  expect(apply).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
+  // The tool ran in the container, the second pass on the first one's session.
+  const launches = engineCalls().slice(before).filter(([command, ...rest]) => command === 'exec' && rest.includes('claude'));
+  expect(launches).toHaveLength(2);
+  expect(launches[1]).toEqual(expect.arrayContaining(['--resume', session]));
+  expect(JSON.stringify(engineCalls().slice(before))).not.toContain('oauth-value');
+  // Its session is in the attempt's tool home, where teamai reads it, never in the member's own Claude home.
+  const transcripts = fs.readdirSync(dataHome, { recursive: true }).map(String).filter((file) => file.endsWith(`${session}.jsonl`));
+  expect(transcripts.length).toBeGreaterThan(0);
+  expect(transcripts.every((file) => file.includes(`tool-home${path.sep}claude${path.sep}projects`))).toBe(true);
 });

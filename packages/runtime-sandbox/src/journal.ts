@@ -10,7 +10,7 @@ import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
 //
 //    places/<handle>.json   the attempt a handle opened and its sandbox id
 //    places/<handle>/<op>   one empty file per op of the handle, so a handle's ops are found without reading another's
-//    ops/<op>.json          an exec or a judge's prompt: its handle, the runtime process running it, and once it ended, its outcome
+//    ops/<op>.json          an exec or a prompt: its handle, the runtime process running it, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the sandbox is stopped
 //
 //  A runtime outlives its stdin while an exec runs, so an exec that ends while teamai is down still records its
@@ -20,7 +20,7 @@ import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
 
 const [, exited, finished, cancelled, failed] = OpStateSchema.options;
 
-/** How an exec or a judge's prompt ended, as this runtime retains it until `close`: its end state, without its op. */
+/** How an exec or a prompt ended, as this runtime retains it until `close`: its end state, without its op. */
 const OutcomeSchema = z.discriminatedUnion('state', [exited.omit({ op: true }), finished.omit({ op: true }), cancelled.omit({ op: true }), failed.omit({ op: true })]);
 
 export type Outcome = z.infer<typeof OutcomeSchema>;
@@ -37,6 +37,8 @@ const PlaceRecordSchema = z.object({
   id: z.string().optional(),
   /** A judge's place, opened with no view: its sandbox is made when its prompt names the directory. */
   confined: z.literal(true).optional(),
+  /** The attempt's tool home, by the variable its tool reads, as the view gave it: a prompt step's tool runs on it. */
+  toolHome: z.record(z.string(), z.string()).optional(),
   /**
    * A place whose tool an app's runtime launches through the sandbox wrapper: the attempt socket the wrapper asks on,
    * the worktree a wrapper's directory must be in to ask there, and the attempt's tool home, by the variable its tool

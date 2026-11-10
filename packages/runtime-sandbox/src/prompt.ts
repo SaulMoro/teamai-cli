@@ -1,4 +1,4 @@
-import { CANCEL_FAILED, PromptResultSchema, type OpId, type PromptRequestSchema, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, PromptResultSchema, type ConfinedPrompt, type OpId, type PromptRequestSchema, type RuntimeFailure } from '@teamai/runtime-protocol';
 import type { OpLedger } from '@teamai/runtime-kit/ledger';
 import { redact, redactJson } from '@teamai/shared/redact';
 import type { z } from 'zod';
@@ -7,18 +7,23 @@ import type { ExecOperations } from './exec.js';
 import type { Journal, Outcome } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf } from './judge.js';
 import { inSandbox, maskedAsGiven, rewrittenMasks } from './loopback.js';
+import { sandboxOf } from './provider.js';
 import type { Ready } from './runtime.js';
+import { runStep, stepToolOf } from './step.js';
 
-// ─── A judge in a sandbox ────────────────────────────────
+// ─── A prompt in a sandbox ───────────────────────────────
+//
+//  A prompt step runs its tool in the attempt's sandbox, on the attempt's tool home, under teamai's id as an exec does:
+//  journaled before it starts, so a repeated id or a reattach answers its end (step.ts launches it).
 //
 //  A confined prompt is a judge: its place opens with no view, and the prompt runs its tool in a container of its own
-//  that sees only the prompt's directory, read-only (judge.ts). It runs under teamai's id as an exec does.
+//  that sees only the prompt's directory, read-only (judge.ts).
 //
 
 type PromptRequest = z.infer<typeof PromptRequestSchema>;
 
-/** Runs a judge's prompt, over `execs`, in a container `creation` lets a close of its place wait for. */
-export function judgePrompts({ journal, ledger, env, execs, creation }: {
+/** Runs prompts over `execs`: a step's in its attempt's sandbox, a judge's in a container `creation` lets a close of its place wait for. */
+export function prompts({ journal, ledger, env, execs, creation }: {
   journal: Journal;
   ledger: OpLedger;
   env: NodeJS.ProcessEnv;
@@ -31,17 +36,74 @@ export function judgePrompts({ journal, ledger, env, execs, creation }: {
   /** Ends `op` failed with `failure`, before this process ran anything of it. */
   const fail = (op: OpId, failure: RuntimeFailure): void => ledger.end({ op, state: 'failed', failure });
 
-  /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
-  const prompt = async (request: PromptRequest, { provider, can, host }: Ready): Promise<void> => {
-    const { op, confined, lease } = request;
+  /** Runs a prompt step's tool in the attempt's sandbox, on the attempt's tool home. */
+  const step = async (request: PromptRequest, { provider, can, host, instances }: Ready): Promise<void> => {
+    const { op, lease } = request;
     const handle = placeOf(request.handle);
+    const replayed = replay(op);
 
-    if (confined === undefined) {
-      fail(op, { code: 'prompt_unsupported', message: 'The sandbox runtime runs the tool teamai builds, as an exec, and launches no agent of its own.' });
+    if (replayed) return replayed;
+
+    // Claimed before the first await, as an exec is.
+    claim(op);
+    const place = journal.place(handle);
+
+    if (place === undefined || place.confined) {
+      finish(op, { state: 'failed', failure: place ? { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt.` } : { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } });
 
       return;
     }
 
+    if (lease.interactive) {
+      finish(op, { state: 'failed', failure: { code: 'tool_unsupported', message: `Step "${lease.step}" is interactive, and the sandbox runs only headless prompts, where no person can reach the tool. Run it on a runtime that offers hitl, such as tools.` } });
+
+      return;
+    }
+
+    const instance = instances.get(lease.tool);
+    const extended = instance?.tool ?? lease.tool;
+    const profile = stepToolOf(extended);
+
+    if (profile === undefined || !can.tools?.includes(lease.tool)) {
+      finish(op, { state: 'failed', failure: { code: 'tool_unavailable', message: `The sandbox runs no ${lease.tool} prompt here: it runs prompt steps on ${can.tools?.join(', ') || 'no tool'}.` } });
+
+      return;
+    }
+
+    journal.saveExec(op, { handle, runner: process.pid });
+    write({ op, event: 'accepted' });
+    const found = await sandboxOf(place, provider);
+
+    if (!found.ok || found.id === undefined) {
+      finish(op, { state: 'failed', failure: found.ok ? { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } : found.failure });
+
+      return;
+    }
+
+    if (journal.isCancelled(op)) {
+      finish(op, { state: 'cancelled' });
+
+      return;
+    }
+
+    // A credential the prompt withholds is not set; the lease's names win over a credential, and the attempt's tool home
+    // over both, as teamai sets an exec runtime's tool on it.
+    const given = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), host);
+
+    const ended = await runStep({
+      request, tool: { name: lease.tool, profile }, command: instance?.command ?? extended, provider, id: found.id,
+      env: { ...given, ...request.env, ...place.toolHome }, masks: maskedAsGiven(request.credentials, given),
+    });
+
+    // The end is masked of every value the tool got, a value the sandbox got rewritten included, which teamai cannot
+    // know: on the wire and in the journal alike.
+    finish(op, journal.isCancelled(op) ? { state: 'cancelled' } : ended);
+  };
+
+  /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
+  const judgePrompt = async (request: PromptRequest, confined: ConfinedPrompt, { provider, can, host }: Ready): Promise<void> => {
+    const { op, lease } = request;
+    const handle = placeOf(request.handle);
     const replayed = replay(op);
 
     if (replayed) return replayed;
@@ -153,5 +215,5 @@ export function judgePrompts({ journal, ledger, env, execs, creation }: {
     settle({ state: 'finished', session: { tool: lease.tool, id: reading.session }, result: reading.result, ...(reading.usage && { usage: reading.usage }), confined: { level: 'verified', access: judge.tool.access } });
   };
 
-  return (request: PromptRequest, current: Ready): Promise<void> => execs.guarded(request, () => prompt(request, current));
+  return (request: PromptRequest, current: Ready): Promise<void> => execs.guarded(request, () => (request.confined === undefined ? step(request, current) : judgePrompt(request, request.confined, current)));
 }
