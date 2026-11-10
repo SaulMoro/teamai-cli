@@ -106,16 +106,60 @@ async function hashPath(workspace: string, relative: string): Promise<string> {
   }
 }
 
-async function stagedEntry(workspace: string, relative: string, run: Git): Promise<string> {
-  const listed = await run(workspace, ['ls-files', '-s', '--', relative]);
+/**
+ * The characters of paths one `git ls-files` gets on its command line, well under Windows' 32,767 for the whole line
+ * with the settings `untrustedGit` puts first. `ls-files` reads no pathspec from stdin.
+ */
+const PATHSPEC_CHARS = 8_000;
 
-  const entries = listed.stdout.split('\n').filter((line) => line.trim() !== '').map((line) => {
-    const [mode, blob, stage] = line.split(/\s+/);
+/** `relative` split into lists whose characters stay within `PATHSPEC_CHARS`, each with at least one path. */
+function pathspecBatches(relative: readonly string[]): string[][] {
+  const batches: string[][] = [];
+  let size = PATHSPEC_CHARS;
 
-    return `${mode}:${blob}:${stage}`;
-  });
+  for (const name of relative) {
+    if (size + name.length > PATHSPEC_CHARS) {
+      batches.push([]);
+      size = 0;
+    }
 
-  return entries.join(',') || 'none';
+    batches.at(-1)?.push(name);
+    size += name.length + 3;
+  }
+
+  return batches;
+}
+
+/**
+ * The index entries git holds at or under each of `relative`, as `mode:blob:stage` joined by commas, every stage of a
+ * conflicted path in git's order, or `none`. One `ls-files` per batch of paths. `./` keeps a name that starts with `:`
+ * from reading as pathspec magic, and an entry a glob in a name matched is not that name's.
+ */
+async function stagedEntries(workspace: string, relative: readonly string[], run: Git): Promise<Map<string, string>> {
+  const listed = new Set(relative);
+  const entries = new Map<string, string[]>();
+
+  for (const batch of pathspecBatches([...listed])) {
+    const read = await run(workspace, ['ls-files', '-s', '-z', '--', ...batch.map((name) => `./${name}`)]);
+
+    for (const record of read.stdout.split('\0')) {
+      const tab = record.indexOf('\t');
+
+      if (tab === -1) continue;
+      const [mode, blob, stage] = record.slice(0, tab).split(' ');
+      const name = record.slice(tab + 1);
+      const parts = name.split('/');
+
+      // A path git lists is the name's own entry, or one under it when the name is a folder git still tracks files in.
+      for (let depth = parts.length; depth > 0; depth -= 1) {
+        const owner = parts.slice(0, depth).join('/');
+
+        if (listed.has(owner)) entries.set(owner, [...entries.get(owner) ?? [], `${mode}:${blob}:${stage}`]);
+      }
+    }
+  }
+
+  return new Map([...listed].map((name) => [name, entries.get(name)?.join(',') ?? 'none']));
 }
 
 async function worktreeMode(workspace: string, relative: string): Promise<string> {
@@ -144,10 +188,12 @@ export async function snapshotWorktree(workspace: string, run: Git, depth = 0): 
 
   if (!status.ok) return { ok: false, files: new Map(), ...resolved, branch };
   const files = new Map<string, string>();
+  const entries = statusEntries(status.text);
+  const staging = await stagedEntries(workspace, entries.map((entry) => entry.relative), run);
 
-  for (const { mark, relative } of statusEntries(status.text)) {
+  for (const { mark, relative } of entries) {
     if (files.has(relative)) continue;
-    const staged = await stagedEntry(workspace, relative, run);
+    const staged = staging.get(relative) ?? 'none';
     const mode = await worktreeMode(workspace, relative);
     const gitlink = staged.split(',').some((entry) => entry.startsWith('160000:'));
 
