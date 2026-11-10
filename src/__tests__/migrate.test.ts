@@ -47,6 +47,8 @@ import { queueLockPath, savePendingLearning, setAsideQueueOnModeSwitch, type Que
 import { acquireLock, releaseLock } from '../update.js';
 import { moveRegularTree } from '@teamai/shared/regular-file';
 
+const actualMove = async () => (await vi.importActual<typeof import('@teamai/shared/regular-file')>('@teamai/shared/regular-file')).moveRegularTree;
+
 /**
  * Start a queue write as a contribute already running beside the migration
  * would, and give it `ms` to finish before the migration goes on: without the
@@ -1101,7 +1103,7 @@ describe('superseded install (#808)', () => {
     if (plan?.mode !== 'superseded') throw new Error('expected a superseded plan');
 
     // As Windows refuses to move a directory another process has open.
-    const move = (await vi.importActual<typeof import('@teamai/shared/regular-file')>('@teamai/shared/regular-file')).moveRegularTree;
+    const move = await actualMove();
     const spy = vi.mocked(moveRegularTree).mockImplementation(async (src: string, dest: string) => {
       if (path.basename(src) === 'team-repo') throw new Error('EBUSY: resource busy or locked');
       return move(src, dest);
@@ -1136,7 +1138,7 @@ describe('superseded install (#808)', () => {
     if (plan?.mode !== 'superseded') throw new Error('expected a superseded plan');
 
     // As an older `contribute` running beside the migration queues one.
-    const move = (await vi.importActual<typeof import('@teamai/shared/regular-file')>('@teamai/shared/regular-file')).moveRegularTree;
+    const move = await actualMove();
     const spy = vi.mocked(moveRegularTree).mockImplementation(async (src: string, dest: string) => {
       await move(src, dest);
       if (src === queue) await fse.outputFile(path.join(queue, 'late.md'), '# late\n');
@@ -1182,7 +1184,7 @@ describe('superseded install (#808)', () => {
 
     // Between the last queue check and the config.yaml move.
     let late: { result: Promise<QueueWrite> } | undefined;
-    const move = (await vi.importActual<typeof import('@teamai/shared/regular-file')>('@teamai/shared/regular-file')).moveRegularTree;
+    const move = await actualMove();
     const spy = vi.mocked(moveRegularTree).mockImplementation(async (src: string, dest: string) => {
       if (src === path.join(legacyDir, 'config.yaml') && !late) {
         late = await startBeside(() => savePendingLearning(config, 'late.md', '# late\n'));
