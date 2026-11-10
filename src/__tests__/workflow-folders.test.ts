@@ -350,6 +350,25 @@ describe('running a workflow folder', () => {
     expect(views.map((view) => view.readonly)).toEqual([expect.arrayContaining([path.join(getDataHome(config), 'workflows', 'folders', (await loadCachedWorkflow(config, 'release'))?.sourceHash ?? '')])]);
   });
 
+  it('lists no path a step\'s own env names as its workflow folder among a step runtime\'s read-only paths', async () => {
+    const { config, workspace } = await runScope({
+      'workflows/plain.yaml': `schemaVersion: v1alpha1\nname: plain\ndescription: Plain.\nsteps:\n  - id: alone\n    env: { TEAMAI_WORKFLOW_DIR: ${JSON.stringify(os.homedir())} }\n    command: echo '{}'\n    output: json\n`,
+    });
+    const host = hostStepRuntime();
+    const views: PlaceView[] = [];
+    const runtime: typeof host = { ...host, open: (request, events) => {
+      if (request.view) views.push(request.view);
+
+      return host.open(request, events);
+    } };
+    const runtimes: DriverRuntimes = { driver: 'box', asked: 'box', runtimes: [{ kind: 'external', use: 'box', runtime, can: {}, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] };
+
+    await runToEnd(config, workspace, 'plain', runtimes);
+
+    expect(views).toHaveLength(1);
+    expect(views[0]?.readonly).not.toContain(path.resolve(os.homedir()));
+  });
+
   it('gives each step of a nested workflow the folder of the file that defines it, and none to a single file', async () => {
     const step = (id: string, extra = ''): string => `  - id: ${id}\n${extra}    command: ${printsFolder('which.txt')}\n    output: json\n`;
     const { config, workspace } = await runScope({

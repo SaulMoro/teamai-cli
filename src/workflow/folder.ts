@@ -124,6 +124,13 @@ function env(config: LocalConfig, sourceHash: string): Record<string, string> {
   return at === undefined ? {} : { [WORKFLOW_DIR_ENV]: at.split(path.sep).join('/') };
 }
 
+/** The folder `value` names when it is a value {@link env} gives, and undefined for any other path, which a step's own `env:` may set. */
+function named(config: LocalConfig, value: string | undefined): string | undefined {
+  const sourceHash = value === undefined ? undefined : path.basename(value);
+
+  return sourceHash !== undefined && env(config, sourceHash)[WORKFLOW_DIR_ENV] === value ? dir(config, sourceHash) : undefined;
+}
+
 /**
  * Writes `files` to {@link dir} once, for every run that uses the folder with `sourceHash`: into a new sibling first,
  * renamed into place, so a run never sees a folder half written. A folder already there is kept as it is.
@@ -177,4 +184,4 @@ function shipped(found: FolderFilesRead): WorkflowFolderRead {
   return fromFiles(found, new Map());
 }
 
-export const WorkflowFolder = { MAX_BYTES, read, shipped, hash, dir, env, pin, prune } as const;
+export const WorkflowFolder = { MAX_BYTES, read, shipped, hash, dir, env, named, pin, prune } as const;

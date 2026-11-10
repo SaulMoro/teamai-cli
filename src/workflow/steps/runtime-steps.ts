@@ -10,6 +10,7 @@ import { withRetry } from '../runtimes/retry-command.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { AttemptResult } from '../attempt-result.js';
+import { WorkflowFolder } from '../folder.js';
 import { attemptResultPath, runScratchDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
@@ -36,11 +37,11 @@ const STDERR_KEPT = 64 * 1024;
  */
 export async function placeView(config: LocalConfig, run: RunId, lease: Pick<LeaseWire, 'attempt' | 'env'>, cwd: string, toolHome?: { variable: string; dir: string }): Promise<PlaceView> {
   const { attempt } = lease;
-  const folder = lease.env?.[WORKFLOW_DIR_ENV];
+  const folder = WorkflowFolder.named(config, lease.env?.[WORKFLOW_DIR_ENV]);
   const listed = await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir']);
   const gitDirs = listed.code === 0 ? listed.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '') : [];
   const pointer = path.join(cwd, '.git');
-  const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => [])), ...folder === undefined ? [] : [path.resolve(folder)]])];
+  const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => [])), ...folder === undefined ? [] : [folder]])];
   const result = path.dirname(attemptResultPath(config, run, attempt));
   const runDir = runScratchDir(config, run);
   await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
