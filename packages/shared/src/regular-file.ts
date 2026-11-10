@@ -36,7 +36,7 @@ export class NotRegularFileError extends Error {
 
   constructor(readonly file: string, stats: fs.Stats, use: 'read' | 'write' = 'read') {
     const kind = kindOf(stats);
-    super(`${file} is ${kind}, not a regular file, so teamai does not ${use} it`);
+    super(use === 'read' ? `${file} is ${kind}, not a regular file, so teamai does not read it` : `${file} is ${kind}, not a regular file, so teamai does not write it`);
     this.kind = kind;
   }
 }
