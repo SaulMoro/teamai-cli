@@ -7,7 +7,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { SessionDemand } from '../session-flow/scoring.js';
 import { CONFINED_TOOLS } from '../tool-launch/tools.js';
-import { installedConfinedTools } from '../tool-launch/confined.js';
+import { installedConfinedTools } from '../workflow/confined-launch.js';
 import { type JsonObject, JsonObjectSchema, type LocalConfig } from '../types.js';
 import { readFileSafe } from '../utils/fs.js';
 import { NOT_A_SCORER, scorerSourceHash } from './cache.js';

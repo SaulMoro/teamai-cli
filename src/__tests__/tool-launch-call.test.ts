@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import { readConfigFrom } from '../config.js';
-import { createToolCaller } from '../tool-launch/call.js';
+import { createToolCaller } from '../workflow/runtimes/tool-caller.js';
 import { getDataHome, getUserConfigPath, type LocalConfig } from '../types.js';
 import { log } from '../utils/logger.js';
 

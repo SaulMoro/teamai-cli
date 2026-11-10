@@ -22,7 +22,7 @@ import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
 import { attemptRun, HeldPlace, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
-import { hostStepRuntime } from '../../runtimes/host.js';
+import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
@@ -40,10 +40,9 @@ import { stopRecordedGroup } from '@teamai/shared/process-group';
 import { startGroupedCommand, type GroupedCommandExit } from '../../shell-command.js';
 import { baseToolOf, instanceNames, isToolId } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../tool-launch/tools.js';
-import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
+import { confinedOffers, type ConfinedOffer } from '../../confined-launch.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';
-import { answerCallTool, runAnswerStep } from './answer-step.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, stepWorkflow, unattendedChoice } from '../../types.js';
 import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
@@ -1424,7 +1423,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot: slotOf.get(lease.attempt) });
 
             if (before.kind !== 'launch') return before.kind === 'ends' ? before.report : undefined;
-            const answered = await runAnswerStep({ config, prompt, output: lease.output, cwd: lease.cwd ?? root, expiresAt: lease.expiresAt, signal: controller.signal, ...lookup });
+            const answered = await hostRuntime.answer({ config, prompt, output: lease.output, cwd: lease.cwd ?? root, expiresAt: lease.expiresAt, signal: controller.signal, ...lookup });
 
             // Cancelled while it answered: the engine settles the step, and the reply is not wanted.
             return controller.signal.aborted ? undefined : { attempt: lease.attempt, revision: lease.revision, driver, ...answered };

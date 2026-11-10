@@ -4,6 +4,8 @@
   "type": "module",
   "description": "The tools step runtime: it launches the member's tools on this machine for workflow prompt steps, in teamai's own process behind the StepRuntime interface; bundled into teamai-cli, which builds its dependencies once.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./answer": "./src/answer.ts",
+    "./headless": "./src/headless.ts"
   }
 }

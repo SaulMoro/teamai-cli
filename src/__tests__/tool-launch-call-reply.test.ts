@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import { opencodeFake } from '@teamai/tool-opencode/testing';
 import { fakeAgent, type FakeAgent, type FakeAgentOptions, type FakeAgentRecording } from '@teamai/tool-testing/fake-agent';
-import { createToolCaller } from '../tool-launch/call.js';
+import { createToolCaller } from '../workflow/runtimes/tool-caller.js';
 
 const made: string[] = [];
 const agents: FakeAgent[] = [];

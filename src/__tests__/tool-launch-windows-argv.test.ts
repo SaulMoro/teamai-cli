@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { batchLaunchOf, spawnCommand, spawnCommandSync } from '@teamai/tool-core/exec';
-import { runTool } from '../tool-launch/run.js';
+import { runTool } from '@teamai/runtime-tools/headless';
 import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../tool-launch/tools.js';
 
 const isWindows = process.platform === 'win32';

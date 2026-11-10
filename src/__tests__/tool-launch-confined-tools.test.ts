@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
-import { installedConfinedTools, runConfined, type ConfinedInput } from '../tool-launch/confined.js';
+import { installedConfinedTools, runConfined, type ConfinedInput } from '../workflow/confined-launch.js';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
 
 let root = '';

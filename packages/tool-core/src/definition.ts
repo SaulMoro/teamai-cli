@@ -349,7 +349,7 @@ export type ToolFeatures = {
   readonly stats: Support;
   /** The dashboard reads the tokens and model of each of the tool's requests (`tokens`), and prices them. */
   readonly tokens: Support;
-  /** teamai's own AI calls (enrich, codebase, import, maintenance) run on the tool's CLI (`tool-launch/call.ts`). */
+  /** teamai's own AI calls (enrich, codebase, import, maintenance) run on the tool's CLI (`src/workflow/runtimes/tool-caller.ts`). */
   readonly aiBackend: Support;
   /** With the skill driver and no verified judge of the tool here, the tool's session judges the workflow run it drives (#1386). */
   readonly sessionJudge: Support;

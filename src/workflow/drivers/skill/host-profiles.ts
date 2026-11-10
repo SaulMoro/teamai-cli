@@ -1,5 +1,5 @@
 /** The host question the agent answers once per run with prompt steps, and what the skill driver declares on every `next`. */
-import { confinedAccess, confinedToolLevel, isConfinedTool } from '../../../tool-launch/confined.js';
+import { confinedAccess, confinedToolLevel, isConfinedTool } from '../../confined-launch.js';
 import type { ConfinedLevel } from '@teamai/tool-core/launch';
 import type { DecidedCan, DriverCan } from '../../requirements.js';
 import type { SkillState } from './skill-state.js';

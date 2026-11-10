@@ -61,7 +61,7 @@ const SKILL_IMPORTS = {
   'src/tool-registry.ts': { names: ['isToolId', 'TOOL_ORDER', 'isAgentToolId'] },
   'src/skill-content.ts': { names: ['packagedSkillRoots'] },
   // The confined tools of this machine, what each can do there, and the level the session's tool reaches here.
-  'src/tool-launch/confined.ts': { names: ['isConfinedTool', 'confinedAccess', 'confinedToolLevel'] },
+  'src/workflow/confined-launch.ts': { names: ['isConfinedTool', 'confinedAccess', 'confinedToolLevel'] },
   // The level a confined run reaches.
   '@teamai/tool-core/launch': { typeOnly: true },
   // What describe proposes for the inputs of a workflow, for the calling session, without the driver naming one.

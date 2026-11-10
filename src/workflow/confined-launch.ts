@@ -18,14 +18,14 @@ import { resolveCliPath } from '../utils/cli-path.js';
 import { execCommand, probeBinary } from '../utils/exec.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { JsonValueSchema, type JsonValue } from '../types.js';
-import type { ConfinedUsage } from './confined-level.js';
+import type { ConfinedUsage } from '../tool-launch/confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { HeadlessRun } from '@teamai/tool-launch/call-launch';
 import { confinedArgs, confinedStdin, confinedVariables } from '@teamai/tool-launch/confined-launch';
-import { runTool } from './run.js';
-import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from './stdout.js';
-import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from './tools.js';
+import { runTool } from '@teamai/runtime-tools/headless';
+import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from '../tool-launch/stdout.js';
+import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../tool-launch/tools.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** A JSON line a tool prints; a field of the wrong type reads as absent. */

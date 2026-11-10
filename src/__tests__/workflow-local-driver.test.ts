@@ -24,6 +24,8 @@ import { cancelRun } from '../workflow/run-controls.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
 import { knownSecrets } from '../env-resolution.js';
+import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
+import { startRun } from '../workflow/engine.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { commitFile, fakeClaude, git, recordDelivery } from './helpers/delivered-checkout.js';
 import { dirs, endRecord, fixture, memberAiTool, projectAiTool, toolPaths, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
@@ -1098,6 +1100,74 @@ steps:
     expect(homes.every(({ home }) => transcript(home))).toBe(true);
     expect(two).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
   }, 30_000);
+});
+
+describe('an answer step on the host slot', () => {
+  const ASK = `schemaVersion: v1alpha1
+name: build
+description: Ask, then review.
+steps:
+  - id: ask
+    answer: Name one color.
+    output: { color: string }
+  - id: review
+    needs: [ask]
+    prompt: Review this project.
+    output:
+      ok: boolean
+`;
+
+  it('answers an answer step here on a definition of an external runtime, which is sent only the prompt step', async () => {
+    const { config, workspace, runId } = await workflowFixture(ASK);
+    vi.stubEnv('TEAMAI_AI_TOOL', '');
+    const claude = claudeBeside(workspace, { answers: [{ when: 'Name one color', answer: '{"color":"red"}' }] });
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const calls = path.join(path.dirname(workspace), 'toy-calls.jsonl');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, calls, agent: { output: { ok: true }, transcript: true } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes, resolveTool: (command) => (command === 'claude' ? claude.executable : null) })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const prompted = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => z.object({ sent: z.object({ step: z.string() }).optional() }).parse(JSON.parse(line)).sent?.step);
+    expect(prompted.filter((step) => step !== undefined)).toEqual(['review']);
+    expect(claude.calls()).toHaveLength(1);
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'ask', status: 'succeeded', outputs: { color: 'red' }, runtime: 'host' },
+      { id: 'review', status: 'succeeded', runtime: 'toy' },
+    ] });
+  }, 30_000);
+
+  it('answers on the tool TEAMAI_AI_TOOL names over ai.tool, and on ai.tool without it', async () => {
+    const ask = async (env: string): Promise<unknown> => {
+      const { config, workspace, runId } = await workflowFixture(ASK.replace(/  - id: review[\s\S]*$/u, ''));
+      vi.stubEnv('TEAMAI_AI_TOOL', env);
+      const claude = claudeBeside(workspace, { answers: [{ when: 'Name one color', answer: '{"color":"red"}' }] });
+      memberAiTool('codex');
+      await runLocalDriver(config, runId, workspace, { resolveTool: (command) => (command === 'claude' ? claude.executable : null) });
+      const run = await readRun(config, runId);
+
+      return typeof run === 'string' ? run : run.steps[0];
+    };
+
+    expect(await ask('claude')).toMatchObject({ status: 'succeeded', outputs: { color: 'red' }, tool: 'claude' });
+    expect(await ask('')).toMatchObject({ status: 'failed', failure: { code: 'tool_unconfigured', message: expect.stringContaining('ai.tool in the machine config') } });
+  });
+
+  it('refuses at start an answer step under a strict sandbox in defaults.requires, which this machine does not keep', async () => {
+    const { config } = await workflowFixture(ASK);
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), ASK.replace('steps:\n', 'defaults:\n  requires: { isolation: sandbox, strict: true }\nsteps:\n'));
+    await syncScorersThenWorkflows(config);
+
+    expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: { driver: 'local', offers: [{ runtime: 'tools', can: { isolation: 'worktree', network: true, env: true } }] } }))
+      .toMatchObject({ error: { code: 'requirement_unmet', message: 'Step "ask" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.' } });
+  });
 });
 
 describe('a place held open for a conversation a later step continues', () => {

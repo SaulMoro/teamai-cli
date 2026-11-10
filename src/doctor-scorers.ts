@@ -1,7 +1,7 @@
 import { loadModelAliases } from './models/aliases.js';
 import { cachedScorerNames, loadCachedScorer } from './scorers/cache.js';
 import { formatScorerDiagnostic } from './scorers/definition.js';
-import { confinedToolLevels, installedConfinedTools } from './tool-launch/confined.js';
+import { confinedToolLevels, installedConfinedTools } from './workflow/confined-launch.js';
 import { CONFINED_TOOLS } from './tool-launch/tools.js';
 import { chooseJudgeModel } from './scorers/judge-model.js';
 import { scoringUnavailable } from './scorers/home.js';

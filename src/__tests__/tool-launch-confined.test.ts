@@ -4,7 +4,7 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { confinedOffers, installedConfinedTools, runConfined } from '../tool-launch/confined.js';
+import { confinedOffers, installedConfinedTools, runConfined } from '../workflow/confined-launch.js';
 
 let root = '';
 beforeEach(async () => { root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-confined-'))); });

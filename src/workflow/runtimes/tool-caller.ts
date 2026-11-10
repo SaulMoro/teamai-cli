@@ -1,16 +1,15 @@
-import { resolveConfigForDir } from '../config.js';
-import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV, type LaunchedBy } from '../launch-context.js';
-import type { LocalConfig } from '../types.js';
-import { resolveCliPath } from '../utils/cli-path.js';
-import { log } from '../utils/logger.js';
-import { CallError, memberTools, type MemberTool } from './member-tools.js';
-import { spawnHeadless } from './run.js';
-import type { TokenUsage } from './stdout.js';
+import { resolveConfigForDir } from '../../config.js';
+import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV, type LaunchedBy } from '../../launch-context.js';
+import type { LocalConfig } from '../../types.js';
+import { resolveCliPath } from '../../utils/cli-path.js';
+import { log } from '../../utils/logger.js';
+import { CallError, memberTools, type MemberTool } from '../../tool-launch/member-tools.js';
+import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { addTokens } from '@teamai/tool-core/stdout';
-import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from './tools.js';
-import { agyGatewayEnv } from '../models/agy-gateway.js';
+import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from '../../tool-launch/tools.js';
+import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
-import { callLaunch } from '@teamai/tool-launch/call-launch';
+import { answerLaunch } from '@teamai/runtime-tools/answer';
 import type { z } from 'zod';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -161,10 +160,9 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
     const env = callEnv(launchedBy, tool);
 
-    const end = await callLaunch({
+    const end = await answerLaunch({
       tool: { name: tool, family: launchAdapterIdOf(tool), call: launchAdapterOf(tool).call, executable },
-      prompt, session, timeoutMs: timeout, idleTimeoutMs: idleTimeout, signal,
-      start: (args) => spawnHeadless({ executable, args, cwd, env, detached: false }),
+      prompt, session, timeoutMs: timeout, idleTimeoutMs: idleTimeout, signal, cwd, env,
     });
 
     // A call teamai stopped at its limit names no tool: the tool gave no answer of its own.
