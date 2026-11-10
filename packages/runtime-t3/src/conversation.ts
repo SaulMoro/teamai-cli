@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import {
-  CANCEL_FAILED, PromptResultSchema,
+  CANCEL_FAILED, PromptResultSchema, RUN_DIR_ENV, WORKFLOW_DIR_ENV,
   type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
@@ -174,15 +174,30 @@ export function threadDisplay(thread: ThreadRecord, environment: Environment): R
   return { label: thread.title.slice(0, 80), url: threadLink(environment, thread.threadId), fields: { thread: thread.threadId.slice(0, 200), model: thread.model, environment: environment.label } };
 }
 
-/** The thread's first message: which run and step it is, where the run started, then teamai's prompt. */
-function firstMessage(place: PlaceRecord, lease: PromptLease, startedFrom: string | undefined): string {
+/**
+ * The paths of `env` a prompt may name that a thread's shell lacks: T3 runs its tool in T3 Code's environment, so the
+ * message carries them.
+ */
+function pathsOf(env: Readonly<Record<string, string>>): string {
+  const scratch = env[RUN_DIR_ENV];
+  const folder = env[WORKFLOW_DIR_ENV];
+
+  if (scratch === undefined) return folder === undefined ? '' : ` Its shell has no ${WORKFLOW_DIR_ENV}: the workflow's folder is ${folder}.`;
+
+  return folder === undefined
+    ? ` Its shell has no ${RUN_DIR_ENV}: the run's scratch directory is ${scratch}.`
+    : ` Its shell has no ${RUN_DIR_ENV} or ${WORKFLOW_DIR_ENV}: the run's scratch directory is ${scratch}, and the workflow's folder ${folder}.`;
+}
+
+/** The thread's first message: which run and step it is, where the run started, the paths its shell lacks, then teamai's prompt. */
+function firstMessage(place: PlaceRecord, { lease, env }: Pick<PromptRequest, 'lease' | 'env'>, startedFrom: string | undefined): string {
   const origin = startedFrom ? ` It was started from the T3 thread ${startedFrom}.` : '';
 
   const interactive = lease.interactive
     ? '\n\nThis step is interactive: work through it with the person in this thread. Write the result file only once they say the step is done.'
     : '';
 
-  return `This thread runs step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}).${origin}`
+  return `This thread runs step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}).${origin}${pathsOf(env)}`
     + ` Work only in this worktree. Do not run teamai workflow commands: teamai commits, pushes and reports the step itself.${interactive}\n\n${lease.prompt}`;
 }
 
@@ -403,7 +418,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
   /** Launches a step's thread on the attempt's folder with its first message, and returns it with the model it runs. */
   const launchStep = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, thread: NewThread): Promise<{ threadId: string; model: string | undefined }> => {
-    const message = firstMessage(opened, request.lease, options.startedFrom && threadMention(s.environment, options.startedFrom));
+    const message = firstMessage(opened, request, options.startedFrom && threadMention(s.environment, options.startedFrom));
     const launched = await s.t3.launch({ ...thread, message, projectId: opened.projectId, workspace: workspaceOf(opened, request.cwd) });
 
     return { threadId: launched.threadId, model: launched.modelSelection?.model };
@@ -415,7 +430,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
    */
   const sendTurn = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, turn: ThreadRecord): Promise<ThreadRecord> => {
     if (turn.turnOf?.configure) await s.t3.configure(turn.threadId, turn.turnOf.configure);
-    await s.t3.send(turn.threadId, firstMessage(opened, request.lease, options.startedFrom && threadMention(s.environment, options.startedFrom)), request.op);
+    await s.t3.send(turn.threadId, firstMessage(opened, request, options.startedFrom && threadMention(s.environment, options.startedFrom)), request.op);
 
     return turn;
   };

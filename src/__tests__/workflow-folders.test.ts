@@ -22,6 +22,7 @@ import { sweepLeftovers } from '../workflow/leftovers.js';
 import { readRun } from '../workflow/store.js';
 import { skillHarness } from './helpers/skill-harness.js';
 import { dirs as handoffDirs, pull, team as handoffTeam } from './helpers/workflow-handoff-fixture.js';
+import { RunIdSchema } from '../workflow/store.js';
 
 const dirs: string[] = [];
 
@@ -508,6 +509,27 @@ describe('a workflow folder under the skill driver', () => {
       status: 'succeeded',
       steps: [{ id: 'plan', outputs: { dir: path.join(getDataHome(made.config), 'workflows', 'folders', sourceHash), text: 'from the folder' } }],
     });
+  });
+});
+
+describe('a workflow folder\'s prompt step under the skill driver', () => {
+  it('names the folder in the brief the agent works from, since the agent\'s shell is the session\'s', async () => {
+    const made = await skillHarness({}, { teamFiles: {
+      'workflows/release/WORKFLOW.yaml': 'schemaVersion: v1alpha1\nname: release\ndescription: Release.\ninvoke: allow\nsteps:\n  - id: plan\n    prompt: Read $TEAMAI_WORKFLOW_DIR/plan.txt and follow it.\n',
+      'workflows/release/plan.txt': 'from the folder',
+    } });
+    dirs.push(made.root);
+    await syncScorersThenWorkflows(made.config);
+    const sourceHash = (await loadCachedWorkflow(made.config, 'release'))?.sourceHash ?? '';
+
+    const start = await made.call({ kind: 'start', name: 'release', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in start) || !('turn' in start.data)) throw new Error(JSON.stringify(start));
+    const chosen = await made.call({ kind: 'choose', run: RunIdSchema.parse(start.data.turn.run), choice: 'h1' });
+    if (!('data' in chosen) || !('turn' in chosen.data)) throw new Error(JSON.stringify(chosen));
+    const [dispatch] = chosen.data.turn.actions.flatMap((action) => (action.kind === 'dispatch' ? [action] : []));
+    if (!dispatch) throw new Error(JSON.stringify(chosen));
+
+    expect(fs.readFileSync(dispatch.brief, 'utf8')).toContain(`the workflow's folder \`${path.join(getDataHome(made.config), 'workflows', 'folders', sourceHash).split(path.sep).join('/')}\``);
   });
 });
 

@@ -343,6 +343,7 @@ async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, p
     changes: confined ? 'confined' : writes ? 'commit' : interactive && place === 'checkout' && !readOnly ? 'keep' : 'none',
     by,
     output, report: reportLiteral(state.invocation, lock.run, attempt), secrets: context.env.secrets,
+    ...(lease.folder !== undefined && { folder: lease.folder }),
   });
 
   const dispatch: Dispatch = { place, dir: workDir, brief, model: picked.model };

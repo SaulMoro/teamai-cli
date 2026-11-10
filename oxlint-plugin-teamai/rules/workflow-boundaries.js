@@ -38,11 +38,13 @@ const SKILL_IMPORTS = {
   'src/workflow/attempt-result.ts': { names: ['AttemptResult'] },
   // What a prompt step's output must be, as every driver's result instruction says it.
   'src/workflow/output.ts': { names: ['expectedOutput'] },
-  'src/workflow/store.ts': { names: ['takeRunLock', 'LockTaken', 'RunLock', 'attemptDir', 'attemptResultPath', 'skillStatePath', 'runsDir', 'RunIdSchema', 'RunId', 'AttemptIdSchema', 'AttemptId', 'withRunnerLock', 'runnerAlive'] },
+  'src/workflow/store.ts': { names: ['takeRunLock', 'LockTaken', 'RunLock', 'attemptDir', 'attemptResultPath', 'runScratchDir', 'skillStatePath', 'runsDir', 'RunIdSchema', 'RunId', 'AttemptIdSchema', 'AttemptId', 'withRunnerLock', 'runnerAlive'] },
   'src/workflow/step-model.ts': {},
   'src/env-resolution.ts': {},
   'src/env-exec.ts': { names: ['stepEnvironment', 'withRunningCli'] },
   '@teamai/shared/redact': {},
+  // The paths a step's env names, which a child's brief names instead, since its shell is the session's.
+  '@teamai/runtime-protocol': { names: ['RUN_DIR_ENV', 'WORKFLOW_DIR_ENV'] },
   // The read and the append that refuse a FIFO a step left where the driver reads or journals a file.
   '@teamai/shared/regular-file': { names: ['readRegularFile', 'appendRegularFile'] },
   'src/utils/session-id.ts': {},

@@ -160,7 +160,7 @@ export type ReadLease = { attempt: AttemptId; step: string; revision: number; ex
    * set `workspace: read-only`. `isolation`: the step requires a sandbox, which no session host enforces. `session`: the
    * session the step continues.
    */
-  | { executor: 'prompt'; prompt: string; place: Dispatch['place']; writes: boolean; team?: true; interactive?: true; readOnly?: true; isolation?: 'sandbox'; agent?: string; model?: string | StepModel; defaultModel?: string; output?: OutputSchema; confined?: ConfinedLease; session?: { tool: string; id: string } }
+  | { executor: 'prompt'; prompt: string; place: Dispatch['place']; writes: boolean; team?: true; interactive?: true; readOnly?: true; isolation?: 'sandbox'; agent?: string; model?: string | StepModel; defaultModel?: string; output?: OutputSchema; confined?: ConfinedLease; session?: { tool: string; id: string }; folder?: string }
 );
 
 /** A gate as the engine asks it. */

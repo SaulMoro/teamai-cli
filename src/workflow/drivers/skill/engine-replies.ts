@@ -3,6 +3,7 @@
  * once into the reply its row takes, and a lease, read as the step this driver runs.
  */
 import { z } from 'zod';
+import { WORKFLOW_DIR_ENV } from '@teamai/runtime-protocol';
 import { LeaseWireSchema } from '../../lease-wire.js';
 import { StartedRunSchema, type StartedRun } from '../../protocol.js';
 import { FailureSchema } from '../../step-state.js';
@@ -51,6 +52,11 @@ export function readLease(raw: unknown): ReadLease | undefined {
     if (confined) lease.confined = confined;
 
     if (session) lease.session = { tool: session.tool, id: session.id };
+
+    // The child's shell is the session's, so its brief names the folder the env would.
+    const folder = env?.[WORKFLOW_DIR_ENV];
+
+    if (folder !== undefined) lease.folder = folder;
   }
 
   if (expiresAt !== undefined) lease.expiresAt = expiresAt;

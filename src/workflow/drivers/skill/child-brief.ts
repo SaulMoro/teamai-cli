@@ -6,7 +6,8 @@ import type { LocalConfig } from '../../../types.js';
 import { writeFileAtomic } from '../../../utils/fs.js';
 import { redact } from '@teamai/shared/redact';
 import { expectedOutput } from '../../output.js';
-import { attemptDir, attemptResultPath, type AttemptId, type RunId } from '../../store.js';
+import { RUN_DIR_ENV, WORKFLOW_DIR_ENV } from '@teamai/runtime-protocol';
+import { attemptDir, attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
 import type { OutputSchema } from '../../types.js';
 import type { Literal } from './literals.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
@@ -62,10 +63,12 @@ export async function writeChildBrief(input: {
   by: 'child' | 'person' | 'self';
   /** The step's output schema, when it declares one. */
   output?: OutputSchema;
+  /** The workflow's folder (`TEAMAI_WORKFLOW_DIR`), for a step of a workflow folder. */
+  folder?: string;
   report: Literal;
   secrets: Record<string, string>;
 }): Promise<string> {
-  const { config, run, attempt, step, dir, changes, prompt, by, output, report, secrets } = input;
+  const { config, run, attempt, step, dir, changes, prompt, by, output, folder, report, secrets } = input;
   const expected = expectedOutput(output);
   const committing = changes === 'commit';
 
@@ -102,6 +105,10 @@ export async function writeChildBrief(input: {
       none: [`- Work in \`${dir}\`: every file the step reads is there. Do not change files here: the step only reads them, and TeamAI fails a step that leaves a change.`, '- Leave git to TeamAI.'],
       confined: [`- Read only the files in \`${dir}\`. Read nothing outside it, not the repository, nor anything from the session that started you: the step is answered from that directory alone.`, '- Change nothing there.'],
     }[changes],
+    // The agent's shell is the session's, which no step's env reaches.
+    folder === undefined
+      ? `- Your shell has no ${RUN_DIR_ENV}: where the step names it, the run's scratch directory is \`${runScratchDir(config, run)}\`.`
+      : `- Your shell has no ${RUN_DIR_ENV} or ${WORKFLOW_DIR_ENV}: where the step names one, the run's scratch directory is \`${runScratchDir(config, run)}\`, and the workflow's folder \`${folder}\`.`,
     '- Run one teamai command, the report below, once, at the end.',
     '',
     '## Finish',

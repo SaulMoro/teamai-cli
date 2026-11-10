@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
+import { RUN_DIR_ENV, RuntimeMessageSchema, WORKFLOW_DIR_ENV } from '@teamai/runtime-protocol';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { CLAUDE, CODEX, credentialsFile, fakeT3, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
@@ -256,6 +256,16 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-0000000c')).toMatchObject({ event: 'finished' });
       expect(t3.threads()[0]?.message).not.toContain('started from');
+    });
+
+    it('names in its first message the run\'s scratch directory and the workflow\'s folder, which the thread\'s shell is not given', async () => {
+      const { runtime, handle } = await opened();
+      const folder = path.join(dir, 'folders', 'f1');
+
+      runtime.send({ ...prompt(handle, 'op-0000000d'), env: { [RUN_DIR_ENV]: path.join(dir, 'scratch'), [WORKFLOW_DIR_ENV]: folder } });
+
+      expect(await ended(runtime, 'op-0000000d')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]?.message).toContain(`Its shell has no ${RUN_DIR_ENV} or ${WORKFLOW_DIR_ENV}: the run's scratch directory is ${path.join(dir, 'scratch')}, and the workflow's folder ${folder}.`);
     });
 
     it('runs a Codex step on the Codex instance with the effort the lease asks, and finds its session', async () => {
