@@ -22,7 +22,7 @@ import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -374,7 +374,7 @@ export async function seedToolHome({ config, run, attempt, tool, sessions }: { c
     const kept = login === undefined ? undefined : path.join(holding.home, login);
 
     // Only files, directories and links are copied: a FIFO or socket the earlier step left there is no part of its session.
-    if (holding.attempt !== attempt) await fs.cp(holding.home, attemptToolHome(config, run, attempt, tool), { recursive: true, force: false, filter: async (source) => source !== kept && isCopied(await fs.lstat(source)) });
+    if (holding.attempt !== attempt) await copyRegularTree(holding.home, attemptToolHome(config, run, attempt, tool), { existing: 'keep', filter: async (source) => source !== kept && isCopied(await fs.lstat(source)) });
 
     return session;
   }

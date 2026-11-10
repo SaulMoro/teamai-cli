@@ -4,10 +4,13 @@ import { defineRule } from '@oxlint/plugins';
 import { fsFunctionOf, openKindOf } from '../fs-calls.js';
 import { repositoryPath } from '../utils.js';
 
-/** The calls that open a path to read it as they find it, and so wait on a FIFO there: reads, copies, and fs-extra's JSON reads and folder copies. */
+/**
+ * The calls that open a path to read it as they find it: a read waits on a FIFO there, and a copy reads a device as a
+ * file. Reads, copies, fs-extra's JSON reads and folder copies, and node's folder copies.
+ */
 const READS = new Set([
   'readFile', 'readFileSync', 'createReadStream', 'copyFile', 'copyFileSync',
-  'readJson', 'readJsonSync', 'readJSON', 'readJSONSync', 'copy', 'copySync',
+  'readJson', 'readJsonSync', 'readJSON', 'readJSONSync', 'copy', 'copySync', 'cp', 'cpSync',
 ]);
 
 /** The calls that open a path, reading when their flags say so. */

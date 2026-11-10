@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { stringify as stringifyToml, type TomlTable } from 'smol-toml';
 import { execCommand, probeBinary } from '@teamai/shared/exec';
 import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
-import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 import type { CallLaunch, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
 import { stoppedOnUsageLimit, toolStdout, type ConfinedUsage, type TokenUsage } from '@teamai/tool-core/stdout';
@@ -330,7 +330,7 @@ const LAUNCHES = {
   async opencode(context) {
     const { request, deps, dir, cwd, env, tmp } = context;
     const { executable } = request;
-    await fs.cp(dir, cwd, { recursive: true, dereference: false });
+    await copyRegularTree(dir, cwd);
     const entries = await fs.readdir(cwd, { recursive: true, withFileTypes: true });
 
     if (entries.some((entry) => entry.isSymbolicLink())) throw new Error(`OpenCode would follow a symlink in ${dir}. Remove the symlink before running it confined`);

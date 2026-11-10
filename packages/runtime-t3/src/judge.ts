@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ConfinedKept, ConfinedPrompt, PromptLease, PromptResult } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
+import { copyRegularTree } from '@teamai/shared/regular-file';
 import type { PromptRequest } from './conversation.js';
 import type { PlaceRecord, ThreadRecord } from './journal.js';
 import type { NewThread, T3 } from './t3.js';
@@ -63,11 +64,11 @@ const WRITABLE = { dir: 0o755, file: 0o644 };
  * Fills `copy`, the judge thread's folder, with what `dir` holds, then makes it read-only. Whatever an earlier attempt
  * left there goes first. A symlink would reach outside `dir`, so none is copied.
  */
-function copyReadOnly({ dir, copy }: { dir: string; copy: string }): void {
+async function copyReadOnly({ dir, copy }: { dir: string; copy: string }): Promise<void> {
   chmodTree(copy, WRITABLE);
 
   for (const name of fs.readdirSync(copy)) fs.rmSync(path.join(copy, name), { recursive: true, force: true });
-  fs.cpSync(dir, copy, { recursive: true, filter: (source) => !fs.lstatSync(source).isSymbolicLink() });
+  await copyRegularTree(dir, copy, { filter: (source) => !fs.lstatSync(source).isSymbolicLink() });
   chmodTree(copy, READ_ONLY);
 }
 
@@ -123,7 +124,7 @@ export async function launchJudge({ t3, request, confined, opened, journalThread
 
   if (shell.runCount === 0) {
     try {
-      copyReadOnly({ dir: confined.dir, copy: shell.worktreePath });
+      await copyReadOnly({ dir: confined.dir, copy: shell.worktreePath });
     } catch (error) {
       throw new JudgeCopyFailed(`teamai could not copy ${confined.dir} into the judge thread's folder ${shell.worktreePath}, so the judge did not start: ${error instanceof Error ? error.message : String(error)}`);
     }

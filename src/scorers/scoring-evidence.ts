@@ -12,7 +12,7 @@ import type { LocalConfig } from '../types.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 import { scoresDir } from './home.js';
 import {
   fencedEvidence, isEvidenceReady, rubricPrompt, subjectEvidenceDirOf, writeEvidence, SESSION_MAX_CHARS, SUBAGENT_MAX_CHARS, type EvidenceGap, type Rubrics,
@@ -388,7 +388,7 @@ export async function buildEvidence(config: LocalConfig, run: RunState, subject:
 
     if (!await isEvidenceReady(collected)) return { ok: false, code: 'evidence_empty' };
 
-    if (!await isEvidenceReady(dir)) await writeEvidence(dir, (tmp) => fs.cp(collected, tmp, { recursive: true }));
+    if (!await isEvidenceReady(dir)) await writeEvidence(dir, (tmp) => copyRegularTree(collected, tmp));
     await assembleJudgePrompt(config, dir, rubrics);
 
     return { ok: true };

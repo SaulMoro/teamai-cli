@@ -45,10 +45,11 @@ export const copy = async (from: string, to: string) => [await fs.copyFile(from,
   expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(3);
 });
 
-invalid('rejects fs-extra copying a path or a folder, which reads every file under it', `import fse from 'fs-extra';
+invalid('rejects fs-extra or node copying a path or a folder, which reads every file under it', `import fse from 'fs-extra';
+import fs from 'node:fs';
 import { copySync } from 'fs-extra';
-export const copy = async (from: string, to: string) => [await fse.copy(from, to, { overwrite: true }), fse.copySync(from, to), copySync(from, to)];`, (output) => {
-  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(3);
+export const copy = async (from: string, to: string) => [await fse.copy(from, to, { overwrite: true }), fse.copySync(from, to), copySync(from, to), await fs.promises.cp(from, to, { recursive: true }), fs.cpSync(from, to, { recursive: true })];`, (output) => {
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(5);
 });
 
 valid('allows the recursive copy of the helper', `import { copyRegularTree } from '@teamai/shared/regular-file';
