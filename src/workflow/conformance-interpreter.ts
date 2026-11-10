@@ -184,8 +184,9 @@ export function profileDriver(profile: DriverProfile): DriverIdentity {
  * profile's `can` it names, and `hitl` sets it for a profile that does not decide it.
  * `state` is matched against the persisted run after the operation. `advance` moves the clock the engine reads.
  * `prepare` asks `next` to prepare the lease's place; `promptHas` lists text its prompt contains. With `prepare`,
- * `attempt` names the saved lease whose attempt `next` prepares, which it must answer with, and `adopt` the `host`
- * place it prepares it in, where the lease must run. `host` makes a place as a host would, at `name` beside the
+ * `attempt` names the saved lease whose attempt `next` prepares, which it must answer with, and `adopt` the
+ * `session-host` place it prepares it in, where the lease must run. `session-host` makes a place as a session host would,
+ * at `name` beside the
  * checkout: a worktree on the workspace branch of `lease` (`on: 'branch'`), detached at its start (`'start'`), or on
  * another branch made there (`'other'`), or a repository of its own (`'foreign'`), with `files` written in it. `edit`
  * writes files in a prepared lease's place, and `files` checks them there, or in the checkout without a lease: `null`
@@ -197,7 +198,7 @@ export type ConformanceOperation =
     base?: { ref?: string; commit: string }; prepare?: true; attempt?: string; adopt?: string; promptHas?: string[];
     cancelled?: string[]; deadlines?: string[]; absent?: string[]; expect: ScenarioJson; state?: ScenarioJson;
   }
-  | { kind: 'host'; name: string; lease: string; on: 'branch' | 'start' | 'other' | 'foreign'; files?: Record<string, string> }
+  | { kind: 'session-host'; name: string; lease: string; on: 'branch' | 'start' | 'other' | 'foreign'; files?: Record<string, string> }
   | { kind: 'edit'; lease: string; files: Record<string, string> }
   /** Writes files under the run's `$TEAMAI_RUN_DIR`, as a step that hands another its files there would. Needs a runner with `runDir`. */
   | { kind: 'runFiles'; files: Record<string, string> }
@@ -370,7 +371,7 @@ export function speaksAsDriverUnderTest(scenario: ConformanceScenario): boolean 
         return standsForDriverUnderTest(operation.as);
       case 'respond':
         return operation.as !== undefined && standsForDriverUnderTest(operation.as) && !('json' in operation);
-      case 'host':
+      case 'session-host':
       case 'edit':
       case 'runFiles':
       case 'files':
@@ -418,12 +419,12 @@ export async function runConformanceScenario(scenario: ConformanceScenario, runn
 
   const refusal = scenario.refusedBy?.[profile];
   let refused = false;
-  const hosts = new Map<string, string>();
+  const sessionHostPlaces = new Map<string, string>();
 
-  const hostOf = (name: string): string => {
-    const dir = hosts.get(name);
+  const sessionHostPlaceOf = (name: string): string => {
+    const dir = sessionHostPlaces.get(name);
 
-    if (dir === undefined) throw new Error(`No host operation made place ${name}`);
+    if (dir === undefined) throw new Error(`No session-host operation made place ${name}`);
 
     return dir;
   };
@@ -438,7 +439,7 @@ export async function runConformanceScenario(scenario: ConformanceScenario, runn
 
         if (operation.prepare && operation.attempt !== undefined) {
           const attempt = AttemptIdSchema.parse(attemptOf(operation.attempt));
-          prepare = operation.adopt !== undefined ? { attempt, adopt: hostOf(operation.adopt) } : { attempt };
+          prepare = operation.adopt !== undefined ? { attempt, adopt: sessionHostPlaceOf(operation.adopt) } : { attempt };
         }
 
         const declared: DriverCan = operation.hitl !== undefined ? { hitl: operation.hitl } : {};
@@ -485,18 +486,18 @@ export async function runConformanceScenario(scenario: ConformanceScenario, runn
 
           if (operation.attempt !== undefined) expect(lease.attempt, `next prepared the attempt of ${operation.attempt}`).toEqual(attemptOf(operation.attempt));
 
-          if (operation.adopt !== undefined) expect(lease.cwd, `the lease runs in host place ${operation.adopt}`).toEqual(hostOf(operation.adopt));
+          if (operation.adopt !== undefined) expect(lease.cwd, `the lease runs in session host place ${operation.adopt}`).toEqual(sessionHostPlaceOf(operation.adopt));
           leases.set(operation.saveAs, lease);
         }
 
         break;
       }
 
-      case 'host': {
+      case 'session-host': {
         const checkout = placeOf(undefined);
         const workspace = leases.get(operation.lease)?.workspace;
 
-        if (!workspace) throw new Error(`Host place ${operation.name} needs lease ${operation.lease} with a workspace`);
+        if (!workspace) throw new Error(`Session host place ${operation.name} needs lease ${operation.lease} with a workspace`);
         const dir = path.join(path.dirname(checkout), 'hosts', operation.name);
         await fs.mkdir(path.dirname(dir), { recursive: true });
         const { branch, start: { commit } } = workspace;
@@ -512,7 +513,7 @@ export async function runConformanceScenario(scenario: ConformanceScenario, runn
         }
 
         for (const [file, text] of Object.entries(operation.files ?? {})) await fs.writeFile(path.join(dir, file), text);
-        hosts.set(operation.name, dir);
+        sessionHostPlaces.set(operation.name, dir);
         break;
       }
 
