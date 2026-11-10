@@ -2273,7 +2273,7 @@ describe('an attempt in an sbx sandbox', () => {
     const { max_parallel: _maxParallel, credentials: _credentials, ...options } = shipped.runtimes[0]?.options ?? {};
     engine.secret('anthropic', true);
 
-    expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox' }, { use: 'local' }] });
+    expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox' }, { use: 'tools' }] });
     expect(await init(start(), options, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
   });
 
