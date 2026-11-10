@@ -545,17 +545,13 @@ describe('local-agent: MCP install/uninstall commands', () => {
     const manifestFile = path.join(tmpDir, '.teamai', 'managed-mcp.json');
     const before = await fse.readJson(manifestFile);
     const original = await fse.readFile(configFile, 'utf-8');
-    const read = fse.readFile;
-    const spy = vi.spyOn(fse, 'readFile').mockImplementation((file, ...args) => {
-      if (String(file).endsWith('/.codex/config.toml')) return Promise.reject(new Error('simulated config read failure'));
-      return read(file, ...args);
-    });
+    await fse.chmod(configFile, 0o000);
 
     const failed = await runResponse({ cmds: [{ ...command, id: 9071, type }] }, 'codex');
-    spy.mockRestore();
+    await fse.chmod(configFile, 0o644);
 
     expect(failed[0].status).toBe('failed');
-    expect(failed[0].error).toContain('simulated config read failure');
+    expect(failed[0].error).toContain('EACCES');
     expect(await fse.readJson(manifestFile)).toEqual(before);
     expect(await fse.readFile(configFile, 'utf-8')).toBe(original);
     expect((await runResponse({ cmds: [{ ...command, id: 9072, type }] }, 'codex'))[0].status).toBe('success');

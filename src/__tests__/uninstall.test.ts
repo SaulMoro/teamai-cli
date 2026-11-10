@@ -2730,17 +2730,13 @@ describe('uninstall', () => {
     const ref = { config, entry };
     await saveStateForScope({ ...await loadStateForScope(localConfig), opencodeContextEntries: [ref] }, localConfig);
     const originalRename = fse.rename.bind(fse);
-    const originalRead = fse.readFile.bind(fse);
     if (failure === 'write failure') {
       vi.spyOn(fse, 'rename').mockImplementation((...args: Parameters<typeof fse.rename>) => {
         if (args[1] === config) return Promise.reject(new Error('EACCES'));
         return originalRename(...args);
       });
     } else {
-      vi.spyOn(fse, 'readFile').mockImplementation((...args: Parameters<typeof fse.readFile>) => {
-        if (args[0] === config) return Promise.reject(new Error('EACCES'));
-        return originalRead(...args);
-      });
+      await fse.chmod(config, 0o000);
     }
     const previousExitCode = process.exitCode;
     commitTeamRepo(repoPath);
@@ -2749,6 +2745,7 @@ describe('uninstall', () => {
     process.exitCode = previousExitCode;
     expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([ref]);
     vi.restoreAllMocks();
+    await fse.chmod(config, 0o644);
     expect((await fse.readJson(config)).instructions).toEqual([entry]);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
     await uninstall({ force: true, ...(scenario !== 'full uninstall' ? { agent: 'opencode' } : {}) });
