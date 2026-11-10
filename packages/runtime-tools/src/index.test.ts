@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { newOpId, type PromptRequest } from '@teamai/runtime-protocol/step-runtime';
-import { toolsStepRuntime } from './index.js';
-import type { StepLauncher } from './step.js';
+import { toolsStepRuntime, type StepLauncher } from './index.js';
 
 describe('the tools runtime\'s prompt', () => {
   it('fails a prompt whose launch throws, and keeps it as ended rather than running', async () => {
