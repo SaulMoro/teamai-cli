@@ -86,7 +86,6 @@
   "src/tool-home.ts": 3,
   "src/tool-instances.ts": 2,
   "src/update.ts": 9,
-  "src/usage-tracker.ts": 1,
   "src/utils/branch-worktree.ts": 2,
   "src/utils/cache-index.ts": 1,
   "src/utils/data-branches.ts": 2,
