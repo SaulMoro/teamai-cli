@@ -221,7 +221,7 @@ describe('appendMonthlyLog / pruneMonthlyLogs', () => {
     fs.writeFileSync(file, original);
     const failure = Object.assign(new Error('read failed'), { code: 'EIO' });
     const open = fs.promises.open;
-    const read = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const opened = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
       if (args[0] === file) throw failure;
       return open(...args);
     });
@@ -229,7 +229,7 @@ describe('appendMonthlyLog / pruneMonthlyLogs', () => {
     await expect(appendMonthlyLog(dir, s)).rejects.toMatchObject({ code: 'EIO' });
     expect(fs.readFileSync(file, 'utf8')).toBe(original);
     expect(fs.readdirSync(dir)).toEqual(['2026-03.md']);
-    read.mockRestore();
+    opened.mockRestore();
     expect(await appendMonthlyLog(dir, s)).toBe(file);
   });
 

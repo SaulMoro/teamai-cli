@@ -2,7 +2,7 @@ import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import type { SessionPlatformDefinition, StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 
 /** A Claude build's platform: Claude Code transcripts in the home of its own `command`, which resumes them. */
-function claudeBuild<const Command extends string>(platform: string, command: Command) {
+function claudeBuild<const Command extends string>({ platform, command }: { platform: string; command: Command }) {
   return {
     store: { in: 'tool-home', home: command, dir: 'projects' },
     resume: (id: string) => `${command} --resume ${id}`,
@@ -21,7 +21,7 @@ function claudeBuild<const Command extends string>(platform: string, command: Co
 
 /** Each Claude build keeps Claude Code transcripts in its own home, so its sessions stay its own. */
 export const platforms = {
-  'claude-code': claudeBuild('claude-code', 'claude'),
-  'claude-internal': claudeBuild('claude-internal', 'claude-internal'),
-  'tclaude': claudeBuild('tclaude', 'tclaude'),
+  'claude-code': claudeBuild({ platform: 'claude-code', command: 'claude' }),
+  'claude-internal': claudeBuild({ platform: 'claude-internal', command: 'claude-internal' }),
+  'tclaude': claudeBuild({ platform: 'tclaude', command: 'tclaude' }),
 } as const satisfies Record<string, SessionPlatformDefinition>;
