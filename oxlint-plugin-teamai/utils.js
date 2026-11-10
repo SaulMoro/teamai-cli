@@ -113,6 +113,20 @@ export function sourcePath(context) {
 }
 
 /**
+ * The linted file as `{ root, relative }`: the repository's directory (the workspace root, else the nearest package
+ * root) and the file's path from it, so `packages/<name>/src/x.ts` keeps its package folder.
+ * @param {Context} context
+ * @returns {{ root: string, relative: string }}
+ */
+export function repositoryPath(context) {
+  const file = lintedPath(context);
+  const dir = path.posix.dirname(file);
+  const root = workspaceRoot(dir) ?? packageRoot(dir) ?? path.posix.dirname(file);
+
+  return { root, relative: path.posix.relative(root, file) };
+}
+
+/**
  * Whether `file`, relative to the workspace root, is test support: under `src/testing/` of the root package or of a
  * `packages/<name>/` folder, the harness its tests run, which `teamai/package-boundaries` keeps everything that ships
  * from importing.
