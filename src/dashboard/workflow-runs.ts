@@ -13,6 +13,7 @@
  * snapshot header and the steps' status.
  */
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { z } from 'zod';
 import { RunOriginSchema, type RunOrigin } from '../default-workflows.js';
@@ -466,7 +467,7 @@ async function localRunDetail(config: LocalConfig, runId: string): Promise<RunDe
 
 async function readLoginWait(directory: string): Promise<LoginWait | undefined> {
   try {
-    return LoginWaitSchema.parse(JSON.parse(await fs.readFile(loginWaitFile(directory), 'utf8')));
+    return LoginWaitSchema.parse(JSON.parse(await readRegularFile(loginWaitFile(directory), 'utf8')));
   } catch {
     return undefined;
   }

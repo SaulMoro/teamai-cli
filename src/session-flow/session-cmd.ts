@@ -20,7 +20,7 @@
 
 import type { Command } from 'commander';
 import { z } from 'zod';
-import fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { resumeCommand } from './adapters/platform-facts.js';
@@ -113,7 +113,7 @@ async function listPushSource(platform: string, cwd: string, all: boolean) {
   const roots = [...new Set([cwd, ...workspaces.filter((workspace) => workspace.scope === 'project').flatMap((workspace) => workspace.roots)])]
     .filter((root) => {
       try {
-        const settings = PiSessionDirSettingsSchema.safeParse(JSON.parse(fs.readFileSync(path.join(root, '.pi', 'settings.json'), 'utf8')));
+        const settings = PiSessionDirSettingsSchema.safeParse(JSON.parse(readRegularFileSync(path.join(root, '.pi', 'settings.json'), 'utf8')));
 
         return settings.success && settings.data.sessionDir.trim().length > 0;
       } catch {

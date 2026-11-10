@@ -531,6 +531,38 @@ describe('session push --all', () => {
     expect(out.join('\n')).toContain('Pushed 2 session(s) from pi');
   });
 
+  it.skipIf(process.platform === 'win32')("skips a Pi project whose settings.json is a FIFO a step left, at once", async () => {
+    const projectRoot = path.join(repoRoot, 'copy');
+    fs.mkdirSync(path.join(projectRoot, '.pi'), { recursive: true });
+    const pipe = path.join(projectRoot, '.pi', 'settings.json');
+    const { execFileSync, spawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    execFileSync('mkfifo', [pipe]);
+    // A read that waits on the FIFO ends only once another process opens it, from three seconds on.
+    const releaser = spawn('sh', ['-c', 'sleep 3; while :; do exec 3<>"$1"; exec 3>&-; sleep 0.1; done', 'sh', pipe], { stdio: 'ignore' });
+    const global = mkSession({ sessionId: 'pi-global', title: 'global', platform: 'pi', cwd: '/proj/global' });
+    const adapter = {
+      platform: 'pi', isReady: () => true,
+      listConversations: vi.fn(async (cwd?: string) => (cwd === undefined ? [{
+        sessionId: global.sessionId, title: global.title, cwd: global.cwd, platform: 'pi',
+        createdAt: global.createdAt, updatedAt: global.updatedAt, messageCount: global.messages.length, filePath: '/fake/pi-global.jsonl', sizeBytes: 100,
+      }] : [])),
+      readSession: vi.fn(async () => global),
+    };
+    mocks.adaptersByPlatform.pi = adapter;
+    mocks.remotes['/proj/global'] = 'https://github.com/team/global.git';
+    const start = Date.now();
+
+    try {
+      await runSession('push', '--source', 'pi', '--all', '--scrub', '-y', '--repo-root', repoRoot, '--cwd', projectRoot);
+    } finally {
+      releaser.kill();
+    }
+
+    expect(Date.now() - start).toBeLessThan(2_000);
+    expect(adapter.listConversations).not.toHaveBeenCalledWith(projectRoot);
+    expect(out.join('\n')).toContain('Pushed 1 session(s) from pi');
+  });
+
   it('asks for confirmation before pushing more than five sessions', async () => {
     const adapter = fakeAdapter(manySessions(6));
     mocks.remotes['/proj/beta'] = 'https://gitlab.com/team/beta.git';

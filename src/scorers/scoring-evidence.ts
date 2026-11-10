@@ -12,6 +12,7 @@ import type { LocalConfig } from '../types.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { redact } from '@teamai/shared/redact';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { scoresDir } from './home.js';
 import {
   fencedEvidence, isEvidenceReady, rubricPrompt, subjectEvidenceDirOf, writeEvidence, SESSION_MAX_CHARS, SUBAGENT_MAX_CHARS, type EvidenceGap, type Rubrics,
@@ -372,7 +373,7 @@ export async function evidenceHash(dir: string): Promise<string | undefined> {
 /** Writes prompt.md in `dir`, which collectEvidence filled: what `rubrics` ask, then the fenced evidence. */
 async function assembleJudgePrompt(config: LocalConfig, dir: string, rubrics: Rubrics): Promise<void> {
   const mask = await secretMask(config);
-  const fenced = await fs.readFile(path.join(dir, FENCED), 'utf8');
+  const fenced = await readRegularFile(path.join(dir, FENCED), 'utf8');
   await fs.writeFile(path.join(dir, 'prompt.md'), mask(rubricPrompt(rubrics)) + fenced);
 }
 
