@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import { errnoCode, pathExists, remove } from './utils/fs.js';
 import { COPILOT_TOOL_ID } from './types.js';
@@ -43,7 +44,7 @@ export async function ownedSkillFiles(skillName: string, paths?: readonly string
 
     if (await pathExists(stubPath)) {
       const digests = owned.get('SKILL.md') ?? new Set<string>();
-      digests.add(packagedSkillDigest(await fs.promises.readFile(stubPath)));
+      digests.add(packagedSkillDigest(await readRegularFile(stubPath)));
       owned.set('SKILL.md', digests);
     }
   }
@@ -57,7 +58,7 @@ export async function isOwnedFile(file: string, relative: string, owned: OwnedSk
 
   if (!digests) return false;
 
-  return digests.has(packagedSkillDigest(await fs.promises.readFile(file)));
+  return digests.has(packagedSkillDigest(await readRegularFile(file)));
 }
 
 /**

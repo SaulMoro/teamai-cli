@@ -823,8 +823,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           slot = slots.find((candidate) => candidate.kind === 'external' && candidate.use === runtime) ?? slots.find((candidate) => candidate.kind === 'external') ?? slots[0];
           break;
         }
+
         case 'in_process':
-          // One slot runs in teamai's process, the host's or the definition's tools, whichever the record names.
+          // One slot runs in teamai's process: the definition's tools, else the host's.
           slot = slots.find((candidate) => candidate.kind !== 'external') ?? slots[0];
           break;
         case 'unrecorded':

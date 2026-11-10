@@ -21,7 +21,6 @@
   "src/benchmark/start.ts": 1,
   "src/benchmark/suite-cache.ts": 1,
   "src/builtin-agents.ts": 1,
-  "src/builtin-skills.ts": 2,
   "src/ci/extract-mr.ts": 1,
   "src/claude-hook-host.ts": 2,
   "src/code-knowledge-recall.ts": 2,

@@ -76,6 +76,8 @@ const SKILL_IMPORTS = {
   'src/types.ts': { typeOnly: true },
   // The usage limits a run's tools hit, which the skill driver keeps between calls and holds steps on as the local driver does.
   'src/workflow/usage-limits.ts': { names: ['UsageLimits', 'KeptLimitSchema', 'KeptLimit', 'WhenIdle'] },
+  // The command a failure names to retry its step, which every driver spells the same way.
+  'src/workflow/runtimes/retry-command.ts': { names: ['retryCommand'] },
 };
 
 /** Rule 3: the modules through which code outside a folder reaches it; tests may also import the entries of their unit. */

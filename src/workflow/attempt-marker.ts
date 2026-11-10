@@ -46,11 +46,11 @@ export function agentEvidence(env: NodeJS.ProcessEnv): AgentEvidence {
  * behaves: Claude Code turns transcript saving off in an interactive session that inherits `CLAUDE_CODE_CHILD_SESSION`,
  * so teamai would find no session of the step to record, score or resume.
  */
-const OUTER_SESSION_MARKERS: readonly string[] = ['CLAUDE_CODE_CHILD_SESSION'];
+const OUTER_SESSION_MARKERS: ReadonlySet<string> = new Set(['CLAUDE_CODE_CHILD_SESSION']);
 
 /** `env` without the markers of a coding session teamai runs inside, for a tool teamai launches (`OUTER_SESSION_MARKERS`). */
 export function withoutOuterSessionMarkers(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(env).filter(([name]) => !OUTER_SESSION_MARKERS.includes(name)));
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !OUTER_SESSION_MARKERS.has(name)));
 }
 
 /**
