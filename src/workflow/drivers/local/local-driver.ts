@@ -756,8 +756,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
     // Named for what runs, as the step's record is.
     const runtime = inProcessRuntimeOf({ isPrompt: lease.prompt !== undefined, isAnswer: lease.answer === true });
+    // What a killed teamai left of the attempt on another runtime is stopped first, by that runtime's record, which this
+    // record would replace. A stop not confirmed keeps that record, and staging the lease fails the step on it.
+    const leftElsewhere = attempt.success ? await stopLeftElsewhere({ config, run: runId, attempt: lease.attempt, runsOn: undefined, checkout: root }) : undefined;
 
-    if (attempt.success) await recordInProcessAttempt(config, runId, attempt.data, { runtime, driver: defined.driver });
+    if (attempt.success && leftElsewhere === undefined) await recordInProcessAttempt(config, runId, attempt.data, { runtime, driver: defined.driver });
     const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
     const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
 
