@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // oxlint's defaults, and import for import/no-cycle: the module graph it needs is built only when import is on here.
+  "plugins": ["typescript", "unicorn", "oxc", "import"],
   "jsPlugins": ["./oxlint-plugin-teamai/index.js"],
   "ignorePatterns": [
     // Agent tooling a member's tools install into the checkout: their skills and hooks, not this repository's source.
@@ -155,9 +157,59 @@
     // CONTRIBUTING: comments explain why, not what.
     "teamai/no-low-value-comments": "error",
     // A suppression with no reason can't be reviewed or removed later.
-    "teamai/suppression-reason": "error"
+    "teamai/suppression-reason": "error",
+    // `fs.readFile` off a default import is how this repository reads files; the rule would flag every one.
+    "import/no-named-as-default-member": "off"
   },
   "overrides": [
+    {
+      // No import cycle in production source: a module in a cycle can be read before it is initialized, and a cycle
+      // joins two concepts that should have one owner. A cycle of type-only imports is allowed: it is erased.
+      "files": ["src/**", "packages/*/src/**"],
+      "excludeFiles": ["src/__tests__/**", "**/*.test.ts", "src/testing/**", "packages/*/src/testing/**"],
+      "rules": { "import/no-cycle": ["error", { "ignoreTypes": true }] }
+    },
+    {
+      // The files in an import cycle when the rule landed. The list only shrinks: import-cycles.test.ts fails while a
+      // listed file is in no cycle, and lint refuses a file not listed that joins one.
+      "files": [
+        "src/agent-skills.ts",
+        "src/builtin-skills.ts",
+        "src/resources/skills.ts",
+        "src/scorers/engine-hooks.ts",
+        "src/scorers/evidence-dir.ts",
+        "src/scorers/pass-scoring.ts",
+        "src/scorers/score-labels.ts",
+        "src/scorers/score-plan.ts",
+        "src/scorers/score-stage.ts",
+        "src/scorers/score-subjects.ts",
+        "src/scorers/scoring-evidence.ts",
+        "src/scorers/try-scorer.ts",
+        "src/skill-content.ts",
+        "src/wiki-engine/code-knowledge/code-extractors.ts",
+        "src/wiki-engine/code-knowledge/extractors/config.ts",
+        "src/wiki-engine/code-knowledge/extractors/go.ts",
+        "src/wiki-engine/code-knowledge/extractors/index.ts",
+        "src/wiki-engine/code-knowledge/extractors/java.ts",
+        "src/wiki-engine/code-knowledge/extractors/python.ts",
+        "src/wiki-engine/code-knowledge/extractors/rust.ts",
+        "src/wiki-engine/code-knowledge/extractors/scala.ts",
+        "src/wiki-engine/code-knowledge/extractors/swift.ts",
+        "src/wiki-engine/code-knowledge/extractors/typescript.ts",
+        "src/workflow/engine.ts",
+        "src/workflow/fleet/owner.ts",
+        "src/workflow/handoff.ts",
+        "src/workflow/leftovers.ts",
+        "src/workflow/place/clone.ts",
+        "src/workflow/place/place.ts",
+        "src/workflow/protocol.ts",
+        "src/workflow/run-controls.ts",
+        "src/workflow/runtimes/attempt.ts",
+        "src/workflow/runtimes/composed.ts",
+        "src/workflow/runtimes/sources.ts"
+      ],
+      "rules": { "import/no-cycle": "off" }
+    },
     {
       // The anti-slop rules hold production code. Tests build partial and
       // malformed values on purpose, and CONTRIBUTING asks them to mock
