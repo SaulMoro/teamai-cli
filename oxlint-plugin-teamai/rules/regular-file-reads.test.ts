@@ -93,11 +93,12 @@ export const readFileSafe = (file: string) => fse.readFile(file, 'utf-8');`, (ou
   expect(output).toContain(MESSAGE);
 }, { filename: 'src/utils/fs.ts' });
 
-valid('allows the helper\'s own read of the descriptor it checked', `import fs from 'node:fs';
-export const read = (fd: number) => fs.readFileSync(fd, 'utf8');`, { filename: 'packages/shared/src/regular-file.ts' });
-
-valid('allows the hook fast path\'s copy of the helper, which runs before the bundle that holds it', `import fs from 'node:fs';
-export const read = (fd: number) => fs.readFileSync(fd, 'utf8');`, { filename: 'src/hook-fast-path.ts' });
+for (const filename of ['packages/shared/src/regular-file.ts', 'src/hook-fast-path.ts']) {
+  invalid(`rejects a new plain read in ${filename}, whose own reads are allowed line by line`, `import fs from 'node:fs';
+export const read = (file: string) => fs.readFileSync(file, 'utf8');`, (output) => {
+    expect(output).toContain(MESSAGE);
+  }, { filename });
+}
 
 valid('allows the helper, and a read of an open handle it returned', `import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 export const text = (file: string) => readRegularFile(file, 'utf8');

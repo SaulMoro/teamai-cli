@@ -180,12 +180,14 @@ function readTextFile(file: string): string | null {
   let fd: number;
 
   try {
+    // oxlint-disable-next-line teamai/regular-file-reads -- the fast path's own nonblocking open, since it loads only node: modules (teamai/uncached-entry)
     fd = fs.openSync(file, process.platform === 'win32' ? fs.constants.O_RDONLY : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch {
     return null;
   }
 
   try {
+    // oxlint-disable-next-line teamai/regular-file-reads -- reads the descriptor just checked as a regular file, not a path
     return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd, 'utf8') : null;
   } catch {
     return null;

@@ -43,6 +43,7 @@ export class NotRegularFileError extends Error {
 
 /** The open handle of `file`, a regular file; a missing file rejects with its own error, anything else with `NotRegularFileError`. */
 export async function openRegularFile(file: string): Promise<FileHandle> {
+  // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read
   const handle = await fs.promises.open(file, NONBLOCKING_READ);
 
   try {
@@ -75,6 +76,7 @@ export async function readRegularFile(file: string, encoding?: BufferEncoding): 
  * `openRegularFile`. Reading a regular file ends at its end, so only the open could block, and it does not here.
  */
 export function openRegularFileSync(file: string): number {
+  // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its descriptor is checked before a byte is read
   const fd = fs.openSync(file, NONBLOCKING_READ);
 
   try {
@@ -96,6 +98,7 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
   const fd = openRegularFileSync(file);
 
   try {
+    // oxlint-disable-next-line teamai/regular-file-reads -- reads the descriptor openRegularFileSync checked, not a path
     return encoding === undefined ? fs.readFileSync(fd) : fs.readFileSync(fd, encoding);
   } finally {
     fs.closeSync(fd);
@@ -119,6 +122,7 @@ export async function openRegularFileForWrite(file: string, { append, mode }: { 
   let handle: FileHandle;
 
   try {
+    // oxlint-disable-next-line teamai/regular-file-reads -- opens for writing, with flags the rule cannot see as a write
     handle = await fs.promises.open(file, NONBLOCKING_WRITE | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
