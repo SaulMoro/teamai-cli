@@ -858,6 +858,33 @@ async function isClaimedHere(config: LocalConfig, run: RunId, attempt: AttemptId
   return fs.access(claimedMarker(config, run, attempt)).then(() => true, () => false);
 }
 
+function foldersNote(config: LocalConfig, run: RunId, attempt: AttemptId): string {
+  return path.join(attemptDir(config, run, attempt), 'fleet-folders.json');
+}
+
+/** Notes the stored workflow folders `held`'s step reads, before they are written, so a sweep keeps them while it runs. */
+export async function noteHeldFolders(config: LocalConfig, held: HeldAttempt, sourceHashes: readonly string[]): Promise<void> {
+  if (sourceHashes.length > 0) await writeJsonAtomic(foldersNote(config, held.run, held.attempt), [...sourceHashes]);
+}
+
+const FoldersNoteSchema = z.array(z.string());
+
+/**
+ * The stored workflow folders the steps this install holds read: no run record here names a command or prompt step a
+ * member takes, and its team's workflows may have moved on since it took it. Read from this install's teamai-reports
+ * checkout as it stands, which holds every write of its own.
+ */
+export async function heldFolders(config: LocalConfig): Promise<string[]> {
+  const held = (await listRecords(config)).filter((record) => isHeld(record) || record.state === 'cancelling');
+
+  // A claim noted no folder when its step reads none; the note is written whole (writeJsonAtomic) or not at all.
+  const notes = await Promise.all(held.map(async (record) => (
+    await isClaimedHere(config, record.run, record.attempt) ? readRegularFile(foldersNote(config, record.run, record.attempt), 'utf8').catch(() => undefined) : undefined
+  )));
+
+  return notes.flatMap((text) => (text === undefined ? [] : FoldersNoteSchema.parse(parseJson(text))));
+}
+
 /**
  * The wake an owner sent for an offer: its op, noted before it is sent, so a restarted owner sends none again; and once
  * the runtime launched a member, where, with what it shows of it.

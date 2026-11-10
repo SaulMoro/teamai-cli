@@ -16,6 +16,7 @@ import { log } from '@teamai/shared/log';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { listCachedWorkflows } from './cache.js';
 import { WorkflowFolder } from './folder.js';
+import { heldFolders } from './fleet/record.js';
 import { publishRunEnd, type HandoffError } from './handoff.js';
 import { pullRequestBranches, RECORDS_DIR, RunRecordFieldsSchema } from './records.js';
 import { ownRunSweptAt, resolveRetention, type ResolvedRetention } from './retention.js';
@@ -738,11 +739,12 @@ export async function sweepLeftovers(config: LocalConfig, team: Pick<TeamaiConfi
     }
   }
 
-  // A stored workflow folder goes once no run of this data home and no workflow this scope has cached uses it. A run swept
-  // past its retention uses none: no retry reopens it, and a claim pins its folders again.
+  // A stored workflow folder goes once no run of this data home, no step this install holds as a fleet member and no
+  // workflow this scope has cached uses it. A run swept past its retention uses none: no retry reopens it, and a claim
+  // pins its folders again.
   const cached = (await listCachedWorkflows(config)).flatMap((workflow) => (workflow.source === 'team' && workflow.files ? [workflow.sourceHash] : []));
   const using = (await readRuns(config)).filter((run) => !cleaned(run, 'retention'));
-  const referenced = new Set([...cached, ...using.flatMap((run) => [...run.folder ? [run.folder] : [], ...Object.values(run.folders ?? {})])]);
+  const referenced = new Set([...cached, ...await heldFolders(config), ...using.flatMap((run) => [...run.folder ? [run.folder] : [], ...Object.values(run.folders ?? {})])]);
   await WorkflowFolder.prune(config, { referenced, now });
 
   return { retention, swept };

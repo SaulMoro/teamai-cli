@@ -134,7 +134,7 @@ function named(config: LocalConfig, value: string | undefined): string | undefin
 /**
  * Writes `files` to {@link dir} once, for every run that uses the folder with `sourceHash`: into a new sibling first,
  * renamed into place, so a run never sees a folder half written. A folder already there is kept as it is, its time set
- * to now, so {@link prune} gives a take that no run record here names, as a fleet member's, its hour again.
+ * to now, so {@link prune} keeps it for a run that pins it before its record names it, as a start and a claim do.
  */
 async function pin(config: LocalConfig, { sourceHash, files }: { sourceHash: string; files: readonly WorkflowFolderFile[] }): Promise<void> {
   const target = dir(config, sourceHash);

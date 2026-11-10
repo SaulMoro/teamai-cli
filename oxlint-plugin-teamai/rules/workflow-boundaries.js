@@ -112,10 +112,11 @@ const ENTRIES = [
   {
     folder: FLEET,
     // The owner's side is a step runtime a driver definition opens (runtimes/sources.ts); the command layer reads the default pool.
+    // A sweep keeps the folders of the steps this install holds as a member (leftovers.ts).
     entries: {
       'owner.ts': ['src/workflow/runtimes/sources.ts'],
       'member.ts': ['src/workflow-commands.ts'],
-      'record.ts': ['src/workflow/handoff.ts', 'src/workflow-commands.ts'],
+      'record.ts': ['src/workflow/handoff.ts', 'src/workflow-commands.ts', 'src/workflow/leftovers.ts'],
     },
     // A member's gate questions are tested on their own: their race needs reads no fleet test can order.
     testEntries: ['record.ts', 'owner.ts', 'member.ts', 'gate.ts'],

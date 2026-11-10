@@ -31,6 +31,8 @@ import { openSessionArchive } from '../session-flow/archive.js';
 import { log } from '@teamai/shared/log';
 import { sessionArchiveRoot } from '../session-flow/session-cmd-shared.js';
 import { getRepoIdentity, SyncManager } from '../session-flow/sync.js';
+import { getDataHome } from '../types.js';
+import { sweepLeftovers } from '../workflow/leftovers.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -637,6 +639,30 @@ describe('a member taking an attempt', () => {
     const to = record?.state === 'finished' ? record.result.to ?? '' : '';
     git(alice.checkout, 'fetch', '-q', 'origin', to);
     expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
+  });
+
+  it('keeps the folder of a step it holds through a sweep, however long the step has run', async () => {
+    const gate = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fleet-gate-')));
+    const command = `while [ ! -f ${path.join(gate, 'go')} ]; do sleep 0.05; done; cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"`;
+    const folder = { 'WORKFLOW.yaml': MARK.replace('echo written > "$MARK"', command), 'mark.txt': 'written\n' };
+    let bob: Member | undefined;
+    const taking = takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command }; }, async (members) => { bob = members.bob; }, { folder });
+    const stored = (): string => (bob ? path.join(getDataHome(bob.config), 'workflows', 'folders') : '');
+    const folders = (): string[] => (fs.existsSync(stored()) ? fs.readdirSync(stored()).filter((name) => /^[0-9a-f]{64}$/.test(name)) : []);
+    // The step has started once its folder is written, and the gate keeps it running while it ages and a sweep runs.
+    while (folders().length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+    if (!bob) throw new Error('Bob took no step');
+    // The team changes the workflow while the step runs, so Bob's cache no longer names the folder the step reads.
+    fs.writeFileSync(path.join(bob.config.repo.localPath, 'workflows', 'mark', 'mark.txt'), 'changed\n');
+    await syncScorersThenWorkflows(bob.config);
+    const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const name of folders()) fs.utimesSync(path.join(stored(), name), longAgo, longAgo);
+    await sweepLeftovers(bob.config, null, { now: Date.now(), checkout: bob.checkout });
+    fs.writeFileSync(path.join(gate, 'go'), '');
+
+    const { taken } = await taking;
+    fs.rmSync(gate, { recursive: true, force: true });
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
   });
 
   // A runtime that runs the step elsewhere, such as a sandbox, makes only what the place names reachable there.
