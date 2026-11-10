@@ -1,9 +1,13 @@
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { processStarts, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import { z } from 'zod';
+import { recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+
+/** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
+const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
@@ -83,7 +87,7 @@ it.skipIf(process.platform === 'win32')('stops an attached command when ps is un
   }
 });
 
-it.skipIf(process.platform === 'win32')('only escalates captured descendants with the same start time, including reparented survivors', async () => {
+it.runIf(READS_PS)('only escalates captured descendants with the same start time, including reparented survivors', async () => {
   vi.useFakeTimers();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-'));
   const snapshot = path.join(directory, 'snapshot');
@@ -121,7 +125,7 @@ esac
   }
 });
 
-it.skipIf(process.platform === 'win32')('escalates only the shell when the current process snapshot fails', async () => {
+it.runIf(READS_PS)('escalates only the shell when the current process snapshot fails', async () => {
   vi.useFakeTimers();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-'));
   const child = new ChildProcess();
@@ -129,11 +133,11 @@ it.skipIf(process.platform === 'win32')('escalates only the shell when the curre
   const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
   const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
   try {
+    // The first snapshot, taken before the stop, lists a descendant; every later one fails.
     fs.writeFileSync(path.join(directory, 'ps'), `#!/bin/sh
-case "$3" in
-  pid=,ppid=*) echo '424243 424242 Sun Oct 18 10:00:00 2026' ;;
-  *) exit 1 ;;
-esac
+[ -e "${directory}/listed" ] && exit 1
+: > "${directory}/listed"
+echo '424243 424242 Sun Oct 18 10:00:00 2026'
 `, { mode: 0o755 });
     vi.stubEnv('PATH', directory);
     const stopping = stopProcess(child, Promise.resolve('closed'), false)();
@@ -156,25 +160,38 @@ async function detachedGroup() {
   });
   const pid = shell.pid;
   if (pid === undefined) throw new Error('the detached shell has no pid');
-  const start = processStarts()?.get(pid) ?? '';
   const alive = (): boolean => {
     try { return process.kill(-pid, 0); } catch { return false; }
   };
-  return { shell, pid, start, alive };
+  return { shell, pid, alive };
+}
+
+/** The record `recordGroup` keeps of `pid` in `records`, once it says when the process started. */
+async function completedRecord(records: string, pid: number): Promise<Record<string, unknown>> {
+  const file = path.join(records, `group-${pid}.json`);
+  let record: Record<string, unknown> = {};
+  await vi.waitFor(() => {
+    record = z.record(z.string(), z.unknown()).parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    expect(record).not.toHaveProperty('spawnedAt');
+  }, { timeout: 5000 });
+  return record;
 }
 
 it.skipIf(process.platform === 'win32')('stops a detached group whose shell was killed, from what was recorded of it', async () => {
-  const { shell, pid, start, alive } = await detachedGroup();
+  const records = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-killed-'));
+  const { shell, pid, alive } = await detachedGroup();
   try {
-    expect(start).not.toBe('');
+    recordGroup(shell, records);
+    await completedRecord(records, pid);
     const closed = new Promise((resolve) => { shell.once('close', resolve); });
     process.kill(pid, 'SIGKILL');
     await closed;
     expect(alive()).toBe(true);
-    expect(await stopGroup({ pid, start })).toBe(true);
+    await stopRecordedGroup(records);
     expect(alive()).toBe(false);
   } finally {
     try { process.kill(-pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(records, { recursive: true, force: true });
   }
 });
 
@@ -260,7 +277,7 @@ function slowPs(seconds: number): { directory: string; bin: string; records: str
   return { directory, bin, records };
 }
 
-it.skipIf(process.platform === 'win32')('records a group without holding the event loop while ps answers', async () => {
+it.runIf(READS_PS)('records a group without holding the event loop while ps answers', async () => {
   const { directory, bin, records } = slowPs(1.5);
   const group = await detachedGroup();
   try {
@@ -272,8 +289,8 @@ it.skipIf(process.platform === 'win32')('records a group without holding the eve
 
     expect(await fired).toBeLessThan(1000);
     const file = path.join(records, `group-${group.pid}.json`);
-    await vi.waitFor(() => { expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ pid: group.pid, start: group.start }); }, { timeout: 5000 });
-    expect(JSON.parse(fs.readFileSync(path.join(records, 'group.json'), 'utf8'))).toEqual({ pid: group.pid, start: group.start });
+    await vi.waitFor(() => { expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ pid: group.pid, start: expect.any(String) }); }, { timeout: 5000 });
+    expect(fs.readFileSync(path.join(records, 'group.json'), 'utf8')).toBe(fs.readFileSync(file, 'utf8'));
   } finally {
     try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
@@ -297,5 +314,105 @@ it.skipIf(process.platform === 'win32')('stops a group recorded while ps has not
   } finally {
     try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/** A directory whose `ps` answers as BusyBox's does, which prints no start time: no `lstart`, no `-p`. */
+function busyboxPs(): { directory: string; bin: string; records: string } {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-busybox-ps-'));
+  const bin = path.join(directory, 'bin');
+  const records = path.join(directory, 'records');
+  fs.mkdirSync(bin);
+  fs.mkdirSync(records);
+  fs.writeFileSync(path.join(bin, 'ps'), '#!/bin/sh\necho "ps: bad -o argument \'lstart\'" >&2\nexit 1\n', { mode: 0o755 });
+  return { directory, bin, records };
+}
+
+/** Whether process `pid` is still running. */
+function isRunning(pid: number): boolean {
+  try { return process.kill(pid, 0); } catch { return false; }
+}
+
+it.runIf(process.platform === 'linux')('stops a recorded group where ps cannot tell when a process started, as in an Alpine container', async () => {
+  const { directory, bin, records } = busyboxPs();
+  const group = await detachedGroup();
+  try {
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    recordGroup(group.shell, records);
+
+    await stopRecordedGroup(records);
+
+    expect(group.alive()).toBe(false);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.runIf(process.platform === 'linux')('stops a recorded attached command and what it started where ps cannot tell when a process started', async () => {
+  const { directory, bin, records } = busyboxPs();
+  const shell = spawn('sh', ['-c', 'sleep 300 & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const sleeper = await new Promise<number>((resolve, reject) => {
+    shell.stdout.once('data', (chunk: Buffer) => resolve(Number(chunk.toString().trim())));
+    shell.once('error', reject);
+  });
+  try {
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    recordGroup(shell, records, { isAttached: true });
+
+    await stopRecordedGroup(records);
+
+    await vi.waitFor(() => { expect(isRunning(sleeper)).toBe(false); }, { timeout: 2000 });
+    await vi.waitFor(() => { expect(shell.signalCode ?? shell.exitCode).not.toBeNull(); }, { timeout: 2000 });
+  } finally {
+    try { process.kill(sleeper, 'SIGKILL'); } catch { /* Already stopped. */ }
+    shell.kill('SIGKILL');
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/** When process `pid` started, in clock ticks since boot, as the kernel reports it in field 22 of `/proc/<pid>/stat`. */
+function kernelStartTicks(pid: number): number {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+}
+
+it.runIf(process.platform === 'linux')('leaves a recorded group alone when its record names another pid namespace', async () => {
+  const records = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-namespace-'));
+  const group = await detachedGroup();
+  try {
+    // Written in a container sharing this home: its pid and start name a process only in its own namespace.
+    fs.writeFileSync(path.join(records, `group-${group.pid}.json`), JSON.stringify({ pid: group.pid, startTicks: kernelStartTicks(group.pid), pidNamespace: 'pid:[1]' }));
+
+    await stopRecordedGroup(records);
+
+    expect(group.alive()).toBe(true);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(records, { recursive: true, force: true });
+  }
+});
+
+it.runIf(process.platform === 'linux')('stops a group an earlier teamai recorded with the start ps printed', async ({ skip }) => {
+  const records = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-lstart-'));
+  const group = await detachedGroup();
+  try {
+    let start = '';
+    try {
+      start = execFileSync('ps', ['-o', 'lstart=', '-p', String(group.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim();
+    } catch {
+      skip('this ps prints no start time (BusyBox)');
+    }
+    fs.writeFileSync(path.join(records, `group-${group.pid}.json`), JSON.stringify({ pid: group.pid, start }));
+    const closed = new Promise((resolve) => { group.shell.once('close', resolve); });
+    process.kill(group.pid, 'SIGKILL');
+    await closed;
+
+    await stopRecordedGroup(records);
+
+    expect(group.alive()).toBe(false);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(records, { recursive: true, force: true });
   }
 });

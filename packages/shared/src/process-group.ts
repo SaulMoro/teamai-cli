@@ -8,47 +8,142 @@ import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** Runs ps with `args` in the C locale, whose `lstart` reads the same on every machine and parses as a date. */
 function ps(args: string[]): string {
   return execFileSync('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } });
 }
 
-const STARTS_ARGS = ['-A', '-o', 'pid=,lstart='];
+/**
+ * When a running process started. On Linux, in clock ticks since the machine booted, read from `/proc`, which a
+ * container whose BusyBox `ps` prints no start time still has; elsewhere as `ps -o lstart=` prints it, to the second.
+ * `at` is that time in milliseconds since the epoch.
+ */
+type ProcessStart = { ticks: number; at: number } | { lstart: string; at: number };
 
-/** The start time of every process, as `ps -o lstart=` prints it, by pid; undefined when ps cannot run. */
-export function processStarts(): Map<number, string> | undefined {
+/** Whether `a` and `b` are the start of one process, read at two times. */
+function isSameStart(a: ProcessStart, b: ProcessStart): boolean {
+  return 'ticks' in a ? 'ticks' in b && a.ticks === b.ticks : 'lstart' in b && a.lstart === b.lstart;
+}
+
+/** A running process: its parent, and when it started. */
+interface RunningProcess { ppid: number; start: ProcessStart }
+
+/** Every running process by pid, from `/proc` on Linux and from ps elsewhere; undefined when neither can tell. */
+function runningProcesses(): Map<number, RunningProcess> | undefined {
+  return procProcesses() ?? psProcesses();
+}
+
+/** The fields of `/proc/<pid>/stat` this module reads: the parent (field 4) and the start in ticks (field 22). */
+function statFields(stat: string): { ppid: number; ticks: number } | undefined {
+  // The command name, field 2, is in parentheses and may hold spaces or parentheses itself: fields count after its last `)`.
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  const ppid = Number(fields[1]);
+  const ticks = Number(fields[19]);
+
+  return Number.isInteger(ppid) && Number.isInteger(ticks) ? { ppid, ticks } : undefined;
+}
+
+/** The clock ticks per second `/proc` counts in (USER_HZ), 100 on every architecture Linux exposes to Node. */
+const USER_HZ = 100;
+
+/** When the machine booted, in milliseconds since the epoch, as `/proc/stat` tells it (to the second). */
+function bootTime(stat: string): number | undefined {
+  const boot = Number(/^btime (\d+)$/m.exec(stat)?.[1]);
+
+  return Number.isInteger(boot) ? boot * 1000 : undefined;
+}
+
+/** The start of a process that started `ticks` after a boot at `boot`. */
+function tickStart(ticks: number, boot: number): ProcessStart {
+  return { ticks, at: boot + (ticks * 1000) / USER_HZ };
+}
+
+/** Every running process, read from `/proc`; undefined off Linux or when `/proc` cannot be read. */
+function procProcesses(): Map<number, RunningProcess> | undefined {
+  if (process.platform !== 'linux') return undefined;
+  let boot: number | undefined;
+  let names: string[];
+
   try {
-    return startsOf(ps(STARTS_ARGS));
+    boot = bootTime(readRegularFileSync('/proc/stat', 'utf8'));
+    names = fs.readdirSync('/proc');
+  } catch {
+    return undefined;
+  }
+
+  if (boot === undefined) return undefined;
+  const running = new Map<number, RunningProcess>();
+
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    let fields: { ppid: number; ticks: number } | undefined;
+
+    try {
+      fields = statFields(readRegularFileSync(`/proc/${name}/stat`, 'utf8'));
+    } catch {
+      // The process exited while the folder was read.
+      continue;
+    }
+
+    if (fields !== undefined) running.set(Number(name), { ppid: fields.ppid, start: tickStart(fields.ticks, boot) });
+  }
+
+  return running;
+}
+
+const PROCESSES_ARGS = ['-A', '-o', 'pid=,ppid=,lstart='];
+
+/** Every running process, as ps lists it; undefined when ps cannot run or prints no start time. */
+function psProcesses(): Map<number, RunningProcess> | undefined {
+  try {
+    return processesOf(ps(PROCESSES_ARGS));
   } catch {
     return undefined;
   }
 }
 
-/** `processStarts`, read without holding the event loop while ps runs. */
-function readProcessStarts(): Promise<Map<number, string> | undefined> {
+function processesOf(stdout: string): Map<number, RunningProcess> {
+  const running = new Map<number, RunningProcess>();
+
+  for (const line of stdout.trim().split('\n')) {
+    const [pid, ppid, ...start] = line.trim().split(/\s+/);
+    const lstart = start.join(' ');
+
+    if (pid && ppid && lstart) running.set(Number(pid), { ppid: Number(ppid), start: { lstart, at: Date.parse(lstart) } });
+  }
+
+  return running;
+}
+
+/**
+ * What a record says of when process `pid` started, read without holding the event loop: one `/proc` read on Linux,
+ * else ps off the event loop. Undefined when no process has the pid or neither can tell.
+ */
+async function recordedStartOf(pid: number): Promise<{ startTicks: number; pidNamespace?: string } | { start: string } | undefined> {
+  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(pid), ownPidNamespace()]);
+
+  if (startTicks !== undefined) return { startTicks, ...(pidNamespace !== undefined && { pidNamespace }) };
+
   return new Promise((resolve) => {
-    execFile('ps', STARTS_ARGS, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout) => {
-      resolve(error ? undefined : startsOf(stdout));
+    execFile('ps', PROCESSES_ARGS, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout) => {
+      const start = error ? undefined : processesOf(stdout).get(pid)?.start;
+
+      resolve(start !== undefined && 'lstart' in start ? { start: start.lstart } : undefined);
     });
   });
 }
 
-function startsOf(stdout: string): Map<number, string> {
-  return new Map(stdout.trim().split('\n').map((line) => {
-    const [pid, ...start] = line.trim().split(/\s+/);
-
-    return [Number(pid), start.join(' ')];
-  }));
-}
-
 /**
  * What a record names: a detached process group, or with `tree`, an attached command, which shares its starter's group
- * and is reached as the process and its descendants. `start` is when that process started, as ps prints it; a record
- * written before ps answered has `spawnedAt` instead, the time in milliseconds its starter spawned it.
+ * and is reached as the process and its descendants. On Linux `startTicks` is when that process started, in clock ticks
+ * since boot, and `pidNamespace` the pid namespace its pid belongs to; elsewhere `start` is when it started, as ps
+ * prints it. A record written before either was read has `spawnedAt` instead, the time in milliseconds its starter
+ * spawned it.
  */
 const RecordedSchema = z.union([
+  z.object({ pid: z.number().int().positive(), startTicks: z.number().int().nonnegative(), pidNamespace: z.string().min(1).optional(), tree: z.literal(true).optional() }),
   z.object({ pid: z.number().int().positive(), start: z.string().min(1), tree: z.literal(true).optional() }),
   z.object({ pid: z.number().int().positive(), spawnedAt: z.number().int().nonnegative(), tree: z.literal(true).optional() }),
 ]);
@@ -58,15 +153,26 @@ type Recorded = z.infer<typeof RecordedSchema>;
 /** How long before its starter read the clock a spawned process may have started: the spawn, which load slows. */
 const SPAWN_LEEWAY_MS = 10_000;
 
-/** Whether `psStart`, when ps says the recorded pid's process started, names the process `recorded` names. */
-function isRecordedStart(recorded: Recorded, psStart: string | undefined): boolean {
-  if (psStart === undefined) return false;
+/**
+ * Whether `recorded` names a process in the pid namespace `namespace`, this process's: a pid recorded in another one
+ * (a container and its host sharing a home) names another process here.
+ */
+function isOwnNamespace(recorded: Recorded, namespace: string | undefined): boolean {
+  return !('startTicks' in recorded) || recorded.pidNamespace === namespace;
+}
 
-  if ('start' in recorded) return psStart === recorded.start;
-  const started = Date.parse(psStart);
+/** Whether `live`, when the recorded pid's process started, names the process `recorded` names. */
+function isRecordedStart(recorded: Recorded, live: ProcessStart | undefined): boolean {
+  if (live === undefined) return false;
 
-  // ps prints the start to the second, and the starter read the clock once the spawn returned.
-  return started <= recorded.spawnedAt && recorded.spawnedAt - started < SPAWN_LEEWAY_MS;
+  if ('startTicks' in recorded) return 'ticks' in live && live.ticks === recorded.startTicks;
+
+  // A record an earlier teamai wrote where ps tells the start, read here from `/proc`: both count whole seconds from boot.
+  if ('start' in recorded) return 'lstart' in live ? live.lstart === recorded.start : Math.floor(live.at / 1000) * 1000 === Date.parse(recorded.start);
+
+  // ps prints the start to the second, `/proc` counts from a boot time to the second, and the starter read the clock
+  // once the spawn returned.
+  return live.at <= recorded.spawnedAt && recorded.spawnedAt - live.at < SPAWN_LEEWAY_MS;
 }
 
 /** The file a teamai before #1523 wrote in a directory: the last process group started there. */
@@ -94,22 +200,22 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   const { pid } = child;
   const file = path.join(dir, `${GROUP_PREFIX}${pid}.json`);
 
-  // Recorded before ps answers, which takes long enough for the command to start working and its starter to be killed:
-  // until then the spawn time stands for the start. A teamai that reads only `start` stops nothing from it, as when
-  // nothing was recorded. ps then runs off the event loop, so a step's command and its output are not held while it does.
+  // Recorded before its start is read, which through ps takes long enough for the command to start working and its
+  // starter to be killed: until then the spawn time stands for the start. A teamai that reads only `start` stops nothing
+  // from it, as when nothing was recorded. ps then runs off the event loop, so a step's command and its output are not
+  // held while it does.
   writeGroup(file, JSON.stringify({ pid, spawnedAt: Date.now(), ...(isAttached && { tree: true }) }));
   const recordsDir = path.resolve(dir);
 
-  // ps runs at once; its answer is written after the records begun before it in `dir`, so `group.json` stays the latest.
-  const settled: Promise<void> = Promise.all([readProcessStarts(), pendingStarts.get(recordsDir)]).then(([starts]) => {
+  // The start is read at once; it is written after the records begun before it in `dir`, so `group.json` stays the latest.
+  const settled: Promise<void> = Promise.all([recordedStartOf(pid), pendingStarts.get(recordsDir)]).then(([start]) => {
     if (pendingStarts.get(recordsDir) === settled) pendingStarts.delete(recordsDir);
-    const start = starts?.get(pid);
 
     // Once this process reaped the child, its pid may name another process. A stop in another process may have removed
     // the record meanwhile: it is not written again.
     if (start === undefined || child.exitCode !== null || child.signalCode !== null || !fs.existsSync(file)) return;
     // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
-    const body = JSON.stringify({ pid, start, ...(isAttached && { tree: true }) });
+    const body = JSON.stringify({ pid, ...start, ...(isAttached && { tree: true }) });
     writeGroup(file, body);
     // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
     // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
@@ -139,12 +245,15 @@ function writeGroup(file: string, body: string): void {
 export async function stopRecordedGroup(dir: string): Promise<void> {
   // A record this process is still completing is finished first, so the stop removes it rather than racing its write.
   await pendingStarts.get(path.resolve(dir));
+  const namespace = await ownPidNamespace();
 
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
 
-    if (recorded?.tree) await stopTree(recorded);
-    else if (recorded !== undefined) await stopGroup(recorded);
+    if (recorded === undefined || !isOwnNamespace(recorded, namespace)) {
+      // Nothing here to stop: a pid recorded in another pid namespace names another process here.
+    } else if (recorded.tree) await stopTree(recorded);
+    else await stopGroup(recorded);
     await fs.promises.rm(file, { force: true });
   }
 }
@@ -190,11 +299,11 @@ function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
  */
 export async function stopGroup(group: Recorded): Promise<boolean> {
   if (process.platform === 'win32' || !signalGroup(group.pid, 0)) return false;
-  const starts = processStarts();
-  const leader = starts?.get(group.pid);
+  const running = runningProcesses();
+  const leader = running?.get(group.pid);
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
-  if (!starts || (leader !== undefined && !isRecordedStart(group, leader))) return false;
+  if (!running || (leader !== undefined && !isRecordedStart(group, leader.start))) return false;
   signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
@@ -210,31 +319,30 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
   return true;
 }
 
+/** A process found running, and when it started, which tells it from a later process given its pid. */
+interface FoundProcess { pid: number; start: ProcessStart }
+
+/** Whether `found` is still running in `now`: its pid names a process that started when it did. */
+function isStillRunning(now: Map<number, RunningProcess>, found: FoundProcess): boolean {
+  const running = now.get(found.pid);
+
+  return running !== undefined && isSameStart(running.start, found.start);
+}
+
 /**
- * Each descendant of process `pid`, deepest first, with when it started, as `ps` lists them now; none when ps cannot
- * run. A process that daemonized away from the tree is not among them.
+ * Each descendant of process `pid`, deepest first, with when it started, as they run now; none when that cannot be
+ * read. A process that daemonized away from the tree is not among them.
  */
-function descendantsOf(pid: number): { pid: number; start: string }[] {
-  let stdout = '';
+function descendantsOf(pid: number): FoundProcess[] {
+  const children = new Map<number, FoundProcess[]>();
 
-  try {
-    stdout = ps(['-A', '-o', 'pid=,ppid=,lstart=']);
-  } catch {
-    return [];
+  for (const [child, { ppid, start }] of runningProcesses() ?? []) {
+    const siblings = children.get(ppid) ?? [];
+    siblings.push({ pid: child, start });
+    children.set(ppid, siblings);
   }
 
-  const children = new Map<number, { pid: number; start: string }[]>();
-
-  for (const line of stdout.trim().split('\n')) {
-    const [child, parent, ...start] = line.trim().split(/\s+/);
-
-    if (!child || !parent || start.length === 0) continue;
-    const siblings = children.get(Number(parent)) ?? [];
-    siblings.push({ pid: Number(child), start: start.join(' ') });
-    children.set(Number(parent), siblings);
-  }
-
-  const found: { pid: number; start: string }[] = [];
+  const found: FoundProcess[] = [];
   const pending = [...children.get(pid) ?? []];
 
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
@@ -251,16 +359,16 @@ function descendantsOf(pid: number): { pid: number; start: string }[] {
  * alone, as `stopGroup` leaves a group. POSIX only.
  */
 async function stopTree(recorded: Recorded): Promise<void> {
-  const rootStart = processStarts()?.get(recorded.pid);
+  const rootStart = runningProcesses()?.get(recorded.pid)?.start;
 
   if (process.platform === 'win32' || rootStart === undefined || !isRecordedStart(recorded, rootStart)) return;
   const tree = [...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }];
 
   /** Signals each process of the tree that is still the one recorded; whether any was reached. */
   const signal = (name: NodeJS.Signals | 0): boolean => {
-    const now = processStarts() ?? new Map<number, string>();
+    const now = runningProcesses() ?? new Map<number, RunningProcess>();
 
-    return tree.filter(({ pid, start }) => now.get(pid) === start).reduce((reached, { pid }) => {
+    return tree.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
       try {
         return process.kill(pid, name) || reached;
       } catch {
@@ -285,7 +393,7 @@ async function stopTree(recorded: Recorded): Promise<void> {
 /** Stops a detached process group or an attached process tree, with a five-second grace period before SIGKILL. */
 export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: boolean): (signal?: NodeJS.Signals) => Promise<T> {
   let stopping: Promise<T> | undefined;
-  let descendants: { pid: number; start: string }[] = [];
+  let descendants: FoundProcess[] = [];
 
   /** Whether the signal reached any process in the group or tree. */
   const signal = (name: NodeJS.Signals | 0): boolean => {
@@ -295,9 +403,9 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
 
       if ((name === 0 || name === 'SIGKILL') && descendants.length > 0) {
         // Without current identities, stop only the shell.
-        const starts = processStarts() ?? new Map<number, string>();
-        // lstart has one-second resolution and the check is not atomic with kill, so this narrows the window but does not close it.
-        targets = descendants.filter(({ pid, start }) => starts.get(pid) === start);
+        const now = runningProcesses() ?? new Map<number, RunningProcess>();
+        // ps's lstart has one-second resolution and the check is not atomic with kill, so this narrows the window but does not close it.
+        targets = descendants.filter((found) => isStillRunning(now, found));
       }
 
       let reached = false;
@@ -357,11 +465,7 @@ export async function processStartTicks(pid: number): Promise<number | undefined
   if (process.platform !== 'linux') return undefined;
 
   try {
-    const stat = await readRegularFile(`/proc/${pid}/stat`, 'utf8');
-    // The command name, field 2, is in parentheses and may hold spaces or parentheses itself: fields count after its last `)`.
-    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
-
-    return Number.isInteger(ticks) ? ticks : undefined;
+    return statFields(await readRegularFile(`/proc/${pid}/stat`, 'utf8'))?.ticks;
   } catch {
     return undefined;
   }
@@ -381,9 +485,6 @@ export async function ownPidNamespace(): Promise<string | undefined> {
   }
 }
 
-/** The clock ticks per second `/proc` counts in (USER_HZ), 100 on every architecture Linux exposes to Node. */
-const USER_HZ = 100;
-
 /**
  * When the process `pid` started, in milliseconds since the epoch: on Linux from `/proc`, which a container without a
  * full `ps` still has, elsewhere as `ps -o lstart=` prints it, to the second. Undefined when no process has the pid or
@@ -394,9 +495,9 @@ export async function processStartedAt(pid: number): Promise<number | undefined>
 
   if (ticks !== undefined) {
     try {
-      const boot = Number(/^btime (\d+)$/m.exec(await readRegularFile('/proc/stat', 'utf8'))?.[1]);
+      const boot = bootTime(await readRegularFile('/proc/stat', 'utf8'));
 
-      if (Number.isInteger(boot)) return boot * 1000 + (ticks * 1000) / USER_HZ;
+      if (boot !== undefined) return tickStart(ticks, boot).at;
     } catch {
       // No /proc/stat: ps may still tell.
     }
