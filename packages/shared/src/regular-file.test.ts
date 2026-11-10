@@ -21,14 +21,6 @@ function scratch(): string {
   return dir;
 }
 
-/** Whether the scratch filesystem finds a name spelled in another case, as macOS and Windows do by default. */
-function ignoresCase(): boolean {
-  const dir = scratch();
-  fs.mkdirSync(path.join(dir, 'Case'));
-
-  return fs.existsSync(path.join(dir, 'case'));
-}
-
 /** A FIFO in a scratch folder: a step can leave one where teamai later reads a file it wrote. */
 function fifo(): string {
   const at = path.join(scratch(), 'result.json');
@@ -191,15 +183,6 @@ describe('copying a folder a step may have planted something in', () => {
     expect(fs.existsSync(path.join(to, 'scripts', 'cache'))).toBe(false);
   });
 
-  it('copies a single file into a folder it creates', async () => {
-    const dir = scratch();
-    fs.writeFileSync(path.join(dir, 'a.md'), 'a\n');
-
-    await copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'x', 'y', 'a.md'));
-
-    expect(fs.readFileSync(path.join(dir, 'x', 'y', 'a.md'), 'utf8')).toBe('a\n');
-  });
-
   it.skipIf(process.platform === 'win32')('refuses a FIFO inside the folder at once, instead of copying it or waiting on it', async () => {
     const dir = scratch();
     const from = path.join(dir, 'skill');
@@ -221,16 +204,6 @@ describe('copying a folder a step may have planted something in', () => {
     expect(fs.existsSync(path.join(dir, 'null'))).toBe(false);
   });
 
-  it('fails on a file already at the destination, or keeps it, when asked to, and leaves it as it was', async () => {
-    const dir = scratch();
-    fs.writeFileSync(path.join(dir, 'a.md'), 'new\n');
-    fs.writeFileSync(path.join(dir, 'b.md'), 'kept\n');
-
-    await expect(copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'b.md'), { existing: 'fail' })).rejects.toMatchObject({ code: 'EEXIST' });
-    await copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'b.md'), { existing: 'keep' });
-    expect(fs.readFileSync(path.join(dir, 'b.md'), 'utf8')).toBe('kept\n');
-  });
-
   it('refuses to copy onto itself, into a folder inside itself, a folder over a link back into it, or a file over a folder, and keeps the source', async () => {
     const dir = scratch();
     const from = path.join(dir, 'skill');
@@ -250,59 +223,9 @@ describe('copying a folder a step may have planted something in', () => {
     expect(fs.existsSync(path.join(from, 'scripts', 'copy'))).toBe(false);
   });
 
-  it.runIf(ignoresCase())('refuses to copy a folder onto itself or into itself spelled in another case, where the filesystem ignores case, and keeps the source', async () => {
-    const dir = scratch();
-    fs.mkdirSync(path.join(dir, 'Docs'));
-    fs.writeFileSync(path.join(dir, 'Docs', 'a.md'), 'a\n');
-
-    await expect(copyRegularTree(path.join(dir, 'Docs'), path.join(dir, 'docs'))).rejects.toThrow('inside');
-    await expect(copyRegularTree(path.join(dir, 'Docs', 'a.md'), path.join(dir, 'docs', 'A.md'))).rejects.toThrow('inside');
-    await expect(copyRegularTree(path.join(dir, 'Docs'), path.join(dir, 'docs', 'sub'))).rejects.toThrow('inside');
-    expect(fs.readdirSync(path.join(dir, 'Docs'))).toEqual(['a.md']);
-    expect(fs.readFileSync(path.join(dir, 'Docs', 'a.md'), 'utf8')).toBe('a\n');
-  });
 });
 
 describe('moving a folder teamai staged', () => {
-  it('renames a folder into a parent it creates, and fails on one already at the destination, leaving both as they were', async () => {
-    const dir = scratch();
-    fs.mkdirSync(path.join(dir, 'queue'));
-    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
-    fs.mkdirSync(path.join(dir, 'taken'));
-
-    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside', 'queue'));
-
-    expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
-    expect(fs.readFileSync(path.join(dir, 'aside', 'queue', 'a.md'), 'utf8')).toBe('a\n');
-    await expect(moveRegularTree(path.join(dir, 'aside', 'queue'), path.join(dir, 'taken'))).rejects.toMatchObject({ code: 'EEXIST' });
-    expect(fs.readdirSync(path.join(dir, 'taken'))).toEqual([]);
-    expect(fs.readFileSync(path.join(dir, 'aside', 'queue', 'a.md'), 'utf8')).toBe('a\n');
-  });
-
-  it('copies through the regular-file copy across filesystems, then removes the source', async () => {
-    const dir = scratch();
-    fs.mkdirSync(path.join(dir, 'queue'));
-    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
-    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }));
-
-    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
-
-    expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
-    expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
-  });
-
-  it('retries a rename Windows refuses for a moment, as while a scanner holds a file, instead of failing at once', async () => {
-    const dir = scratch();
-    fs.mkdirSync(path.join(dir, 'queue'));
-    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
-    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
-    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }));
-
-    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
-
-    expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
-  });
-
   it.skipIf(process.platform === 'win32')('refuses a FIFO across filesystems, leaving the source whole and nothing at the destination', async () => {
     const dir = scratch();
     fs.mkdirSync(path.join(dir, 'queue'));
