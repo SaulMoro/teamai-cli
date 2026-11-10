@@ -888,7 +888,7 @@ workflowCmd
   .option('--json <payload>', 'attempt, revision, outcome (success, failed, or released), and driver. A prompt step\'s report also sends tool, the tool the driver launched, and durationMs (milliseconds around the tool launch) and cost ({"amount":0.12,"unit":"USD"}, only as the tool stated it) when known, and limit (timeout, budget or max_turns) when a limit in its lease\'s limits stopped the tool. queued, as on next: the attempts of its other open leases it has not started, whose own timeout then counts from this report.')
   .option('--driver <kind>', 'skill: report an attempt of a run the current coding session drives, as its turn printed the command')
   .option('--attempt <id>', 'With --driver skill: the attempt to report')
-  .option('--model-unavailable', 'With --driver skill and --attempt: the host cannot run the model the dispatch names, so the step fails model_unavailable')
+  .option('--model-unavailable', 'With --driver skill and --attempt: the session host cannot run the model the dispatch names, so the step fails model_unavailable')
   .action(async (run: string, cmdOpts: { json?: string; driver?: string; attempt?: string; modelUnavailable?: boolean }) => {
     const { workflowReport } = await import('./workflow-commands.js');
     await workflowReport(run, cmdOpts);
