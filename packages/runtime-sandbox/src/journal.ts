@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The journal ─────────────────────────────────────────
 //
@@ -63,7 +64,7 @@ export type JournalId = z.infer<typeof JournalIdSchema>;
  */
 function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
   try {
-    return schema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    return schema.parse(JSON.parse(readRegularFileSync(file, 'utf8')));
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw new Error(`Its record ${file} cannot be read (${error instanceof Error ? error.message : String(error)}), so the attempt's sandbox is kept until it can. Repair that file, then try again.`, { cause: error });

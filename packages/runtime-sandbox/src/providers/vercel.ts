@@ -95,7 +95,7 @@ function authOf(providerAuth: VercelOptions['provider_auth'], env: NodeJS.Proces
     const file = from.slice('file:'.length).replace(/^~(?=\/|$)/, home);
 
     try {
-      values[name] = fs.readFileSync(file, 'utf8').trim();
+      values[name] = readRegularFileSync(file, 'utf8').trim();
     } catch (error) {
       return { ok: false, message: `provider_auth reads ${name} from ${file}, which cannot be read (${(error instanceof Error ? error.message : String(error))}). Fix the path, and start again` };
     }
@@ -227,7 +227,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
   const keptOf = (id: string): { view: PlaceView; runFiles: Record<string, string> } | undefined => {
     const file = path.join(dirOf(id), 'view.json');
 
-    return fs.existsSync(file) ? z.object({ view: PlaceViewSchema, runFiles: z.record(z.string(), z.string()).default({}) }).parse(JSON.parse(fs.readFileSync(file, 'utf8'))) : undefined;
+    return fs.existsSync(file) ? z.object({ view: PlaceViewSchema, runFiles: z.record(z.string(), z.string()).default({}) }).parse(JSON.parse(readRegularFileSync(file, 'utf8'))) : undefined;
   };
 
   const viewOf = (id: string): PlaceView | undefined => keptOf(id)?.view;
@@ -260,7 +260,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
     try {
       // A record that cannot be read is taken as none: the snapshot is made again, and the record written anew.
-      kept = WarmRecordSchema.parse(JSON.parse(fs.readFileSync(warmFile(plan.key), 'utf8')));
+      kept = WarmRecordSchema.parse(JSON.parse(readRegularFileSync(warmFile(plan.key), 'utf8')));
     } catch {
       return { ok: true, snapshotId: undefined };
     }

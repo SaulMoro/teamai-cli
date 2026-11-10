@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { OS_RELEASE } from '../this-machine.js';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
 
@@ -43,7 +44,7 @@ const INSTALL = [
 /** This distribution's os-release IDs: its `ID`, then each it is like (`ID_LIKE`). */
 function distributionIds(): string[] {
   const file = OS_RELEASE.find((at) => fs.existsSync(at));
-  const text = file === undefined ? '' : fs.readFileSync(file, 'utf8');
+  const text = file === undefined ? '' : readRegularFileSync(file, 'utf8');
   const field = (name: string): string => (new RegExp(`^${name}=(.*)$`, 'm').exec(text)?.[1] ?? '').replaceAll(/["']/g, '').trim();
 
   return [field('ID'), ...field('ID_LIKE').split(/\s+/)].flatMap((id) => (id === '' ? [] : [id.toLowerCase()]));
