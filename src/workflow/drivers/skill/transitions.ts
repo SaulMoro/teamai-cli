@@ -156,8 +156,8 @@ export type ReadLease = { attempt: AttemptId; step: string; revision: number; ex
   | { executor: 'command'; command: string; env: Record<string, string>; envScope?: EnvScope }
   /**
    * `writes`: the step commits to a branch, in a workspace `new` or `continue` or the team workspace. `team`: in the team
-   * workspace, whose clone TeamAI makes, never a host. `interactive`: the person works in the step. `readOnly`: the step
-   * set `workspace: read-only`. `isolation`: the step requires a sandbox, which no skill host enforces. `session`: the
+   * workspace, whose clone TeamAI makes, never a session host. `interactive`: the person works in the step. `readOnly`: the step
+   * set `workspace: read-only`. `isolation`: the step requires a sandbox, which no session host enforces. `session`: the
    * session the step continues.
    */
   | { executor: 'prompt'; prompt: string; place: Dispatch['place']; writes: boolean; team?: true; interactive?: true; readOnly?: true; isolation?: 'sandbox'; agent?: string; model?: string | StepModel; defaultModel?: string; output?: OutputSchema; confined?: ConfinedLease; session?: { tool: string; id: string } }
@@ -278,7 +278,7 @@ export type DescribeVerdict =
 /** What a start on an app's driver asks the person: the answers that driver takes. */
 export const APP_START_ANSWERS: ReadonlySet<StartAnswer> = new Set(['confirmed', 'inputs', 'hitl']);
 
-/** The run R10 starts: its options, whether it asks the host question first, and who judges it on this machine. */
+/** The run R10 starts: its options, whether it asks the session host question first, and who judges it on this machine. */
 export interface StartRun { parallel: number; hitl: HitlMode; sessionHost: UnansweredSessionHost; judge?: JudgedBy }
 
 /** A refusal of the skill driver; its code decides the literal it names to run instead. */
@@ -367,7 +367,7 @@ export function reportedByAgent(open: AttemptState): boolean {
   return open.phase === 'offered' || open.phase === 'dispatched' || (open.phase === 'stopping' && open.by === 'agent');
 }
 
-/** Whether something waits for the agent: the host question, a dispatch to ack, a place to adopt, or a child to stop. */
+/** Whether something waits for the agent: the session host question, a dispatch to ack, a place to adopt, or a child to stop. */
 function waitsForAgent(state: SkillState): boolean {
   return state.host.kind === 'pending'
     || state.attempts.some((open) => open.phase === 'offered' || open.phase === 'placing' || (open.phase === 'stopping' && open.by === 'agent'));
@@ -623,7 +623,7 @@ export function doneRow(state: SkillState): { row: 'X1' | 'X2' | 'X4' } | undefi
   return { row: state.attempts.length > 0 ? 'X4' : state.scoring.length > 0 ? 'X1' : 'X2' };
 }
 
-/** The most attempts `state` keeps open at once: `--parallel`, and one under a serial host. */
+/** The most attempts `state` keeps open at once: `--parallel`, and one under a serial session host. */
 export function childCap(state: SkillState): number {
   return state.host.kind === 'chosen' && state.host.children === 'serial' ? 1 : state.options.parallel;
 }
@@ -661,7 +661,7 @@ export function queuedAttempts(state: SkillState, unqueued: readonly AttemptId[]
 }
 
 /**
- * The engine `next` of a tick (D1), or R12 while the host question waits. Once the run is done, a `next` that takes no
+ * The engine `next` of a tick (D1), or R12 while the session host question waits. Once the run is done, a `next` that takes no
  * lease (X5) asks whether the engine reopened it or another driver ended it again, but only once `version`, what the
  * run file says now, moved from what the end kept (X7). A runner's check (`role: 'runner'`) takes no lease.
  */
@@ -746,18 +746,18 @@ export function scoredRow(state: SkillState, input: { run: RunId; ticked: SkillS
 }
 
 /**
- * R13: the agent's answer to the host question; R15 when the run asks none now. `judge`: the confined judge of the
- * session's tool on this machine, which judges the run in the background on a host that starts no child agent.
+ * R13: the agent's answer to the session host question; R15 when the run asks none now. `judge`: the confined judge of the
+ * session's tool on this machine, which judges the run in the background on a session host that starts no child agent.
  */
 export function chooseRow(state: SkillState, input: { choice: SessionHostChoice; profile: SessionHostProfile; judgeTool?: string; judge?: ConfinedJudge }): Moved<'R13'> | Answered<'R15'> {
   if (state.host.kind !== 'pending') return { row: 'R15', answer: { kind: 'error', refusal: { code: 'unknown_choice', run: state.run } } };
 
-  // A run without a prompt step asked only for its judge, so its commands run as on any host.
+  // A run without a prompt step asked only for its judge, so its commands run as on any session host.
   const chosen: SkillState = {
     ...state, host: state.host.hasPromptStep ? { kind: 'chosen', id: input.choice, children: input.profile.children, places: input.profile.places } : { kind: 'none' },
   };
 
-  // The session judges in a fresh subagent, which a host that starts no child agent cannot give it: the background
+  // The session judges in a fresh subagent, which a session host that starts no child agent cannot give it: the background
   // runner judges instead, at best-effort, when the session's tool runs confined here.
   const tool = input.judgeTool;
 
@@ -765,12 +765,12 @@ export function chooseRow(state: SkillState, input: { choice: SessionHostChoice;
   const { sessionJudge: _judge, ...rest } = chosen;
 
   if (input.judge) return { row: 'R13', state: { ...rest, judging: { tool: input.judge.tool, level: 'best-effort' } } };
-  const message = `This host starts no child agent, and ${tool} does not run confined on this machine, so this session does not judge the run: a driver that offers a confined judge, such as the local driver where a judge tool is installed, judges its scored steps.`;
+  const message = `This session host starts no child agent, and ${tool} does not run confined on this machine, so this session does not judge the run: a driver that offers a confined judge, such as the local driver where a judge tool is installed, judges its scored steps.`;
 
   return { row: 'R13', state: withEvent(rest, { kind: 'judging-off', failure: { code: 'no_child_agent', message } }) };
 }
 
-/** K1 to K3: the ack of the dispatch of `attempt`; R14 while the host question waits. */
+/** K1 to K3: the ack of the dispatch of `attempt`; R14 while the session host question waits. */
 export function ackRow(state: SkillState, attempt: AttemptId): Moved<'K1' | 'K2'> | Answered<'K3' | 'R14'> {
   if (state.host.kind === 'pending') return choicePending(state);
   const open = openAttempt(state, attempt);
@@ -788,7 +788,7 @@ export function ackRow(state: SkillState, attempt: AttemptId): Moved<'K1' | 'K2'
 
 /**
  * The row of `next --attempt a --adopt dir`: K4 gives `dir` to a new runner of `a`, an attempt that waits for its
- * place, which prepares it there; K5 refuses any other attempt; R14 waits for the host question.
+ * place, which prepares it there; K5 refuses any other attempt; R14 waits for the session host question.
  */
 export function adoptRow(state: SkillState, input: { attempt: AttemptId; dir: string; at: string }): MovedWithEffects<'K4'> | Answered<'K5' | 'R14'> {
   if (state.host.kind === 'pending') return choicePending(state);
@@ -1260,7 +1260,7 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
   const unavailable = input.modelUnavailable && model.by !== 'definition';
 
   const failure = unavailable
-    ? { code: 'model_unavailable', message: `Step "${open.step}" needs model ${model.name}, which the host of this coding session cannot run.` }
+    ? { code: 'model_unavailable', message: `Step "${open.step}" needs model ${model.name}, which this coding session, its session host, cannot run.` }
     : input.result.kind === 'failure' ? input.result.failure : undefined;
 
   const tool = open.dispatch.tool ?? state.orchestrator.tool ?? input.tool;
@@ -1295,9 +1295,9 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
 }
 
 /**
- * The session a step the orchestrator worked itself went on in: on a host that starts no child, or an interactive step,
+ * The session a step the orchestrator worked itself went on in: on a session host that starts no child, or an interactive step,
  * the session that reports is the step's, with the orchestrator's tool, and it resumed the session its lease continues
- * when it is that session. A child's report says no session: a child's host gives it its orchestrator's.
+ * when it is that session. A child's report says no session: a child's session host gives it its orchestrator's.
  */
 function sessionRun(state: SkillState, dispatch: Dispatch, session: string | undefined): Pick<ReportBody, 'tool' | 'session' | 'resumed'> {
   const tool = state.orchestrator.tool;
@@ -1360,7 +1360,7 @@ function takenOver(state: SkillState, { session, tool, at }: { session: string |
 }
 
 /**
- * The row the runner of `open`, an attempt whose host makes its place, takes when that place is still to make: C6 when
+ * The row the runner of `open`, an attempt whose session host makes its place, takes when that place is still to make: C6 when
  * the place the agent adopted was `refused`, else C5. Either way the attempt waits for the agent to adopt one.
  */
 export function placingRow(state: SkillState, open: Extract<AttemptState, { phase: 'preparing' }>, input: { ask: PlaceAsk; refused?: string }): Moved<'C5' | 'C6'> {

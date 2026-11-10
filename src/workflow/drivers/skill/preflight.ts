@@ -14,7 +14,7 @@ import type { DescribeAsk, DescribedInput } from './turn.js';
 
 /**
  * The answers a start must carry: the person's yes for `invoke: ask`, the inputs, how many steps run at once, how
- * optional gates are answered, and the tool of a session whose host names none (`needsTool`).
+ * optional gates are answered, and the tool of a session whose session host names none (`needsTool`).
  */
 export type StartAnswer = 'confirmed' | 'inputs' | 'parallel' | 'hitl' | 'tool';
 

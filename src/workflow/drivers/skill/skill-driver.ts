@@ -34,7 +34,7 @@ export { canFor } from './session-host-profiles.js';
 
 export { ceilingOf, isLeft, listOf, localReason, personClauses } from './preflight.js';
 
-/** `tool`: `--tools default=<tool>`, the tool of the calling session, which its host may not name. */
+/** `tool`: `--tools default=<tool>`, the tool of the calling session, which its session host may not name. */
 export type SkillCall =
   | { kind: 'describe'; name: string; tool?: ToolId }
   /**
@@ -51,11 +51,11 @@ export type SkillCall =
   | { kind: 'next'; run: RunId; wait: boolean }
   /** `next --takeover`: this session drives the run from now on, as the person agreed; `confirmed` as a resume's. */
   | { kind: 'takeover'; run: RunId; confirmed: boolean }
-  /** `next --choice`: the agent's answer to the host question. */
+  /** `next --choice`: the agent's answer to the session host question. */
   | { kind: 'choose'; run: RunId; choice: SessionHostChoice }
   /** `next --ack dispatch.<a>`: the child of attempt `a` started. */
   | { kind: 'ack'; run: RunId; attempt: AttemptId }
-  /** `next --attempt <a> --adopt <dir>`: the host made `dir`, an absolute path, for the place attempt `a` asked for. */
+  /** `next --attempt <a> --adopt <dir>`: the session host made `dir`, an absolute path, for the place attempt `a` asked for. */
   | { kind: 'adopt'; run: RunId; attempt: AttemptId; dir: string }
   /** `respond --driver skill`: the agent's answer to an optional gate. */
   | { kind: 'respond'; run: RunId; step: string; pass: number; choice: string }
@@ -97,7 +97,7 @@ export interface SkillContext {
   toolPaths: TeamaiConfig['toolPaths'] | undefined;
   env: WorkflowEnv;
   client: WorkflowClient;
-  /** The calling agent session, undefined when its host names none. */
+  /** The calling agent session, undefined when its session host names none. */
   session: string | undefined;
   /** What says an agent runs the calling process, which a start of the workflow is checked against: its `invoke`. */
   evidence: AgentEvidence;
@@ -108,7 +108,7 @@ export interface SkillContext {
    * describe asks before it offers that start: its runtimes open as for an unattended run, so none asks for a sign-in.
    */
   app: { session: SessionApp; canStart(): Promise<boolean> } | undefined;
-  /** The tool of that session, which a child's model is resolved for; undefined when its host names none. */
+  /** The tool of that session, which a child's model is resolved for; undefined when its session host names none. */
   tool: ToolId | undefined;
   /** The tools the member names for `config`'s scope, the most specific first: TEAMAI_AI_TOOL, then `ai.tool`. */
   aiTools: readonly string[];
@@ -135,7 +135,7 @@ export async function skillContext(input: Pick<SkillContext, 'config' | 'toolPat
     ...input,
     app: input.app,
     session: session.id,
-    // Only a coding agent drives --driver skill, so a host that sets no session variable is still an agent's.
+    // Only a coding agent drives --driver skill, so a session host that sets no session variable is still an agent's.
     evidence: evidence.kind === 'none' ? { kind: 'skill-driver' } : evidence,
     mode: resolveRunMode(process.env),
     tool: session.agent !== undefined && isToolId(session.agent) ? session.agent : undefined,
@@ -199,7 +199,7 @@ export async function drivesUndoneRun(config: LocalConfig, session: string): Pro
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** `--tools default=<tool>`: the tool this coding session works in, for a host that sets no session variable teamai reads. */
+/** `--tools default=<tool>`: the tool this coding session works in, for a session host that sets no session variable teamai reads. */
 const SessionToolSchema = z.string().transform((tools, ctx) => {
   const [pair = '', ...more] = tools.split(',');
   const separator = pair.indexOf('=');
@@ -249,7 +249,7 @@ const NextOptionsSchema = z.object({
   wait: z.boolean().optional(),
   takeover: z.boolean().optional(),
   confirmed: z.boolean().optional(),
-  choice: z.enum(SESSION_HOST_CHOICES, { error: `--choice takes the id of a host question option: ${SESSION_HOST_CHOICES.join(', ')}` }).optional(),
+  choice: z.enum(SESSION_HOST_CHOICES, { error: `--choice takes the id of a session host question option: ${SESSION_HOST_CHOICES.join(', ')}` }).optional(),
   ack: z.string().transform((offer, ctx) => {
     const attempt = AttemptIdSchema.safeParse(OFFER.exec(offer)?.[1]);
 
@@ -259,7 +259,7 @@ const NextOptionsSchema = z.object({
     return z.NEVER;
   }).optional(),
   attempt: AttemptIdSchema.optional(),
-  adopt: z.string().min(1, '--adopt takes the directory the host made').optional(),
+  adopt: z.string().min(1, '--adopt takes the directory the session host made').optional(),
   json: z.undefined({ error: '--driver skill takes no --json: the skill driver composes every request itself' }).optional(),
   prepare: z.undefined({ error: '--prepare is for --json drivers' }).optional(),
 }).refine((options) => (options.attempt === undefined) === (options.adopt === undefined), {
@@ -450,7 +450,7 @@ export async function runSkillCall(call: SkillCall, context: SkillContext): Prom
 }
 
 async function answerOf(call: SkillCall, caller: SkillContext): Promise<SkillAnswer> {
-  // The tool a session declares is the one it works in, whatever its host names, as a host may pass its env on to another tool.
+  // The tool a session declares is the one it works in, whatever its session host names, as a session host may pass its env on to another tool.
   const context = 'tool' in call && call.tool !== undefined ? { ...caller, tool: call.tool } : caller;
 
   switch (call.kind) {

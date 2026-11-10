@@ -508,8 +508,8 @@ async function finish(context: SkillContext, lock: RunLock, state: SkillState, t
 interface Resume { claim: ResumeClaim; confirmed: boolean; answers: ResumeAnswers; tool?: ToolId }
 
 /**
- * A call that answers with a turn at once: `next`, a takeover, a resume, an answer to the host question, an ack, a place
- * the host made, or an answer to a gate.
+ * A call that answers with a turn at once: `next`, a takeover, a resume, an answer to the session host question, an ack, a place
+ * the session host made, or an answer to a gate.
  */
 export type ForegroundCall =
   | { kind: 'next' }
@@ -587,7 +587,7 @@ async function callRowOf(context: SkillContext, state: SkillState, call: Foregro
   }
 }
 
-/** The confined judge of the session's tool, probed only when `choice` is a host that starts no child agent for a session judge. */
+/** The confined judge of the session's tool, probed only when `choice` is a session host that starts no child agent for a session judge. */
 async function sessionJudgeOn(state: SkillState, choice: SessionHostChoice): Promise<ConfinedJudge | undefined> {
   const tool = sessionJudgeTool(state);
 

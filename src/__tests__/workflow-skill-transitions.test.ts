@@ -493,7 +493,7 @@ async function turnOf(answer: Awaited<ReturnType<Awaited<ReturnType<typeof harne
   return answer.data.turn;
 }
 
-/** Starts `name` and answers the host question with `choice`: the turn of the answer. */
+/** Starts `name` and answers the session host question with `choice`: the turn of the answer. */
 async function chosen(made: Awaited<ReturnType<typeof harness>>, name: string, parallel: number, choice: 'h1' | 'h2' = 'h1') {
   const { run } = await turnOf(await made.call({ kind: 'start', name, answers: { parallel, confirmed: false }, inputs: undefined }));
   return turnOf(await made.call({ kind: 'choose', run, choice }));
@@ -597,13 +597,13 @@ async function reviewed(made: Awaited<ReturnType<typeof harness>>, answers: { ju
 }
 
 /**
- * Starts REVIEW, answers the host question with h1, and has the child of its dispatch stop on claude's usage limit,
+ * Starts REVIEW, answers the session host question with h1, and has the child of its dispatch stop on claude's usage limit,
  * which resets `resetsMs` from the harness clock on: the run and the dispatch.
  */
 async function limitedReview(made: Awaited<ReturnType<typeof harness>>, resetsMs: number) {
   const { run } = await turnOf(await made.call({ kind: 'start', name: 'review', answers: { confirmed: false, judge: false }, inputs: undefined }));
   const [dispatch] = dispatches(await turnOf(await made.call({ kind: 'choose', run, choice: 'h1' })));
-  if (!dispatch) throw new Error('the host answer dispatched nothing');
+  if (!dispatch) throw new Error('the session host answer dispatched nothing');
   await made.call({ kind: 'ack', run, attempt: dispatch.attempt });
   const resetsAt = Math.ceil((made.context.now().getTime() + resetsMs) / 1000);
   childWrites(dispatch.brief, { kind: 'failure', failure: { code: 'usage_limited', message: `claude hit its usage limit: Claude AI usage limit reached|${resetsAt}` } });
@@ -1132,7 +1132,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'an unattended run on a host that starts no child hands a step that needs a worktree to the person, and the turn ends the loop',
+    name: 'an unattended run on a session host that starts no child hands a step that needs a worktree to the person, and the turn ends the loop',
     rows: ['R13', 'D14'],
     run: async () => {
       const made = await harness({ inline: INLINE }, { mode: 'unattended' });
@@ -1324,7 +1324,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       expect(fs.existsSync(skillStatePath(made.config, gatedRun))).toBe(false);
       expect(await turnOf(await made.call({ kind: 'resume', run: gatedRun, claim: 'lacking', confirmed: true, answers: {} }, { evidence: AGENT }))).toMatchObject({ run: gatedRun });
       expect(await turnOf(await made.call({ kind: 'takeover', run: await runOf('check'), confirmed: false }, { evidence: AGENT }))).toMatchObject({ status: expect.any(String) });
-      // Only a coding agent drives --driver skill, so a host that sets no agent variable is refused alike.
+      // Only a coding agent drives --driver skill, so a session host that sets no agent variable is refused alike.
       expect(await made.call({ kind: 'takeover', run: locked, confirmed: false }, { evidence: { kind: 'skill-driver' } }))
         .toMatchObject({ error: { code: 'invoke_denied', message: expect.stringContaining('this command uses --driver skill'), next: null } });
       return made.rows;
@@ -2081,7 +2081,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'two prompt steps: the host question, dispatches, a wake, acks, reports from result.json, and a repeated report',
+    name: 'two prompt steps: the session host question, dispatches, a wake, acks, reports from result.json, and a repeated report',
     rows: ['R12', 'R13', 'D7', 'C2', 'D22', 'K1', 'K2', 'P5', 'P1'],
     run: async () => {
       const made = await harness({ pair: PAIR });
@@ -2125,7 +2125,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'the host question first: an ack or a report waits for it, and a second answer is refused',
+    name: 'the session host question first: an ack or a report waits for it, and a second answer is refused',
     rows: ['R14', 'R15', 'K3'],
     run: async () => {
       const made = await harness({ pair: PAIR });
@@ -2168,7 +2168,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'a model the host cannot run fails the step: an alias with no model for the tool, and a model the agent reports unavailable',
+    name: 'a model the session host cannot run fails the step: an alias with no model for the tool, and a model the agent reports unavailable',
     rows: ['C3', 'P4'],
     run: async () => {
       const aliased = await harness({ pair: PAIR.replace('model: claude-haiku-4-5', 'model: fast') });
@@ -2198,7 +2198,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'on a host that makes places, a step that commits to a branch asks for one; a refused place is asked for again, an adopted one is dispatched, and an adopt for an attempt that waits for none is refused',
+    name: 'on a session host that makes places, a step that commits to a branch asks for one; a refused place is asked for again, an adopted one is dispatched, and an adopt for an attempt that waits for none is refused',
     rows: ['D8', 'C5', 'C6', 'K4', 'K5'],
     run: async () => {
       const made = await harness({ write: WRITE });
@@ -2222,7 +2222,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'a step in the team workspace runs in a fresh clone of the team repo, a command in the runner and a prompt in a child TeamAI places there, also on a host that makes places, and each pushes what it changed to its branch',
+    name: 'a step in the team workspace runs in a fresh clone of the team repo, a command in the runner and a prompt in a child TeamAI places there, also on a session host that makes places, and each pushes what it changed to its branch',
     rows: ['D6', 'D7'],
     run: async () => {
       const member = await sharedTeam({ tidy: TIDY }).install('member');
@@ -2246,7 +2246,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'on a host that starts no child, a step in the checkout is the session\'s to work in the foreground, and a step that needs a worktree is held',
+    name: 'on a session host that starts no child, a step in the checkout is the session\'s to work in the foreground, and a step that needs a worktree is held',
     rows: ['R13', 'D1', 'D7', 'C2', 'K1', 'P5'],
     run: async () => {
       const made = await harness({ inline: INLINE });
@@ -2380,7 +2380,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'describe asks a session whose host names no tool for it, with a describe whose {tool} slot it fills, when the run needs a tool',
+    name: 'describe asks a session whose session host names no tool for it, with a describe whose {tool} slot it fills, when the run needs a tool',
     rows: ['R27', 'R3', 'R4'],
     run: async () => {
       const plain = REVIEW.replace('    scorers: { names: [review-quality], start: workflow }\n', '');

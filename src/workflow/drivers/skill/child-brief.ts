@@ -57,7 +57,7 @@ export async function writeChildBrief(input: {
   prompt: string;
   /**
    * Who works the step: a `child` agent the orchestrator started; the orchestrator, with the `person`, in an interactive
-   * step; or the orchestrator alone (`self`), on a host that starts no child. Only a child ends when it reports.
+   * step; or the orchestrator alone (`self`), on a session host that starts no child. Only a child ends when it reports.
    */
   by: 'child' | 'person' | 'self';
   /** The step's output schema, when it declares one. */
