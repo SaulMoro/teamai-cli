@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
-import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
+import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptPlacement, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
 import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -160,7 +160,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     expect(await placed.stopLeftOperation()).toBeUndefined();
     expect(await placed.close()).toBeUndefined();
     expect({ cancels, closes }).toEqual({ cancels: [], closes: ['h1'] });
-    expect(await readAttemptRuntime(config(), RUN, FIRST)).toMatchObject({ phase: 'closed' });
+    expect(await readAttemptPlacement(config(), RUN, FIRST)).toMatchObject({ kind: 'external', record: { phase: 'closed' } });
   });
 
   it('takes an operation that failed with any code but cancel_failed after the cancel as ended, as the next cancel does', async () => {
@@ -173,6 +173,12 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   const resumePrompt = (runtime: StepRuntime<DriverCan>) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).prompt({
     lease: { step: 'review', tool: 'codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
   }, {});
+
+  const displayed = async (): Promise<RuntimeDisplay | undefined> => {
+    const placement = await readAttemptPlacement(config(), RUN, FIRST);
+
+    return placement.kind === 'external' ? placement.record.display : undefined;
+  };
 
   it('keeps the limit a prompt that finished before the restart was stopped at, as the runtime kept it', async () => {
     const op = newOpId();
@@ -200,7 +206,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
       prompt: async (request, events) => {
         expect(request.op).toBe(op);
         events.onAccepted?.({});
-        atReconnect = (await readAttemptRuntime(config(), RUN, FIRST))?.display;
+        atReconnect = await displayed();
 
         return { kind: 'finished', session: { tool: 'codex', id: 'actual-agent' }, result: { output: { ok: true } } };
       },
@@ -213,7 +219,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     fs.writeFileSync(path.join(dir, 'runtime.json'), JSON.stringify(saved));
 
     const end = await resumePrompt(runtime);
-    const afterEnd = (await readAttemptRuntime(config(), RUN, FIRST))?.display;
+    const afterEnd = await displayed();
 
     expect({ atReconnect, afterEnd, end: end.kind }).toEqual({ atReconnect: agent, afterEnd: agent, end: 'finished' });
   });
@@ -405,7 +411,7 @@ describe('an open that failed, or that a killed teamai left unanswered', () => {
 
     expect(await run.open(view())).toMatchObject({ ok: false });
     expect(await run.close()).toBeUndefined();
-    expect(await readAttemptRuntime(config(), RUN, FIRST)).toMatchObject({ phase: 'closed' });
+    expect(await readAttemptPlacement(config(), RUN, FIRST)).toMatchObject({ kind: 'external', record: { phase: 'closed' } });
   });
 
   it('keeps an open a killed teamai left with no handle when the restarted open is refused, since the first may have made a place', async () => {
@@ -615,6 +621,6 @@ describe('a place a restarted teamai opens again', () => {
     };
 
     expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).open(undefined)).toMatchObject({ ok: false });
-    expect((await readAttemptRuntime(config(), RUN, FIRST))?.open.handle).toBe(whole);
+    expect(await readAttemptPlacement(config(), RUN, FIRST)).toMatchObject({ kind: 'external', record: { open: { handle: whole } } });
   });
 });

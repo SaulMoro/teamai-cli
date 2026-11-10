@@ -50,6 +50,7 @@ import type {
 } from './types.js';
 import { isAgentExcluded, isJsonObject, resolveBaseDir, scopedToolPaths, SOURCE_PULL_TTL_MS } from './types.js';
 import type { DeliveryRecorder } from './git-exclude-delivered.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Source repo management ──────────────────────────────
 
@@ -268,7 +269,7 @@ async function readSourceManifest(manifestPath: string): Promise<SourceInstallRe
   let raw: string;
 
   try {
-    raw = await fse.readFile(manifestPath, 'utf8');
+    raw = await readRegularFile(manifestPath, 'utf8');
   } catch (error) {
     if (errnoCode(error) === 'ENOENT') return null;
     throw new Error(`Cannot read source ownership record: ${manifestPath}`, { cause: error });
@@ -1787,7 +1788,7 @@ async function membersFileInTheWay(target: string, sourcePath: string, repoDir: 
     const versions = await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`);
 
     if (versions === null) return null;
-    const blob = await blobIdOf(repoDir, await fse.readFile(dest));
+    const blob = await blobIdOf(repoDir, await readRegularFile(dest));
 
     if (!versions.some((version) => version.blob === blob && version.mode !== '120000')) return rel;
   }
@@ -1835,10 +1836,10 @@ async function legacyCopyKeeper(
 
       // `foreign`: a path of a skill the source has or had, but never this file, which only history can tell.
       const fromSource = async (rel: string): Promise<'today' | 'history' | 'changed' | 'foreign'> => {
-        const bytes = await fse.readFile(path.join(skillDir, rel));
+        const bytes = await readRegularFile(path.join(skillDir, rel));
         const source = sourcePath ? await fse.lstat(path.join(sourcePath, rel)).catch(() => null) : null;
 
-        if (source?.isFile() && bytes.equals(await fse.readFile(path.join(sourcePath!, rel)))) return 'today';
+        if (source?.isFile() && bytes.equals(await readRegularFile(path.join(sourcePath!, rel)))) return 'today';
 
         if (!history) return 'changed';
 

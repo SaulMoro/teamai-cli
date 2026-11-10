@@ -18,6 +18,7 @@ import { detectShellProfile, SHELL_PROFILE_CANDIDATE_NAMES, shellQuoteValue, toG
 import { resolveMemberToolRoots } from '../config.js';
 import { isJsonObject, JsonValueSchema, recordedToolRootDir, RELOCATABLE_TOOLS, type JsonObject, type JsonValue, type LocalConfig, JsonObjectSchema } from '../types.js';
 import { ALL_MODEL_AGENTS, ModelAgentSchema, type ModelAgent, type ModelProtocol, type ResolvedModelProfile, sameTeamIdentity } from './profile.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export { ALL_MODEL_AGENTS } from './profile.js';
 
@@ -227,7 +228,7 @@ function movedSettingsMessage(agent: ModelAgent, state: AgentState, roots: Agent
 
 async function readOptionalFile(file: string): Promise<string | null> {
   try {
-    return await fs.promises.readFile(file, 'utf8');
+    return await readRegularFile(file, 'utf8');
   } catch (error) {
     if (errnoCode(error) === 'ENOENT') return null;
     throw error;

@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** Absolute path to the local API key file. */
 export function getApiKeyPath(): string {
@@ -32,7 +33,7 @@ export function resolveApiKey(): string | null {
   if (fromEnv && fromEnv.trim()) return fromEnv.trim();
 
   try {
-    const content = fs.readFileSync(getApiKeyPath(), 'utf-8').trim();
+    const content = readRegularFileSync(getApiKeyPath(), 'utf-8').trim();
 
     if (content) return content;
   } catch {

@@ -24,6 +24,7 @@ import { execCommand } from '../utils/exec.js';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import { HttpError } from './http.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** What the page asks for: the view's query, with the team commit to split at as the member typed it. */
 export type ScorerQuery = Omit<ScorerResultsQuery, 'split'> & { commit?: string };
@@ -89,7 +90,7 @@ const sessionKey = (platform: string, sessionId: string) => `${platform}\0${sess
 
 async function publishedRecord(config: LocalConfig, runId: string): Promise<PublishedRecord | undefined> {
   try {
-    const parsed = RecordSchema.safeParse(JSON.parse(await fs.readFile(path.join(getReportsDir(config), RECORDS_DIR, `${runId}.json`), 'utf8')));
+    const parsed = RecordSchema.safeParse(JSON.parse(await readRegularFile(path.join(getReportsDir(config), RECORDS_DIR, `${runId}.json`), 'utf8')));
 
     return parsed.success ? parsed.data : undefined;
   } catch {

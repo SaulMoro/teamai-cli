@@ -273,7 +273,7 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
     async start() {
       fs.rmSync(runtimeFile, { force: true });
       // The command line names the state, so a leak check of the test's directory sees the server.
-      server = spawn(process.execPath, [await bundleOnce(FAKE_T3), state], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });
+      server = spawn(process.execPath, [await bundleOnce(FAKE_T3), state], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home, FAKE_T3_PARENT: String(process.pid) }, stdio: ['ignore', 'ignore', 'inherit'] });
       const deadline = Date.now() + 10_000;
 
       while (!fs.existsSync(runtimeFile)) {

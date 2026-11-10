@@ -20,6 +20,7 @@ import {
     type PendingReviewItem,
     type Risk,
 } from './review-store.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── 类型 ────────────────────────────────────────────────
 
@@ -153,7 +154,7 @@ async function applyOne(
         return { ok: false, reason: `target file not found: ${filePath}` };
     }
 
-    const oldMd = await fs.readFile(filePath, 'utf8');
+    const oldMd = await readRegularFile(filePath, 'utf8');
     const body = String(item.payload['content'] ?? '');
 
     if (!body) {

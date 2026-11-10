@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The T3 projects teamai added for folders of its own ───
 //
@@ -30,7 +31,7 @@ export interface AddedProjects {
 export function addedProjects(file: string): AddedProjects {
   const list = (): AddedProject[] => {
     try {
-      return z.array(AddedProjectSchema).parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+      return z.array(AddedProjectSchema).parse(JSON.parse(readRegularFileSync(file, 'utf8')));
     } catch {
       return [];
     }

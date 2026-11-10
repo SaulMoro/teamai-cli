@@ -1,8 +1,8 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { expandHome } from '@teamai/tool-core/home';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The daemon's address ────────────────────────────────
 //
@@ -60,7 +60,7 @@ export function daemonUrl(env: NodeJS.ProcessEnv): { url: string } | RuntimeFail
   let text: string;
 
   try {
-    text = fs.readFileSync(file, 'utf8');
+    text = readRegularFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: DEFAULT_URL };
 

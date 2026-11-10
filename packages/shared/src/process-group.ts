@@ -8,6 +8,7 @@ import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Runs ps with `args` in the C locale, whose `lstart` reads the same on every machine and parses as a date. */
 function ps(args: string[]): string {
@@ -138,7 +139,7 @@ async function recordedGroups(dir: string): Promise<string[]> {
 /** What the file `file` records, undefined when it records nothing readable. */
 async function readGroup(file: string): Promise<Recorded | undefined> {
   try {
-    return RecordedSchema.parse(JSON.parse(await fs.promises.readFile(file, 'utf8')));
+    return RecordedSchema.parse(JSON.parse(await readRegularFile(file, 'utf8')));
   } catch {
     return undefined;
   }

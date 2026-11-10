@@ -13,6 +13,7 @@ import { extractReply } from '@teamai/tool-core/reply';
 import type { IWikiDocument } from './utils/iwiki-client.js';
 import { appendPendingReview } from './review-store.js';
 import { log } from './utils/logger.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** How much of each page the AI tool is shown. */
 const MAX_CONTENT_PER_PAGE = 5000;
@@ -197,7 +198,7 @@ export async function writeSections(flags: SectionsFlags): Promise<Record<string
     const ts = new Date().toISOString();
     await fs.ensureDir(flags.sectionsDir);
     const exists = await fs.pathExists(filePath);
-    let content = exists ? await fs.readFile(filePath, 'utf8') : buildSkeletonContent();
+    let content = exists ? await readRegularFile(filePath, 'utf8') : buildSkeletonContent();
 
     for (const sectionKey of SECTIONS) {
         const body = aiOutput[sectionKey] ?? '';

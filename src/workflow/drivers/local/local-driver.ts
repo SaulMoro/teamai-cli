@@ -20,9 +20,9 @@ import { inProcessRuntimeOf, type DecidedCan, type DriverCan, type Missing } fro
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
-import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
+import { failureReport, launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
-import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
@@ -329,9 +329,11 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
  */
 async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { config: LocalConfig; run: RunId; attempt: string; runsOn: string | undefined; checkout: string }): Promise<WorkflowFailure | undefined> {
   const id = AttemptIdSchema.safeParse(attempt);
-  const record = id.success ? await readAttemptRuntime(config, run, id.data) : undefined;
+  const placement = id.success ? await readAttemptPlacement(config, run, id.data) : undefined;
 
-  if (!id.success || !record || record.phase === 'closed' || record.runtime === runsOn) return undefined;
+  // One in teamai's process left its process group, which staging stops; it holds no place elsewhere. An unreadable
+  // record names no place to stop.
+  if (!id.success || placement?.kind !== 'external' || placement.record.phase === 'closed' || placement.record.runtime === runsOn) return undefined;
   const notStopped = await stopOnRecordedDriver(config, run, id.data, { checkout });
 
   if (notStopped) return notStopped;
@@ -776,7 +778,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     const handle = localHandles.get(attempt);
     const slot = slotOf.get(attempt);
     const logins = slot?.engine.logins ?? [];
-    const closingHandle = slot?.kind === 'external' ? (await readAttemptRuntime(config, runId, attempt))?.open.handle : undefined;
+    const placement = slot?.kind === 'external' ? await readAttemptPlacement(config, runId, attempt) : undefined;
+    const closingHandle = placement?.kind === 'external' ? placement.record.open.handle : undefined;
     attemptRuns.delete(attempt);
     localHandles.delete(attempt);
     slotOf.delete(attempt);
@@ -1502,13 +1505,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           return runPromptStep({
             config, lock, driver, lease, adapter, tools: options.tools, toolPaths: options.toolPaths, archive, signal: controller.signal, mode, staged: launch,
             secrets: { ...turn.secrets, ...maskedCredentials }, askPerson,
-            onRuntime: stepRun && {
-              run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn,
-              ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runsOnToolHome && { runsOnToolHome: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }),
-              ...(slot && HeldPlace.holdsOn(slot) && {
+            onRuntime: stepRun && slot && promptRuntimeOn({
+              run: stepRun, offered: promptOfferOf(slot), teamEnv: turn,
+              ...(HeldPlace.holdsOn(slot) && {
                 conversationHeld: async (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions, workspace: await workspaceOf(lease.step) }),
               }),
-            },
+            }),
           });
         })() });
       }

@@ -23,6 +23,7 @@ import { invokeRefusal, type InvokeCaller } from './workflow/protocol.js';
 import { parseSnapshot, SNAPSHOTS_DIR, snapshotPath, type HandoffOwner, type RunSnapshot } from './workflow/snapshot.js';
 import { installOwner, readRuns, RunIdSchema, type RunId } from './workflow/store.js';
 import { onlyPersonAnswers, type RunState, type RunStatus, type WorkflowFailure } from './workflow/types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Who would take an offered run: the calling process, as `invoke` judges it, whether a person answers what the run asks
@@ -122,7 +123,7 @@ async function list(config: LocalConfig, { taker, env }: { taker: Taker; env: Wo
 }
 
 async function readSnapshot(config: LocalConfig, run: RunId): Promise<RunSnapshot | undefined> {
-  const text = await fs.readFile(path.join(getReportsDir(config), snapshotPath(run)), 'utf8').catch(() => undefined);
+  const text = await readRegularFile(path.join(getReportsDir(config), snapshotPath(run)), 'utf8').catch(() => undefined);
 
   if (text === undefined) return undefined;
   const parsed = parseSnapshot(text, run);

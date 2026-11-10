@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The member's T3 Code settings, as T3 resolves them for one project ───
 //
@@ -74,7 +74,7 @@ export interface ProjectSettings {
 /** The member's T3 settings in `t3Home`; an absent or unreadable file reads as nothing set. */
 export function readSettings(t3Home: string): Read {
   try {
-    const parsed = SettingsSchema.safeParse(JSON.parse(fs.readFileSync(path.join(t3Home, 'userdata', 'settings.json'), 'utf8')));
+    const parsed = SettingsSchema.safeParse(JSON.parse(readRegularFileSync(path.join(t3Home, 'userdata', 'settings.json'), 'utf8')));
 
     return parsed.success ? parsed.data : {};
   } catch {

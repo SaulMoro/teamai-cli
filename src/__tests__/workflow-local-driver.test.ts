@@ -17,7 +17,7 @@ import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
-import { attemptRuntimePath, attemptToolHome, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
+import { attemptRuntimePath, attemptToolHome, readAttemptPlacement, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/definitions.js';
 import { cancelRun } from '../workflow/run-controls.js';
@@ -1641,9 +1641,9 @@ steps:
     if (typeof run !== 'object') throw new Error('run was not stored');
     const one = run.steps.find((step) => step.id === 'change.one');
     const attempt = AttemptIdSchema.parse(one && 'attempt' in one ? one.attempt : undefined);
-    const record = await readAttemptRuntime(config, RunIdSchema.parse(runId), attempt);
-    expect(record?.phase).toBe('closed');
-    expect(record).not.toHaveProperty('heldFor');
+    const placement = await readAttemptPlacement(config, RunIdSchema.parse(runId), attempt);
+    expect(placement).toMatchObject({ kind: 'external', record: { phase: 'closed' } });
+    expect(placement.kind === 'external' && placement.record).not.toHaveProperty('heldFor');
   }, 30_000);
 
   it('names the conversation\'s first step in the lease of every later step of a chain', async () => {

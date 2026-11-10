@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import type { SearchResult } from './utils/search-index.js';
 import { getUserHome } from './utils/home.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Recall quality tracking ─────────────────────────────
 //
@@ -66,7 +67,7 @@ function readCache(sessionId: string): RecallCache | null {
 
         if (!fs.existsSync(cachePath)) return null;
 
-        const raw = fs.readFileSync(cachePath, 'utf-8');
+        const raw = readRegularFileSync(cachePath, 'utf-8');
         const cache = StoredRecallCacheSchema.safeParse(JSON.parse(raw));
 
         if (!cache.success) return null;

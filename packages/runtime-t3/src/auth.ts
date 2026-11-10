@@ -8,6 +8,7 @@ import { OAuthClientInformationFullSchema, OAuthTokensSchema, type OAuthClientIn
 import { z } from 'zod';
 import type { StepMode } from './t3.js';
 import type { T3Command } from './t3-command.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The member's sign-in to a T3 environment ───
 //
@@ -74,7 +75,7 @@ function credentialStore(stateDir: string) {
 
   const read = (): z.infer<typeof StoreSchema> => {
     try {
-      return StoreSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+      return StoreSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8')));
     } catch {
       return {};
     }

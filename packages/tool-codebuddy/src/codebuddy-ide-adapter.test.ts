@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import * as crypto from 'node:crypto';
 
 /**
  * IDE 存储路径是 `os.homedir()` 派生的，必须整体换掉 home 才能用 fixture。
@@ -19,12 +18,8 @@ vi.mock('node:os', async (importOriginal) => {
   return patched;
 });
 
-import {
-  getUserDataBase,
-  listIdeHistoryRoots,
-  readIdeConversation,
-} from '@teamai/tool-core/formats/ide-history';
 import { CodeBuddyIdeAdapter } from './codebuddy-ide-adapter.js';
+import { buildWorkspace, defaultInstanceHistory, ideDataIn, instanceHistory, md5, workspaceFolderOf } from './testing/ide-history.js';
 
 /**
  * CodeBuddy IDE 适配器测试。
@@ -41,91 +36,7 @@ let previousIdeData: string | undefined;
 function useIdeData(home: string): void {
   mocks.home = home;
   previousIdeData = process.env.TEAMAI_CODEBUDDY_IDE_DATA;
-  process.env.TEAMAI_CODEBUDDY_IDE_DATA = path.join(home, 'CodeBuddyExtension', 'Data');
-}
-
-function md5(s: string): string {
-  return crypto.createHash('md5').update(s).digest('hex');
-}
-
-function userDataBase(home: string): string {
-  const base = getUserDataBase();
-  if (!base?.startsWith(home)) {
-    throw new Error(`CodeBuddy IDE data dir ${base} is not under the test home ${home}`);
-  }
-  return base;
-}
-
-/** 常规实例：<extId>/CodeBuddyIDE/<instId>/history */
-function historyRootA(home: string): string {
-  return path.join(userDataBase(home), 'ext-a', 'CodeBuddyIDE', 'ext-a', 'history');
-}
-
-/** default 实例：<extId>/CodeBuddyIDE/history（少一层 instId） */
-function historyRootB(home: string): string {
-  return path.join(userDataBase(home), 'ext-b', 'CodeBuddyIDE', 'history');
-}
-
-function writeMsg(msgDir: string, id: string, role: string, content: unknown[], createdAt: string): void {
-  fs.mkdirSync(msgDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(msgDir, `${id}.json`),
-    JSON.stringify(
-      {
-        role,
-        message: JSON.stringify({ role, content }),
-        id,
-        extra: JSON.stringify({ modelName: 'custom-local:test-model' }),
-        createdAt,
-      },
-      null,
-      2,
-    ),
-  );
-}
-
-interface FixtureConv {
-  id: string;
-  name?: string;
-  messages: Array<{ id: string; role: string; content: unknown[] }>;
-}
-
-/** 在某个 history 根下建一个工作区及其会话。 */
-function buildWorkspace(
-  historyRoot: string,
-  cwd: string,
-  convs: FixtureConv[],
-): string {
-  const wsDir = path.join(historyRoot, md5(cwd));
-  fs.mkdirSync(wsDir, { recursive: true });
-
-  const index = {
-    conversations: convs.map((c) => ({
-      id: c.id,
-      type: 'craft',
-      name: c.name ?? '',
-      createdAt: '2026-09-01T10:00:00.000Z',
-      lastMessageAt: '2026-09-01T11:00:00.000Z',
-    })),
-    current: convs[0]?.id,
-  };
-  fs.writeFileSync(path.join(wsDir, 'index.json'), JSON.stringify(index, null, 2));
-
-  for (const c of convs) {
-    const convDir = path.join(wsDir, c.id);
-    const msgDir = path.join(convDir, 'messages');
-    fs.mkdirSync(msgDir, { recursive: true });
-    // 顺序故意与文件名字典序相反，验证顺序来自 index.json 而非文件名
-    fs.writeFileSync(
-      path.join(convDir, 'index.json'),
-      JSON.stringify({ messages: c.messages.map((m) => ({ id: m.id, role: m.role, isComplete: true })), requests: [] }, null, 2),
-    );
-    c.messages.forEach((m, i) => {
-      writeMsg(msgDir, m.id, m.role, m.content, new Date(Date.UTC(2026, 8, 1, 10, i)).toISOString());
-    });
-  }
-
-  return wsDir;
+  process.env.TEAMAI_CODEBUDDY_IDE_DATA = ideDataIn(home);
 }
 
 beforeEach(() => {
@@ -140,63 +51,12 @@ afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 
-describe('listIdeHistoryRoots', () => {
-  it('covers both layouts, including the default instance without an instId level', () => {
-    fs.mkdirSync(historyRootA(tmpHome), { recursive: true });
-    fs.mkdirSync(historyRootB(tmpHome), { recursive: true });
-
-    const roots = listIdeHistoryRoots();
-    expect(roots).toContain(historyRootA(tmpHome));
-    expect(roots).toContain(historyRootB(tmpHome));
-  });
-
-  it('returns empty when CodeBuddy IDE has never been launched', () => {
-    expect(listIdeHistoryRoots()).toEqual([]);
-  });
-});
-
-describe('readIdeConversation', () => {
-  it('follows the message order from index.json, not filename order', () => {
-    const cwd = '/tmp/project-a';
-    const conv: FixtureConv = {
-      id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1',
-      name: 'order test',
-      messages: [
-        { id: 'zzz', role: 'user', content: [{ type: 'text', text: 'first' }] },
-        { id: 'aaa', role: 'assistant', content: [{ type: 'text', text: 'second' }] },
-      ],
-    };
-    const wsDir = buildWorkspace(historyRootA(tmpHome), cwd, [conv]);
-    const convDir = path.join(wsDir, conv.id);
-
-    const messages = readIdeConversation(convDir);
-    expect(messages.map((m) => m.content[0]?.text)).toEqual(['first', 'second']);
-  });
-
-  it('stops at the limit so listing does not read whole conversations', () => {
-    const cwd = '/tmp/project-a';
-    const conv: FixtureConv = {
-      id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2',
-      name: 'limit test',
-      messages: Array.from({ length: 10 }, (_, i) => ({
-        id: `m${i}`,
-        role: 'user',
-        content: [{ type: 'text', text: `msg-${i}` }],
-      })),
-    };
-    const wsDir = buildWorkspace(historyRootA(tmpHome), cwd, [conv]);
-    const convDir = path.join(wsDir, conv.id);
-
-    expect(readIdeConversation(convDir, 3)).toHaveLength(3);
-  });
-});
-
 describe('CodeBuddyIdeAdapter', () => {
   const cwdA = '/tmp/ws-a';
   const cwdB = '/tmp/ws-b';
 
   function seed(): void {
-    buildWorkspace(historyRootA(tmpHome), cwdA, [
+    buildWorkspace(instanceHistory(tmpHome), cwdA, [
       {
         id: '33333333333333333333333333333333',
         name: '项目 A 的会话',
@@ -226,7 +86,7 @@ describe('CodeBuddyIdeAdapter', () => {
         ],
       },
     ]);
-    buildWorkspace(historyRootB(tmpHome), cwdB, [
+    buildWorkspace(defaultInstanceHistory(tmpHome), cwdB, [
       {
         id: '22222222222222222222222222222222',
         name: '',
@@ -314,17 +174,18 @@ describe('CodeBuddyIdeAdapter', () => {
     const still = await adapter.readSession({ sessionId: sourceId, projectPath: cwdA });
     expect(still.title).not.toBe('should not clobber');
 
+    // 写入时两个 IDE 实例都写了，删除要两个都清掉
+    const targetWsDirs = [instanceHistory(tmpHome), defaultInstanceHistory(tmpHome)].map((r) => path.join(r, workspaceFolderOf(targetCwd)));
+    expect(targetWsDirs.map((wsDir) => fs.existsSync(path.join(wsDir, writtenId)))).toEqual([true, true]);
+
     expect(await adapter.deleteSession(writtenId, targetCwd)).toBe(true);
 
-    // 写入时两个 IDE 实例都写了，删除要两个都清掉
-    const targetWsDirs = listIdeHistoryRoots().map((r) => path.join(r, md5(targetCwd)));
-    expect(targetWsDirs.length).toBeGreaterThan(0);
     for (const wsDir of targetWsDirs) {
       expect(fs.existsSync(path.join(wsDir, writtenId))).toBe(false);
     }
 
     // 同名会话在别的工作区另有副本，按 cwd 限定删除不能连带误删
-    expect(fs.existsSync(path.join(historyRootA(tmpHome), md5(cwdA), sourceId))).toBe(true);
+    expect(fs.existsSync(path.join(instanceHistory(tmpHome), md5(cwdA), sourceId))).toBe(true);
   });
 
   it('refuses to write when the target cwd is not an absolute path', async () => {

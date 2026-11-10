@@ -21,18 +21,18 @@
  * Design principle: this module is an **enhancement**. Any failure degrades silently and must never block the main migration flow.
  */
 
-import { assertSafeSessionFileId } from '../sessions/ids.js';
+import { assertSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ContentBlock, Session, ToolArguments } from '../sessions/ir.js';
-import { imagePlaceholderText } from '../sessions/ir.js';
-import { mayReadLocalImageFile, OptionalString, safeFileName } from '../sessions/fs.js';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../json.js';
-import { isInjectedText, titleFromUserText , visibleUserText } from '../sessions/title.js';
+import type { ContentBlock, Session, ToolArguments } from '@teamai/tool-core/sessions/ir';
+import { imagePlaceholderText } from '@teamai/tool-core/sessions/ir';
+import { mayReadLocalImageFile, OptionalString, safeFileName } from '@teamai/tool-core/sessions/fs';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/tool-core/json';
+import { isInjectedText, titleFromUserText , visibleUserText } from '@teamai/tool-core/sessions/title';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -541,7 +541,7 @@ function writeIndex(historyDir: string, data: IdeIndex): void {
   // Back up before writing, matching the IDE's own .index_bak.json convention
   if (fs.existsSync(idxPath)) {
     try {
-      fs.copyFileSync(idxPath, path.join(historyDir, '.index_bak.json'));
+      fs.writeFileSync(path.join(historyDir, '.index_bak.json'), readRegularFileSync(idxPath));
     } catch {
       // A failed backup must not block the write
     }
@@ -767,7 +767,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
             if (path.relative(assetsDir, dest).startsWith('..')) throw new Error('unsafe asset name');
 
             if (asset.sourcePath && fs.existsSync(asset.sourcePath)) {
-              fs.copyFileSync(asset.sourcePath, dest);
+              fs.writeFileSync(dest, readRegularFileSync(asset.sourcePath));
               ok = true;
             } else if (asset.data) {
               fs.writeFileSync(dest, Buffer.from(asset.data, 'base64'));
@@ -820,7 +820,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
 
       if (fs.existsSync(convIdxPath)) {
         try {
-          fs.copyFileSync(convIdxPath, path.join(convDir, '.index_bak.json'));
+          fs.writeFileSync(path.join(convDir, '.index_bak.json'), readRegularFileSync(convIdxPath));
         } catch {
           // A failed backup must not block the write
         }
