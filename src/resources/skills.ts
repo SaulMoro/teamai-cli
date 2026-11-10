@@ -1518,9 +1518,9 @@ export class SkillsHandler extends ResourceHandler {
       } catch (e) {
         ledger?.recorder?.failed('skills');
 
-        if (e instanceof NotRegularFileError) {
-          // Copied whole or not at all (copyDir), so the member keeps what an earlier pull delivered, as with a folder pull skips.
-          const message = `Skipped skill ${item.name} for ${tool}: ${e.message}. Nothing of it was copied; a copy an earlier pull delivered stays as it was.`;
+        if (e instanceof NotRegularFileError && !path.relative(item.sourcePath, e.file).startsWith('..')) {
+          // copyDir refused an entry of the team's folder before writing anything: a copy an earlier pull delivered stays whole.
+          const message = `Skipped skill ${item.name} for ${tool}: ${e.message}. Nothing of it was copied; a copy an earlier pull delivered stays as it was. Remove that file from the team checkout, then run \`teamai pull --force\`.`;
           log.warn(message);
           log.persist(message);
         } else {
