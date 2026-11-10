@@ -36,7 +36,7 @@ steps:
     expect(parsed.ok && parsed.definition.steps[0]?.requires).toEqual({ host: true });
 
     const refused = flow('{ host: false }');
-    expect(refused.ok).toBe(false);
+    expect(refused.ok === false && refused.diagnostics.map((diagnostic) => diagnostic.field)).toEqual(['steps[0].requires.host']);
   });
 
   it('holds from every level below it, as defaults.requires does for every step', () => {
@@ -55,7 +55,7 @@ steps:
 
   const offer = (requires: InEffect, executor: Offer['executor']): Offer => ({
     step: 'build', executor, requires, interactive: false, hasContract: false, envKeys: [], runEnvKeys: new Set(), budgeted: false,
-    unattended: false, clone: false, prepare: false, tool: executor === 'prompt' ? 'claude' : undefined, pinned: isPinnedToHost({ executor, answer: false, inShippedWorkflow: false, publishes: false, requires }),
+    unattended: false, clone: false, prepare: false, tool: executor === 'prompt' ? 'claude' : undefined,
   });
   const env = { declared: new Set<string>(), secrets: new Set<string>(), present: new Set<string>() };
   const remote: DriverCan = { exec: true, tools: ['claude'], remote: true };

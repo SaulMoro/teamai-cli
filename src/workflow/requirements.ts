@@ -416,7 +416,7 @@ export interface Offer {
   clone: boolean;
   /** The caller asked `next --prepare`. */
   prepare: boolean;
-  /** The step runs only on this host (`isPinnedToHost`). Absent: not pinned. */
+  /** The step runs only on this host (`isPinnedToHost`). Absent: not pinned, unless `requires.host` pins it. */
   pinned?: boolean;
   /** An answer step, which a slot that runs no prompt step takes. Absent: not one. */
   answer?: boolean;
@@ -506,6 +506,8 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
 
   if (allow.env && [...required, ...setupKeys].some((key) => sameEnvName(allow.env ?? [], key) === undefined)) policy.push('policy.env');
   const provided = providedIsolation(can, offer.hasContract);
+  // A step that requires the host is pinned whether or not its caller derived the pin.
+  const pinned = offer.pinned === true || requires.host === true;
 
   const gaps: Missing[] = policy.length > 0 ? policy : [
     ...toolGap(offer.tool, can),
@@ -518,9 +520,9 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...personGap(offer.interactive, can),
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
     ...(offer.executor === 'workflow' && can.workflow !== true ? ['workflow' as const] : []),
-    ...(offer.pinned && can.remote ? ['host' as const] : []),
+    ...(pinned && can.remote ? ['host' as const] : []),
     ...(offer.executor === 'prompt' && !offer.answer && can.prompt === false ? ['prompt' as const] : []),
-    ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),
+    ...(can.commands === 'pinned' && offer.executor === 'command' && !pinned ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` or `member` does.

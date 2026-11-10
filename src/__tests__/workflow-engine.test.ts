@@ -6329,4 +6329,21 @@ describe('a workflow step leased whole', () => {
 
     expect(await settledCheck(whole.config, whole.runId)).toEqual(expanded);
   });
+
+  it('expands a workflow whose command step requires the host, so it never runs whole on another machine', async () => {
+    const pinned = {
+      check: workflow('check', `  - id: look
+    requires: { host: true }
+    command: node look.js
+`),
+      ship: workflow('ship', `  - id: check
+    workflow: check
+`),
+    };
+    const run = await startTree(pinned, 'ship');
+
+    const lease = leaseIn(await leaseNext(run.config, run.runId, driverA, { can: { workflow: true } }));
+
+    expect(lease.step).toBe('check.look');
+  });
 });
