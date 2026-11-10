@@ -19,6 +19,8 @@ The runtimes teamai ships are built on `@teamai/runtime-kit` instead: its reques
 
 Put the bundled file where teamai finds a runtime, such as `runtimes/<name>/runtime` in the team repo ([where teamai looks](workflow-advanced.md#driver-definitions-and-step-runtimes)), and name it in a driver definition with `use: <name>`.
 
+A runtime that runs no command, as T3 and Paseo run only prompts, says so in a `package.json` beside that file: `{ "teamai": { "exec": false } }`, matching the `can.exec: false` of its `init`. A run that needs no AI tool then never starts it, and its commands run on the host. A runtime that says nothing there is started.
+
 ## Test it against the scenario suite
 
 `src/__tests__/step-runtime-scenarios.test.ts` runs the scenarios that `host`, `tools`, the sandbox, T3 and Paseo runtimes and the toy pass, through `StepRuntime` alone: open, exec or prompt, cancel, a teamai killed and restarted, close. A runtime that runs commands goes in `SUBJECTS`, as the toy is there:

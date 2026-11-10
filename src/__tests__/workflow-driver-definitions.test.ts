@@ -157,3 +157,32 @@ describe('the host driver, which teamai builds in', () => {
     )));
   });
 });
+
+describe('a run that needs no AI tool and the runtimes that run no command', () => {
+  /** A team whose runtimes/agents/ holds a runtime, with `manifest` as its package.json when given, and a definition of it. */
+  function teamWithRuntime(manifest?: unknown): LocalConfig {
+    const team = teamWith([]);
+    const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'runtime'), 'not run: an unattended open refuses a revision no one accepted\n', { mode: 0o755 });
+    if (manifest !== undefined) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'agents.yaml'), 'schemaVersion: v1alpha1\nname: agents\nruntimes:\n  - use: agents\n');
+    return team;
+  }
+
+  const open = (config: LocalConfig, needsAiTool: boolean) => openDriver(config, 'agents', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath, needsAiTool });
+
+  it('does not open a team runtime whose manifest says it runs no command, for a run that needs no AI tool', async () => {
+    expect(await open(teamWithRuntime({ teamai: { exec: false } }), false)).toMatchObject({ ok: true, opened: { runtimes: [] } });
+  });
+
+  it('opens it for a run that needs an AI tool, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
+    const unaccepted = { ok: false, failure: { code: 'runtime_not_accepted' } };
+
+    expect(await open(teamWithRuntime({ teamai: { exec: false } }), true)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime(), false)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime({ name: 'agents' }), false)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime({ teamai: { exec: true } }), false)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime({ teamai: { exec: 'no' } }), false)).toMatchObject(unaccepted);
+  });
+});

@@ -1,6 +1,17 @@
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { dir, worktree, daemon, behave, received, start, isEnd, isInit, ready, opened, cannotRun, notInstalled, promptRequest, useRuntimeSuite } from './testing/suite.js';
+
+/** The `exec` teamai's package manifest declares for runtime `name` (`teamai.runtimes.<name>`), which teamai reads without starting it. */
+function declaredExec(name: string): unknown {
+  const manifest = z.object({ teamai: z.object({ runtimes: z.record(z.string(), z.object({ exec: z.unknown() })) }) })
+    .parse(JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'package.json'), 'utf8')));
+
+  return manifest.teamai.runtimes[name]?.exec;
+}
 
 describe('teamai-runtime-paseo', () => {
   useRuntimeSuite();
@@ -9,13 +20,17 @@ describe('teamai-runtime-paseo', () => {
     // The daemon runs on this machine, where `codex login status` says Codex is signed in.
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }, codex_login: 'signed_in' });
 
-    expect(await ready(start())).toEqual({
+    const reply = await ready(start());
+
+    expect(reply).toEqual({
       type: 'init', ok: true, prompt: true, conversations: true, confinedPrompt: true, wake: true,
       can: {
         exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude', 'codex', 'opencode'],
         confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex', 'opencode'] }],
       },
     });
+    // teamai skips the runtime for a run that needs no AI tool by what its manifest declares, never asking init.
+    expect(declaredExec('paseo')).toBe(z.object({ can: z.object({ exec: z.boolean() }) }).parse(reply).can.exec);
   });
 
   it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available, and names it unavailable with how to sign it in', async () => {

@@ -26,17 +26,25 @@ export function shippedDriverFile(name: string): string {
   return path.join(teamaiPackageDir(), 'drivers', `${name}.yaml`);
 }
 
-const PackageBinSchema = z.object({ bin: z.record(z.string(), z.string()).optional() });
+/** What a runtime's manifest says of it: `exec: false` when it runs no command, as every `init` of it answers. */
+export const RuntimeFactsSchema = z.object({ exec: z.boolean().optional().catch(undefined) }).catch({});
+
+/** The runtime facts in a package manifest: under `teamai`, `runtimes.<name>` for each runtime teamai ships, by the name `use` gives it. */
+const PackageSchema = z.object({
+  bin: z.record(z.string(), z.string()).optional(),
+  teamai: z.object({ runtimes: z.record(z.string(), RuntimeFactsSchema).optional().catch(undefined) }).optional().catch(undefined),
+});
 
 /**
- * The built file of step runtime `name` that teamai ships: the `teamai-runtime-<name>` entry of the package's `bin`,
- * in `packageDir`, or undefined when it ships none. Found here, a stray executable of that name on PATH never shadows it.
+ * The step runtime `name` that teamai ships: its built file, the `teamai-runtime-<name>` entry of the package's `bin`,
+ * in `packageDir`, and what the package manifest says of it beside that (`teamai.runtimes.<name>`); undefined when it
+ * ships none. Found here, a stray executable of that name on PATH never shadows it.
  */
-export function shippedRuntimeFile(name: string, packageDir = teamaiPackageDir()): string | undefined {
-  let manifest: z.infer<typeof PackageBinSchema>;
+export function shippedRuntime(name: string, packageDir = teamaiPackageDir()): { file: string; exec?: boolean } | undefined {
+  let manifest: z.infer<typeof PackageSchema>;
 
   try {
-    manifest = PackageBinSchema.parse(JSON.parse(readRegularFileSync(path.join(packageDir, 'package.json'), 'utf8')));
+    manifest = PackageSchema.parse(JSON.parse(readRegularFileSync(path.join(packageDir, 'package.json'), 'utf8')));
   } catch {
     return undefined;
   }
@@ -48,6 +56,7 @@ export function shippedRuntimeFile(name: string, packageDir = teamaiPackageDir()
 
   // A bin entry that leaves the package is not one teamai ships.
   if (path.relative(packageDir, file).startsWith('..') || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return undefined;
+  const exec = manifest.teamai?.runtimes?.[name]?.exec;
 
-  return file;
+  return { file, ...(exec !== undefined && { exec }) };
 }

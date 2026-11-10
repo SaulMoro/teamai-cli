@@ -1,10 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { RuntimeMessageSchema, UNAVAILABLE_REASON_MAX } from '@teamai/runtime-protocol';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { CLAUDE, CODEX, credentialsFile, fakeBrowser, PATH_WITHOUT_T3, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
 import { checkout, dir, noticesOf, start, t3, useT3Runtime } from './testing/suite.js';
+
+/** The `exec` teamai's package manifest declares for runtime `name` (`teamai.runtimes.<name>`), which teamai reads without starting it. */
+function declaredExec(name: string): unknown {
+  const manifest = z.object({ teamai: z.object({ runtimes: z.record(z.string(), z.object({ exec: z.unknown() })) }) })
+    .parse(JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'package.json'), 'utf8')));
+
+  return manifest.teamai.runtimes[name]?.exec;
+}
 
 describe('teamai-runtime-t3', () => {
   useT3Runtime();
@@ -26,6 +35,8 @@ describe('teamai-runtime-t3', () => {
           confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex'] }],
         },
       });
+      // teamai skips the runtime for a run that needs no AI tool by what its manifest declares, never asking init.
+      expect(declaredExec('t3')).toBe(z.object({ can: z.object({ exec: z.boolean() }) }).parse(reply).can.exec);
     });
 
     it.each([

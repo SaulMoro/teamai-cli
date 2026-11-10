@@ -9,7 +9,7 @@ import { resolveCliPath } from '@teamai/shared/cli-path';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
-import { shippedRuntimeFile } from '../../default-drivers.js';
+import { RuntimeFactsSchema, shippedRuntime } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type DriverDefinition, type ResolvedDriver } from './definitions.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
@@ -57,15 +57,31 @@ export function toolsLaunchDeps(): StepLaunchDeps {
 /** The file in a runtime directory that teamai spawns. */
 export const RUNTIME_ENTRY = 'runtime';
 
+/**
+ * Where a runtime was found. `exec: false` is what its manifest declares when it runs no command, read without starting
+ * it: teamai's package manifest for one it ships, the `package.json` beside a personal or team runtime's executable.
+ */
 export type RuntimeSource =
   | { kind: 'builtin'; name: 'tools' }
-  | { kind: 'personal' | 'path'; name: string; executable: string }
+  | { kind: 'personal'; name: string; executable: string; exec?: boolean }
+  | { kind: 'path'; name: string; executable: string }
   /** A runtime teamai ships, as a built file of its package that the Node running teamai runs. */
-  | { kind: 'shipped'; name: string; file: string }
-  | { kind: 'team'; name: string; executable: string; dir: string; relative: string };
+  | { kind: 'shipped'; name: string; file: string; exec?: boolean }
+  | { kind: 'team'; name: string; executable: string; dir: string; relative: string; exec?: boolean };
 
 async function isFile(at: string): Promise<boolean> {
   return (await fs.lstat(at).catch(() => undefined))?.isFile() === true;
+}
+
+/** The runtime facts the `package.json` in `dir` declares under `teamai`: none when it has none or cannot be read. */
+async function declaredFacts(dir: string): Promise<{ exec?: boolean }> {
+  try {
+    const exec = z.object({ teamai: RuntimeFactsSchema }).parse(JSON.parse(await readRegularFile(path.join(dir, 'package.json'), 'utf8'))).teamai.exec;
+
+    return exec === undefined ? {} : { exec };
+  } catch {
+    return {};
+  }
 }
 
 /** The runtime `use` names for `driver`, or why there is none. */
@@ -83,7 +99,7 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
 
   const personal = path.join(personalDir('runtimes'), use, RUNTIME_ENTRY);
 
-  if (await isFile(personal)) return { ok: true, source: { kind: 'personal', name: use, executable: personal } };
+  if (await isFile(personal)) return { ok: true, source: { kind: 'personal', name: use, executable: personal, ...await declaredFacts(path.dirname(personal)) } };
   const root = path.join(getKnowledgeDir(driver.config), 'runtimes');
   const team = await teamItem(driver.config, root, use, '');
 
@@ -92,12 +108,12 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
   }
 
   if (team.kind === 'found' && await isFile(path.join(team.at, RUNTIME_ENTRY))) {
-    return { ok: true, source: { kind: 'team', name: use, executable: path.join(team.at, RUNTIME_ENTRY), dir: team.at, relative: path.relative(getKnowledgeDir(driver.config), team.at) } };
+    return { ok: true, source: { kind: 'team', name: use, executable: path.join(team.at, RUNTIME_ENTRY), dir: team.at, relative: path.relative(getKnowledgeDir(driver.config), team.at), ...await declaredFacts(team.at) } };
   }
 
-  const shipped = shippedRuntimeFile(use);
+  const shipped = shippedRuntime(use);
 
-  if (shipped) return { ok: true, source: { kind: 'shipped', name: use, file: shipped } };
+  if (shipped) return { ok: true, source: { kind: 'shipped', name: use, ...shipped } };
   const onPath = resolveCliPath(`teamai-runtime-${use}`);
 
   if (onPath) return { ok: true, source: { kind: 'path', name: use, executable: onPath } };
@@ -623,25 +639,22 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
 }
 
 /**
- * The runtimes teamai ships that run no command (`can.exec: false` at every init, as their offer tests pin): t3 and
- * paseo launch agents in their apps. A run that needs no AI tool gives them no step, so it never opens them, and its
- * commands run on the host slot.
+ * Whether a run that needs no AI tool skips `entry` of `driver`: a runtime whose manifest declares it runs no command
+ * (`exec: false`, as t3 and paseo do, their offer tests pinning it to their `init`). Such a run gives it no step, so it
+ * is never opened, and the commands run on the host slot. A runtime that declares nothing is opened.
  */
-const SHIPPED_AGENTS_ONLY: ReadonlySet<string> = new Set(['t3', 'paseo']);
-
-/** Whether a run that needs no AI tool skips `entry` of `driver`: one of teamai's own runtimes that runs no command. */
 async function isSkippedWithoutAi(driver: ResolvedDriver, entry: DriverDefinition['runtimes'][number]): Promise<boolean> {
-  if (entry.through !== undefined || !SHIPPED_AGENTS_ONLY.has(entry.use)) return false;
+  if (entry.through !== undefined) return false;
   const located = await locateRuntime(driver, entry.use);
 
-  return located.ok && located.source.kind === 'shipped';
+  return located.ok && located.source.kind !== 'builtin' && located.source.kind !== 'path' && located.source.exec === false;
 }
 
 /**
  * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
  * then opens each of its runtimes in order, so a bad option of any fails before a step runs. Each starts in `checkout`,
  * the run's, which its `init` names too. A drive of a run that `needsAiTool: false` says needs none leaves out the
- * runtimes teamai ships that run no command, such as t3, which it would only sign in to and ask what it runs.
+ * runtimes whose manifest declares they run no command, such as t3, which it would only sign in to and ask what it runs.
  */
 export async function openDriver(
   config: LocalConfig,
