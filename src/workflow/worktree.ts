@@ -130,6 +130,7 @@ export const UNTRUSTED_CONFIG: readonly string[] = [
  */
 export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string, kept: MemberConfig = NO_MEMBER_CONFIG): UntrustedGit {
   const run: Git = async (cwd, args, options) => {
+    // Read before every call, never once for several: a process a step left running can write the copy's config between two calls.
     const off = await plantedOff({ cwd, env, expiresAt, kept });
 
     if ('error' in off) return off.error;
