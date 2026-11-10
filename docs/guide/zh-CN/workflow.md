@@ -290,7 +290,7 @@ steps:
 
 `session: continue` 用同一个工具恢复这一步上一 pass 的会话。`session: { from: <步骤> }` 恢复这一步所依赖的步骤。换成别的工具时，会把会话复制到该工具里，再恢复这份副本。OpenCode 也会拿到副本，但总是新开会话，因为它没有恢复会话的参数。步骤恢复的会话，是最后一个继续它的步骤留下的样子，不管那个步骤在哪个工具或哪台机器上运行。新开会话的步骤（例如 OpenCode 步骤）不会改变后续步骤恢复什么。
 
-在以自己的方式启动智能体的运行时上（例如 T3 或 Paseo），继续会话的步骤会在同一个对话里继续：teamai 让前一个步骤的位置保持打开（不占 `max_parallel`），直到没有剩下的步骤在同一个工作区里继续它，后一个步骤的 prompt 是那个线程或智能体的又一轮。前一个对话已不存在、运行的是另一个工具，或工作在另一个目录时，运行时会开一个新对话，并发出一条说明原因的通知。经由另一个运行时（`through:`）的运行时条目不会保持任何位置打开。使用 skill 驱动时，会启动子智能体的宿主把之后的每个步骤都交给完成该对话第一个步骤的那个子智能体，并把带 `session: continue` 的步骤的下一轮交给它第一轮的那个子智能体。
+在以自己的方式启动智能体的运行时上（例如 T3 或 Paseo），继续会话的步骤会在同一个对话里继续：teamai 让前一个步骤的位置保持打开（不占 `max_parallel`），直到没有剩下的步骤在同一个工作区里继续它，后一个步骤的 prompt 是那个线程或智能体的又一轮。前一个对话已不存在、运行的是另一个工具，或工作在另一个目录时，运行时会开一个新对话，并发出一条说明原因的通知。经由另一个运行时（`through:`）的运行时条目不会保持任何位置打开。使用 skill 驱动时，会启动子智能体的会话宿主把之后的每个步骤都交给完成该对话第一个步骤的那个子智能体，并把带 `session: continue` 的步骤的下一轮交给它第一轮的那个子智能体。
 
 只有共用一个工作区的步骤才会共用一个对话。T3 和 Paseo 给每个顶层步骤各自的 worktree，所以继续另一个步骤的顶层步骤总会开一个新对话，并发出那条通知。要让多个步骤保持在同一个对话里，把它们放进一个带 `workspace: new` 的 `workflow` 步骤，并在每个步骤里继续它的工作区：
 
@@ -487,7 +487,7 @@ teamai workflow start tighten-rule --inputs '{"rule":"backend"}'
 
 - `branch` 只能读取 `{{ inputs.* }}` 和步骤所需步骤的输出，例如 `teamai/tasks/{{ steps.draft.outputs.id }}`，这样之后给出相同值的运行会沿用同一个分支和 pull request。它在步骤被租用时渲染。不写时，步骤使用运行为该步骤和 pass 命名的分支。分支是团队仓库的默认分支，或者 git 无法用它命名分支时，步骤以 `workspace_base` 失败。
 - 分支和默认分支冲突时，步骤在运行前以 `merge_conflict` 失败。把默认分支合并进它，或者删除它。
-- 只有只运行一次的 command 或 prompt 步骤能用它，`workflow` 步骤和 `for_each` 不行；它也不能列 `scorers`，因为步骤报告后克隆就被删除了。它也不带 `role`，外层 `workflow` 步骤的也不继承，因为它在自己的克隆里运行，而不在那个步骤的副本里。本地驱动运行它；在会启动子 agent 的宿主上，skill 驱动也运行它：command 在它的后台 runner 里运行，prompt 由在克隆里工作的子 agent 运行。`workflow publish` 会拒绝它的运行，因为克隆只在那台机器上。
+- 只有只运行一次的 command 或 prompt 步骤能用它，`workflow` 步骤和 `for_each` 不行；它也不能列 `scorers`，因为步骤报告后克隆就被删除了。它也不带 `role`，外层 `workflow` 步骤的也不继承，因为它在自己的克隆里运行，而不在那个步骤的副本里。本地驱动运行它；在会启动子 agent 的会话宿主上，skill 驱动也运行它：command 在它的后台 runner 里运行，prompt 由在克隆里工作的子 agent 运行。`workflow publish` 会拒绝它的运行，因为克隆只在那台机器上。
 - 推送前，提交必须是 `teamai pull` 会接受的：改动的每个文件都在 pull 放置的目录里（`skills/`、`rules/`、`scorers/`、`benchmarks/` 等），不能是符号链接或子模块，也不能是克隆里某个符号链接也指向的文件，因为步骤可能经由那个符号链接的路径写了它；benchmark 文件必须在 pull 读取的套件里，即带 `suite.yaml` 的 `benchmarks/<suite>/` 或 `benchmarks/<namespace>/<suite>/`；pull 不能拒绝默认分支上原本接受的任何文件，比如步骤删掉了某个工作流所用的评分器。否则步骤以 `push_failed` 失败，逐个列出文件和原因，什么也不推送。
 - 步骤运行期间队友推送到该分支的提交会让步骤以 `push_failed` 失败。origin 保留那个提交，下一次运行从它开始。
 - 分支的内容和默认分支相同时（比如它的 pull request 已被 squash 合并），步骤什么也不推送，也不打开 pull request。
@@ -526,7 +526,7 @@ teamai workflow start share-standup --inputs '{"member":"alice","note":"Shipped 
 - 什么也没暂存的步骤会成功，也不推送。它的运行不产生副本、不开 pull request，`workflow publish` 会接受它。
 - 在[隔离运行](workflow-advanced.md#隔离运行)里，例如基准测试运行，步骤就绪后会被跳过，它的 `message` 说明原因，因此不需要任何驱动提供团队工作区。
 - 离线、另一个 teamai 进程正在写该分支、团队仓库是 http，或者 origin 改动了步骤暂存的内容时，步骤成功，消息说明数据待发布。步骤暂存的内容留在本机，作为一个提交，或作为 `<data home>/data-branches/<branch>/pending/` 下的补丁，下一次 `teamai pull`、`teamai score --push` 或 `teamai score --drain` 会发送它。下一个发布到该分支的步骤会从这些数据开始，并先按顺序发送它们，再发送自己的。补丁已在该分支上、且就在它所针对的位置时会被丢弃。只在文件末尾追加行的补丁（例如一条笔记），若因另一个步骤先在那里追加而无法再应用，会被追加到这些文件当前内容的末尾。其他无法再应用的补丁留在那里：步骤的消息和发送时都会说出该文件，并提示在该分支的检出中手动应用它（`git apply --3way <patch>`）、推送，然后删除它。`teamai score --drain` 会说出哪个分支的数据仍待发布，并以 1 退出。
-- 本地驱动运行它；在会启动子 agent 的宿主上，skill 驱动也运行它。
+- 本地驱动运行它；在会启动子 agent 的会话宿主上，skill 驱动也运行它。
 
 ### 限定在一个目录里的提示步骤
 
@@ -560,7 +560,7 @@ teamai workflow start judge-change --driver local
 - `<dir>` 可以是模板，读取输入、`item` 和该步骤所需步骤的输出。它在步骤被租用时渲染，相对路径位于 `$TEAMAI_RUN_DIR` 下。目录在它之外、是符号链接，或没有可读的 `confined.json` 时，步骤以 `confined_invalid` 失败，并说明怎么修。
 - `confined.json` 是 `{ "level": "verified" | "best-effort", "prefer": "<tool>" | ["<tool>", …], "schema": "<file>" }`。`verified` 只在 TeamAI 检查过其受限启动的工具版本上运行，例如 Claude Code 2.1.308、Codex 0.163.0 或 OpenCode 2.1.2；`best-effort` 可在 TeamAI 能受限启动的任何工具上运行，例如 Cursor。`prefer` 最先尝试；列表按其顺序尝试。`schema` 是该目录里的一个 JSON Schema 文件，回答要符合它。级别由写证据的步骤决定：工作流文件不能设置或降低它。
 - 该步骤只运行一个提示，一次。pull 拒绝把 `workspace: { confined }` 用在命令步骤或 `workflow` 步骤上，也拒绝它与 `for_each`、`scorers`、`requires.env`、`agent`、`tool`、`session`、`role`、`interactive` 或 `deliver` 同时出现。它可以设置 `model`：本机没有一个达到其级别的工具能解析该模型时，步骤保持待处理。
-- 本地 driver 运行它；[driver 定义](workflow-advanced.md#回答限定提示的运行时)在回答限定提示的运行时上运行它；没有这种运行时而定义列出了 `local` 时，用本机的工具。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。宿主不能启动子 agent 时，若会话所用工具在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的宿主上而该工具不在 PATH 上时，该步骤等待其他 driver。
+- 本地 driver 运行它；[driver 定义](workflow-advanced.md#回答限定提示的运行时)在回答限定提示的运行时上运行它；没有这种运行时而定义列出了 `local` 时，用本机的工具。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。会话宿主不能启动子 agent 时，若会话所用工具在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的会话宿主上而该工具不在 PATH 上时，该步骤等待其他 driver。
 - 该步骤记录 `confined`：工具、工具报告的模型和 effort、TeamAI 测得的隔离级别、工具拥有的访问权限，以及用量。成功的报告没有记录，或记录中的工具不在租约提供的工具里，或隔离级别低于该步骤的级别时，步骤以 `confined_report_mismatch` 失败。
 
 ## 交付 PR
@@ -786,7 +786,7 @@ $ teamai workflow resume r6aa0e2c0927ff266 --claim
 
 alice 停止之后，`--claim --confirmed` 即可接管。从 agent 会话发出时，这个 `--confirmed` 只回答接管：`invoke: ask` 工作流的运行随后返回 `confirm_needed`，本人同意后，再用同一条带 `--confirmed` 的命令继续它。无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）无论是否带 `--confirmed` 都会被拒绝。留给运行器接手的运行，或已经结束的运行，不询问直接接管。
 
-要在编程会话中继续这个运行，由 agent 执行 `teamai workflow resume <run> --driver skill`，加 `--claim` 则从所有者那里接管。它以同样的方式认领运行，然后在会话的运行模式下用 skill 驱动运行它，选项与 skill 启动相同：`--parallel`、`--hitl` 或 `--auto-approve`，以及 `--no-judge`。不带这些选项时，一次只运行一个步骤，agent 在回答可选关卡前会先问你。在无人值守的运行中，它像 `--auto-approve` 那样回答可选关卡；运行到只有人能处理的步骤时，它[把运行交给人](#运行需要人参与时)，会话随之停止。`invoke: ask` 的工作流会在认领之前被拒绝（`unattended_denied`）。无人值守的运行中会拒绝 `--hitl person`（`invalid_arguments`）：没有人会回答。它的第一个回合在工作流有 prompt 步骤或由会话评审时提出宿主问题，并重新派发另一台机器持有租约的步骤。必须用本地驱动运行的工作流会以 `teamai workflow resume <run>` 交还给你。接管运行由你决定，所以 agent 执行这两条命令前都会先问你。
+要在编程会话中继续这个运行，由 agent 执行 `teamai workflow resume <run> --driver skill`，加 `--claim` 则从所有者那里接管。它以同样的方式认领运行，然后在会话的运行模式下用 skill 驱动运行它，选项与 skill 启动相同：`--parallel`、`--hitl` 或 `--auto-approve`，以及 `--no-judge`。不带这些选项时，一次只运行一个步骤，agent 在回答可选关卡前会先问你。在无人值守的运行中，它像 `--auto-approve` 那样回答可选关卡；运行到只有人能处理的步骤时，它[把运行交给人](#运行需要人参与时)，会话随之停止。`invoke: ask` 的工作流会在认领之前被拒绝（`unattended_denied`）。无人值守的运行中会拒绝 `--hitl person`（`invalid_arguments`）：没有人会回答。它的第一个回合在工作流有 prompt 步骤或由会话评审时提出会话宿主问题，并重新派发另一台机器持有租约的步骤。必须用本地驱动运行的工作流会以 `teamai workflow resume <run>` 交还给你。接管运行由你决定，所以 agent 执行这两条命令前都会先问你。
 
 已发布的运行结束时，teamai 会发布它的结束状态，不带 `--sessions`。之后接手该运行的成员不会重新运行它的任何步骤。
 
@@ -1051,7 +1051,7 @@ steps:
 
 0.28.0 之前的 teamai 会丢弃设置了 `invoke` 或 `alias` 的工作流，所以成员和 CI 任务需要 0.28.0 或更高版本。`teamai review --branch` 会对每个新增这两个键之一的工作流给出警告。
 
-设置了 agent 的会话变量（如 `CLAUDE_CODE_SESSION_ID`）的进程，就算在 agent 会话内运行。在这样的进程中，`workflow start` 启动 `deny` 工作流时返回 `invoke_denied`。消息会给出本人在自己终端运行的命令，以及让 agent 能启动该工作流的 `invoke` 设置。启动 `ask` 工作流时，没有 `--confirmed` 就返回 `confirm_needed`；会话在本人同意后加上它。在无人值守的运行中（`TEAMAI_MODE=unattended` 或 `CI`），即使带 `--confirmed` 也返回 `unattended_denied`，因为没有人能同意。这些规则对所有驱动都成立，不指定驱动时也一样。`CI` 不豁免任何东西：CI 任务能启动任何工作流，是因为它不设置会话变量。`workflow start --driver skill` 即使宿主没有设置这类变量也算 agent 发起，因为只有编码 agent 会驱动 skill 驱动。替你启动默认工作流的命令不受这些判断，因为会话请求的是命令：在 agent 会话中，`teamai recall maintenance --update-quality` 可以运行，而 `teamai workflow start teamai-draft-learning-updates` 返回 `invoke_denied`。
+设置了 agent 的会话变量（如 `CLAUDE_CODE_SESSION_ID`）的进程，就算在 agent 会话内运行。在这样的进程中，`workflow start` 启动 `deny` 工作流时返回 `invoke_denied`。消息会给出本人在自己终端运行的命令，以及让 agent 能启动该工作流的 `invoke` 设置。启动 `ask` 工作流时，没有 `--confirmed` 就返回 `confirm_needed`；会话在本人同意后加上它。在无人值守的运行中（`TEAMAI_MODE=unattended` 或 `CI`），即使带 `--confirmed` 也返回 `unattended_denied`，因为没有人能同意。这些规则对所有驱动都成立，不指定驱动时也一样。`CI` 不豁免任何东西：CI 任务能启动任何工作流，是因为它不设置会话变量。`workflow start --driver skill` 即使会话宿主没有设置这类变量也算 agent 发起，因为只有编码 agent 会驱动 skill 驱动。替你启动默认工作流的命令不受这些判断，因为会话请求的是命令：在 agent 会话中，`teamai recall maintenance --update-quality` 可以运行，而 `teamai workflow start teamai-draft-learning-updates` 返回 `invoke_denied`。
 
 运行的步骤内不能启动或驱动另一次运行。步骤的进程带有 `TEAMAI_WORKFLOW_ATTEMPT`：本地驱动为它运行的命令和提示词步骤的工具设置它，skill 驱动为它的 runner 及其命令设置它，所有驱动都为 setup 设置它。设置了它时，每个会改变运行的 `workflow` 命令（`start`、`next`、`report`、`respond`、`retry`、`cancel`、`resume` 和 `publish`）都返回 `nested_workflow`，只有 skill 驱动的 runner 上报它自己的 attempt 除外。在 `.teamai/workflow-worktrees` 下的工作流 worktree 中，以及在 `teamai/<run>/...` 分支上的检出中，`start` 也返回 `nested_workflow`。其他命令在那里仍然可用，因为步骤的子 agent 从它的位置上报。要让另一个工作流成为运行的一部分，把它作为 `workflow` 步骤加入定义。
 
@@ -1091,19 +1091,19 @@ self 模式下，工作流 worktree 中的团队文件是已提交的版本。�
 
 agent 运行 `teamai workflow start --describe <name> --driver skill`。回复说明如何启动运行：直接启动、先问本人一个问题、在后台启动，或交给本地驱动。这个问题涵盖输入、同时运行几个步骤、谁回答可选审批，以及是否评审。
 
-TeamAI 从宿主设置的会话变量得知会话所用的工具。找不到时（例如 Oh My Pi 或 Qoder），且有步骤指定了模型或需要评分，describe 会要求提供工具，agent 就用 `--tools default=<tool>` 再次 describe。之后 teamai 打印的每条命令都会带上它。运行会记住这个工具：评分步骤由它评审；teamai 为该工具安装 agent 时，步骤的模型也按它解析。
+TeamAI 从会话宿主设置的会话变量得知会话所用的工具。找不到时（例如 Oh My Pi 或 Qoder），且有步骤指定了模型或需要评分，describe 会要求提供工具，agent 就用 `--tools default=<tool>` 再次 describe。之后 teamai 打印的每条命令都会带上它。运行会记住这个工具：评分步骤由它评审；teamai 为该工具安装 agent 时，步骤的模型也按它解析。
 
 启动后，每次回复都是一个 turn：agent 要做的 action、正在运行的步骤、上次调用以来发生的事，以及下一条要运行的命令。运行状态保存在 CLI 中，agent 在两次调用之间不需要记住任何东西。上下文压缩后或在新会话中，`teamai workflow next <run> --driver skill` 会打印当前 turn。如果另一个会话仍在驱动这次运行，它返回 `orchestrator_active`，由本人决定是否让本会话用 `--takeover` 接管。
 
 - 命令步骤在 TeamAI 于本机启动的后台进程中运行。
 - 提示词步骤交给会话启动的子 agent，附带任务说明和工作目录。子 agent 完成后自行上报。步骤有工作区时，TeamAI 会 commit 并 push 子 agent 的工作。
 - `interactive` 步骤由会话的 agent 自己和本人一起完成，一次一个。
-- 每次运行，agent 会说明一次它的宿主如何启动子 agent。宿主为每个子 agent 创建 worktree 时，TeamAI 检查并接管该 worktree。宿主不启动子 agent 时，agent 自己在检出中完成每个步骤，需要 worktree 的步骤则等本人在自己的终端运行。
+- 每次运行，agent 会说明一次它的会话宿主如何启动子 agent。会话宿主为每个子 agent 创建 worktree 时，TeamAI 检查并接管该 worktree。会话宿主不启动子 agent 时，agent 自己在检出中完成每个步骤，需要 worktree 的步骤则等本人在自己的终端运行。
 - 会话告诉本人发生了什么，提出问题，并给出结果和 PR。
 
 `teamai skill get workflow` 打印 agent 遵循的指令。`teamai workflow <command> --help` 列出所有选项。
 
-skill 驱动声明 `env: "commands"`（见[要求和限制](workflow-advanced.md#要求和限制)）。命令步骤和 setup 像在本地驱动中一样获得各自的 `requires.env` 键。带 `requires.env` 的提示词步骤会等待，因为 TeamAI 只在自己启动的进程中限定团队 env。该驱动从不声明 `tokens`、`max_turns` 或 `network`，因为没有宿主会把子 agent 的 token 或轮次报告给 TeamAI；也从不声明 `unattended`，所以带 `permissions: unattended` 的提示词步骤会等待。处于 `budget` 下的无头提示词步骤会等待，所以运行级的 `budget` 会让该运行的所有无头提示词步骤等待。`max_turns` 和 `requires.network: false` 会列入 `unenforced`。worktree 不是 sandbox：`requires.isolation: sandbox` 也会列入 `unenforced`。
+skill 驱动声明 `env: "commands"`（见[要求和限制](workflow-advanced.md#要求和限制)）。命令步骤和 setup 像在本地驱动中一样获得各自的 `requires.env` 键。带 `requires.env` 的提示词步骤会等待，因为 TeamAI 只在自己启动的进程中限定团队 env。该驱动从不声明 `tokens`、`max_turns` 或 `network`，因为没有会话宿主会把子 agent 的 token 或轮次报告给 TeamAI；也从不声明 `unattended`，所以带 `permissions: unattended` 的提示词步骤会等待。处于 `budget` 下的无头提示词步骤会等待，所以运行级的 `budget` 会让该运行的所有无头提示词步骤等待。`max_turns` 和 `requires.network: false` 会列入 `unenforced`。worktree 不是 sandbox：`requires.isolation: sandbox` 也会列入 `unenforced`。
 
 当一个因 env 或 budget 而等待的步骤，在同一次运行中较早步骤打开的工作区里工作时，describe 会把整个运行交给本地驱动，由本人在自己的终端启动。否则会话先运行它能运行的部分。只剩等待的步骤时，它把运行交给本人，由本人在自己的终端用 `teamai workflow resume <run>` 继续。本地驱动用本地配置中 `workflows.tools` 指定的、或 `--tools` 选择的无头工具运行提示词步骤。`TEAMAI_AI_TOOL`、`workflows.tools.default` 和两处 `ai.tool` 都没有指定工具时，会话给出的本地启动命令和 `resume` 命令会带上 `--tools default=<会话的工具>`。
 
@@ -1140,7 +1140,7 @@ agent 从不启动 `deny` 工作流。在有人值守的会话中，describe 回
 
 ### 评审
 
-当步骤列出[评分器](scorers.md)，且本机安装了会话所用工具的受限评审器时，TeamAI 在后台评审每个被评分的 pass，会话把标签告诉本人。本机没有会话所用工具的已验证评审器时（例如 Cursor），每个 pass 的 teamai-score 运行中的评审步骤交给会话，会话在新的子 agent 中以 `best-effort` 隔离评审它。评分器要求 `verified` 的任务保持打开，留给其他 driver。会话的宿主不能启动子 agent 时，若会话所用工具在 PATH 上，TeamAI 在后台用该工具以 `best-effort` 评审，否则全部任务都保持打开。如果不想在本机评审这些步骤，本人选择不评审的启动选项（`--no-judge`）。负责编排的 agent 从不在自己的上下文中评审。
+当步骤列出[评分器](scorers.md)，且本机安装了会话所用工具的受限评审器时，TeamAI 在后台评审每个被评分的 pass，会话把标签告诉本人。本机没有会话所用工具的已验证评审器时（例如 Cursor），每个 pass 的 teamai-score 运行中的评审步骤交给会话，会话在新的子 agent 中以 `best-effort` 隔离评审它。评分器要求 `verified` 的任务保持打开，留给其他 driver。它的会话宿主不能启动子 agent 时，若会话所用工具在 PATH 上，TeamAI 在后台用该工具以 `best-effort` 评审，否则全部任务都保持打开。如果不想在本机评审这些步骤，本人选择不评审的启动选项（`--no-judge`）。负责编排的 agent 从不在自己的上下文中评审。
 
 ### 限制
 
