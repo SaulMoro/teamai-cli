@@ -200,7 +200,7 @@ async function fail(context: SkillContext, lock: RunLock, input: { state: SkillS
 }
 
 /**
- * The child of the earlier step whose conversation `step` goes on in (`session.from`), on a host that starts children:
+ * The child of the earlier step whose conversation `step` goes on in (`session.from`), on a session host that starts children:
  * the one this run dispatched that step's settled attempt to. The run records no session of such a child, whose session
  * is its orchestrator's, so the earlier step's attempt names it. None while an open attempt already went on in that
  * child: a conversation takes one step at a time, as a runtime starts a new one for a turn it cannot take.
@@ -236,7 +236,7 @@ async function prepare(context: SkillContext, lock: RunLock, attempt: AttemptId)
   }
 
   const placed = async (prepared: Awaited<ReturnType<WorkflowClient['prepare']>>): Promise<Stage> => {
-    // Only a place the host made is refused, and prepareHostPlace answers that as a place to make.
+    // Only a place the session host made is refused, and prepareSessionHostPlace answers that as a place to make.
     if (prepared.kind === 'failed' || prepared.kind === 'refused') return failed(prepared.failure);
 
     if (prepared.kind === 'busy') {
@@ -257,10 +257,10 @@ async function prepare(context: SkillContext, lock: RunLock, attempt: AttemptId)
   };
 
   if (open.phase !== 'preparing' || !open.request) return placed(await context.client.prepare(lock, job.raw));
-  const hosted = await context.client.prepareHostPlace(lock, job.raw, open.request);
+  const sessionHostPlace = await context.client.prepareSessionHostPlace(lock, job.raw, open.request);
 
-  if (hosted.kind !== 'needs-place') return placed(hosted);
-  const { name, branch, start, refused } = hosted;
+  if (sessionHostPlace.kind !== 'needs-place') return placed(sessionHostPlace);
+  const { name, branch, start, refused } = sessionHostPlace;
   const placing = traced(context, placingRow(state, open, { ask: { name, branch, start }, refused }));
   await writeSkillState(context.config, lock, placing.state, context.env.secrets);
 
@@ -292,7 +292,7 @@ async function begin(context: SkillContext, lock: RunLock, attempt: AttemptId, p
 
   if (!state || (open?.phase !== 'preparing' && open?.phase !== 'running')) return { kind: 'gone', status: 'gone' };
   const { dir, job: { lease } } = prepared;
-  // The step has not run. An empty list keeps a host file written after adopt out of the commit, and the failure stays the one that stopped the step.
+  // The step has not run. An empty list keeps a session host file written after adopt out of the commit, and the failure stays the one that stopped the step.
   const failed = (failure: WorkflowFailure, cause: 'place' | 'model'): Promise<Stage> => fail(context, lock, { state, attempt, revision: open.revision, failure, cause, changed: [] });
 
   if (lease.executor === 'command') {

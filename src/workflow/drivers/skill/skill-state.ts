@@ -8,7 +8,7 @@ import type { LocalConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';
 import { writeJsonAtomic } from '../../../utils/fs.js';
 import { redactJson } from '@teamai/shared/redact';
-import type { HostPlaceRequest, RunVersion } from '../../protocol.js';
+import type { SessionHostPlaceRequest, RunVersion } from '../../protocol.js';
 import { ConfinedRunReportSchema, FailureSchema, TokenUsageSchema } from '../../step-state.js';
 import { AttemptIdSchema, RunIdSchema, skillStatePath, type RunId, type RunLock } from '../../store.js';
 import { KeptLimitSchema } from '../../usage-limits.js';
@@ -51,7 +51,7 @@ export type ReportBody = z.infer<typeof ReportBodySchema>;
 
 /**
  * The model a child must run. `definition`: neither the step nor `defaults.model` named one, so the child runs the team
- * agent's own model, or the host's default.
+ * agent's own model, or the session host's default.
  */
 const ModelPickSchema = z.union([
   z.object({ by: z.literal('definition') }),
@@ -63,7 +63,7 @@ export type ModelPick = z.infer<typeof ModelPickSchema>;
 /**
  * A prompt step's work as a child gets it: the place it works in, its brief, and the agent and model it runs as.
  * `person`: an interactive step, which the agent works itself with the person instead of a child. `isolation`: the step
- * requires a sandbox, which no skill host enforces.
+ * requires a sandbox, which no session host enforces.
  */
 const DispatchSchema = z.object({
   place: z.enum(['workspace', 'checkout']),
@@ -77,9 +77,9 @@ const DispatchSchema = z.object({
   brief: z.string(),
   agent: z.string().optional(),
   model: ModelPickSchema,
-  /** The child of an earlier step whose conversation this step goes on in: the host sends it the brief when it can reach it. */
+  /** The child of an earlier step whose conversation this step goes on in: the session host sends it the brief when it can reach it. */
   continues: z.object({ title: z.string() }).optional(),
-  /** The orchestrating session works the step itself: on a host that starts no child, or an interactive step. */
+  /** The orchestrating session works the step itself: on a session host that starts no child, or an interactive step. */
   bySession: z.literal(true).optional(),
   /** The session the lease continues, which a report from that same session records as resumed. */
   resumes: z.object({ tool: z.string(), id: z.string() }).optional(),
@@ -102,29 +102,29 @@ const STOP_REASONS = ['cancelled', 'timeout'] as const;
 
 export type StopReason = typeof STOP_REASONS[number];
 
-/** The place the host is asked to make for a step: `name` for it, on `branch`, from commit `start`. */
+/** The place the session host is asked to make for a step: `name` for it, on `branch`, from commit `start`. */
 const PlaceAskSchema = z.object({ name: z.string(), branch: z.string(), start: z.string() });
 
 export type PlaceAsk = z.infer<typeof PlaceAskSchema>;
 
-/** Where a runner prepares the place of its attempt when the host makes it. Absent: where TeamAI makes it. */
-const HostRequestSchema = z.discriminatedUnion('kind', [
+/** Where a runner prepares the place of its attempt when the session host makes it. Absent: where TeamAI makes it. */
+const SessionHostRequestSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('host') }),
   z.object({ kind: z.literal('adopt'), dir: z.string() }),
-]) satisfies z.ZodType<HostPlaceRequest>;
+]) satisfies z.ZodType<SessionHostPlaceRequest>;
 
 const RunVersionSchema: z.ZodType<RunVersion> = z.object({ status: z.enum(['running', 'succeeded', 'failed', 'cancelled']), revision: z.number().int(), receipts: z.number().int(), creating: z.boolean(), branch: z.string().optional() });
 const AttemptBase = { attempt: AttemptIdSchema, step: z.string(), revision: z.number().int(), spawnedAt: z.string(), expiresAt: z.string().optional() };
 
 /**
  * An open attempt: its runner prepares its place or runs its command; it waits for the place another attempt holds;
- * it waits for the agent to adopt a place its host made; its dispatch is offered to the agent, or acked; it is being
+ * it waits for the agent to adopt a place its session host made; its dispatch is offered to the agent, or acked; it is being
  * stopped, by its runner or by the agent that started its child; or it has a report to send.
  */
 const AttemptStateSchema = z.discriminatedUnion('phase', [
   // runs: D28 leased the step to this machine's confined tool, so its runner runs it and offers it to no child.
-  z.object({ ...AttemptBase, phase: z.literal('preparing'), request: HostRequestSchema.optional(), runs: z.literal('here').optional() }),
-  z.object({ ...AttemptBase, phase: z.literal('queued'), behind: AttemptIdSchema, request: HostRequestSchema.optional() }),
+  z.object({ ...AttemptBase, phase: z.literal('preparing'), request: SessionHostRequestSchema.optional(), runs: z.literal('here').optional() }),
+  z.object({ ...AttemptBase, phase: z.literal('queued'), behind: AttemptIdSchema, request: SessionHostRequestSchema.optional() }),
   /** `refused`: why the place the agent adopted last was not prepared. */
   z.object({ ...AttemptBase, phase: z.literal('placing'), ask: PlaceAskSchema, refused: z.string().optional() }),
   z.object({ ...AttemptBase, phase: z.literal('running'), runs: z.literal('here').optional() }),
@@ -202,8 +202,10 @@ const SkillStateSchema = z.object({
   /** `mode`: the run mode its start resolved, which every process of its attempts gets; a state from before it was kept is attended. */
   options: z.object({ parallel: z.number().int().min(1), hitl: z.enum(HITL_MODES), mode: RunModeSchema.default('attended') }),
   /**
-   * `none`: the run has no prompt step. `pending`: the agent has not answered the host question yet; a run without a
-   * prompt step (`hasPromptStep` false) asks it only for its judge, and a state from before it was kept had one.
+   * The session host of the run, the coding session that drives it: the key `host` names the session host, and a stored
+   * skill state keeps that spelling. `none`: the run has no prompt step. `pending`: the agent has not answered the session
+   * host question yet; a run without a prompt step (`hasPromptStep` false) asks it only for its judge, and a state from
+   * before it was kept had one. `places: 'host'`: the session host makes the places.
    */
   host: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('none') }),
@@ -212,15 +214,15 @@ const SkillStateSchema = z.object({
   ]),
   gate: GateSchema.optional(),
   /**
-   * The session that drives the run, when its host names one, and when it last called. `tool`: the tool that session
-   * works in, which `--tools default=<tool>` names or its host does, so a runner resolves its children's models for it;
+   * The session that drives the run, when its session host names one, and when it last called. `tool`: the tool that
+   * session works in, which `--tools default=<tool>` names or its session host does, so a runner resolves its children's models for it;
    * dropped when this teamai knows no such tool.
    */
   orchestrator: z.object({ session: z.string().optional(), tool: z.string().refine(isToolId).optional().catch(undefined), lastCallAt: z.string() }),
   attempts: z.array(AttemptStateSchema),
   /**
    * Present while this driver judges the run's scored steps with the confined judge of `tool`, which the background
-   * runner starts, at `level`: `verified`, or `best-effort` on a host that starts no child agent. A state from before
+   * runner starts, at `level`: `verified`, or `best-effort` on a session host that starts no child agent. A state from before
    * the level was kept judged at `verified`.
    */
   judging: z.object({ tool: z.string(), level: ConfinedRunReportSchema.shape.isolation.default('verified') }).optional(),
@@ -256,17 +258,17 @@ const SkillStateSchema = z.object({
 
 export type SkillState = z.infer<typeof SkillStateSchema>;
 
-/** The host of a run before the agent answers the host question, as R10 or R19 starts it. */
-export type UnansweredHost = Exclude<SkillState['host'], { kind: 'chosen' }>;
+/** The session host of a run before the agent answers the session host question, as R10 or R19 starts it. */
+export type UnansweredSessionHost = Exclude<SkillState['host'], { kind: 'chosen' }>;
 
 /**
  * The state of a run this driver starts to drive for `session`, working in `tool`, from `at` on: nothing open and nothing
  * shown yet, and `judge`, who judges its scored steps on this machine, when anyone does.
  */
 export function newSkillState(input: {
-  run: RunId; driver: SkillState['driver']; invocation: SkillState['invocation']; options: SkillState['options']; host: UnansweredHost; session: string | undefined; tool: ToolId | undefined; at: string; judge?: JudgedBy;
+  run: RunId; driver: SkillState['driver']; invocation: SkillState['invocation']; options: SkillState['options']; sessionHost: UnansweredSessionHost; session: string | undefined; tool: ToolId | undefined; at: string; judge?: JudgedBy;
 }): SkillState {
-  const { run, driver, invocation, options, host, session, tool, at, judge } = input;
+  const { run, driver, invocation, options, sessionHost, session, tool, at, judge } = input;
 
   const orchestrator: SkillState['orchestrator'] = { lastCallAt: at };
 
@@ -275,14 +277,14 @@ export function newSkillState(input: {
   if (tool !== undefined) orchestrator.tool = tool;
 
   return {
-    version: 1, run, driver, invocation, options, host, orchestrator,
+    version: 1, run, driver, invocation, options, host: sessionHost, orchestrator,
     attempts: [], ...judgingState(judge), scoring: [], seq: 0, events: [], seen: {}, settled: [], usage: [],
   };
 }
 
 /**
  * The skill state of `run`, which scores a pass of `scored`'s run, as the first tick that drives it makes it: that run's
- * identity, invocation, options, host, session and judging, with nothing open yet.
+ * identity, invocation, options, session host, session and judging, with nothing open yet.
  */
 export function scoringSkillState(scored: SkillState, run: RunId, at: string): SkillState {
   const { driver, invocation, options, host, orchestrator, judging, sessionJudge } = scored;

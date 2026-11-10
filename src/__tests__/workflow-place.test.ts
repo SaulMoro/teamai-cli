@@ -10,7 +10,7 @@ import { resolveWorkflowEnv } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
 import { PROFILES_UNDER_TEST, profileLacks, inProcessConformanceClient, runConformanceScenario, type ConformanceClient } from '../workflow/conformance-interpreter.js';
 import { PLACE_CHECKOUT_FILES, workflowPlaceConformanceScenarios } from '../workflow/conformance/place.js';
-import { inProcessClient, refuseDirtyAdoptedCommand, type HostPlaceRequest } from '../workflow/protocol.js';
+import { inProcessClient, refuseDirtyAdoptedCommand, type SessionHostPlaceRequest } from '../workflow/protocol.js';
 import { pull } from '../pull.js';
 import { pendingRecords } from '../workflow/records.js';
 import { findRunConfig } from '../workflow/run-location.js';
@@ -633,7 +633,7 @@ steps:
     const write = await lease();
     const dir = path.join(path.dirname(f.work), 'hosts', 'overlay');
     git(f.work, 'worktree', 'add', '-q', '--detach', dir, write.workspace.start.commit);
-    expect(await withRunLock(f.config, run, (lock) => f.client.prepareHostPlace(lock, write.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
+    expect(await withRunLock(f.config, run, (lock) => f.client.prepareSessionHostPlace(lock, write.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'Branch instructions.\n');
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'Added on the branch.\n');
     expect(await f.client.report(f.runId, { attempt: write.attempt, revision: write.revision, outcome: 'success', driver: f.driver }, { changed: ['AGENTS.md', 'CLAUDE.md'] })).toMatchObject({ data: { accepted: true, step: { status: 'succeeded' } } });
@@ -692,7 +692,7 @@ steps:
     const dir = path.join(path.dirname(f.work), 'hosts', name);
     git(f.work, 'worktree', 'add', '-q', '--detach', dir, join.workspace.start.commit);
     const run = RunIdSchema.parse(f.runId);
-    expect(await withRunLock(f.config, run, (lock) => f.client.prepareHostPlace(lock, join.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
+    expect(await withRunLock(f.config, run, (lock) => f.client.prepareSessionHostPlace(lock, join.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
     expect(fs.readFileSync(path.join(dir, 'a.ts'), 'utf8')).toContain('<<<<<<<');
     expect(git(dir, 'status', '--porcelain')).toContain('b.ts');
     return { f, dir, join };
@@ -827,7 +827,7 @@ steps:
           prompt: Polish the change.
 `);
     const run = RunIdSchema.parse(f.runId);
-    const prepare = (lease: unknown, request: HostPlaceRequest) => withRunLock(f.config, run, (lock) => f.client.prepareHostPlace(lock, lease, request), { waitMs: 0 });
+    const prepare = (lease: unknown, request: SessionHostPlaceRequest) => withRunLock(f.config, run, (lock) => f.client.prepareSessionHostPlace(lock, lease, request), { waitMs: 0 });
     const lease = async (): Promise<{ raw: unknown } & z.infer<typeof LeaseSchema>> => {
       const answer = await f.client.next(f.runId, body(f));
       if (!('data' in answer) || !answer.data.lease) throw new Error(JSON.stringify(answer));
@@ -880,7 +880,7 @@ steps:
     const write = await lease();
     const dir = path.join(path.dirname(f.work), 'hosts', 'place');
     git(f.work, 'worktree', 'add', '-q', '--detach', dir, write.workspace.start.commit);
-    expect(await withRunLock(f.config, run, (lock) => f.client.prepareHostPlace(lock, write.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
+    expect(await withRunLock(f.config, run, (lock) => f.client.prepareSessionHostPlace(lock, write.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
     fs.writeFileSync(path.join(dir, 'change.txt'), 'written\n');
     expect(await f.client.report(f.runId, { attempt: write.attempt, revision: write.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
 
@@ -920,7 +920,7 @@ steps:
     const write = await lease();
     const dir = path.join(path.dirname(f.work), 'hosts', 'place');
     git(f.work, 'worktree', 'add', '-q', '--detach', dir, write.workspace.start.commit);
-    expect(await withRunLock(f.config, run, (lock) => f.client.prepareHostPlace(lock, write.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
+    expect(await withRunLock(f.config, run, (lock) => f.client.prepareSessionHostPlace(lock, write.raw, { kind: 'adopt', dir }), { waitMs: 0 })).toMatchObject({ kind: 'prepared', dir });
     fs.writeFileSync(path.join(dir, 'change.txt'), 'written\n');
     expect(await f.client.report(f.runId, { attempt: write.attempt, revision: write.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
     fs.writeFileSync(path.join(dir, 'stray.txt'), 'left by the host\n');
@@ -957,7 +957,7 @@ steps:
     const ui = await raw([attempt]);
     const dir = path.join(path.dirname(f.work), 'hosts', 'shared');
     git(f.work, 'worktree', 'add', '-q', '--detach', dir, workspace.start.commit);
-    const prepare = (lease: unknown) => withRunLock(f.config, run, (lock) => f.client.prepareHostPlace(lock, lease, { kind: 'adopt', dir }), { waitMs: 0 });
+    const prepare = (lease: unknown) => withRunLock(f.config, run, (lock) => f.client.prepareSessionHostPlace(lock, lease, { kind: 'adopt', dir }), { waitMs: 0 });
 
     killAfter.add('worktreeHooks');
     await expect(prepare(api)).rejects.toThrow('killed after worktreeHooks');
