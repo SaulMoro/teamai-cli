@@ -256,6 +256,8 @@ interface SlotBase {
   unavailable?: Record<string, string>;
   /** Its prompts' tools run in another runtime (`use: t3, through: sandbox`). */
   isThrough?: true;
+  /** It runs each prompt's tool in the attempt's tool home, as a runtime that execs the tool does. */
+  runsOnToolHome?: true;
 }
 
 type ReportBody = ReportInput;
@@ -654,7 +656,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
-          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }),
+          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }),
           can: {
             ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
             ...(unproven(entry.can) && { isolation: 'none' as const }),
@@ -1469,7 +1471,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             secrets: { ...turn.secrets, ...maskedCredentials }, askPerson,
             onRuntime: stepRun && {
               run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn,
-              ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }),
+              ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runsOnToolHome && { runsOnToolHome: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }),
               ...(slot && HeldPlace.holdsOn(slot) && {
                 conversationHeld: async (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions, workspace: await workspaceOf(lease.step) }),
               }),

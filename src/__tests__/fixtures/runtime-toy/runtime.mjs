@@ -21,8 +21,10 @@
 // it. A person who deletes the conversation is the test removing that file. With
 // `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
 // machine does; with `home` too, in that Claude home instead, which `finished` reports as the session's `home`, as a
-// T3 provider instance with its own home does. Each open records the tool its attempt's prompt runs (`open.tool`) and
-// the attempt's deadline (`open.deadline`).
+// T3 provider instance with its own home does. With `prompt_tool_home` beside `agent`, its init says it runs each tool
+// in the attempt's tool home (`toolHome: true`), and its agent keeps a transcript in the Claude home its place's view
+// gives (`view.toolHome.CLAUDE_CONFIG_DIR`), and none when the view gives none. Each open records the tool its attempt's prompt
+// runs (`open.tool`) and the attempt's deadline (`open.deadline`).
 // `agent.display` is what its agent shows once it exists, given with the prompt's acceptance; with `display_after_ms`, it
 // accepts the prompt at once with no display and sends that one as a `display` event that long after, as a runtime that
 // accepts before its slow launch and shows the agent once it exists.
@@ -69,7 +71,7 @@ import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls', 'wake_log']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls', 'wake_log', 'prompt_tool_home']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -268,7 +270,8 @@ function init(request) {
 
   // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
   const conversations = options.agent.conversations === false ? {} : { conversations: true };
-  send({ type: 'init', ok: true, prompt: true, ...conversations, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+  const toolHome = options.prompt_tool_home === true ? { toolHome: true } : {};
+  send({ type: 'init', ok: true, prompt: true, ...conversations, ...toolHome, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 }
 
 /** Notes which credentials a request brought, by name only: a value is never written. */
@@ -289,6 +292,7 @@ function open(request) {
   writeJson(file('handles.json'), handles);
   // A confined prompt's place is opened with no view of the host.
   writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null, deadline: request.deadline ?? null });
+  if (options.prompt_tool_home === true) writeJson(file('views', `${handle}.json`), request.view ?? null);
   noteCredentials(request, handle);
   openCredentials.set(handle, request.credentials ?? {});
 
@@ -432,8 +436,11 @@ function agentOutcome(record) {
   const id = continues ? record.continued ?? conversationId(record.op) : resumes ? record.lease.resume : conversationId(record.op);
   const session = { tool: record.lease.tool, id, ...(options.agent.home !== undefined && { home: options.agent.home }) };
 
-  if (options.agent.transcript) {
-    const project = path.join(options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', encodeCwdClaude(record.cwd));
+  // On the attempt's tool home, the agent keeps its transcript in the Claude home its place's view gives.
+  const placeHome = options.prompt_tool_home === true ? readJson(file('views', `${record.handle}.json`), null)?.toolHome?.CLAUDE_CONFIG_DIR : undefined;
+
+  if (options.agent.transcript && (options.prompt_tool_home !== true || placeHome !== undefined)) {
+    const project = path.join(placeHome ?? options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', encodeCwdClaude(record.cwd));
     fs.mkdirSync(project, { recursive: true });
     const line = { type: 'user', sessionId: session.id, cwd: record.cwd, timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } };
     fs.appendFileSync(path.join(project, `${session.id}.jsonl`), `${JSON.stringify(line)}\n`);

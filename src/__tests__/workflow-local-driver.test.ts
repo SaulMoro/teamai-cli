@@ -17,7 +17,7 @@ import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
-import { readAttemptRuntime } from '../workflow/runtimes/attempt.js';
+import { attemptToolHome, readAttemptRuntime } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/definitions.js';
 import { cancelRun } from '../workflow/run-controls.js';
@@ -1009,6 +1009,57 @@ steps:
     expect(shown).toEqual(['Found 2 entries.', 'Using <REDACTED:DEPLOY_TOKEN>']);
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', progress: [{ step: 'say', lines: shown }] } } });
   });
+});
+
+describe('a prompt runtime that runs each tool on the attempt\'s tool home', () => {
+  it('gives each place the attempt\'s tool home, and resumes a session.from step from the earlier one\'s session seeded there', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Two steps of one session.
+steps:
+  - id: one
+    prompt: Plan the change.
+    output:
+      ok: boolean
+  - id: two
+    needs: [one]
+    session:
+      from: one
+    prompt: Make the change you planned.
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, transcript: true, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    // The toy names each place `toy-<run>-<attempt>`, and keeps the view each was opened with.
+    const homes = fs.readdirSync(path.join(state, 'views')).map((name) => {
+      const attempt = AttemptIdSchema.parse(name.slice(`toy-${runId}-`.length, -'.json'.length));
+      const view = z.object({ toolHome: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(path.join(state, 'views', name), 'utf8')));
+
+      return { attempt, given: view.toolHome.CLAUDE_CONFIG_DIR, home: attemptToolHome(config, RunIdSchema.parse(runId), attempt, 'claude') };
+    });
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(run);
+    const [one, two] = run.steps;
+    const session = one && 'session' in one ? String(one.session) : '';
+    const transcript = (home: string): boolean => fs.existsSync(path.join(home, 'projects', encodeCwdClaude(fs.realpathSync(workspace)), `${session}.jsonl`));
+
+    expect(homes).toHaveLength(2);
+    for (const { given, home } of homes) expect(given).toBe(home);
+    // Step one's agent kept its session in its attempt's home; step two's home was seeded with it and resumed it there.
+    expect(homes.every(({ home }) => transcript(home))).toBe(true);
+    expect(two).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
+  }, 30_000);
 });
 
 describe('a place held open for a conversation a later step continues', () => {

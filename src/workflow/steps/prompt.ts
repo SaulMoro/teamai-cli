@@ -237,6 +237,8 @@ async function outerToolHome({ dir, tool, variable, memberHome }: { dir: string;
 export type PromptRuntime = {
   run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; teamEnv: WorkflowEnv;
   isThrough?: true;
+  /** It runs a prompt's tool in the attempt's tool home (`Initialized.runsOnToolHome`), as a runtime that execs the tool does. */
+  runsOnToolHome?: true;
   /** The runtime picks the tool, model and login where it runs the step (`StepRuntime.isToolPickedThere`). */
   isToolPickedThere?: true;
   /**
@@ -356,15 +358,17 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   const cwd = lease.cwd ?? driver.workspace;
   const resultFile = attemptResultPath(config, lock.run, lease.attempt);
-  // On a step runtime that execs the tool, it keeps its session in a home of the attempt's, under the variable it reads:
-  // an instance's own `home.env`, else the one of the tool it extends. A runtime that launches agents its own way gives
-  // the tool its own home, where the member's sessions are found.
+  // On a step runtime that execs the tool, or one that launches agents and runs them on the attempt's tool home, the
+  // tool keeps its session in a home of the attempt's, under the variable it reads: an instance's own `home.env`, else
+  // the one of the tool it extends. Any other runtime that launches agents its own way gives the tool its own home,
+  // where the member's sessions are found.
   const execs = onRuntime && !onRuntime.launchesAgents ? onRuntime : undefined;
+  const homed = onRuntime && (!onRuntime.launchesAgents || onRuntime.runsOnToolHome === true) ? onRuntime : undefined;
   const homeVariable = target.instance?.home?.env ?? toolHomeVariable(selected);
-  const variable = execs ? homeVariable : undefined;
+  const variable = homed ? homeVariable : undefined;
   const memberHome = () => (target.instance?.home ? instanceHomeDir(target.instance.home, target.instance.extends) : memberToolHome(selected));
 
-  if (execs && (variable === undefined || !isExecRuntimeTool(selected))) {
+  if (homed && (variable === undefined || !isExecRuntimeTool(selected))) {
     return giveUp({
       code: 'tool_unsupported',
       message: `A step runtime runs prompt steps on ${EXEC_RUNTIME_TOOLS.join(', ')}, and step "${lease.step}" runs on ${selected}. Name one of them with the step's tool or --tools, or run the step with --driver local.`,
@@ -377,7 +381,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   // An instance reaches a runtime that execs its tool only when the runtime lists it, so its command is there. Its
   // home, and the sessions there, are its own.
-  const toolHome = execs && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, launched) } : undefined;
+  const toolHome = homed && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, launched) } : undefined;
   const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
 
@@ -406,7 +410,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   // A login the runtime brings is held by this attempt alone, on the whole machine, from before the place opens until
   // it is written back: another attempt waits for it here, naming the attempt that holds it.
   // An instance keeps its own sign-in in its own home, so a login of the tool it extends is not copied there.
-  const login = toolHome ? execs?.logins.find((tool) => tool === launched) : undefined;
+  const login = toolHome ? homed?.logins.find((tool) => tool === launched) : undefined;
 
   if (login && toolHome) {
     // The first attended step that needs the login creates it for the member; an unattended one says how.
@@ -497,8 +501,9 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     const throughHome = onRuntime.isThrough !== true ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
     const isThroughOuter = onRuntime.isThrough === true;
     launcher = runtimePrompter(onRuntime.run, {
-      view: await placeView(config, lock.run, lease.attempt, cwd, throughHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
+      view: await placeView(config, lock.run, lease.attempt, cwd, throughHome ?? toolHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
       credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter, ...(conversation && { continues: { handle: conversation.handle, op: conversation.op } }),
+      ...(toolHome && { toolHome: { tool: toolHome.tool, dir: toolHome.dir } }),
     });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
