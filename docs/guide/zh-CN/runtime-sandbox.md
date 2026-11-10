@@ -127,6 +127,7 @@ runtimes:
 ~/.teamai/projects/…/attempts/a3e9b0c51/out             工具写结果的位置，可读写
 ~/.teamai/projects/…/attempts/a3e9b0c51/tool-home/claude   CLAUDE_CONFIG_DIR：会话，可读写
 ~/.teamai/projects/…/runs/r7c41d09e2b6a5f13/scratch        TEAMAI_RUN_DIR：运行共享的文件，可读写
+~/.teamai/projects/…/folders/4be1c07d…                     TEAMAI_WORKFLOW_DIR：工作流目录里的文件，只读
 /tmp/teamai-home                                        HOME，容器私有
 ```
 
@@ -372,7 +373,7 @@ teamai workflow start review --driver sandbox
 
 和容器不同的地方：
 
-- 工作树是沙箱的工作区。git 目录、结果目录、运行目录和工具主目录是额外的工作区，都在主机上的路径，git 的那些是只读的（`/home/me/acme/app/.git:ro`）。sbx 自己不会顺着链接工作树的 `.git` 找到主检出，所以由 teamai 列出这些路径。`git status` 能用，`git commit` 会失败。
+- 工作树是沙箱的工作区。git 目录、工作流目录、结果目录、运行目录和工具主目录是额外的工作区，都在主机上的路径，git 的那些和工作流目录是只读的（`/home/me/acme/app/.git:ro`）。sbx 自己不会顺着链接工作树的 `.git` 找到主检出，所以由 teamai 列出这些路径。`git status` 能用，`git commit` 会失败。
 - 步骤以 sbx 的 `agent` 用户运行。它写到你磁盘上的文件仍然归你所有。
 - 每次 `sbx exec` 都用 `-e NAME` 拿到步骤的变量名，命令行里从不出现值。严格步骤要扣下的变量，比如 sbx 为它的代理设置的 `GH_TOKEN`，会在步骤进程里被取消设置。步骤自己的 `HOME`、`XDG_*`、`SBX_*` 或 `DOCKER_*` 不会传进去：sbx CLI 自己读取它们，沙箱保留它自己的。
 - 取消或到达限制时执行 `sbx stop`，下一次 exec 会重新启动沙箱。尝试结束时 teamai 执行 `sbx rm --force`。sbx 也会自己停掉空闲的沙箱，这没有问题。
@@ -437,7 +438,7 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录，Claude Code 的 `CLAUDE_CODE_TMPDIR` 就是这个 `TMPDIR`。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
+- 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录、工作流目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录，Claude Code 的 `CLAUDE_CODE_TMPDIR` 就是这个 `TMPDIR`。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
 - 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
 - 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
@@ -471,7 +472,7 @@ runtimes:
 ```
 
 - teamai 用 `VERCEL_TOKEN`、`VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或者用 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）登录 Vercel。`provider_auth` 可以为其中任意一个指定另一个变量或一个文件。它们在这台机器上读取，永远不会到达步骤。
-- teamai 把工作树、git 目录（只读）、运行的文件和工具主目录按主机路径复制进去。步骤结束时，它把工作树、结果和工具主目录复制回来，修改和删除都会带回；步骤在运行的文件里写下的文件也会带回，但那里不删除任何东西，因为其他步骤也会写那里。git 目录不会复制回来。步骤放下的链接以链接的形式带回，这次尝试的目录之外什么都不会写。
+- teamai 把工作树、git 目录和工作流目录（只读）、运行的文件和工具主目录按主机路径复制进去。步骤结束时，它把工作树、结果和工具主目录复制回来，修改和删除都会带回；步骤在运行的文件里写下的文件也会带回，但那里不删除任何东西，因为其他步骤也会写那里。git 目录和工作流目录不会复制回来。步骤放下的链接以链接的形式带回，这次尝试的目录之外什么都不会写。
 - 每个沙箱创建时都关闭持久化，并在尝试关闭时删除。不设置时，`timeout` 持续到步骤时间限制之后 5 分钟；步骤没有时间限制时为 45 分钟。沙箱必须在时间限制之后再存活这 5 分钟，才能把步骤的工作拷回来：如果 `timeout` 更早结束，或者时间限制在 5 小时以后，步骤会在创建任何沙箱之前以 `timeout` 上的 `bad_option` 失败。
 - Vercel 上的沙箱连不到这台机器，所以指向 `localhost` 或 `127.0.0.1` 的凭据（例如 `ANTHROPIC_BASE_URL`）会以 `bad_option` 失败。
 - 遗留下来的沙箱会以 `teamai-<home id>-<run>-<attempt>` 的名字出现在 Vercel 控制台（Sandboxes）里。下一个打开的尝试会删除它，或者它的 timeout 到了就会结束它。

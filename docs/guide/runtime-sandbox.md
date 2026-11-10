@@ -127,6 +127,7 @@ in the container                                        from the host
 ~/.teamai/projects/…/attempts/a3e9b0c51/out             where the tool writes its result, read-write
 ~/.teamai/projects/…/attempts/a3e9b0c51/tool-home/claude   CLAUDE_CONFIG_DIR: the session, read-write
 ~/.teamai/projects/…/runs/r7c41d09e2b6a5f13/scratch        TEAMAI_RUN_DIR: the run's shared files, read-write
+~/.teamai/projects/…/folders/4be1c07d…                     TEAMAI_WORKFLOW_DIR: the files of a workflow folder, read-only
 /tmp/teamai-home                                        HOME, private to the container
 ```
 
@@ -372,7 +373,7 @@ teamai workflow start review --driver sandbox
 
 What differs from a container:
 
-- The worktree is the sandbox's workspace. The git directories, the result directory, the run directory and the tool home are extra workspaces at their host paths, the git ones read-only (`/home/me/acme/app/.git:ro`). sbx does not follow a linked worktree's `.git` to the main checkout by itself, so teamai names those paths. `git status` works, and `git commit` fails.
+- The worktree is the sandbox's workspace. The git directories, a workflow folder, the result directory, the run directory and the tool home are extra workspaces at their host paths, the git ones and the folder read-only (`/home/me/acme/app/.git:ro`). sbx does not follow a linked worktree's `.git` to the main checkout by itself, so teamai names those paths. `git status` works, and `git commit` fails.
 - The step runs as sbx's `agent` user. Files it writes on your disk are still yours.
 - Each `sbx exec` gets the step's names with `-e NAME`, never a value in the command line. A strict step's withheld names, such as `GH_TOKEN`, which sbx sets for its proxy, are unset in the step's process. A step's own `HOME`, `XDG_*`, `SBX_*` or `DOCKER_*` is not passed: the sbx CLI reads those itself, and the sandbox keeps its own.
 - A cancel or a limit runs `sbx stop`; the next exec starts the sandbox again. When the attempt ends, teamai runs `sbx rm --force`. sbx also stops an idle sandbox on its own, and that is fine.
@@ -437,7 +438,7 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-- The step writes its worktree, its result and its tool home, and reads the git directories and the directories on your `PATH` (under your home, only the `bin` directory itself). It cannot read your home or your temp directory, so your SSH keys, logins and the repositories there are out of reach: its `HOME` and `TMPDIR` are empty directories of its own, and Claude Code's `CLAUDE_CODE_TMPDIR` is that `TMPDIR`. On `bwrap` it sees nothing else of this machine but its system directories. On `seatbelt` it also reads macOS's system directories (`/usr`, `/System`, `/Library`, `/opt`) and Xcode's developer directory, so a repository under `/opt` stays readable; one elsewhere, such as under `/Volumes`, does not.
+- The step writes its worktree, its result and its tool home, and reads the git directories, a workflow folder and the directories on your `PATH` (under your home, only the `bin` directory itself). It cannot read your home or your temp directory, so your SSH keys, logins and the repositories there are out of reach: its `HOME` and `TMPDIR` are empty directories of its own, and Claude Code's `CLAUDE_CODE_TMPDIR` is that `TMPDIR`. On `bwrap` it sees nothing else of this machine but its system directories. On `seatbelt` it also reads macOS's system directories (`/usr`, `/System`, `/Library`, `/opt`) and Xcode's developer directory, so a repository under `/opt` stays readable; one elsewhere, such as under `/Volumes`, does not.
 - Its environment holds `PATH`, `USER`, `SHELL`, `LANG` and `TERM`, plus what teamai gives the step. None of your other variables reaches it.
 - It shares this machine's network, so a base URL on `localhost` or `127.0.0.1` reaches it as is.
 - A Claude login in the macOS Keychain or in `~/.claude` is not read there: name a key in `credentials`, as for a container.
@@ -471,7 +472,7 @@ runtimes:
 ```
 
 - teamai signs in to Vercel from `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID`, or from `VERCEL_OIDC_TOKEN` (`vercel link`, then `vercel env pull`). `provider_auth` names another variable or a file for any of them. They are read on this machine and never reach the step.
-- teamai copies the worktree, the git directories (read-only), the run's files and the tool home in at their host paths. At the end of the step it copies the worktree, the result and the tool home back, changes and deletions alike, and what the step wrote among the run's files, deleting none of them, since other steps write there too. The git directories are not copied back. A link the step planted comes back as a link, and nothing is written outside the place.
+- teamai copies the worktree, the git directories and a workflow folder (read-only), the run's files and the tool home in at their host paths. At the end of the step it copies the worktree, the result and the tool home back, changes and deletions alike, and what the step wrote among the run's files, deleting none of them, since other steps write there too. The git directories and the folder are not copied back. A link the step planted comes back as a link, and nothing is written outside the place.
 - Each sandbox is created with persistence off and deleted when the attempt closes. Unset, `timeout` lasts until 5 minutes past the step's time limit, or 45 minutes for a step with none. A sandbox must last those 5 minutes past the time limit, to copy the step's work back: a `timeout` that ends sooner, or a time limit more than 5 hours away, fails the step `bad_option` on `timeout` before any sandbox exists.
 - A sandbox on Vercel cannot reach this machine, so a credential such as `ANTHROPIC_BASE_URL` on `localhost` or `127.0.0.1` fails `bad_option`.
 - A sandbox left behind shows in the Vercel dashboard (Sandboxes) as `teamai-<home id>-<run>-<attempt>`. The next attempt that opens deletes it, or its timeout ends it.
