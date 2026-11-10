@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 
 import { windowsPowerShell } from './utils/powershell.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Process tree helpers ──────────────────────────────
 //
@@ -114,7 +114,7 @@ export function getParentPid(pid: number): number | undefined {
 
     // Linux: read /proc/{pid}/stat (fast, no process spawn)
     try {
-        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
+        const stat = readRegularFileSync(`/proc/${pid}/stat`, 'utf-8');
         // Field 4 is ppid. Field 2 (comm) can contain spaces/parens, so split carefully.
         // Format: pid (comm) state ppid ...
         const closeParen = stat.lastIndexOf(') ');
@@ -156,7 +156,7 @@ export function getProcessComm(pid: number): string | undefined {
 
     // Linux: /proc/{pid}/comm (just the basename, no args)
     try {
-        return fs.readFileSync(`/proc/${pid}/comm`, 'utf-8').trim();
+        return readRegularFileSync(`/proc/${pid}/comm`, 'utf-8').trim();
     } catch {
         // fall through
     }

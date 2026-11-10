@@ -16,6 +16,7 @@ import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
 import { parseYaml } from './utils/yaml.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Tool instances ──────────────────────────────────────
 //
@@ -118,7 +119,7 @@ async function readText(file: string): Promise<string | undefined> {
   try {
     const stat = await fs.lstat(file);
 
-    return stat.isFile() ? await fs.readFile(file, 'utf8') : undefined;
+    return stat.isFile() ? await readRegularFile(file, 'utf8') : undefined;
   } catch {
     return undefined;
   }
@@ -315,7 +316,7 @@ function trustFile(): string {
 
 async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
   try {
-    return TrustFileSchema.parse(JSON.parse(await fs.readFile(trustFile(), 'utf8')));
+    return TrustFileSchema.parse(JSON.parse(await readRegularFile(trustFile(), 'utf8')));
   } catch {
     return { accepted: [] };
   }

@@ -405,7 +405,7 @@ export function reloadToolHomesHistory(): ToolHomesHistory {
   let raw: string;
 
   try {
-    raw = fs.readFileSync(toolHomesHistoryPath(), 'utf8');
+    raw = readRegularFileSync(toolHomesHistoryPath(), 'utf8');
   } catch (e) {
     if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return {};
 
@@ -471,7 +471,7 @@ function parseToolHomes(file: string): ToolHomesRead {
   let raw: string;
 
   try {
-    raw = fs.readFileSync(file, 'utf8');
+    raw = readRegularFileSync(file, 'utf8');
   } catch (e) {
     if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return { kind: 'missing' };
 

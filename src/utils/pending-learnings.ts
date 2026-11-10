@@ -8,6 +8,7 @@ import { normalizeRepoUrlForCompare, redactGitCredentials, remotesMatch } from '
 import { log } from './logger.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome, getTeamaiHomeDir, isSelfMode, LocalConfigSchema, type LocalConfig } from '../types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Durable queue of learnings a member has written but that are not published
@@ -277,7 +278,7 @@ export async function readPendingLearning(
   relPath: string,
 ): Promise<string | null> {
   try {
-    return await fs.promises.readFile(path.join(pendingLearningsDir(localConfig), relPath), 'utf-8');
+    return await readRegularFile(path.join(pendingLearningsDir(localConfig), relPath), 'utf-8');
   } catch {
     return null;
   }

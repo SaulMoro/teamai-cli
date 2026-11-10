@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, unlink, stat, mkdir } from 'node:fs/promises';
+import { writeFile, unlink, stat, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { z } from 'zod';
 import { memberHome } from './home.js';
 import { log } from './logger.js';
 import { withFileLock } from '../update.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Duration after which a lock file is considered stale and safe to ignore. */
 const LOCK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours; a lock older than this is stale
@@ -64,7 +65,7 @@ type ImportLockFields = z.infer<typeof ImportLockFieldsSchema>;
 /** The lock file at `lockPath` as read, with its fields; undefined when it is absent or not JSON. */
 async function readLock(lockPath: string): Promise<{ raw: string; meta: ImportLockFields } | undefined> {
   try {
-    const raw = await readFile(lockPath, 'utf8');
+    const raw = await readRegularFile(lockPath, 'utf8');
 
     return { raw, meta: ImportLockFieldsSchema.parse(JSON.parse(raw)) };
   } catch {
@@ -131,7 +132,7 @@ function takeoverPath(lockPath: string): string {
 /** Removes the lock file at `lockPath` only while it still holds `raw`, so a lock another process took meanwhile stays. */
 async function removeIfUnchanged(lockPath: string, raw: string, failure: string): Promise<void> {
   try {
-    if (await readFile(lockPath, 'utf8') === raw) await unlink(lockPath);
+    if (await readRegularFile(lockPath, 'utf8') === raw) await unlink(lockPath);
   } catch (e) {
     log.debug(`[import-lock] ${failure} ${lockPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -273,7 +274,7 @@ async function judgeLock(lockPath: string): Promise<boolean> {
   let raw: string;
 
   try {
-    raw = await readFile(lockPath, 'utf8');
+    raw = await readRegularFile(lockPath, 'utf8');
   } catch {
     // File absent (ENOENT) or unreadable — no lock.
     return false;

@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { endedRequest, type PullRequestRecord, type PullRequestRef } from '../types.js';
 import { tgitFetch, tgitGitCloneUrl } from './rest-auth.js';
 import { TGIT_HOST } from './repo-url.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** Path where gf CLI is installed */
 function gfInstallDir(): string {
@@ -229,7 +230,7 @@ export async function ensureGfInstalled(): Promise<void> {
     // addressed redirect target, or the x-checksum-sha256 header). Fail closed:
     // if we cannot obtain an expected digest, we cannot vouch for the binary —
     // abort rather than extract and execute an unverified archive.
-    const expected = parseExpectedSha256(fs.readFileSync(headerPath, 'utf-8'));
+    const expected = parseExpectedSha256(readRegularFileSync(headerPath, 'utf-8'));
 
     if (!expected) {
       throw new Error(
@@ -238,7 +239,7 @@ export async function ensureGfInstalled(): Promise<void> {
     }
 
     const actual = createHash('sha256')
-      .update(fs.readFileSync(tarballPath))
+      .update(readRegularFileSync(tarballPath))
       .digest('hex');
 
     if (actual !== expected) {

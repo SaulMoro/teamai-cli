@@ -38,9 +38,11 @@ const mockRmSync = vi.fn();
 vi.mock('node:fs', () => ({
   default: {
     existsSync: (...args: unknown[]) => mockExistsSync(...args),
-    readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
     rmSync: (...args: unknown[]) => mockRmSync(...args),
   },
+}));
+vi.mock('@teamai/shared/regular-file', () => ({
+  readRegularFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 import os from 'node:os';

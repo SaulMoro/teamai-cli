@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getUserHome, legacyUserHome } from '../../utils/home.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /**
  * Retrieve the OAuth token that gf stored in ~/.netrc.
@@ -37,7 +38,7 @@ export function gfGetOAuthToken(): string | null {
       // that exists but cannot be read still falls through to the next
       // candidate via the `catch`.
       if (!fs.existsSync(netrcPath)) continue;
-      const content = fs.readFileSync(netrcPath, 'utf-8');
+      const content = readRegularFileSync(netrcPath, 'utf-8');
 
       // Match: machine git.woa.com ... password <TOKEN>
       const match = content.match(

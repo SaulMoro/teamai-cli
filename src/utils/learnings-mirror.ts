@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fse from 'fs-extra';
 import { ensureDir, listDirs, listFiles, listFilesRecursive, pathExists, remove } from './fs.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 function visibleFiles(files: string[]): string[] {
   return files.filter((file) => file.split('/').every((segment) => !segment.startsWith('.')));
@@ -21,7 +22,7 @@ async function isDirectory(dir: string): Promise<boolean> {
 async function copyIfChanged(source: string, destination: string): Promise<void> {
   if (await pathExists(destination)) {
     const [incoming, existing, sourceStat, destinationStat] = await Promise.all([
-      fse.readFile(source), fse.readFile(destination), fse.stat(source), fse.stat(destination),
+      readRegularFile(source), readRegularFile(destination), fse.stat(source), fse.stat(destination),
     ]);
 
     if (incoming.equals(existing) && (sourceStat.mode & 0o777) === (destinationStat.mode & 0o777)) return;
