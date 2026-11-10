@@ -26,7 +26,7 @@ import { confinedArgs, confinedStdin, confinedVariables } from '@teamai/tool-lau
 import { runTool } from '@teamai/runtime-tools/headless';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from '../tool-launch/stdout.js';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../tool-launch/tools.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** A JSON line a tool prints; a field of the wrong type reads as absent. */
 const RecordSchema = z.looseObject({
@@ -195,7 +195,7 @@ async function claudeSettings(tool: ConfinedTool, env: NodeJS.ProcessEnv, tmp: s
   const allowed = Object.fromEntries(Object.entries(settings.env ?? {}).filter(([key]) => profileOf(tool).env.includes(key)));
   const target = path.join(tmp, 'claude-settings.json');
   // An empty model stays undefined, which the JSON leaves out.
-  await fs.writeFile(target, JSON.stringify({ env: allowed, model: settings.model || undefined }));
+  await writeRegularFile(target, JSON.stringify({ env: allowed, model: settings.model || undefined }));
 
   return target;
 }
@@ -275,14 +275,14 @@ async function openCodeSettings(env: NodeJS.ProcessEnv, tmp: string): Promise<st
   const data = path.join(tmp, 'data');
   await fs.mkdir(path.join(data, 'opencode'), { recursive: true });
 
-  if (auth !== undefined) await fs.writeFile(path.join(data, 'opencode', 'auth.json'), auth, { mode: 0o600 });
+  if (auth !== undefined) await writeRegularFile(path.join(data, 'opencode', 'auth.json'), auth, { mode: 0o600 });
   env.OPENCODE_DB = path.join(data, 'judge.db');
   env.OPENCODE_DISABLE_PROJECT_CONFIG = '1';
   env.OPENCODE_DISABLE_CLAUDE_CODE = '1';
   env.OPENCODE_DISABLE_AUTOUPDATE = '1';
   const config = path.join(tmp, 'config');
   await fs.mkdir(config);
-  await fs.writeFile(path.join(config, 'opencode.json'), JSON.stringify({ ...settings,
+  await writeRegularFile(path.join(config, 'opencode.json'), JSON.stringify({ ...settings,
     permission: { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', external_directory: 'deny', bash: 'deny', edit: 'deny', webfetch: 'deny', websearch: 'deny', task: 'deny', skill: 'deny' }, plugin: [], mcp: {},
   }), { mode: 0o600 });
   env.OPENCODE_CONFIG_DIR = config;
@@ -386,7 +386,7 @@ const LAUNCHES = {
     const { input, env, tmp } = context;
     const settings = await claudeSettings(input.tool, env, tmp);
     const prompt = path.join(tmp, 'prompt.md');
-    await fs.writeFile(prompt, input.prompt);
+    await writeRegularFile(prompt, input.prompt);
 
     return { stdin: confinedStdin('claude', input.prompt), args: confinedArgs({ family: 'claude', model: input.model, schema: input.schema, settingsFile: settings, promptFile: prompt }) };
   },
@@ -397,11 +397,11 @@ const LAUNCHES = {
     env.CODEX_HOME = path.join(tmp, 'codex');
     await fs.mkdir(env.CODEX_HOME);
 
-    if (auth !== undefined) await fs.writeFile(path.join(env.CODEX_HOME, 'auth.json'), auth, { mode: 0o600 });
-    await fs.writeFile(path.join(env.CODEX_HOME, 'config.toml'), codexProfile(dir));
+    if (auth !== undefined) await writeRegularFile(path.join(env.CODEX_HOME, 'auth.json'), auth, { mode: 0o600 });
+    await writeRegularFile(path.join(env.CODEX_HOME, 'config.toml'), codexProfile(dir));
     const schema = path.join(tmp, 'schema.json');
 
-    if (input.schema !== undefined) await fs.writeFile(schema, JSON.stringify(input.schema));
+    if (input.schema !== undefined) await writeRegularFile(schema, JSON.stringify(input.schema));
 
     return {
       stdin: confinedStdin('codex', input.prompt),
