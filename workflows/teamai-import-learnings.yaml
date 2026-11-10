@@ -11,6 +11,8 @@ inputs:
   dir: string
   by_type: boolean
   all: boolean
+defaults:
+  requires: { host: true }
 steps:
   - id: classify
     for_each: { items: inputs.candidates, max_parallel: 3 }
@@ -23,7 +25,6 @@ steps:
         personal: steps.parse.outputs.personal
       steps:
         - id: read
-          requires: { host: true }
           command: teamai import read-candidate --file "$FILE"
           env: { FILE: "{{ item.file }}" }
           output: { content: string }
@@ -48,7 +49,6 @@ steps:
           workspace: new
         - id: parse
           needs: [ask]
-          requires: { host: true }
           # A reply that is not the JSON asked for reads as personal, so the file is left out rather than guessed at.
           command: teamai import classify-reply --path "$SHOWN" --reply "$REPLY"
           env: { SHOWN: "{{ item.path }}", REPLY: "{{ steps.ask.outputs.text }}" }
@@ -70,7 +70,6 @@ steps:
             options: [accept, edit, skip]
   - id: write
     needs: [classify, review]
-    requires: { host: true }
     command: teamai import write-learnings --classified "$CLASSIFIED" --reviewed "$REVIEWED" --target "$DIR" --by-type "$BY_TYPE"
     env:
       CLASSIFIED: "{{ steps.classify.results }}"

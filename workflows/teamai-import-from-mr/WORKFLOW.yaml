@@ -18,6 +18,7 @@ inputs:
   language: en | zh
 # A caller that publishes nothing has no directory to give.
 defaults:
+  requires: { host: true }
   inputs: { dir: "" }
 steps:
   - id: extract
@@ -33,7 +34,6 @@ steps:
         repo_url: steps.draft.outputs.repo_url
       steps:
         - id: fetch
-          requires: { host: true }
           command: teamai import fetch-mr --url "$URL" --mrs "$MRS" --threads "$THREADS"
           env: { URL: "{{ item }}", MRS: "{{ inputs.mrs }}", THREADS: "{{ inputs.discussions }}" }
           output: { url: string, title: string, description: string, commits: string, diff: string, threads: string, thread_count: number, author: string, date: string }
@@ -51,7 +51,6 @@ steps:
           timeout: 600s
         - id: draft
           needs: [fetch, ask-en, ask-zh]
-          requires: { host: true }
           # Only one of the two prompts ran; the other renders as nothing.
           command: teamai import draft-mr --url "$URL" --title "$TITLE" --reply "$REPLY"
           env: { URL: "{{ steps.fetch.outputs.url }}", TITLE: "{{ steps.fetch.outputs.title }}", REPLY: "{{ steps.ask-en.outputs.text }}{{ steps.ask-zh.outputs.text }}" }
@@ -75,7 +74,6 @@ steps:
   - id: publish
     needs: [extract, review]
     if: "(steps.extract.outcome == 'success' || steps.extract.outcome == 'failed') && inputs.publish"
-    requires: { host: true }
     command: teamai import publish-mr --extracted "$EXTRACTED" --reviewed "$REVIEWED" --target "$DIR" --drafts "$DRAFTS"
     env:
       EXTRACTED: "{{ steps.extract.results }}"
@@ -87,7 +85,6 @@ steps:
   - id: finish
     needs: [extract, publish]
     if: steps.extract.outcome == 'success' || steps.extract.outcome == 'failed'
-    requires: { host: true }
     command: teamai import finish-mr --extracted "$EXTRACTED"
     env: { EXTRACTED: "{{ steps.extract.results }}" }
     output: { text: string, exit_code: number, learnings: [{ url: string, title: string, file: string, repo_url: string }] }

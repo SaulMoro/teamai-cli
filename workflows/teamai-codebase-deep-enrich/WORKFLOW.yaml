@@ -7,11 +7,11 @@ private: true
 # publish commits and pushes the docs to the team repo that holds wiki_root, for a caller that does not publish them.
 inputs: { wiki_root: string, project: string, max_modules: number, concurrency: number, publish: boolean }
 defaults:
+  requires: { host: true }
   inputs: { publish: false }
 ends: { unconfigured-tool: failed }
 steps:
   - id: plan
-    requires: { host: true }
     command: teamai codebase deep-enrich-plan --wiki-root "$WIKI_ROOT" --codebase "$PROJECT" --max-modules "$MAX_MODULES"
     env: { WIKI_ROOT: "{{ inputs.wiki_root }}", PROJECT: "{{ inputs.project }}", MAX_MODULES: "{{ inputs.max_modules }}" }
     # The teamwiki may be in this checkout: under .teamai/ in self mode, or an --output directory.
@@ -37,7 +37,6 @@ steps:
         - id: write
           needs: [ask]
           if: steps.ask.failure.code != 'tool_unconfigured'
-          requires: { host: true }
           command: teamai codebase deep-enrich-write --wiki-root "$WIKI_ROOT" --codebase "$PROJECT" --component "$SLUG" --text "$TEXT" --failure "$WHY"
           env:
             WIKI_ROOT: "{{ inputs.wiki_root }}"
@@ -67,7 +66,6 @@ steps:
   - id: architecture-write
     needs: [architecture]
     if: steps.architecture.outcome == 'success' || (steps.architecture.outcome == 'failed' && steps.architecture.failure.code != 'tool_unconfigured')
-    requires: { host: true }
     command: teamai codebase deep-enrich-write --wiki-root "$WIKI_ROOT" --codebase "$PROJECT" --architecture --text "$TEXT" --failure "$WHY"
     env:
       WIKI_ROOT: "{{ inputs.wiki_root }}"
@@ -78,7 +76,6 @@ steps:
   - id: graph
     needs: [components, architecture-write]
     if: steps.components.outcome == 'success' || steps.components.outcome == 'failed'
-    requires: { host: true }
     command: teamai codebase deep-enrich-graph --wiki-root "$WIKI_ROOT" --codebase "$PROJECT" --max-modules "$MAX_MODULES"
     env: { WIKI_ROOT: "{{ inputs.wiki_root }}", PROJECT: "{{ inputs.project }}", MAX_MODULES: "{{ inputs.max_modules }}" }
     writes: ["{{ inputs.wiki_root }}"]
@@ -99,7 +96,6 @@ steps:
   - id: finish
     needs: [graph, scenarios]
     if: steps.graph.outcome == 'success' && steps.scenarios.failure.code != 'tool_unconfigured'
-    requires: { host: true }
     command: teamai codebase deep-enrich-finish --wiki-root "$WIKI_ROOT" --codebase "$PROJECT" --max-modules "$MAX_MODULES" --scenarios "$TEXT" --scenarios-failure "$WHY"
     env:
       WIKI_ROOT: "{{ inputs.wiki_root }}"
@@ -112,7 +108,6 @@ steps:
   - id: publish
     needs: [finish]
     if: inputs.publish && steps.finish.outcome == 'success'
-    requires: { host: true }
     command: teamai codebase deep-enrich-publish --wiki-root "$WIKI_ROOT" --codebase "$PROJECT"
     env: { WIKI_ROOT: "{{ inputs.wiki_root }}", PROJECT: "{{ inputs.project }}" }
     writes: ["{{ inputs.wiki_root }}"]

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { RESOURCE_LAYOUTS, Resources } from '../resources/resolver.js';
 import { parseWorkflow } from '../workflow/parse.js';
-import { envAdvice, isPinnedToHost, mergeRequirements, negotiate, type DriverCan, type InEffect, type Offer } from '../workflow/requirements.js';
-import { stepWorkflow, type WorkflowStep } from '../workflow/types.js';
+import { envAdvice, isPinnedToHost, mergeRequirements, negotiate, type DriverCan, type Executor, type InEffect, type Offer } from '../workflow/requirements.js';
+import { stepWorkflow, type WorkflowDefinition, type WorkflowStep } from '../workflow/types.js';
 
 describe('envAdvice', () => {
   it('offers env set alone for a key the team declares', () => {
@@ -69,22 +69,75 @@ steps:
 });
 
 describe('the workflows teamai ships', () => {
-  /** Every command step of `steps`, with the requirements in effect on it, inline workflows included. */
-  const commandSteps = (steps: readonly WorkflowStep[], around: InEffect, prefix: string): Array<{ path: string; requires: InEffect }> => steps.flatMap((step) => {
-    const requires = mergeRequirements(around, step.requires);
-    const child = stepWorkflow(step);
-    const inner = child?.kind === 'inline' ? commandSteps(child.workflow.steps, requires, `${prefix}${step.id}.`) : [];
+  type Shipped = WorkflowDefinition;
+  type Reached = { path: string; step: WorkflowStep; requires: InEffect };
 
-    return step.command === undefined ? inner : [{ path: `${prefix}${step.id}`, requires }, ...inner];
-  });
+  const shippedWorkflows = async (): Promise<Shipped[]> => (await Resources.list(RESOURCE_LAYOUTS.workflows, { teamai: DefaultWorkflows.layer }))
+    .flatMap((found) => (found.kind === 'resolved' && found.item.layer === 'teamai' ? [found.item.shipped.definition] : []));
 
-  it('declare requires.host on every command step, so a team copy under another name keeps the pin teamai derives by name', async () => {
-    const shipped = (await Resources.list(RESOURCE_LAYOUTS.workflows, { teamai: DefaultWorkflows.layer }))
-      .flatMap((found) => (found.kind === 'resolved' && found.item.layer === 'teamai' ? [found.item.shipped] : []));
-    const steps = shipped.flatMap(({ definition }) => [...definition.steps, ...definition.finally ?? []].flatMap((step) => commandSteps([step], mergeRequirements(definition.defaults?.requires), `${definition.name}:`)));
+  /**
+   * Every step `root` reaches, with the requirements in effect on it on that route, as the engine's scopes merge them:
+   * the steps around it, the step that runs a workflow file by name, then that file's `defaults.requires`.
+   */
+  const reached = (root: Shipped, byName: ReadonlyMap<string, Shipped>): Reached[] => {
+    const visit = (steps: readonly WorkflowStep[], around: InEffect, prefix: string, seen: ReadonlySet<string>): Reached[] => steps.flatMap((step) => {
+      const requires = mergeRequirements(around, step.requires);
+      const path = `${prefix}${step.id}`;
+      const child = stepWorkflow(step);
+      const named = child?.kind === 'named' && !seen.has(child.name) ? byName.get(child.name) : undefined;
+      const inner = child?.kind === 'inline' ? visit(child.workflow.steps, requires, `${path}.`, seen)
+        : named ? visit([...named.steps, ...named.finally ?? []], mergeRequirements(requires, named.defaults?.requires), `${path}>${named.name}:`, new Set([...seen, named.name])) : [];
+
+      return [{ path, step, requires }, ...inner];
+    });
+
+    return visit([...root.steps, ...root.finally ?? []], mergeRequirements(root.defaults?.requires), `${root.name}:`, new Set([root.name]));
+  };
+
+  /** Whether a step is meant to move off this machine: it runs in a sandbox, or it is the judge of teamai-score. */
+  const movable = ({ path, requires }: Reached): boolean => requires.isolation === 'sandbox' || /(?:^|>)teamai-score:score\.judge$/.test(path);
+  const executorOf = (step: WorkflowStep): Executor => (step.command !== undefined ? 'command' : 'prompt');
+
+  /** The steps meant to move that some route still pins to this machine. */
+  const pinnedMovable = (roots: readonly Shipped[], byName: ReadonlyMap<string, Shipped>): string[] => roots.flatMap((root) => reached(root, byName))
+    .filter((at) => movable(at) && (at.requires.host === true || isPinnedToHost({ step: at.step, executor: executorOf(at.step), inShippedWorkflow: false, requires: at.requires })))
+    .map((at) => at.path);
+
+  it('pin no step meant to move, a sandboxed step or the judge of teamai-score, by any route', async () => {
+    const shipped = await shippedWorkflows();
+    const byName = new Map(shipped.map((definition) => [definition.name, definition]));
 
     expect(shipped.length).toBeGreaterThan(0);
-    expect(steps.length).toBeGreaterThan(0);
-    expect(steps.filter((step) => step.requires.host !== true).map((step) => step.path)).toEqual([]);
+    expect(pinnedMovable(shipped, byName)).toEqual([]);
+  });
+
+  it('would pin the sandboxed trials of teamai-benchmark if its file pinned every step, which a sandbox runtime could then never take', async () => {
+    const shipped = await shippedWorkflows();
+    const benchmark = shipped.find((definition) => definition.name === 'teamai-benchmark');
+    if (!benchmark) throw new Error('teamai-benchmark is not shipped');
+    const pinnedFile: Shipped = { ...benchmark, defaults: { ...benchmark.defaults, requires: { ...benchmark.defaults?.requires, host: true } } };
+    const byName = new Map(shipped.map((definition) => [definition.name, definition]));
+    const trials = reached(pinnedFile, byName).find((at) => at.path === 'teamai-benchmark:trials');
+
+    expect(pinnedMovable([pinnedFile], byName)).toContain('teamai-benchmark:trials');
+    expect(trials?.requires).toMatchObject({ host: true, isolation: 'sandbox' });
+  });
+
+  it('pin every command step, by the file\'s defaults.requires where every step it reaches belongs here and by the step\'s own key otherwise, so a team copy under another name keeps the pin teamai derives by name', async () => {
+    const shipped = await shippedWorkflows();
+    const byName = new Map(shipped.map((definition) => [definition.name, definition]));
+    /** The steps written in `definition` itself, inline workflows included and files it runs by name left out. */
+    const ownSteps = (definition: Shipped): Reached[] => reached(definition, new Map());
+    const shape = shipped.map((definition) => {
+      const wholeHere = !reached(definition, byName).some(movable);
+      const declared = ownSteps(definition).filter((at) => at.step.requires?.host === true).map((at) => at.path);
+
+      return { file: definition.name, wholeHere, fileDefault: definition.defaults?.requires?.host === true, declared };
+    });
+    const unpinned = shipped.flatMap(ownSteps).filter((at) => at.step.command !== undefined && at.requires.host !== true).map((at) => at.path);
+
+    expect(unpinned).toEqual([]);
+    expect(shape.filter((file) => file.wholeHere && (!file.fileDefault || file.declared.length > 0)).map(({ file, declared }) => ({ file, declared }))).toEqual([]);
+    expect(shape.filter((file) => !file.wholeHere && file.fileDefault).map((file) => file.file)).toEqual([]);
   });
 });

@@ -6,9 +6,10 @@ private: true
 # wiki_root is the teamwiki the codebase was just extracted into, whose .indices/ caches hold its facts; project is its directory under evidence/code/.
 inputs: { wiki_root: string, project: string }
 ends: { unconfigured-tool: failed }
+defaults:
+  requires: { host: true }
 steps:
   - id: plan
-    requires: { host: true }
     command: teamai codebase enrich-plan --wiki-root "$WIKI_ROOT" --codebase "$PROJECT"
     env: { WIKI_ROOT: "{{ inputs.wiki_root }}", PROJECT: "{{ inputs.project }}" }
     output:
@@ -46,7 +47,6 @@ steps:
   - id: summary
     needs: [modules]
     if: (steps.modules.outcome == 'success' || steps.modules.outcome == 'failed') && !any(steps.modules.results, .outputs.failure == 'tool_unconfigured')
-    requires: { host: true }
     command: teamai codebase enrich-summary --codebase "$PROJECT" --results "$RESULTS"
     env: { PROJECT: "{{ inputs.project }}", RESULTS: "{{ steps.modules.results }}" }
     output: { count: number, project: string, modules: string }
@@ -83,7 +83,6 @@ steps:
     needs: [modules, summary, domain]
     # With no module answered it writes nothing and says modules 0, so the run always has its outputs.
     if: steps.summary.outcome == 'success' && steps.domain.failure.code != 'tool_unconfigured'
-    requires: { host: true }
     command: teamai codebase enrich-write --wiki-root "$WIKI_ROOT" --codebase "$PROJECT" --results "$RESULTS" --domain "$TEXT" --domain-failure "$WHY"
     env:
       WIKI_ROOT: "{{ inputs.wiki_root }}"

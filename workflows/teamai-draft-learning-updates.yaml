@@ -5,9 +5,10 @@ invoke: deny
 private: true
 # knowledge_root is the checkout holding the entries, the team repo or a project's .teamai/; the drafts land under it.
 inputs: { knowledge_root: string }
+defaults:
+  requires: { host: true }
 steps:
   - id: stale
-    requires: { host: true }
     command: teamai recall maintenance stale
     output:
       entries: [{ doc_id: string, path: string, type: string, recalled_count: number, upvoted_count: number, user_count: number }]
@@ -19,7 +20,6 @@ steps:
     workflow:
       steps:
         - id: context
-          requires: { host: true }
           command: teamai recall maintenance draft-context --path "$ENTRY" --doc-id "$DOC_ID"
           env: { ENTRY: "{{ item.path }}", DOC_ID: "{{ item.doc_id }}" }
           output: { content: string, related: string }
@@ -48,7 +48,6 @@ steps:
           timeout: 600s
         - id: write
           needs: [ask]
-          requires: { host: true }
           command: teamai recall maintenance write-draft --path "$ENTRY" --draft "$DRAFT"
           env: { ENTRY: "{{ item.path }}", DRAFT: "{{ steps.ask.outputs.text }}" }
           writes: ["{{ inputs.knowledge_root }}"]
@@ -56,7 +55,6 @@ steps:
   - id: report
     needs: [draft]
     if: steps.draft.outcome == 'success' || steps.draft.outcome == 'failed'
-    requires: { host: true }
     command: teamai recall maintenance draft-report --results "$RESULTS"
     env: { RESULTS: "{{ steps.draft.results }}" }
     output: { text: string, exit_code: number }
