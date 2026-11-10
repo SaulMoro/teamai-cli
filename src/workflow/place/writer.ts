@@ -7,7 +7,7 @@ import type { StepChanges } from '../workspace.js';
 import { commitPathsOf, mergeStagedPathsOf } from './worktree-snapshot.js';
 import { commitWork, hostGitEnv, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git, type MemberConfig } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Merges each of `merge` into the copy `dir` of a writer. A conflict stops the merging: a command fails
@@ -92,7 +92,7 @@ export async function rememberConflicts(dir: string, run: Git): Promise<Record<s
 
   for (const [relative, text] of current) merged.set(relative, text);
 
-  if (merged.size > 0) await fs.writeFile(file, JSON.stringify(Object.fromEntries(merged)));
+  if (merged.size > 0) await writeRegularFile(file, JSON.stringify(Object.fromEntries(merged)));
 
   return Object.fromEntries([...merged].map(([relative, text]) => [relative, hashText(text)]));
 }
@@ -238,7 +238,7 @@ export async function recordMergePreparation(dir: string, git: Git): Promise<str
   const record: Record<string, string> = {};
 
   for (const relative of listed.paths) record[relative] = await worktreeContentKey(dir, relative, git);
-  await fs.writeFile(await mergePreparedPath(dir, git), JSON.stringify(record));
+  await writeRegularFile(await mergePreparedPath(dir, git), JSON.stringify(record));
 
   return undefined;
 }

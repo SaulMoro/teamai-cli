@@ -15,7 +15,7 @@ import { withTeamRevision } from './cache.js';
 import { runsDir, TeamPinSchema } from './store.js';
 import type { RunState } from './types.js';
 import { boundedGit, git } from './worktree.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 export type TeamPin = z.infer<typeof TeamPinSchema>;
 
@@ -56,7 +56,7 @@ async function changesPast(root: string, spec: string, revision: string): Promis
   try {
     const index = path.join(dir, 'index');
     const own = await git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'index']);
-    const copied = own.code === 0 && await readRegularFile(own.stdout.trim()).then((bytes) => fs.writeFile(index, bytes)).then(() => true, () => false);
+    const copied = own.code === 0 && await readRegularFile(own.stdout.trim()).then((bytes) => writeRegularFile(index, bytes)).then(() => true, () => false);
     const withIndex = boundedGit(undefined, { ...process.env, GIT_INDEX_FILE: index });
 
     for (const args of [...copied ? [] : [['read-tree', 'HEAD']], ['add', '-A', '--', spec]]) {

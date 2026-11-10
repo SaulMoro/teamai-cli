@@ -5,22 +5,28 @@ import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
 import { z } from 'zod';
 
-import { fsFunctionOf } from '../fs-calls.js';
+import { fsFunctionOf, openKindOf } from '../fs-calls.js';
 import { repositoryPath, stringLiteralValue } from '../utils.js';
 
-/** The calls that open a path for writing whatever it holds: a FIFO there waits for a reader. */
-const WRITES = new Set(['createWriteStream', 'appendFile', 'appendFileSync']);
+/**
+ * The calls that open a path for writing whatever it holds: a FIFO there waits for a reader. A copy opens its
+ * destination so; fs-extra's writers of a whole file too.
+ */
+const WRITES = new Set([
+  'createWriteStream', 'appendFile', 'appendFileSync', 'copyFile', 'copyFileSync',
+  'outputFile', 'outputFileSync', 'writeJson', 'writeJsonSync', 'writeJSON', 'writeJSONSync', 'outputJson', 'outputJsonSync', 'outputJSON', 'outputJSONSync',
+]);
+
+/** The calls that write a whole file, replacing it unless their options' `flag` only creates. */
+const WHOLE_WRITES = new Set(['writeFile', 'writeFileSync']);
 
 /** The calls that open a path, writing when their flags say so. */
 const OPENS = new Set(['open', 'openSync']);
 
-/** The `fs.constants` an open only reads with; any other constant, such as `O_WRONLY` or `O_CREAT`, counts as a write. */
-const READ_FLAGS = new Set(['O_RDONLY', 'O_NONBLOCK', 'O_NOFOLLOW', 'O_NOATIME', 'O_CLOEXEC', 'O_DIRECTORY', 'O_SYNC', 'O_DSYNC']);
-
-const MESSAGE = 'Open a file for writing in src/workflow with openRegularFileForWrite or appendRegularFile from @teamai/shared/regular-file, or write it whole with writeJsonAtomic: a step writes the paths the engine writes to, and a FIFO it leaves there blocks a plain open for writing until a reader comes, past every deadline. The helper opens without blocking and refuses anything but a regular file.';
+const MESSAGE = 'Write a file in src/workflow with writeRegularFile, appendRegularFile or openRegularFileForWrite from @teamai/shared/regular-file, or with writeJsonAtomic: a step writes the paths the engine writes to, and a FIFO it leaves there blocks a plain open for writing until a reader comes, past every deadline and past process.exit. The helper opens without blocking and refuses anything but a regular file. A create that fails on anything already there (flag wx) is allowed.';
 
 /** The rule's option, as `meta.schema` lets it be written; unset lists nothing. */
-const OptionsSchema = z.tuple([z.object({ stillAppends: z.array(z.string()) }).strict()]).or(z.tuple([]));
+const OptionsSchema = z.tuple([z.object({ stillWrites: z.array(z.string()) }).strict()]).or(z.tuple([]));
 
 /**
  * Whether the rule checks `file`, given from the repository root: production source under `src/workflow/`, so a new
@@ -33,52 +39,33 @@ export function isWriteChecked(file) {
 }
 
 /**
- * The constant names `node` ORs together, such as `O_WRONLY` of `fs.constants.O_WRONLY`; undefined when any part is
- * not a named constant.
- * @param {ESTree.Node} node
- * @returns {string[] | undefined}
- */
-function constantNames(node) {
-  if (node.type === 'BinaryExpression' && node.operator === '|') {
-    const left = constantNames(node.left);
-    const right = constantNames(node.right);
-
-    return left && right && [...left, ...right];
-  }
-
-  return node.type === 'MemberExpression' && !node.computed && node.property.type === 'Identifier' ? [node.property.name] : undefined;
-}
-
-/**
- * Whether `flags`, an open's second argument, may write: a string with `w`, `a` or `+`, a constant that is not a read
- * constant, or anything this rule cannot read, which counts as a write so the rule fails closed.
- * @param {ESTree.Node | undefined} flags
+ * Whether `options`, a whole-file write's third argument, may replace what is there: anything but an object literal whose
+ * `flag` is a string with `x`, which only creates and fails at once on a FIFO. What the rule cannot read replaces.
+ * @param {ESTree.Node | undefined} options
  * @returns {boolean}
  */
-function writesWith(flags) {
-  if (flags === undefined) return false;
-  const text = stringLiteralValue(flags);
+function replacesWith(options) {
+  if (options?.type !== 'ObjectExpression') return true;
+  const flag = options.properties.find((property) => property.type === 'Property' && !property.computed && property.key.type === 'Identifier' && property.key.name === 'flag');
+  const text = flag?.type === 'Property' ? stringLiteralValue(flag.value) : undefined;
 
-  if (text !== undefined) return /[wa+]/.test(text);
-  const names = constantNames(flags);
-
-  return names === undefined || names.some((name) => !READ_FLAGS.has(name));
+  return text === undefined || !text.includes('x');
 }
 
 export default defineRule({
   meta: {
     type: 'problem',
-    docs: { description: 'Open files for writing in src/workflow only through the helper that refuses a FIFO or a device.' },
-    // `stillAppends`: files, from the repository root, that still open a file for writing plainly, until their owner
-    // converts them. The list only shrinks: an entry that no longer opens one, or whose file is gone, fails until it is removed.
-    schema: [{ type: 'object', properties: { stillAppends: { type: 'array', items: { type: 'string' } } }, required: ['stillAppends'], additionalProperties: false }],
+    docs: { description: 'Write files in src/workflow only through the helpers that refuse a FIFO or a device.' },
+    // `stillWrites`: files, from the repository root, that still write a file plainly, until their owner converts them.
+    // The list only shrinks: an entry that no longer writes one, or whose file is gone, fails until it is removed.
+    schema: [{ type: 'object', properties: { stillWrites: { type: 'array', items: { type: 'string' } } }, required: ['stillWrites'], additionalProperties: false }],
   },
   create(context) {
     const { root, relative } = repositoryPath(context);
 
     if (!isWriteChecked(relative)) return {};
     const { sourceCode } = context;
-    const listed = OptionsSchema.parse(context.options)[0]?.stillAppends ?? [];
+    const listed = OptionsSchema.parse(context.options)[0]?.stillWrites ?? [];
     const isListed = listed.includes(relative);
     // Each file checks the entries of its own folder, so a removed file fails lint instead of staying listed.
     const gone = listed.filter((file) => path.posix.dirname(file) === path.posix.dirname(relative) && !fs.existsSync(path.posix.join(root, file)));
@@ -88,15 +75,17 @@ export default defineRule({
       CallExpression(node) {
         const called = fsFunctionOf(sourceCode, node.callee);
 
-        if (called === undefined || !(WRITES.has(called) || (OPENS.has(called) && writesWith(node.arguments[1])))) return;
+        const [, flags, options] = node.arguments;
+
+        if (called === undefined || !(WRITES.has(called) || (WHOLE_WRITES.has(called) && replacesWith(options)) || (OPENS.has(called) && openKindOf(flags) !== 'read'))) return;
         writes = true;
 
         if (!isListed) context.report({ node, message: MESSAGE });
       },
       'Program:exit'(/** @type {ESTree.Program} */ node) {
-        for (const file of gone) context.report({ node, message: `${file} is listed in stillAppends but does not exist. Remove it from the teamai/step-path-writes option.` });
+        for (const file of gone) context.report({ node, message: `${file} is listed in stillWrites but does not exist. Remove it from the teamai/step-path-writes option.` });
 
-        if (isListed && !writes) context.report({ node, message: `${relative} no longer opens a file for writing. Remove it from stillAppends in the teamai/step-path-writes option.` });
+        if (isListed && !writes) context.report({ node, message: `${relative} no longer opens a file for writing. Remove it from stillWrites in the teamai/step-path-writes option.` });
       },
     };
   },

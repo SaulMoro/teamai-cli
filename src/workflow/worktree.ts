@@ -13,7 +13,7 @@ import { stopProcess } from '@teamai/shared/process-group';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
 import { MAX_TIMER_MS } from '../utils/timer.js';
-import { appendRegularFile, readRegularFile } from '@teamai/shared/regular-file';
+import { appendRegularFile, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */
 export const AGENT_PATHS: readonly string[] = agentConfigPaths();
@@ -302,7 +302,7 @@ export async function remoteGit(dir: string, member: MemberRemote, args: string[
     const made = await spawnGit(neutral, ['init', '-q', '--bare', '--template=', neutral], undefined, member.env);
 
     if (made.code !== 0) return made;
-    await fs.writeFile(path.join(neutral, 'objects', 'info', 'alternates'), `${path.join(common.stdout.trim(), 'objects')}\n`);
+    await writeRegularFile(path.join(neutral, 'objects', 'info', 'alternates'), `${path.join(common.stdout.trim(), 'objects')}\n`);
     const values: Record<string, string> = {};
 
     const given = [...member.kept].flatMap((entry) => {
@@ -609,7 +609,7 @@ export async function markSetup(dir: string, state: 'unfinished' | 'finished'): 
 
   if (!marker) return;
 
-  if (state === 'unfinished') await fs.writeFile(marker, '');
+  if (state === 'unfinished') await writeRegularFile(marker, '');
   else await fs.rm(marker, { force: true });
 }
 
@@ -809,7 +809,7 @@ export async function applyBaseConfig(
 
   if (!kept) {
     await fs.mkdir(copying);
-    await fs.writeFile(path.join(copying, '_conflicts'), (await options.run(dir, ['ls-files', '-u', '-z', '--', ...AGENT_PATHS])).stdout);
+    await writeRegularFile(path.join(copying, '_conflicts'), (await options.run(dir, ['ls-files', '-u', '-z', '--', ...AGENT_PATHS])).stdout);
     await saveConfig(dir, copying, options.paths);
     await fs.rename(copying, saved);
   }
@@ -873,7 +873,7 @@ async function putBackBranchConfig(dir: string, saved: string, { indexFile, inde
   }
 
   // Renamed over the index, so git never reads it half written.
-  await fs.writeFile(`${indexFile}.teamai`, index);
+  await writeRegularFile(`${indexFile}.teamai`, index);
   await fs.rename(`${indexFile}.teamai`, indexFile);
   await fs.rm(saved, { recursive: true, force: true });
 }
@@ -928,7 +928,7 @@ export async function savedConfigPaths(saved: string): Promise<readonly string[]
  * to `dir`, are AGENT_PATHS unless a copy's install delivers elsewhere in it too; `saved` then lists them.
  */
 export async function saveConfig(dir: string, saved: string, paths: readonly string[] = AGENT_PATHS): Promise<void> {
-  if (paths !== AGENT_PATHS) await fs.writeFile(path.join(saved, SAVED_PATHS), JSON.stringify(paths));
+  if (paths !== AGENT_PATHS) await writeRegularFile(path.join(saved, SAVED_PATHS), JSON.stringify(paths));
 
   for (const relative of paths) {
     try {
@@ -994,8 +994,8 @@ export async function worktreeContentKey(dir: string, relative: string, run: Git
 /** Records the agent files present after team delivery, so that delivery is not a step edit. */
 export async function recordConfigOverlay(dir: string, saved: string): Promise<void> {
   const paths = await savedConfigPaths(saved);
-  await fs.writeFile(path.join(saved, '_overlay.json'), JSON.stringify(await fileManifest(dir, paths)));
-  await fs.writeFile(path.join(saved, '_dirs.json'), JSON.stringify(await agentDirs(dir, paths)));
+  await writeRegularFile(path.join(saved, '_overlay.json'), JSON.stringify(await fileManifest(dir, paths)));
+  await writeRegularFile(path.join(saved, '_dirs.json'), JSON.stringify(await agentDirs(dir, paths)));
 }
 
 /**
@@ -1399,7 +1399,7 @@ async function copyEntry(from: string, to: string): Promise<void> {
   }
 
   if (!stats.isFile()) return;
-  await fs.writeFile(to, await readRegularFile(from));
+  await writeRegularFile(to, await readRegularFile(from));
   await fs.chmod(to, stats.mode);
 }
 

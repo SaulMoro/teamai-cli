@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { writeRegularFile } from '@teamai/shared/regular-file';
 import YAML from 'yaml';
 import { loadTeamConfig, readEphemeralConfig } from '../config.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
@@ -39,10 +40,10 @@ async function open(checkout: string, teamRepo?: string): Promise<EphemeralScope
 
     if (given === undefined) {
       await fs.mkdir(team);
-      await fs.writeFile(path.join(team, 'teamai.yaml'), YAML.stringify({ team: 'ephemeral', repo: '', provider: 'git', usageReport: false }));
+      await writeRegularFile(path.join(team, 'teamai.yaml'), YAML.stringify({ team: 'ephemeral', repo: '', provider: 'git', usageReport: false }));
     }
 
-    await fs.writeFile(file, YAML.stringify({ repo: { localPath: team, remote: '' }, username: memberName(), scope: 'workspace' }));
+    await writeRegularFile(file, YAML.stringify({ repo: { localPath: team, remote: '' }, username: memberName(), scope: 'workspace' }));
     const [config, teamConfig] = await Promise.all([readEphemeralConfig(file, checkout), loadTeamConfig(team)]);
 
     if (!config || !teamConfig) throw new Error(`The config built for this run in ${root} could not be read back. Run teamai init, then run the command again.`);
