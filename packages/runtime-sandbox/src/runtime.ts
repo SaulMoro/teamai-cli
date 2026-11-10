@@ -12,7 +12,7 @@ import { noJudgeCredential, offersSignedIn } from './judge.js';
 import { onThisMachine } from './loopback.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { attemptSockets } from './outer.js';
-import { judgePrompts } from './prompt.js';
+import { prompts } from './prompt.js';
 import { ATTEMPT_ID, handleOf, RUN_ID, sandboxOf, unreachable, type HostRoute, type Provider } from './provider.js';
 import type { UnusedGateways } from './sign-in.js';
 import { sweep } from './sweep.js';
@@ -24,9 +24,10 @@ import { sweep } from './sweep.js';
 //  starts, so a repeated id is answered with the same outcome, a reattach reads what an exec did while teamai was
 //  down, and a sandbox a dead runtime created is still found by its labels. Each exec brings the credentials teamai
 //  gives it (a prompt's tool the attempt's, a command none); they are set over that exec's process only, never when the
-//  sandbox is created, and never kept: not in the journal, and not in memory past the exec. A `prompt` is answered
-//  `failed`: this runtime runs the tool teamai builds, as an exec. A confined `prompt` is a judge: its place opens with
-//  no view, and the prompt runs its tool in a sandbox that sees only the prompt's directory (judge.ts).
+//  sandbox is created, and never kept: not in the journal, and not in memory past the exec. A `prompt` runs its tool
+//  here, in the attempt's sandbox on the attempt's tool home, journaled as an exec is (step.ts). A confined `prompt` is a
+//  judge: its place opens with no view, and the prompt runs its tool in a sandbox that sees only the prompt's directory
+//  (judge.ts).
 //
 //  This module owns the place: init, open, collect, reattach and close. What runs there is exec.ts and prompt.ts, the
 //  attempt socket an app's wrapper asks on is outer.ts, and what earlier runtimes left is sweep.ts.
@@ -189,7 +190,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       }
     }
 
-    journal.savePlace(handle, { ...key, ...(outer && { outer }) });
+    journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }) });
     write({ op, event: 'accepted', handle: outer === undefined ? handle : JSON.stringify({ place: handle, socket: outer.socket } satisfies OuterHandle) });
     // Its own place is saved first, so the sweep keeps it.
     void sweep({ provider, journal, warn });
@@ -230,7 +231,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return { ok: false, failure: { code: 'sandbox_failed', message: `Attempt ${attempt} was closed while its sandbox was being made, ${removal}.` } };
       }
 
-      journal.savePlace(handle, { ...key, ...(outer && { outer }), id: created.id });
+      journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), id: created.id });
 
       return created;
     };
@@ -466,10 +467,10 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       }
     }
 
-    write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }), ...(Object.keys(offered.unavailable).length > 0 && { unavailable: offered.unavailable }), ...(offered.ownLogins.length > 0 && { ownLogins: offered.ownLogins }) });
+    write({ type: 'init', ok: true, can, prompt: true, toolHome: true, ...(can.confined && { confinedPrompt: true }), ...(Object.keys(offered.unavailable).length > 0 && { unavailable: offered.unavailable }), ...(offered.ownLogins.length > 0 && { ownLogins: offered.ownLogins }) });
   };
 
-  const prompt = judgePrompts({ journal, ledger, env, execs, creation });
+  const prompt = prompts({ journal, ledger, env, execs, creation });
 
   return serveRuntime({
     name: 'sandbox',

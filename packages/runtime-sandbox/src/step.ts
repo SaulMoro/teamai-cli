@@ -1,0 +1,185 @@
+import { PromptResultSchema, type PromptRequestSchema } from '@teamai/runtime-protocol';
+import { redact, redactJson } from '@teamai/shared/redact';
+import type { StepLaunch } from '@teamai/tool-core/launch';
+import { stepLaunchOf } from '@teamai/tool-definitions';
+import { runStepLaunch, type StepFamily, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import type { z } from 'zod';
+import { boundedTail } from './bounded-tail.js';
+import type { Outcome } from './journal.js';
+import type { Provider } from './provider.js';
+import type { LAUNCHABLE } from './providers/cli.js';
+
+// ─── A prompt step's tool in the attempt's sandbox ──────
+//
+//  The runtime launches a prompt lease's tool itself, as teamai's own launch does, through @teamai/tool-launch: the
+//  family builds the argv, and the launch meters the budget, keeps the timeout and the idle limit, and reads the result
+//  file. Only the process port is this runtime's: the provider's exec in the attempt's sandbox. The library assumes it
+//  runs where the tool runs, so this port gives it nothing of this machine:
+//
+//    env       the launch always gets the whole environment the lease gives, never this runtime's own
+//    files     a bind provider mounts the place at its host paths; a copy provider copies the sandbox's work back
+//              before the tool counts as ended, so the result file the launch reads is at its host path
+//    platform  the sandbox runs on POSIX only (main.ts refuses Windows), where the argv is the same on either side
+//    stdin     a step's tool gets none; an answer, the one launch that needs stdin, runs in teamai's process
+//
+
+type PromptRequest = z.infer<typeof PromptRequestSchema>;
+
+/**
+ * The family whose step the sandbox launches for each tool it ships, by its executable, or none: OpenCode's argv depends
+ * on a version this runtime cannot read before the step, and teamai reads none of its sessions in a tool home.
+ */
+const STEP_FAMILY = { claude: 'claude', codex: 'codex', codebuddy: 'codebuddy', opencode: undefined } as const satisfies Record<(typeof LAUNCHABLE)[number], StepFamily | undefined>;
+
+/**
+ * The family and step profile of `tool`, a tool the sandbox ships (or one an instance extends); undefined for one whose
+ * step it does not launch.
+ */
+export function stepToolOf(tool: string): { family: StepFamily; step: StepLaunch } | undefined {
+  const family = Object.entries(STEP_FAMILY).find(([shipped]) => shipped === tool)?.[1];
+  const step = family === undefined ? undefined : stepLaunchOf(family);
+
+  return family === undefined || step === undefined ? undefined : { family, step };
+}
+
+/**
+ * What the launch would read from this machine, which a step in a sandbox does not have: no OpenCode or agy step runs
+ * here (STEP_FAMILY), and teamai writes the result the prompt finishes with (runtimePrompter), so the runtime writes none.
+ */
+const IN_SANDBOX: StepLaunchHost = {
+  opencodeMajor: async () => 1,
+  agyGatewayEnv: () => ({}),
+  writeResult: async () => {},
+};
+
+/** The last chars of a tool's stderr kept for a failure that names why it ended. */
+const STDERR_CHARS = 4_000;
+
+/**
+ * The process port of a step's tool in sandbox `id`: the provider's exec, with the environment the launch gives and the
+ * names `unset` withholds. Its stop stops every process in the sandbox, as a cancel's does, and the sandbox stays. It
+ * calls `onStdout` only once `start` returned, so a budget stop finds its process. `stderr` gives the end of what the
+ * tool printed there.
+ */
+function sandboxProcess(provider: Provider, id: string, unset: string[]) {
+  const stderr = boundedTail(STDERR_CHARS);
+
+  const start: ToolLauncher = ({ executable, args, cwd, env, onStart, onStdout }) => {
+    let started = false;
+
+    const closed = (async (): Promise<ToolClosed> => {
+      // After `start` returned: the launch holds the process before its first output.
+      await Promise.resolve();
+      started = true;
+      onStart();
+      let stdout = '';
+      const given = Object.fromEntries(Object.entries(env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]])));
+
+      const ran = await provider.exec(id, { argv: [executable, ...args], env: given, unset, cwd }, (stream, data) => {
+        if (stream === 'stderr') {
+          stderr.push(data);
+
+          return;
+        }
+
+        stdout += data;
+        onStdout(data);
+      });
+
+      if (ran.kind === 'failed') return { failure: ran.failure };
+
+      // A copy provider's work, the result file and the session among it, reaches its host paths only once copied back.
+      if (provider.family === 'copy') {
+        const collected = await provider.collect(id);
+
+        if (!collected.ok) return { failure: collected.failure };
+      }
+
+      return { exitCode: ran.code, stdout };
+    })();
+
+    return {
+      closed,
+      started: () => started,
+      stop: async () => {
+        await provider.stop(id);
+      },
+    };
+  };
+
+  return { start, stderr: () => stderr.text() };
+}
+
+/**
+ * The launch a headless prompt lease asks for: its whole prompt as the lease carries it, the result instruction in it,
+ * with `env` as the tool's whole environment.
+ */
+function leaseInput(request: PromptRequest, env: Record<string, string>): StepLaunchInput {
+  const { lease } = request;
+
+  return {
+    prompt: lease.prompt, expected: undefined, cwd: request.cwd, resultPath: lease.result, secrets: {}, env,
+    ...(lease.model && { model: lease.model }),
+    ...(lease.resume !== undefined && { resume: lease.resume }),
+    ...(lease.maxTurns !== undefined && { maxTurns: lease.maxTurns }),
+    ...(lease.permissions === 'unattended' && { unattended: true }),
+  };
+}
+
+/**
+ * A launch's result as the prompt's end, every text in it masked with `masks`: a tool that exited on its own with a
+ * status that is not 0 failed, with what it said or the end of its stderr; one that exited 0, or that a limit stopped,
+ * and named its session, finished, with whatever result it wrote, and resumed when that is the session `resume` named.
+ */
+function outcomeOf(tool: string, resume: string | undefined, ran: StepLaunchResult, stderr: string, masks: Record<string, string>): Outcome {
+  const masked = (text: string): string => redact(text, { envSecrets: masks, patterns: false });
+  const failed = (failure: { code: string; message: string }): Outcome => ({ state: 'failed', failure: { code: failure.code, message: masked(failure.message) } });
+
+  if (!ran.started) return failed(ran.failure);
+
+  if (ran.exitCode !== 0 && ran.stoppedBy === undefined) {
+    const lastStderr = stderr.trim().split('\n').at(-1);
+
+    return failed(ran.failure && ran.failure.message !== `${tool} exited with status ${ran.exitCode}`
+      ? ran.failure
+      : { code: 'tool_failed', message: `${tool} exited with status ${ran.exitCode} in the sandbox: ${lastStderr || 'it printed nothing on stderr'}` });
+  }
+
+  if (ran.session === undefined) return failed(ran.failure ?? { code: 'tool_failed', message: `${tool} named no session` });
+  const stopped = ran.stoppedBy === 'budget' || ran.stoppedBy === 'timeout' ? ran.stoppedBy : undefined;
+  const result = PromptResultSchema.parse(redactJson({ ...('output' in ran && { output: ran.output }), ...(ran.failure && { failure: ran.failure }) }, masks));
+
+  // A tool that continued the session the lease names states that session again.
+  const resumed = resume !== undefined && ran.session === resume && ran.startedFresh !== true;
+
+  return { state: 'finished', session: { tool, id: ran.session }, result, ...(ran.tokens && { usage: ran.tokens }), ...(resumed && { resumed }), ...(stopped && { stopped }) };
+}
+
+/**
+ * Runs the headless prompt `request` on `tool` (an instance's name, or the tool's), whose executable is `command`, in
+ * sandbox `id` on `provider`, with `env` as its whole environment, and stops it at the lease's limits. Its end is masked
+ * with `masks`.
+ */
+export async function runStep({ request, tool, command, provider, id, env, masks }: {
+  request: PromptRequest;
+  tool: { name: string; profile: { family: StepFamily; step: StepLaunch } };
+  command: string;
+  provider: Provider;
+  id: string;
+  env: Record<string, string>;
+  masks: Record<string, string>;
+}): Promise<Outcome> {
+  const { start, stderr } = sandboxProcess(provider, id, request.unset);
+  const limits = request.lease.limits;
+
+  const ran = await runStepLaunch({
+    tool: { name: tool.name, ...tool.profile, executable: command },
+    input: leaseInput(request, env),
+    start,
+    limits: { budget: limits?.budget?.tokens, timeoutMs: limits?.timeoutMs, idleTimeoutMs: limits?.idleMs },
+    interactive: false,
+    host: IN_SANDBOX,
+  });
+
+  return outcomeOf(tool.name, request.lease.resume, ran, stderr(), masks);
+}

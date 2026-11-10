@@ -567,21 +567,6 @@ describe('a prompt attempt in a container', () => {
       .toMatchObject({ event: 'exited', code: 0, stdout: '/opt/step/bin:/usr/bin:/bin' });
   });
 
-  it('answers a prompt with failed: it runs the tool teamai builds, as an exec', async () => {
-    const connection = start();
-    await init(connection, { provider: 'docker', image: IMAGE });
-    const at = place();
-    await openPlace(connection, at);
-    const op = newOp();
-    connection.send({
-      type: 'prompt', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree,
-      lease: { step: 'review', tool: 'claude', prompt: 'Review it.', result: path.join(at.result, 'result.json'), permissions: 'unattended', interactive: false },
-    });
-
-    expect(await connection.next((message) => message.op === op && message.event !== 'accepted')).toMatchObject({ op, event: 'failed', failure: { code: 'prompt_unsupported' } });
-    expect(engine.calls().filter(([, command]) => command === 'exec')).toEqual([]);
-  });
-
   it('answers close_failed when the engine cannot remove the container, and keeps the place to close again', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

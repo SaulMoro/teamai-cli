@@ -1060,6 +1060,37 @@ steps:
     expect(homes.every(({ home }) => transcript(home))).toBe(true);
     expect(two).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
   }, 30_000);
+
+  it('leases it no step on a tool whose sessions teamai does not read in a tool home, even one it lists', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: One OpenCode step.
+steps:
+  - id: one
+    tool: opencode
+    prompt: Plan the change.
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true, can: { tools: ['claude', 'opencode'] } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    await runLocalDriver(config, runId, workspace, { runtimes });
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(run);
+
+    // It never reached the runtime: the step found no slot that runs OpenCode, rather than a runtime that cannot read its session.
+    expect(fs.existsSync(path.join(state, 'prompts.jsonl'))).toBe(false);
+    expect(run.steps[0]).not.toMatchObject({ failure: { code: 'tool_unsupported' } });
+    expect(run.steps[0]).toMatchObject({ status: 'failed' });
+  }, 30_000);
 });
 
 describe('a place held open for a conversation a later step continues', () => {

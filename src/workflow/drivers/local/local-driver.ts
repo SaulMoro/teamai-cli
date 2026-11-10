@@ -657,8 +657,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
           ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }),
+          // A tool that runs on the attempt's tool home, as an exec runtime's does, is one whose sessions teamai reads there.
           can: {
-            ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
+            ...entry.can, tools: entry.launchesAgents && entry.runsOnToolHome !== true ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
             ...(unproven(entry.can) && { isolation: 'none' as const }),
           },
         };
