@@ -344,7 +344,6 @@ export async function resumeRefusal(
   return invokeRefusal(carried.value?.definition, caller, { kind: act, run: runId });
 }
 
-/** The failure a call answers when the cache holds no unambiguous runnable version of workflow or alias `name`. */
 /**
  * The settled attempt of the step that started the conversation step `step` of run `run` goes on in: with
  * `session: continue`, its own first earlier pass; else its `session.from` step, or, along a chain where C goes on from
@@ -385,6 +384,7 @@ export async function continuedAttempt(config: LocalConfig, run: RunId, step: st
   return first;
 }
 
+/** The failure a call answers when the cache holds no unambiguous runnable version of workflow or alias `name`. */
 export function workflowNotFound(name: string): WorkflowFailure {
   return { code: 'workflow_not_found', message: `Workflow or alias ${name} has no unambiguous runnable version` };
 }

@@ -276,7 +276,7 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
   const adopt = asked ?? (goesOn ? sessionHostPlace : undefined);
   const opened = await openCopy({ config, base, lease, workspace, reopened, adopt, sessionHostPlace });
 
-  // While the host's place has the branch checked out, git refuses TeamAI's own worktree of it, so the failure leads with
+  // While the session host's place has the branch checked out, git refuses TeamAI's own worktree of it, so the failure leads with
   // why that place was passed over.
   const explained = (opening: WorkflowFailure): WorkflowFailure => adopt === undefined && sessionHostPlace !== undefined && passedOver !== undefined
     ? { ...opening, message: `TeamAI did not go on in ${sessionHostPlace}, the place the session host made for branch ${workspace.branch}: ${passedOver} Making its own worktree of the branch failed too: ${opening.message}` }
@@ -763,7 +763,7 @@ export async function placeEditsOf(input: { config: LocalConfig; run: RunId; att
 
 /**
  * Why a command must not start in an adopted place, or undefined when it may. A file written after adopt, such as a
- * host's background setup, is already there: the command does not run, and nothing is committed. The base agent files
+ * session host's background setup, is already there: the command does not run, and nothing is committed. The base agent files
  * prepare checked out over the branch are not that file when they still match the overlay it recorded. A file the
  * command itself writes during the run is still committed afterwards.
  */

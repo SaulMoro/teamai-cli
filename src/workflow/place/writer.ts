@@ -221,7 +221,7 @@ export async function finishWriter(input: {
   return failed ? { changes, unpushed } : { changes, failure: { code: 'push_failed', message: unpushed } };
 }
 
-/** Where an adopted place records the merge prepare staged, so finish can tell it from a host file. */
+/** Where an adopted place records the merge prepare staged, so finish can tell it from a file of the session host's. */
 async function mergePreparedPath(dir: string, run: Git): Promise<string> {
   const printed = (await run(dir, ['rev-parse', '--git-path', 'teamai-merge.json'])).stdout.trim();
 
