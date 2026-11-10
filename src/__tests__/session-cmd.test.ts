@@ -107,6 +107,9 @@ vi.mock('node:readline', async (importOriginal) => {
   };
 });
 
+// The registry is mocked here, so the adapters these tests read through get a host of their own.
+const READ_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () => ['codex'] };
+
 vi.mock('../session-flow/adapters/index.js', () => {
   const adapterOf = (platform: string) => {
     const adapter = mocks.adaptersByPlatform[platform];
@@ -177,6 +180,8 @@ import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+import { HOST_PROCESSES } from '@teamai/shared/exec';
+import type { SessionHost } from '@teamai/tool-core/sessions/platform';
 
 let repoRoot: string;
 /** console.log + process.stdout.write 的合并捕获（ask 的提示走 stdout.write） */
@@ -1706,7 +1711,7 @@ describe('adapters: native cwd recovery from JSONL records', () => {
       }) + '\n',
     );
 
-    const session = await BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     expect(session.cwd).toBe(NATIVE);
   });
 });
@@ -1737,13 +1742,13 @@ describe('codex sessions: images', () => {
       lines.map((l) => JSON.stringify({ timestamp: '2026-10-02T10:00:00.000Z', ...l })).join('\n') + '\n',
     );
 
-    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     const images = session.messages.flatMap((m) => m.content).filter((b) => b.type === 'image');
     expect(images).toEqual([{ type: 'image', mimeType: 'image/png', data: PNG, label: 'image.png' }]);
   });
 
   it('writes a user image as an input_image and reads it back', async () => {
-    const adapter = new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }));
+    const adapter = new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST);
     const sid = await adapter.writeSession(
       {
         sessionId: 'src-image-1',
@@ -1803,7 +1808,7 @@ describe('codex readSession: reasoning', () => {
       lines.map((l) => JSON.stringify({ timestamp: '2026-10-01T10:00:00.000Z', ...l })).join('\n') + '\n',
     );
 
-    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     const thinking = session.messages.flatMap((m) => m.content).filter((b) => b.type === 'thinking');
     expect(thinking).toEqual([
       { type: 'thinking', text: '**Reading the config**\n\nThe port comes from env.' },
@@ -1829,7 +1834,7 @@ describe('codex readSession: freeform tool calls', () => {
       lines.map((l) => JSON.stringify({ timestamp: '2026-10-01T10:00:00.000Z', ...l })).join('\n') + '\n',
     );
 
-    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     const call = session.messages.flatMap((m) => m.content).find((b) => b.type === 'tool_call');
     expect(call).toMatchObject({ type: 'tool_call', toolName: 'edit_file', callId: 'call_1', arguments: { input: patch } });
   });
@@ -1860,7 +1865,7 @@ describe('codex readSession: freeform tool calls', () => {
       lines.map((l) => JSON.stringify({ timestamp: '2026-10-01T10:00:00.000Z', ...l })).join('\n') + '\n',
     );
 
-    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     const result = session.messages.flatMap((m) => m.content).find((b) => b.type === 'tool_result');
     expect(result).toMatchObject({ type: 'tool_result', callId: 'call_1', content: 'Output:\ndone' });
   });
@@ -1886,7 +1891,7 @@ describe('codex readSession: freeform tool calls', () => {
       lines.map((l) => JSON.stringify({ timestamp: '2026-10-01T10:00:00.000Z', ...l })).join('\n') + '\n',
     );
 
-    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     // Both tool results come first, then a user message with the images they returned
     expect(session.messages.map((m) => [m.role, m.content.map((b) => b.type)])).toEqual([
       ['user', ['text']],
@@ -1919,7 +1924,7 @@ describe('codex readSession: freeform tool calls', () => {
       lines.map((l) => JSON.stringify({ timestamp: '2026-10-01T10:00:00.000Z', ...l })).join('\n') + '\n',
     );
 
-    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined })).readSession({ sessionId: SID });
+    const session = await new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), READ_HOST).readSession({ sessionId: SID });
     expect(session.messages.map((m) => [m.role, m.content.map((b) => b.type)])).toEqual([
       ['user', ['text']],
       ['assistant', ['tool_call', 'tool_call']],

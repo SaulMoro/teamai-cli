@@ -38,7 +38,6 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import { spawnCommand } from '@teamai/shared/exec';
 import { z } from 'zod';
 import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '../sessions/base.js';
 import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../sessions/ir.js';
@@ -47,10 +46,9 @@ import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { typedTitle, visibleUserText } from '../sessions/title.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '../sessions/ids.js';
 import { findSqlite3 } from '../sessions/sqlite.js';
+import type { SessionHost } from '../sessions/platform.js';
 import { log } from '@teamai/shared/log';
-import { execCommand, probeBinary } from '@teamai/shared/exec';
 import { isOnPath } from '@teamai/shared/lookpath';
-import { desktopCodexBinaries } from './codex-desktop.js';
 import {
   resolveRealCwd,
   readJsonl,
@@ -315,13 +313,13 @@ function pushItemCompleted(records: CodexWrittenLine[], args: ItemCompletedArgs)
 }
 
 /**
- * The codex CLI that runs: `codex` on PATH (npm / brew install), else the one bundled with
- * Codex Desktop. Probed and later started through spawnCommand, which resolves the npm
- * `codex.cmd` shim on Windows that a plain PATH join and `spawn` miss.
+ * The first Codex CLI the host names that runs: `codex` on PATH (npm / brew install), else one a desktop app bundles.
+ * Probed and later started through the host's processes, which resolve the npm `codex.cmd` shim on Windows that a
+ * plain PATH join and `spawn` miss.
  */
-async function findCodexCli(): Promise<string | null> {
-  for (const candidate of ['codex', ...desktopCodexBinaries()]) {
-    if (await probeBinary(candidate)) return candidate;
+async function findCodexCli(host: SessionHost): Promise<string | null> {
+  for (const candidate of host.codexCli()) {
+    if (await host.processes.probe(candidate)) return candidate;
   }
 
   return null;
@@ -352,7 +350,7 @@ export class CodexAdapter extends AgentAdapter {
    * @param platform The session platform this store is: 'codex', a variant such as 'tcodex', or 'joycode'
    * @param storageRoot The platform's session store (`sessionStoreDir`), such as ~/.codex/sessions
    */
-  constructor(platform: string, storageRoot: string) {
+  constructor(platform: string, storageRoot: string, private readonly host: SessionHost) {
     super();
     this.platform = platform;
     this.storageRoot = storageRoot;
@@ -1111,7 +1109,7 @@ export class CodexAdapter extends AgentAdapter {
    * then retry. Everything is best-effort: keep the legacy rollout as-is when the CLI
    */
   private async paginateRollout(sessionId: string, codexHome: string): Promise<void> {
-    const bin = await findCodexCli();
+    const bin = await findCodexCli(this.host);
 
     if (!bin) {
       this.noteWrite(
@@ -1130,7 +1128,7 @@ export class CodexAdapter extends AgentAdapter {
         // A non-zero exit (e.g. a corrupted rollout causing "one or more rollout
         // migrations failed") still carries the full JSON report; parse it to
         // judge this thread's outcome.
-        ({ stdout } = await execCommand(bin, ['migrate-rollouts', '--apply', '--thread', sessionId, '--json'], opts));
+        ({ stdout } = await this.host.processes.exec(bin, ['migrate-rollouts', '--apply', '--thread', sessionId, '--json'], opts));
       } catch {
         // Timed out or could not start: no report.
       }
@@ -1181,7 +1179,7 @@ export class CodexAdapter extends AgentAdapter {
       let child: ChildProcess;
 
       try {
-        child = spawnCommand(bin, ['app-server'], {
+        child = this.host.processes.spawn(bin, ['app-server'], {
           env: { ...process.env, CODEX_HOME: codexHome, RUST_LOG: 'error' },
           stdio: ['pipe', 'pipe', 'ignore'],
           windowsHide: true,
@@ -1416,7 +1414,7 @@ export class CodexAdapter extends AgentAdapter {
     for (const [db, sqls] of present) {
       for (const sql of sqls) {
         try {
-          await execCommand(bin, [db, `PRAGMA busy_timeout=5000; ${sql}`], { timeoutMs: 30_000 });
+          await this.host.processes.exec(bin, [db, `PRAGMA busy_timeout=5000; ${sql}`], { timeoutMs: 30_000 });
         } catch {
           // Missing table / lock contention: skip, other cleanup continues
         }

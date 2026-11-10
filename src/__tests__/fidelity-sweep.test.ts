@@ -25,7 +25,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { getAdapter } from '../session-flow/adapters/index.js';
+import { getAdapter, SESSION_HOST } from '../session-flow/adapters/index.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import * as crypto from 'node:crypto';
 import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migrate.js';
@@ -304,7 +304,7 @@ function makeAdapter(platform: string): AgentAdapter {
     case 'codebuddy-ide':
       return getAdapter('codebuddy-ide');
     case 'codex':
-      return new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }));
+      return new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), SESSION_HOST);
     case 'cursor':
       return getAdapter('cursor');
     case 'workbuddy':
@@ -544,7 +544,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       const back = (await claude.readSession({ sessionId: claudeSid, projectPath: cwd })) as Session;
       const claudeReadMs = Date.now() - t0;
 
-      const codex = new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }));
+      const codex = new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), SESSION_HOST);
       t0 = Date.now();
       // Every write derives its id, so read back by the id the write returned.
       const stressSid = (await codex.writeSession(session, cwd)) as string;

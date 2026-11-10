@@ -42,6 +42,7 @@ import {
 import { cleanTitleText, cutTitle, fallbackTitle, isInjectedText, titleFromCandidates, titleFromUserText } from '@teamai/tool-core/sessions/title';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { registerWorkBuddySession, unregisterWorkBuddySession } from './workbuddy-store.js';
+import type { Processes } from '@teamai/shared/exec';
 import { log } from '@teamai/shared/log';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
@@ -197,7 +198,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
   private readonly storageRoot: string;
 
   /** @param storageRoot The session store (the registry passes the member's, `sessionStoreDir`). */
-  constructor(storageRoot: string) {
+  constructor(storageRoot: string, private readonly processes: Processes) {
     super();
     this.storageRoot = storageRoot;
   }
@@ -744,7 +745,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
         // Latest activity = migration time: the list sorts by updated_at, and keeping the source time would bury the session in an old date group
         updatedAtMs: Date.now(),
         model: session.metadata?.model,
-      });
+      }, this.processes);
 
       if (!reg.ok) {
         const notice =
@@ -773,7 +774,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
 
     // Drop the DB registration (otherwise deleting the jsonl leaves an unopenable session in the WorkBuddy list)
     try {
-      unregisterWorkBuddySession(this.storageRoot, sessionId);
+      unregisterWorkBuddySession(this.storageRoot, sessionId, this.processes);
     } catch {
       // best-effort
     }

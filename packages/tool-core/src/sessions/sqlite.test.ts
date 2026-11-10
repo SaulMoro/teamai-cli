@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { snapshotSqlite } from './sqlite.js';
+import { execCommand } from '@teamai/shared/exec';
 
 const HAS_SQLITE3 = process.platform !== 'win32' && spawnSync('sqlite3', ['-version']).status === 0;
 const dirs: string[] = [];
@@ -35,7 +36,7 @@ describe.skipIf(!HAS_SQLITE3)('snapshotSqlite', () => {
     const before = fs.readdirSync(dir).sort();
     const target = path.join(workdir(), 'copy.db');
 
-    await snapshotSqlite('sqlite3', db, target);
+    await snapshotSqlite('sqlite3', db, target, execCommand);
 
     expect(count(target)).toBe('2');
     expect(fs.readdirSync(dir).sort()).toEqual(before);
@@ -51,7 +52,7 @@ describe.skipIf(!HAS_SQLITE3)('snapshotSqlite', () => {
     await expect.poll(() => count(db)).toBe('3');
     const target = path.join(workdir(), 'copy.db');
 
-    await snapshotSqlite('sqlite3', db, target);
+    await snapshotSqlite('sqlite3', db, target, execCommand);
 
     expect(count(target)).toBe('3');
   });
@@ -65,7 +66,7 @@ describe.skipIf(!HAS_SQLITE3)('snapshotSqlite', () => {
     writers.push(releaser);
     const start = Date.now();
 
-    await expect(snapshotSqlite('sqlite3', db, path.join(workdir(), 'copy.db'))).rejects.toThrow(`${db} is a pipe, not a regular file`);
+    await expect(snapshotSqlite('sqlite3', db, path.join(workdir(), 'copy.db'), execCommand)).rejects.toThrow(`${db} is a pipe, not a regular file`);
     expect(Date.now() - start).toBeLessThan(1_000);
   });
 });

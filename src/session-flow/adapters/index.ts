@@ -8,7 +8,9 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import path from 'node:path';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import type { StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { HOST_PROCESSES } from '@teamai/shared/exec';
+import type { SessionHost, StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { executablesOf } from '../../launch-registry.js';
 import { isSessionPlatform, isStoredSessionPlatform, SESSION_PLATFORM_FACTS, type SessionPlatform } from './platform-facts.js';
 import { sessionStoreDir, type SessionStoreRoot } from '../../locate.js';
 import { instanceHomeDir } from '../../tool-instances.js';
@@ -20,6 +22,13 @@ import { instanceNames, instancePlatform } from '../../tool-registry.js';
  */
 export type AdapterFactory = (storeDir: string) => AgentAdapter;
 
+/** What every adapter this registry builds starts its processes through, and the Codex CLIs it may index with. */
+export const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () => executablesOf('codex') };
+
+function stored(definition: StoredPlatformDefinition): AdapterFactory {
+  return (storeDir) => definition.adapter(storeDir, SESSION_HOST);
+}
+
 /** Platform id → adapter factory. Open to any id so a test can register a stand-in platform. */
 export interface AdapterRegistry {
   [platform: string]: AdapterFactory;
@@ -27,30 +36,30 @@ export interface AdapterRegistry {
 
 export const ADAPTER_REGISTRY: AdapterRegistry = {
   // Base platforms
-  'claude-code': (storeDir) => BUILT_IN_TOOLS.claude.platforms['claude-code'].adapter(storeDir),
-  codex: (storeDir) => BUILT_IN_TOOLS.codex.platforms.codex.adapter(storeDir),
-  qoder: (storeDir) => BUILT_IN_TOOLS.qoder.platforms.qoder.adapter(storeDir),
-  'qoder-cn': (storeDir) => BUILT_IN_TOOLS.qoder.platforms['qoder-cn'].adapter(storeDir),
+  'claude-code': stored(BUILT_IN_TOOLS.claude.platforms['claude-code']),
+  codex: stored(BUILT_IN_TOOLS.codex.platforms.codex),
+  qoder: stored(BUILT_IN_TOOLS.qoder.platforms.qoder),
+  'qoder-cn': stored(BUILT_IN_TOOLS.qoder.platforms['qoder-cn']),
   // CodeBuddy has two independent stores, split into two platforms:
   //   codebuddy     = CLI (<CodeBuddy home>/projects/...)
   //   codebuddy-ide = IDE GUI (CodeBuddyExtension/.../history)
-  codebuddy: (storeDir) => BUILT_IN_TOOLS.codebuddy.platforms.codebuddy.adapter(storeDir),
+  codebuddy: stored(BUILT_IN_TOOLS.codebuddy.platforms.codebuddy),
   'codebuddy-ide': () => BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'].adapter(),
-  workbuddy: (storeDir) => BUILT_IN_TOOLS.codebuddy.platforms.workbuddy.adapter(storeDir),
-  cursor: (storeDir) => BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(storeDir),
-  opencode: (storeDir) => BUILT_IN_TOOLS.opencode.platforms.opencode.adapter(storeDir),
-  agy: (storeDir) => BUILT_IN_TOOLS.agy.platforms.agy.adapter(storeDir),
-  pi: (storeDir) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(storeDir),
-  omp: (storeDir) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(storeDir),
-  muse: (storeDir) => BUILT_IN_TOOLS.muse.platforms.muse.adapter(storeDir),
-  hermes: (storeDir) => BUILT_IN_TOOLS.hermes.platforms.hermes.adapter(storeDir),
-  copilot: (storeDir) => BUILT_IN_TOOLS.copilot.platforms.copilot.adapter(storeDir),
+  workbuddy: stored(BUILT_IN_TOOLS.codebuddy.platforms.workbuddy),
+  cursor: stored(BUILT_IN_TOOLS.cursor.platforms.cursor),
+  opencode: stored(BUILT_IN_TOOLS.opencode.platforms.opencode),
+  agy: stored(BUILT_IN_TOOLS.agy.platforms.agy),
+  pi: stored(BUILT_IN_TOOLS.pi.platforms.pi),
+  omp: stored(BUILT_IN_TOOLS.pi.platforms.omp),
+  muse: stored(BUILT_IN_TOOLS.muse.platforms.muse),
+  hermes: stored(BUILT_IN_TOOLS.hermes.platforms.hermes),
+  copilot: stored(BUILT_IN_TOOLS.copilot.platforms.copilot),
   // TeamAI variants (different path prefixes, identical format)
-  'claude-internal': (storeDir) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(storeDir),
-  tclaude: (storeDir) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(storeDir),
-  'codex-internal': (storeDir) => BUILT_IN_TOOLS.codex.platforms['codex-internal'].adapter(storeDir),
-  tcodex: (storeDir) => BUILT_IN_TOOLS.codex.platforms.tcodex.adapter(storeDir),
-  joycode: (storeDir) => BUILT_IN_TOOLS.joycode.platforms.joycode.adapter(storeDir),
+  'claude-internal': stored(BUILT_IN_TOOLS.claude.platforms['claude-internal']),
+  tclaude: stored(BUILT_IN_TOOLS.claude.platforms.tclaude),
+  'codex-internal': stored(BUILT_IN_TOOLS.codex.platforms['codex-internal']),
+  tcodex: stored(BUILT_IN_TOOLS.codex.platforms.tcodex),
+  joycode: stored(BUILT_IN_TOOLS.joycode.platforms.joycode),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
 /**
@@ -74,7 +83,7 @@ function factoryOf(platform: string): AdapterFactory | undefined {
   if (Object.hasOwn(ADAPTER_REGISTRY, platform)) return ADAPTER_REGISTRY[platform];
   const store = instanceStore(platform);
 
-  return store && ((storeDir) => store.adapterAs(platform, storeDir));
+  return store && ((storeDir) => store.adapterAs(platform, storeDir, SESSION_HOST));
 }
 
 /** The platforms of the instances this process knows that keep sessions of their own: each one's name. */

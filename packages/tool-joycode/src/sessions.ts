@@ -11,7 +11,7 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
-    adapter: (storeDir) => new CodexAdapter('joycode', storeDir),
-    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
+    adapter: (storeDir, host) => new CodexAdapter('joycode', storeDir, host),
+    adapterAs: (platform, storeDir, host) => new CodexAdapter(platform, storeDir, host),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

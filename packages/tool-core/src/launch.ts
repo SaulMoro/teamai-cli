@@ -143,6 +143,8 @@ export interface SignInVariables {
 export interface LaunchAdapter {
   /** The command that starts the tool, when it is not the tool's id. */
   readonly executable?: string;
+  /** The executables a desktop app installs the tool as, outside PATH, in the order to try after the command. */
+  readonly installs?: () => string[];
   /** The variables the tool signs in with, for a tool a step runtime launches with the member's sign-in. */
   readonly signIn?: SignInVariables;
   readonly call: CallLaunch;

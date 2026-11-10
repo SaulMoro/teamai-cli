@@ -21,6 +21,12 @@ export interface LookPathOptions {
 
 const DEFAULT_WIN_PATHEXT = '.EXE;.CMD;.BAT;.COM';
 
+/**
+ * The Windows executable extensions a process starts by name, in PATHEXT order. `npm install -g` writes three shims
+ * on Windows, an extensionless POSIX script, `<cmd>.cmd` and `<cmd>.ps1`, and CreateProcess cannot start the first.
+ */
+export const WIN_EXEC_EXTENSIONS = ['.exe', '.cmd', '.bat'] as const;
+
 /** Bare executable name — no path separators or shell metacharacters. */
 export const SAFE_BIN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 

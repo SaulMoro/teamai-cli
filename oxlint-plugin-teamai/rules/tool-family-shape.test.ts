@@ -93,7 +93,7 @@ it('matches every family\'s production source in this checkout, and no infrastru
 it('lists in its stillSpawns option only files that exist in this checkout', () => {
   const config = fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
   const rules = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(JSON.parse(config)).rules;
-  const [, options] = z.tuple([z.literal('error'), z.object({ stillSpawns: z.array(z.string()).min(1) })]).parse(rules['teamai/tool-family-shape']);
+  const [, options] = z.tuple([z.literal('error'), z.object({ stillSpawns: z.array(z.string()) })]).parse(rules['teamai/tool-family-shape']);
 
   for (const file of options.stillSpawns) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
 });

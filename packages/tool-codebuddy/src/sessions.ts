@@ -45,6 +45,6 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: true,
     idFormat: 'uuid',
-    adapter: (storeDir): AgentAdapter => new WorkBuddyAdapter(storeDir),
+    adapter: (storeDir, { processes }): AgentAdapter => new WorkBuddyAdapter(storeDir, processes),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

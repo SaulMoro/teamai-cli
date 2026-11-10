@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AgyAdapter } from './session-adapter.js';
+import { HOST_PROCESSES } from '@teamai/shared/exec';
 
 const HAS_SQLITE3 = process.platform !== 'win32' && spawnSync('sqlite3', ['-version']).status === 0;
 const FIXTURES = path.join(import.meta.dirname, 'fixtures', 'agy');
@@ -54,7 +55,7 @@ afterEach(() => {
 
 describe.skipIf(!HAS_SQLITE3)('agy session listing', () => {
   it('lists each conversation with its title, workspace and times, newest first', async () => {
-    const listed = await new AgyAdapter([root]).listConversations();
+    const listed = await new AgyAdapter([root], HOST_PROCESSES).listConversations();
 
     expect(listed.map((meta) => meta.sessionId)).toEqual([SKILL, DENIED, NOTE]);
     expect(listed[0]).toEqual({
@@ -79,7 +80,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session listing across the CLI and the Antigr
       fs.renameSync(path.join(root, 'brain', DENIED), path.join(app, 'brain', DENIED));
       writeSummaries(app, ROWS.filter(([id]) => id === DENIED));
 
-      const adapter = new AgyAdapter([root, app]);
+      const adapter = new AgyAdapter([root, app], HOST_PROCESSES);
       const listed = await adapter.listConversations();
 
       expect(listed.map((meta) => meta.sessionId)).toEqual([SKILL, DENIED, NOTE]);
@@ -99,7 +100,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session listing beside an app store of anothe
       // As a later app version might keep it: the table renamed its columns.
       expect(spawnSync('sqlite3', [path.join(app, 'conversation_summaries.db'), 'CREATE TABLE conversation_summaries (id TEXT, name TEXT);']).status).toBe(0);
 
-      const listed = await new AgyAdapter([root, app]).listConversations();
+      const listed = await new AgyAdapter([root, app], HOST_PROCESSES).listConversations();
 
       expect(listed.map((meta) => meta.sessionId)).toEqual([SKILL, DENIED, NOTE]);
     } finally {
@@ -114,7 +115,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session listing from a store agy closed', () 
     expect(spawnSync('sqlite3', [db, 'PRAGMA journal_mode=WAL;']).status).toBe(0);
     const before = fs.readdirSync(root).sort();
 
-    const listed = await new AgyAdapter([root]).listConversations();
+    const listed = await new AgyAdapter([root], HOST_PROCESSES).listConversations();
 
     expect(listed.map((meta) => meta.sessionId)).toEqual([SKILL, DENIED, NOTE]);
     expect(fs.readdirSync(root).sort()).toEqual(before);
@@ -128,7 +129,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session listing with a row agy wrote oddly', 
     expect(odd.status).toBe(0);
     fs.writeFileSync(transcriptOf(NOTE), '{"step_index":"0","type":"USER_INPUT","created_at":"yesterday"}\n');
 
-    const listed = await new AgyAdapter([root]).listConversations();
+    const listed = await new AgyAdapter([root], HOST_PROCESSES).listConversations();
 
     expect(listed.map((meta) => meta.sessionId)).toEqual([SKILL, DENIED, NOTE]);
     expect(listed[1]).toMatchObject({ sessionId: DENIED, cwd: '', updatedAt: '2026-10-28T23:47:37.443Z' });
@@ -138,7 +139,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session listing with a row agy wrote oddly', 
 
 describe.skipIf(!HAS_SQLITE3)('agy session reading', () => {
   it('reads the request, the tool calls with their arguments decoded, the results and the answer', async () => {
-    const session = await new AgyAdapter([root]).readSession({ sessionId: SKILL });
+    const session = await new AgyAdapter([root], HOST_PROCESSES).readSession({ sessionId: SKILL });
 
     expect(session).toMatchObject({ sessionId: SKILL, title: 'Release Notes Skill Code Word', cwd: '/tmp/agyprobe/usagereal/work', platform: 'agy' });
     const [request, injected, call, result, answer] = session.messages;
@@ -156,7 +157,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session reading', () => {
   });
 
   it('reads a tool call a hook denied as a failed result carrying the reason', async () => {
-    const session = await new AgyAdapter([root]).readSession({ sessionId: DENIED });
+    const session = await new AgyAdapter([root], HOST_PROCESSES).readSession({ sessionId: DENIED });
     const call = session.messages.find((message) => message.content.some((block) => block.type === 'tool_call'));
     expect(call?.content).toContainEqual(expect.objectContaining({ toolName: 'bash', arguments: expect.objectContaining({ CommandLine: 'rm -rf build .' }) }));
     const results = session.messages.flatMap((message) => message.content).filter((block) => block.type === 'tool_result');
@@ -164,7 +165,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session reading', () => {
   });
 
   it('finds a session by id, and only in its own workspace when one is given', async () => {
-    const adapter = new AgyAdapter([root]);
+    const adapter = new AgyAdapter([root], HOST_PROCESSES);
     expect(await adapter.existingSessionId(NOTE)).toBe(NOTE);
     expect(await adapter.existingSessionId(NOTE, '/tmp/agyprobe/proj6')).toBe(NOTE);
     expect(await adapter.existingSessionId(NOTE, '/tmp/agyprobe/hooksreal/work')).toBeUndefined();
@@ -175,7 +176,7 @@ describe.skipIf(!HAS_SQLITE3)('agy session reading', () => {
 
 describe('agy session writing', () => {
   it('refuses to write or delete a conversation, since agy resumes from a store teamai cannot write', async () => {
-    const adapter = new AgyAdapter([root]);
+    const adapter = new AgyAdapter([root], HOST_PROCESSES);
     const session = { sessionId: 's', title: 't', cwd: '/tmp', platform: 'claude-code', createdAt: '', updatedAt: '', messages: [] };
     await expect(adapter.writeSession(session)).rejects.toThrow(/cannot write agy sessions/);
     expect(await adapter.deleteSession(NOTE)).toBe(false);

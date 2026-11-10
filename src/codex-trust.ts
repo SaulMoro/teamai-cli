@@ -3,7 +3,6 @@ import path from 'node:path';
 import { spawnCommand } from '@teamai/shared/exec';
 import semver from 'semver';
 import { z } from 'zod';
-import { desktopCodexBinaries } from '@teamai/tool-core/formats/codex-desktop';
 import { getCurrentVersion } from './package-info.js';
 import type { CodexBuild, CodexBuildSkew, JsonValue } from './types.js';
 import { JsonValueSchema, JsonObjectSchema } from './types.js';
@@ -11,6 +10,8 @@ import { probeBinary } from '@teamai/shared/exec';
 import { lenientList } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 import { findOnPath } from '@teamai/shared/lookpath';
+import { isBareCommandName } from '@teamai/shared/cli-path';
+import { executablesOf } from './launch-registry.js';
 
 /**
  * Trusting what teamai writes into Codex (#955).
@@ -96,12 +97,12 @@ interface CodexCandidate {
 
 /** `codex` on PATH first (it wins a version tie), then the desktop builds. Stat only, no spawn. */
 function codexBuildCandidates(): CodexCandidate[] {
-  const onPath = findOnPath('codex');
+  const found = executablesOf('codex').flatMap((command) => {
+    if (!isBareCommandName(command)) return [{ command, path: command }];
+    const onPath = findOnPath(command);
 
-  const found = [
-    ...(onPath ? [{ command: 'codex', path: onPath }] : []),
-    ...desktopCodexBinaries().map((binary) => ({ command: binary, path: binary })),
-  ];
+    return onPath ? [{ command, path: onPath }] : [];
+  });
 
   const seen = new Set<string>();
 

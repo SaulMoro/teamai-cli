@@ -43,6 +43,7 @@ import {
 import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, isRenderableText, visibleUserText } from '@teamai/tool-core/sessions/title';
 import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from './cursor-store.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
+import type { Processes } from '@teamai/shared/exec';
 import { log } from '@teamai/shared/log';
 import type { JsonlRecord } from '@teamai/shared/json';
 
@@ -166,7 +167,7 @@ export class CursorAdapter extends AgentAdapter {
    * @param platform The session platform this store is: 'cursor'
    * @param storageRoot The platform's transcript store (`sessionStoreDir`), such as ~/.cursor/projects
    */
-  constructor(platform: string, storageRoot: string) {
+  constructor(platform: string, storageRoot: string, private readonly processes: Processes) {
     super();
     this.platform = platform;
     this.storageRoot = storageRoot;
@@ -490,7 +491,7 @@ export class CursorAdapter extends AgentAdapter {
   async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
     if (this.findSessionFile(sessionId, projectPath)) return sessionId;
     // Cursor shows the conversation from its store, which a write would replace, transcript or not.
-    const inStore = cursorComposerExists(sessionId, projectPath);
+    const inStore = cursorComposerExists(sessionId, this.processes, projectPath);
 
     if (!inStore.ok) {
       throw new ToolUnavailableError(
@@ -644,7 +645,7 @@ export class CursorAdapter extends AgentAdapter {
         composerId: sessionId,
         title,
         messages: this.toComposerMessages(session),
-      });
+      }, this.processes);
 
       if (!reg.ok) {
         const notice =
@@ -765,12 +766,12 @@ export class CursorAdapter extends AgentAdapter {
 
     if (!jsonlPath) {
       // No transcript, but the composer can still be in the store; with `projectPath`, only one in that workspace.
-      const inStore = cursorComposerExists(sessionId, projectPath);
+      const inStore = cursorComposerExists(sessionId, this.processes, projectPath);
 
       if (!inStore.ok) throw new Error(`Cursor's session store could not be read: ${inStore.reason}`);
 
       if (!inStore.exists) return false;
-      const removed = unregisterCursorComposer(sessionId);
+      const removed = unregisterCursorComposer(sessionId, this.processes);
 
       if (!removed.ok) throw new Error(`Removing session ${sessionId} from Cursor's store failed: ${removed.reason}`);
 
@@ -779,7 +780,7 @@ export class CursorAdapter extends AgentAdapter {
 
     // Unregister (otherwise deleting the transcript leaves an unopenable entry in the Agents list)
     try {
-      unregisterCursorComposer(sessionId);
+      unregisterCursorComposer(sessionId, this.processes);
     } catch {
       // best-effort: leftover registration rows only affect the list display, never data safety
     }

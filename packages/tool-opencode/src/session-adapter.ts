@@ -22,7 +22,6 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { createServer } from 'node:net';
 import * as path from 'node:path';
-import { spawnCommand } from '@teamai/shared/exec';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
@@ -30,7 +29,7 @@ import { imagePlaceholderText, ToolArgumentsSchema, type ContentBlock, type Imag
 import { JsonValueSchema } from '@teamai/shared/json';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { execCommand, probeBinary, type ExecResult } from '@teamai/shared/exec';
+import type { ExecResult, Processes } from '@teamai/shared/exec';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
   ['read', 'read_file'],
@@ -73,11 +72,11 @@ type ChildServer =
   | { status: 'ready'; children(parent: string): Promise<string[]>; stop(): Promise<void> }
   | { status: 'unavailable'; reason: string };
 
-async function startChildServer(env: NodeJS.ProcessEnv): Promise<ChildServer> {
+async function startChildServer(env: NodeJS.ProcessEnv, processes: Processes): Promise<ChildServer> {
   const port = await freePort();
   const password = randomBytes(16).toString('hex');
 
-  const child = spawnCommand('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
+  const child = processes.spawn('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
     env: { ...env, OPENCODE_SERVER_PASSWORD: password },
     stdio: 'ignore',
     windowsHide: true,
@@ -448,7 +447,7 @@ export class OpencodeAdapter extends AgentAdapter {
    * @param storageRoot OpenCode's data directory (`sessionStoreDir`): `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default.
    * @param platform The session platform this store is: 'opencode', or an instance's own name.
    */
-  constructor(private readonly storageRoot: string, private readonly sessionPlatform = 'opencode') {
+  constructor(private readonly storageRoot: string, private readonly processes: Processes, private readonly sessionPlatform = 'opencode') {
     super();
   }
 
@@ -471,7 +470,7 @@ export class OpencodeAdapter extends AgentAdapter {
 
   /** Run an `opencode session` command; throws `ToolUnavailableError` when no OpenCode 2 runs here. */
   private async session(args: string[], cwd?: string): Promise<ExecResult> {
-    const version = await probeBinary('opencode');
+    const version = await this.processes.probe('opencode');
     const major = /(\d+)\.\d+/.exec(version)?.[1];
 
     if (!major || Number(major) < 2) {
@@ -482,7 +481,7 @@ export class OpencodeAdapter extends AgentAdapter {
       );
     }
 
-    return execCommand('opencode', ['session', ...args, '--standalone'], { cwd, env: this.storeEnv() });
+    return this.processes.exec('opencode', ['session', ...args, '--standalone'], { cwd, env: this.storeEnv() });
   }
 
   /**
@@ -533,7 +532,7 @@ export class OpencodeAdapter extends AgentAdapter {
    * reads each child with `session export`, and stops it.
    */
   async readSubagents(session: Session, _ref: SessionReadRef): Promise<SubagentsRead> {
-    const server = await startChildServer(this.storeEnv());
+    const server = await startChildServer(this.storeEnv(), this.processes);
 
     if (server.status === 'unavailable') return { status: 'unread', reason: server.reason };
 

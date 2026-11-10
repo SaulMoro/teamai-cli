@@ -9,7 +9,7 @@ import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from
 import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3, snapshotSqlite } from '@teamai/tool-core/sessions/sqlite';
-import { execCommand, type ExecResult } from '@teamai/shared/exec';
+import type { ExecResult, Processes } from '@teamai/shared/exec';
 import { JsonValueSchema } from '@teamai/shared/json';
 
 const CODING_SOURCES = ['acp', 'cli', 'desktop', 'gui', 'oneshot', 'tui'] as const;
@@ -129,7 +129,7 @@ function messagesOf(rows: MessageRow[]): Message[] {
 export class HermesAdapter extends AgentAdapter {
   static readonly platform = 'hermes';
 
-  constructor(private readonly home: string) { super(); }
+  constructor(private readonly home: string, private readonly processes: Processes) { super(); }
 
   get platform(): string { return 'hermes'; }
 
@@ -153,8 +153,8 @@ export class HermesAdapter extends AgentAdapter {
 
     try {
       const copied = path.join(copy, 'state.db');
-      await snapshotSqlite(sqlite3, this.db, copied);
-      result = await execCommand(sqlite3, ['-json', copied, sql], { timeoutMs: 30_000 });
+      await snapshotSqlite(sqlite3, this.db, copied, this.processes.exec);
+      result = await this.processes.exec(sqlite3, ['-json', copied, sql], { timeoutMs: 30_000 });
     } finally {
       await fs.promises.rm(copy, { recursive: true, force: true });
     }

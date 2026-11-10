@@ -13,8 +13,8 @@ import * as path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { openRegularFile } from '@teamai/shared/regular-file';
-import { WIN_EXEC_EXTENSIONS } from '@teamai/shared/cli-path';
-import { execCommand } from '@teamai/shared/exec';
+import { WIN_EXEC_EXTENSIONS } from '@teamai/shared/lookpath';
+import type { CommandExecutor } from '@teamai/shared/exec';
 
 /** Locate the sqlite3 CLI: PATH first, then well-known install locations off Windows.
  *  On Windows a PATH entry holds `sqlite3.exe`, so the name carries the extension.
@@ -55,7 +55,7 @@ async function copyRegularFile(from: string, to: string): Promise<void> {
  * Without a `-shm`, no writer has it open, so the file and the `-wal` it left are the whole database and are copied as
  * they are. A read-only connection could not open it then: it would have to create the `-shm`.
  */
-export async function snapshotSqlite(sqlite3: string, db: string, target: string): Promise<void> {
+export async function snapshotSqlite(sqlite3: string, db: string, target: string, exec: CommandExecutor): Promise<void> {
   if (!fs.existsSync(`${db}-shm`)) {
     await copyRegularFile(db, target);
     await copyRegularFile(`${db}-wal`, `${target}-wal`).catch((cause: unknown) => {
@@ -66,7 +66,7 @@ export async function snapshotSqlite(sqlite3: string, db: string, target: string
   }
 
   // sqlite3 reads backslash escapes inside a quoted dot-command argument, so the path is given with forward slashes.
-  const backup = await execCommand(sqlite3, [`${pathToFileURL(db).href}?mode=ro`, `.backup "${target.replaceAll('\\', '/')}"`], { timeoutMs: 30_000 });
+  const backup = await exec(sqlite3, [`${pathToFileURL(db).href}?mode=ro`, `.backup "${target.replaceAll('\\', '/')}"`], { timeoutMs: 30_000 });
 
   if (backup.code !== 0) throw new Error(`sqlite3 could not snapshot ${db}: ${backup.stderr.trim() || `exit ${backup.code}`}`);
 }

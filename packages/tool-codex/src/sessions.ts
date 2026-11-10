@@ -11,8 +11,8 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
-    adapter: (storeDir) => new CodexAdapter('codex', storeDir),
-    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
+    adapter: (storeDir, host) => new CodexAdapter('codex', storeDir, host),
+    adapterAs: (platform, storeDir, host) => new CodexAdapter(platform, storeDir, host),
   },
   'codex-internal': {
     store: { in: 'tool-home', home: 'codex-internal', dir: 'sessions' },
@@ -22,8 +22,8 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
-    adapter: (storeDir) => new CodexAdapter('codex-internal', storeDir),
-    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
+    adapter: (storeDir, host) => new CodexAdapter('codex-internal', storeDir, host),
+    adapterAs: (platform, storeDir, host) => new CodexAdapter(platform, storeDir, host),
   },
   'tcodex': {
     store: { in: 'tool-home', home: 'tcodex', dir: 'sessions' },
@@ -33,7 +33,7 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
-    adapter: (storeDir) => new CodexAdapter('tcodex', storeDir),
-    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
+    adapter: (storeDir, host) => new CodexAdapter('tcodex', storeDir, host),
+    adapterAs: (platform, storeDir, host) => new CodexAdapter(platform, storeDir, host),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

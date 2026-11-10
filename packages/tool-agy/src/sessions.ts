@@ -14,6 +14,6 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     readOnly: true,
-    adapter: (storeDir): AgentAdapter => new AgyAdapter(agyStoreRoots(storeDir)),
+    adapter: (storeDir, { processes }): AgentAdapter => new AgyAdapter(agyStoreRoots(storeDir), processes),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

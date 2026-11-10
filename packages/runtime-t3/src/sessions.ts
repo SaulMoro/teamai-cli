@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
+import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { getUserHome } from '@teamai/shared/home';
+import type { SessionHost } from '@teamai/tool-core/sessions/platform';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 
 // ─── The tool session a T3 thread ran ───
@@ -13,13 +15,16 @@ import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 //  session-store lookup once it exists.
 //
 
+// The runtime only reads sessions, and only writing one runs a Codex CLI to index it.
+const READ_ONLY_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () => ['codex'] };
+
 /**
  * The T3 provider drivers this runtime runs, each with the teamai tool it is, its name in T3, its tool's home under a
  * user's home, the variable that moves that home, and the store its sessions are in under a tool home.
  */
 export const DRIVERS = {
   claudeAgent: { tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')) },
-  codex: { tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions')) },
+  codex: { tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), READ_ONLY_HOST) },
 } as const satisfies Record<string, { tool: string; label: string; home: string; homeEnv: string; sessions(toolHome: string): AgentAdapter }>;
 
 export type Driver = keyof typeof DRIVERS;

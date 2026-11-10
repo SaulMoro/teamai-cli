@@ -59,6 +59,13 @@ export function executableOf(tool: LaunchOrderTool): string {
   return adapter.executable ?? tool;
 }
 
+/** The executables of `tool` to try, in order: its command, then those a desktop app installs it as. */
+export function executablesOf(tool: LaunchOrderTool): string[] {
+  const adapter: LaunchAdapter = launchAdapterOf(tool);
+
+  return [executableOf(tool), ...(adapter.installs?.() ?? [])];
+}
+
 type Profile = 'step' | 'confined';
 
 /** The tools whose adapter builds `P`. */

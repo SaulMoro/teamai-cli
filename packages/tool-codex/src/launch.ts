@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { answered, failed, jsonLines, type CallOutput, type CallReading, type LaunchAdapter, type StepArgsHow, type StepArgsInput } from '@teamai/tool-core/launch';
 import { readToolMetadata } from '@teamai/tool-core/stdout';
+import { desktopCodexBinaries } from './codex-desktop.js';
 
 const CodexError = z.union([
   z.object({ type: z.literal('error'), message: z.string() }),
@@ -41,6 +42,7 @@ function stepArgs(input: StepArgsInput, { interactive }: StepArgsHow): string[] 
 /** How teamai launches Codex and its variants headless; each variant starts its own command. */
 export const launch = {
   codex: {
+    installs: () => desktopCodexBinaries(),
     signIn: { variables: ['OPENAI_API_KEY', 'CODEX_API_KEY'] },
     call: { evidence: 'verified', prompt: 'stdin', args: ({ lastMessageFile }) => ['exec', '--json', '--skip-git-repo-check', '-o', lastMessageFile, '-'], read: readCodexExec, streams: { evidence: 'docs' } },
     // `codex exec --help` of codex-cli 0.165.0: "Intended solely for running in environments that are externally sandboxed".

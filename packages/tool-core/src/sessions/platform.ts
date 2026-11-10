@@ -1,3 +1,4 @@
+import type { Processes } from '@teamai/shared/exec';
 import type { AgentAdapter } from './base.js';
 import type { SessionIdFormat } from './ids.js';
 
@@ -34,15 +35,24 @@ export interface SessionPlatformFacts<TTool extends string = string> {
   readOnly?: true;
 }
 
+/**
+ * What the host gives a session adapter: the processes it may start, and the Codex CLIs installed here, in the order
+ * to try, which the Codex format runs to index a session it wrote.
+ */
+export interface SessionHost {
+  readonly processes: Processes;
+  codexCli(): readonly string[];
+}
+
 /** A platform whose store teamai resolves (`sessionStoreDir`) and hands to its adapter. */
 export type StoredPlatformDefinition<TTool extends string = string> = SessionPlatformFacts<TTool> & {
   readonly store: Exclude<SessionStore<TTool>, { readonly in: 'ide-history' }>;
-  adapter(storeDir: string): AgentAdapter;
+  adapter(storeDir: string, host: SessionHost): AgentAdapter;
   /**
    * The adapter of an instance's own platform `platform`, in this platform's format, on the instance's store. Absent
    * when this format's sessions cannot carry another platform id: an instance of the tool then keeps no sessions teamai reads.
    */
-  adapterAs?(platform: string, storeDir: string): AgentAdapter;
+  adapterAs?(platform: string, storeDir: string, host: SessionHost): AgentAdapter;
 };
 
 /** A platform whose adapter finds its own store: the CodeBuddy IDE's history. */

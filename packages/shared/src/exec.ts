@@ -5,7 +5,8 @@ import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { isBareCommandName, pickWindowsCommand, WIN_EXEC_EXTENSIONS } from './cli-path.js';
+import { isBareCommandName, pickWindowsCommand } from './cli-path.js';
+import { WIN_EXEC_EXTENSIONS } from './lookpath.js';
 import { pathDirs } from './lookpath.js';
 
 export interface ExecOptions {
@@ -266,3 +267,14 @@ export function spawnCommandSync(executable: string, args: readonly string[], op
 
   return batch ? nodeSpawnSync(batch.command, [...batch.args], { ...options, windowsVerbatimArguments: true }) : spawn.sync(executable, [...args], options);
 }
+
+/** The processes a module that may not start one itself, such as a tool family's session reader, runs through. */
+export interface Processes {
+  readonly exec: CommandExecutor;
+  readonly spawn: typeof spawnCommand;
+  readonly spawnSync: typeof spawnCommandSync;
+  readonly probe: typeof probeBinary;
+}
+
+/** This process's own: what the host gives a module that runs through `Processes`. */
+export const HOST_PROCESSES: Processes = { exec: execCommand, spawn: spawnCommand, spawnSync: spawnCommandSync, probe: probeBinary };

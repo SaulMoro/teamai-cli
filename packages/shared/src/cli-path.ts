@@ -8,17 +8,11 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { WIN_EXEC_EXTENSIONS } from './lookpath.js';
 
 /** CLI 探测超时（毫秒），防止 execFileSync 挂死。 */
 export const CLI_DETECT_TIMEOUT_MS = 5_000;
 
-/**
- * 可按扩展名直接启动的 Windows 可执行后缀，按 PATHEXT 优先级排列。
- *
- * `npm install -g` 在 Windows 上同时生成三个 shim：无扩展名的 POSIX 脚本、
- * `<cmd>.cmd`、`<cmd>.ps1`。无扩展名的那个 CreateProcess 无法启动。
- */
-export const WIN_EXEC_EXTENSIONS = ['.exe', '.cmd', '.bat'] as const;
 
 /**
  * 从 `where <cmd>` 的输出中挑出可启动的那一条。

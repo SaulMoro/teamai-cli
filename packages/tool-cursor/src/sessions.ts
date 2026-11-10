@@ -16,7 +16,7 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: true,
     idFormat: 'uuid',
-    adapter: (storeDir): AgentAdapter => new CursorAdapter('cursor', storeDir),
-    adapterAs: (platform, storeDir): AgentAdapter => new CursorAdapter(platform, storeDir),
+    adapter: (storeDir, { processes }): AgentAdapter => new CursorAdapter('cursor', storeDir, processes),
+    adapterAs: (platform, storeDir, { processes }): AgentAdapter => new CursorAdapter(platform, storeDir, processes),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

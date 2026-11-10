@@ -26,8 +26,6 @@ export const PROCESS_STARTERS = new Set([
   '@teamai/shared/cli-path',
   '@teamai/shared/exec',
   '@teamai/shared/process-group',
-  '@teamai/tool-core/formats/codex',
-  '@teamai/tool-core/sessions/sqlite',
   '@teamai/tool-testing/conformance',
   '@teamai/tool-testing/fake-agent',
 ]);

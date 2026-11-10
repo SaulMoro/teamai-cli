@@ -16,6 +16,6 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'hermes',
     readOnly: true,
-    adapter: (storeDir): AgentAdapter => new HermesAdapter(storeDir),
+    adapter: (storeDir, { processes }): AgentAdapter => new HermesAdapter(storeDir, processes),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

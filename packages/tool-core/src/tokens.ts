@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import readline from 'node:readline';
 import { openRegularFile } from '@teamai/shared/regular-file';
+import type { Processes } from '@teamai/shared/exec';
 import type { JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 
@@ -90,8 +91,11 @@ export type TokenReading = {
   requests: TokenRequest[];
 };
 
-/** Reads a session's token usage in one transcript format. A source that is missing or unreadable reads as no usage. */
-export type TokenFormat = (source: TokenSource) => Promise<TokenReading>;
+/**
+ * Reads a session's token usage in one transcript format, starting a process only through `processes`. A source that is
+ * missing or unreadable reads as no usage.
+ */
+export type TokenFormat = (source: TokenSource, processes: Processes) => Promise<TokenReading>;
 
 /** Max bytes to scan from a transcript when counting interventions (guards huge files). */
 export const INTERVENTION_SCAN_MAX_BYTES = 50 * 1024 * 1024;

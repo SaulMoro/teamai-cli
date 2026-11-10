@@ -21,7 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import type { Processes } from '@teamai/shared/exec';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
@@ -35,13 +35,13 @@ function esc(value: string): string {
 }
 
 /** Run a SQL script through the sqlite3 CLI (piped in; never written to disk). */
-function runSql(dbPath: string, sql: string, timeoutMs = 30_000): RegisterWorkBuddyResult {
+function runSql(dbPath: string, sql: string, processes: Processes, timeoutMs = 30_000): RegisterWorkBuddyResult {
   const sqlite3 = findSqlite3();
 
   if (!sqlite3) return { ok: false, reason: 'sqlite3 CLI not found' };
 
   try {
-    const r = spawnSync(sqlite3, [dbPath], {
+    const r = processes.spawnSync(sqlite3, [dbPath], {
       input: sql,
       maxBuffer: 32 * 1024 * 1024,
       timeout: timeoutMs,
@@ -73,19 +73,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * (they differ in practice), so the client's user filter would still hide the session and we
  * would leave a dirty row behind. Returns null when no source has it; the caller skips registration and warns.
  */
-function readUserId(dbPath: string): string | null {
+function readUserId(dbPath: string, processes: Processes): string | null {
   const sqlite3 = findSqlite3();
 
    // 1) existing session rows
   if (sqlite3 && fs.existsSync(dbPath)) {
     try {
-      const r = spawnSync(
+      const r = processes.spawnSync(
         sqlite3,
         ['-readonly', dbPath, "select user_id from sessions where user_id is not null and user_id <> '' limit 1;"],
         { encoding: 'utf-8', timeout: 10_000 },
       );
 
-      const v = (r.stdout ?? '').trim();
+      const v = (r.stdout ?? '').toString().trim();
 
       if (UUID_RE.test(v)) return v;
     } catch {
@@ -144,7 +144,7 @@ export interface RegisterWorkBuddyResult {
  *
  * Idempotent: re-migrating the same sessionId hits ON CONFLICT DO UPDATE -- no duplicates.
  */
-export function registerWorkBuddySession(args: RegisterWorkBuddySessionArgs): RegisterWorkBuddyResult {
+export function registerWorkBuddySession(args: RegisterWorkBuddySessionArgs, processes: Processes): RegisterWorkBuddyResult {
   const dbPath = workBuddyDbPath(args.store);
 
   if (!fs.existsSync(dbPath)) {
@@ -152,7 +152,7 @@ export function registerWorkBuddySession(args: RegisterWorkBuddySessionArgs): Re
   }
 
    // user_id is the account id; inventing one makes the client's user filter hide the row.
-  const userId = readUserId(dbPath);
+  const userId = readUserId(dbPath, processes);
 
   if (!userId) {
     return { ok: false, reason: 'no existing session row to derive user_id from' };
@@ -183,11 +183,11 @@ export function registerWorkBuddySession(args: RegisterWorkBuddySessionArgs): Re
     'COMMIT;',
   ].join('\n');
 
-  return runSql(dbPath, sql);
+  return runSql(dbPath, sql, processes);
 }
 
  /** Remove the session from WorkBuddy's list (called on rollback / delete). */
-export function unregisterWorkBuddySession(store: string, sessionId: string): RegisterWorkBuddyResult {
+export function unregisterWorkBuddySession(store: string, sessionId: string, processes: Processes): RegisterWorkBuddyResult {
   const dbPath = workBuddyDbPath(store);
 
   if (!fs.existsSync(dbPath)) return { ok: false, reason: 'workbuddy.db not found' };
@@ -198,5 +198,5 @@ export function unregisterWorkBuddySession(store: string, sessionId: string): Re
     `DELETE FROM sessions WHERE id='${esc(sessionId)}';\n` +
     'COMMIT;';
 
-  return runSql(dbPath, sql);
+  return runSql(dbPath, sql, processes);
 }

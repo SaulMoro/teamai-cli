@@ -14,7 +14,7 @@ export const platforms = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: false,
     idFormat: 'opencode',
-    adapter: (storeDir): AgentAdapter => new OpencodeAdapter(storeDir),
-    adapterAs: (platform, storeDir): AgentAdapter => new OpencodeAdapter(storeDir, platform),
+    adapter: (storeDir, { processes }): AgentAdapter => new OpencodeAdapter(storeDir, processes),
+    adapterAs: (platform, storeDir, { processes }): AgentAdapter => new OpencodeAdapter(storeDir, processes, platform),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

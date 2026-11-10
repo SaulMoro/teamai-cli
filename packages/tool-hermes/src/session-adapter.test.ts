@@ -15,8 +15,14 @@ vi.mock('@teamai/tool-core/sessions/sqlite', async (importOriginal) => ({
   ...await importOriginal<typeof import('@teamai/tool-core/sessions/sqlite')>(),
   findSqlite3: () => mocks.sqlite3 || null,
 }));
-vi.mock('@teamai/shared/exec', () => ({
-  execCommand: async (_command: string, args: string[]) => {
+
+import { HermesAdapter } from './session-adapter.js';
+import { ToolUnavailableError } from '@teamai/tool-core/sessions/base';
+import { HOST_PROCESSES, type Processes } from '@teamai/shared/exec';
+
+const processes: Processes = {
+  ...HOST_PROCESSES,
+  exec: async (_command, args) => {
     mocks.commands.push(args);
     if (args[1]?.startsWith('.backup ')) return { code: 0, stdout: '', stderr: '', signal: null };
     const sql = args[2]!;
@@ -27,10 +33,7 @@ vi.mock('@teamai/shared/exec', () => ({
       stderr: '', signal: null,
     };
   },
-}));
-
-import { HermesAdapter } from './session-adapter.js';
-import { ToolUnavailableError } from '@teamai/tool-core/sessions/base';
+};
 
 const roots: string[] = [];
 
@@ -74,7 +77,7 @@ function fixture(): { adapter: HermesAdapter; home: string; cwd: string; id: str
       timestamp: 1_793_761_205, finish_reason: null, reasoning: null, reasoning_content: null },
   ];
 
-  return { adapter: new HermesAdapter(home), home, cwd, id };
+  return { adapter: new HermesAdapter(home, processes), home, cwd, id };
 }
 
 describe('HermesAdapter', () => {
