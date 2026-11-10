@@ -29,7 +29,6 @@ const repoConfig = ConfigSchema.parse(rawConfig);
 const cycleRule = (override: z.infer<typeof OverrideSchema>) => override.rules['import/no-cycle'];
 const { plugins } = repoConfig;
 const [guard, ...more] = repoConfig.overrides.filter((override) => Array.isArray(cycleRule(override)));
-const listed = repoConfig.overrides.filter((override) => cycleRule(override) === 'off').flatMap((override) => override.files);
 
 /**
  * The files `import/no-cycle` reports under `dir`'s `paths`, linted with `overrides` and nothing else. oxlint reads an
@@ -57,8 +56,8 @@ describe('the import cycle guard', () => {
   it('is one override, scoped to production source, that allows type-only cycles, with the import plugin on for the whole config', () => {
     expect(plugins).toContain('import');
     expect(more).toEqual([]);
-    // Any other setting, such as "warn" or 0, would weaken the guard where it applies without being listed.
-    expect(repoConfig.overrides.map(cycleRule).filter((setting) => setting !== undefined && !Array.isArray(setting) && setting !== 'off')).toEqual([]);
+    // Any other setting, "off" included, would weaken the guard where it applies: no file is let off it.
+    expect(repoConfig.overrides.map(cycleRule).filter((setting) => setting !== undefined && !Array.isArray(setting))).toEqual([]);
     expect(z.object({ rules: z.record(z.string(), z.unknown()) }).parse(rawConfig).rules['import/no-cycle']).toBeUndefined();
     expect(guard).toMatchObject({ files: ['src/**', 'packages/*/src/**'], rules: { 'import/no-cycle': ['error', { ignoreTypes: true }] } });
   });
@@ -79,7 +78,7 @@ describe('the import cycle guard', () => {
     expect(cycleFiles(dir, [guard], ['src', 'packages']).files).toEqual(['packages/zzz/src/e.ts', 'packages/zzz/src/f.ts', 'src/x/a.ts', 'src/x/b.ts']);
   });
 
-  it('lists exactly the files in a cycle in this checkout, each of which exists, so the list only shrinks', () => {
+  it('finds no cycle in this checkout\'s production source, over more than a thousand files', () => {
     expect(guard).toBeDefined();
     if (guard === undefined) return;
     // The rule unscoped over the checkout, with the guard's options, then the guard's own globs: oxlint reads those
@@ -93,7 +92,6 @@ describe('the import cycle guard', () => {
     const found = { files: [...new Set(report.diagnostics.filter((diagnostic) => diagnostic.code === 'import(no-cycle)').map((diagnostic) => diagnostic.filename))].filter(inScope).sort(), linted: report.number_of_files };
 
     expect(found.linted).toBeGreaterThan(1000);
-    for (const file of listed) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
-    expect(found.files).toEqual([...listed].sort());
+    expect(found.files).toEqual([]);
   });
 });

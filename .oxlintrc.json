@@ -170,31 +170,6 @@
       "rules": { "import/no-cycle": ["error", { "ignoreTypes": true }] }
     },
     {
-      // The files in an import cycle when the rule landed. The list only shrinks: import-cycles.test.ts fails while a
-      // listed file is in no cycle, and lint refuses a file not listed that joins one.
-      "files": [
-        "src/agent-skills.ts",
-        "src/builtin-skills.ts",
-        "src/resources/skills.ts",
-        "src/scorers/engine-hooks.ts",
-        "src/scorers/pass-scoring.ts",
-        "src/scorers/scoring-evidence.ts",
-        "src/skill-content.ts",
-        "src/workflow/engine.ts",
-        "src/workflow/fleet/owner.ts",
-        "src/workflow/handoff.ts",
-        "src/workflow/leftovers.ts",
-        "src/workflow/place/clone.ts",
-        "src/workflow/place/place.ts",
-        "src/workflow/protocol.ts",
-        "src/workflow/run-controls.ts",
-        "src/workflow/runtimes/attempt.ts",
-        "src/workflow/runtimes/composed.ts",
-        "src/workflow/runtimes/sources.ts"
-      ],
-      "rules": { "import/no-cycle": "off" }
-    },
-    {
       // The anti-slop rules hold production code. Tests build partial and
       // malformed values on purpose, and CONTRIBUTING asks them to mock
       // external I/O (git, fetch, child_process) at the module boundary.
