@@ -1,7 +1,6 @@
 import path from 'node:path';
-import { fitReason, type InitInstance, type RuntimeFailure, type RuntimeMessage } from '@teamai/runtime-protocol';
+import { fitReason, type ConfinedKept, type InitInstance, type RuntimeFailure, type RuntimeMessage } from '@teamai/runtime-protocol';
 import type { InstalledTool, Target } from './daemon/connect.js';
-import { CONFINED_KEPT } from './judge.js';
 import { CONFINED_MODES, isPaseoTool, PASEO_TOOLS, type ProviderToAdd } from './providers.js';
 
 // ─── What this daemon can run ────────────────────────────
@@ -9,6 +8,9 @@ import { CONFINED_MODES, isPaseoTool, PASEO_TOOLS, type ProviderToAdd } from './
 //  From the tools and instances the daemon has installed, as init found them: what the runtime offers of each, how
 //  Paseo runs it, and init's answer, with the notices a person reads once.
 //
+
+/** What this runtime keeps of a confined prompt: its agent is briefed to read only the directory, and cannot write without asking. */
+export const CONFINED_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
 /** What init offered of an installed tool: its steps and judges, its steps only, or nothing, with why not. */
 export type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } | { runs: 'nothing'; reason: string };
