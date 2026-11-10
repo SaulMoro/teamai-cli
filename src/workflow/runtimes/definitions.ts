@@ -8,7 +8,7 @@ import { resolveNamespacedItems, type NamespaceCandidate } from '../../namespace
 import { resolveResourceNamespaces } from '../../resource-namespaces.js';
 import { getKnowledgeDir, getTeamaiHomeDir, JsonValueSchema, type LocalConfig } from '../../types.js';
 import { parseYaml } from '../../utils/yaml.js';
-import { parseDriver, type DriverName } from '../driver-name.js';
+import { LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
 import type { WorkflowFailure } from '../types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
@@ -218,7 +218,8 @@ async function fromTeam(config: LocalConfig, name: string): Promise<Lookup> {
  * definitions, for a run handed over from another member.
  */
 export async function resolveDriver(config: LocalConfig, name: string, { personal }: { personal: boolean }): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
-  const named = definitionName(name);
+  // `local` is no definition's name: it runs `teamai-local`, the member's, then the team's, then teamai's.
+  const named = name === LOCAL_DRIVER ? { ok: true as const } : definitionName(name);
 
   if (!named.ok) return { ok: false, failure: { code: 'driver_not_found', message: `No driver definition can be named "${name}": ${named.reason}.` } };
   const user = config.scope === 'project' ? await loadLocalConfigForScope('user', undefined, { dryRun: true }) : null;
@@ -230,7 +231,7 @@ export async function resolveDriver(config: LocalConfig, name: string, { persona
     ...(user ? [() => fromTeam(user, candidate)] : []),
   ];
 
-  for (const lookup of [...sources(name), ...(shipped === name ? [] : sources(shipped)), () => read(shippedDriverFile(shipped), 'shipped', config)]) {
+  for (const lookup of [...(name === LOCAL_DRIVER ? [] : sources(name)), ...(shipped === name ? [] : sources(shipped)), () => read(shippedDriverFile(shipped), 'shipped', config)]) {
     const found = await lookup();
 
     if (found.kind === 'found') return { ok: true, driver: found.driver };

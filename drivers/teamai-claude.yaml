@@ -3,4 +3,4 @@ name: teamai-claude
 description: Run every step on this machine, with prompt steps on Claude Code unless a step or --tools names another tool.
 tool: claude
 runtimes:
-  - use: local
+  - use: tools

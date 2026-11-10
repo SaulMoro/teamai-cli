@@ -319,7 +319,7 @@ description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from 
 runtimes:
   - use: sandbox
     options: { provider: sbx, max_parallel: 4 }   # 不写 agent：每次尝试从它自己工具的模板启动
-  - use: local                                     # 负责评判：sbx 不提供评判
+  - use: tools                                     # 负责评判：sbx 不提供评判
 ```
 
 ```sh

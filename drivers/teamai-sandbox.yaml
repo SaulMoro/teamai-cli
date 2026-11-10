@@ -4,4 +4,4 @@ description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from 
 runtimes:
   - use: sandbox
     options: { provider: sbx, max_parallel: 4 }   # no agent: each attempt starts from its own tool's template
-  - use: local                                     # takes the judge, which sbx does not offer
+  - use: tools                                     # takes the judge, which sbx does not offer

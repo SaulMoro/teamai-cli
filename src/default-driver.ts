@@ -41,7 +41,6 @@ export async function resolveDefaultDriver(config: LocalConfig, team: Pick<Teama
 type DriverHere = 'drives' | 'unaccepted' | 'absent';
 
 async function driverHere(config: LocalConfig, name: DriverName): Promise<DriverHere> {
-  if (name === 'local') return 'drives';
   const resolved = await resolveDriver(config, name, { personal: true });
 
   if (!resolved.ok) return 'absent';

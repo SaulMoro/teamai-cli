@@ -2,7 +2,7 @@
 
 > Part of the [TeamAI CLI Usage Guide](../usage-guide.md).
 
-The `t3` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each prompt step of a workflow as a [T3 Code](https://t3.codes) thread of its own. You can watch the agent work in the app, answer its approval requests, steer it with a message, or stop it. teamai still prepares the step's worktree, reads the result, and commits and pushes on your machine. Command steps and steps with `setup` run on `local`, as they do with `--driver local`.
+The `t3` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each prompt step of a workflow as a [T3 Code](https://t3.codes) thread of its own. You can watch the agent work in the app, answer its approval requests, steer it with a message, or stop it. teamai still prepares the step's worktree, reads the result, and commits and pushes on your machine. Command steps and steps with `setup` run on this machine, as they do with `--driver local`. A prompt step on a tool T3 cannot run fails `tool_unavailable` with T3's reason.
 
 It ships with teamai as the executable `teamai-runtime-t3`. `--driver t3` uses the definition teamai ships:
 
@@ -16,7 +16,6 @@ runtimes:
     options:
       environment: local
       max_parallel: 4
-  - use: local
 ```
 
 ## Quick start

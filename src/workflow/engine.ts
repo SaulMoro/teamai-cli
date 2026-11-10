@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { LOCAL_DEFINITION, LOCAL_DRIVER } from './driver-name.js';
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -1932,9 +1933,12 @@ export interface RuntimeOffer {
   unavailable?: Readonly<Record<string, string>>;
 }
 
-/** Whether `sole` is the plain local driver, which the messages of a refusal name as it always did. */
+/**
+ * Whether `sole` is the plain local driver, which the messages of a refusal name as it always did: no definition, or
+ * the local driver's own definition with one runtime in teamai's process.
+ */
 function isPlainLocal(sole: SoleDriver): boolean {
-  return sole.driver === 'local' && sole.offers.length === 1;
+  return (sole.driver === LOCAL_DRIVER || sole.driver === LOCAL_DEFINITION) && sole.offers.length === 1;
 }
 
 /**

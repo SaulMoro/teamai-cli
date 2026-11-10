@@ -941,11 +941,11 @@ async function runShortcutIn(loaded: Ready, { workflow, inputs, command, json }:
 }
 
 /**
- * The definition `--driver` names, opened, or undefined for none, `local` and `skill`, which are no definition.
- * `personal: false` skips the member's own definitions, for a run taken from another member.
+ * The definition `--driver` names, opened, `teamai-local` for `local`, or undefined for none and `skill`, which is no
+ * definition. `personal: false` skips the member's own definitions, for a run taken from another member.
  */
 async function openNamedDriver(config: LocalConfig, name: string | undefined, { personal }: { personal: boolean }): Promise<{ ok: true; opened: OpenedDriver | undefined } | { ok: false; failure: WorkflowFailure }> {
-  if (name === undefined || name === 'local' || name === 'skill') return { ok: true, opened: undefined };
+  if (name === undefined || name === 'skill') return { ok: true, opened: undefined };
   const canAsk = process.stdin.isTTY && process.stderr.isTTY;
 
   return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run', checkout: process.cwd() });
@@ -1487,8 +1487,8 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
     return;
   }
 
-  // Without --driver, the run resumes on the definition it was last driven with here, which may no longer resolve.
-  const defined = await openNamedDriver(loaded.config, options.driver ?? await resumedDriver(loaded.config, run.data), { personal: true });
+  // Without --driver, the run resumes on the definition it was last driven with here, which may no longer resolve, else on local.
+  const defined = await openNamedDriver(loaded.config, options.driver ?? await resumedDriver(loaded.config, run.data) ?? LOCAL_DRIVER, { personal: true });
 
   if (!defined.ok) {
     writeEnvelope({ error: defined.failure }, secrets);

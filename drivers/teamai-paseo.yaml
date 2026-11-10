@@ -4,4 +4,3 @@ description: Run each prompt step as an agent of the Paseo daemon on this machin
 runtimes:
   - use: paseo
     options: { max_parallel: 4 }
-  - use: local

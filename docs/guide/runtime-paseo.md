@@ -35,7 +35,6 @@ description: Run each prompt step as an agent of the Paseo daemon on this machin
 runtimes:
   - use: paseo
     options: { max_parallel: 4 }
-  - use: local
 ```
 
 It reaches the daemon your Paseo config names, as `paseo start` reads it: `daemon.listen` in `$PASEO_HOME/config.json` (`~/.paseo/config.json` by default), else `127.0.0.1:6767`. For a daemon at another address, or other options, add a definition of your own in the team repo or in `~/.teamai/drivers/`, as the examples below do.

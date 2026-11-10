@@ -6,4 +6,3 @@ runtimes:
     options:
       environment: local
       max_parallel: 4
-  - use: local

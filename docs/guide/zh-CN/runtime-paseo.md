@@ -35,7 +35,6 @@ description: Run each prompt step as an agent of the Paseo daemon on this machin
 runtimes:
   - use: paseo
     options: { max_parallel: 4 }
-  - use: local
 ```
 
 它连接你的 Paseo 配置所指的守护进程，读法与 `paseo start` 相同：`$PASEO_HOME/config.json`（默认 `~/.paseo/config.json`）中的 `daemon.listen`，没有时为 `127.0.0.1:6767`。守护进程在其他地址，或需要其他选项时，在团队仓库或 `~/.teamai/drivers/` 里添加你自己的定义，如下面的示例所示。

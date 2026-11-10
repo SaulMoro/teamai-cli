@@ -11,6 +11,7 @@ import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
+import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '../../utils/logger.js';
 import { stdioStepRuntime } from './stdio.js';
@@ -628,6 +629,11 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
   const how = { mode, canAsk, purpose, checkout };
 
   if (purpose === 'run') for (const warning of shadowedFleetEntries(driver.definition.runtimes)) log.warn(`Driver definition ${driver.file}: ${warning}`);
+
+  // A member's or the team's teamai-local replaces every run's default driver, which a run never does silently.
+  if (purpose === 'run' && name === LOCAL_DRIVER && driver.source !== 'shipped') {
+    log.info(`Driver local runs ${driver.file}, ${driver.source === 'personal' ? 'your own' : 'the team\'s'} teamai-local, in place of teamai's.`);
+  }
 
   for (const entry of driver.definition.runtimes) {
     const one = entry.through === undefined

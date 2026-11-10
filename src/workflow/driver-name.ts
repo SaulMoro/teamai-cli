@@ -14,6 +14,9 @@ export type DriverName = z.infer<typeof DriverNameSchema>;
 /** The local driver's name: the driver a start drives when neither `--driver` nor `workflows.driver` names one. */
 export const LOCAL_DRIVER = DriverNameSchema.parse('local');
 
+/** The definition the local driver runs: the member's, then the team's, then teamai's `drivers/teamai-local.yaml`. */
+export const LOCAL_DEFINITION = DriverNameSchema.parse('teamai-local');
+
 /** The driver a name stands for: one of teamai's own, or a driver definition outside it. */
 export type Driver = 'local' | 'skill' | 'none' | { external: DriverName };
 

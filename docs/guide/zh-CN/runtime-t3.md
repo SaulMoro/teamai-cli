@@ -2,7 +2,7 @@
 
 > 本文是 [TeamAI CLI 使用指南](../../usage-guide.zh-CN.md) 的一部分。
 
-`t3` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流的每个提示词步骤作为一个独立的 [T3 Code](https://t3.codes) 线程运行。你可以在应用里看 agent 工作，回应它的审批请求，发消息引导它，或者停止它。teamai 仍然在你的机器上准备步骤的 worktree、读取结果、提交并推送。命令步骤和带 `setup` 的步骤在 `local` 上运行，和 `--driver local` 一样。
+`t3` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流的每个提示词步骤作为一个独立的 [T3 Code](https://t3.codes) 线程运行。你可以在应用里看 agent 工作，回应它的审批请求，发消息引导它，或者停止它。teamai 仍然在你的机器上准备步骤的 worktree、读取结果、提交并推送。命令步骤和带 `setup` 的步骤在本机运行，和 `--driver local` 一样。T3 无法运行的工具上的提示词步骤以 `tool_unavailable` 失败，并给出 T3 的原因。
 
 它作为可执行文件 `teamai-runtime-t3` 随 teamai 一起发布。`--driver t3` 使用 teamai 自带的定义：
 
@@ -16,7 +16,6 @@ runtimes:
     options:
       environment: local
       max_parallel: 4
-  - use: local
 ```
 
 ## 快速开始

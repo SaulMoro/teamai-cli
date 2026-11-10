@@ -19,7 +19,6 @@ export type DriveOn = { kind: 'named'; name: DriverName } | { kind: 'opened'; op
 export async function driveRun(config: LocalConfig, run: string, on: DriveOn, { cwd, options }: { cwd: string; options: LocalDriverOptions }): Promise<WorkflowEnvelope> {
   if (on.kind === 'opened') return runLocalDriver(config, run, cwd, { ...options, ...definedDrive(on.opened, options.tools ?? {}) });
 
-  if (on.name === 'local') return runLocalDriver(config, run, cwd, options);
   const opened = await openDriver(config, on.name, { personal: true, mode: resolveRunMode(process.env), canAsk: process.stdin.isTTY && process.stderr.isTTY, purpose: 'run', checkout: cwd });
 
   if (!opened.ok) return { error: opened.failure };

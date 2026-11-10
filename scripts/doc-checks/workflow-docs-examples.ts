@@ -690,7 +690,9 @@ type OptionsCheck = (options: RuntimeOptions) => Promise<{ ok: true } | { ok: fa
 
 /** Each runtime teamai ships or builds in, checking a definition's options the way that runtime does at `init`. */
 const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
+  // `local` is the old name of `tools`; like the host runtime, neither takes options.
   ['local', (options) => hostStepRuntime().init({ options, mode: 'attended' })],
+  ['tools', (options) => hostStepRuntime().init({ options, mode: 'attended' })],
   ['fleet', async (options) => parseFleetOptions(options)],
   ['sandbox', async (options) => parseSandboxOptions(options)],
   ['t3', async (options) => parseT3Options(options)],
@@ -703,11 +705,11 @@ const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
  */
 const GUIDE_RUNTIMES: ReadonlySet<string> = new Set(['toy', 'threads', 'my-app', 'my-sandbox']);
 
-/** The runtimes teamai ships: `local`, and each `teamai-runtime-<name>` in package.json's `bin`. */
+/** The runtimes teamai ships: `tools`, its old name `local`, and each `teamai-runtime-<name>` in package.json's `bin`. */
 function shippedRuntimes(): string[] {
   const { bin } = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')));
 
-  return ['local', ...Object.keys(bin).flatMap((name) => /^teamai-runtime-(.+)$/.exec(name)?.[1] ?? [])];
+  return ['tools', 'local', ...Object.keys(bin).flatMap((name) => /^teamai-runtime-(.+)$/.exec(name)?.[1] ?? [])];
 }
 
 // Fails closed: a runtime teamai ships whose options this check cannot read fails it, so its guide examples are never
