@@ -64,7 +64,7 @@ async function sessionOf(config: LocalConfig, demand: SessionDemand): Promise<{ 
 
   return { error: { code: 'source_required', message: holding.length > 0
     ? `Pass --source with --session ${sessionId}: the platform that holds it. Found in: ${holding.join(', ')}.`
-    : `No installed tool holds session ${sessionId}. Pass --source <platform> to read it from one of: ${listAvailablePlatforms().join(', ')}.` } };
+    : `No installed tool holds session ${sessionId}. Pass --source <platform> to read it from one of: ${listAvailablePlatforms().join(', ')}. A workflow step's session on a step runtime is kept with its run: score it with teamai score --run <run>.` } };
 }
 
 /**

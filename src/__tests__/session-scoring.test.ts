@@ -275,6 +275,15 @@ describe('teamai score --session', () => {
     expect(fs.existsSync(path.join(root, 'judged.md'))).toBe(false);
   });
 
+  it('names --run for a session no installed tool holds, as one a workflow step ran on a runtime', async () => {
+    const config = await fixture();
+    fakeClaude('good');
+
+    expect(await tryScorer(config, { session: 'kept-in-a-tool-home', scorers: [quality()] })).toEqual({
+      error: { code: 'source_required', message: expect.stringMatching(/^No installed tool holds session kept-in-a-tool-home\. .*A workflow step's session on a step runtime is kept with its run: score it with teamai score --run <run>\.$/) },
+    });
+  });
+
   it('takes the platform of --session from its captures when they name exactly one', async () => {
     const config = await fixture();
     plantClaudeSession(path.join(root, 'app'), 'Add retries to the client');
