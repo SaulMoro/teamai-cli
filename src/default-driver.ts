@@ -8,7 +8,7 @@
  */
 import { loadTeamConfig } from './config.js';
 import type { LocalConfig, TeamaiConfig } from './types.js';
-import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
+import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
 import { resolveKeptSetting, type KeptValue } from './workflow/kept-setting.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
 import { acceptRuntime, locateRuntime } from './workflow/runtimes/sources.js';
@@ -25,10 +25,16 @@ export async function resolveDefaultDriver(config: LocalConfig, team: Pick<Teama
   const resolved = await resolveKeptSetting(config, team, 'driver', (written, file): KeptValue<Exclude<Driver, 'skill'>> => {
     const parsed = parseDriver(written);
 
-    if (parsed.ok && parsed.driver !== 'skill') return { ok: true, value: parsed.driver };
-    const reason = parsed.ok ? 'the skill driver needs a coding session, so it drives only a run started with --driver skill' : parsed.reason;
+    if (!parsed.ok) return { ok: false, warning: `Ignoring workflows.driver in ${file}: ${parsed.reason}.` };
+    const { driver } = parsed;
 
-    return { ok: false, warning: `Ignoring workflows.driver in ${file}: ${reason}.` };
+    if (driver === 'skill') return { ok: false, warning: `Ignoring workflows.driver in ${file}: the skill driver needs a coding session, so it drives only a run started with --driver skill.` };
+
+    if (driver !== 'local' && driver !== 'none' && driver.external === HOST_DRIVER) {
+      return { ok: false, warning: `Ignoring workflows.driver in ${file}: the host driver launches no AI tool, which the runs this setting starts use, so it drives only a run started with --driver host.` };
+    }
+
+    return { ok: true, value: driver };
   });
 
   if (!resolved) return { driver: 'local', text: 'local' };

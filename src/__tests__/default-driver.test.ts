@@ -87,6 +87,7 @@ describe('driveByDefault', () => {
     ['a value that is no text', '[acme]', '["acme"] is not a driver name: letters, digits, dot, underscore and hyphen, starting with a letter or digit'],
     ['fleet', 'fleet', 'fleet is a driver name teamai reserves, and no driver of it exists yet'],
     ['skill', 'skill', 'the skill driver needs a coding session, so it drives only a run started with --driver skill'],
+    ['host', 'host', 'the host driver launches no AI tool, which the runs this setting starts use, so it drives only a run started with --driver host'],
   ])('skips %s with a warning naming its file, and the next level decides', async (_case, value, why) => {
     onMachine(`workflows: { driver: ${value} }\n`);
     const config = await workspace('', 'workflows: { driver: gamma }\n');
