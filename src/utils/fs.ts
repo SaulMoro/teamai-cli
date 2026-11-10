@@ -1,3 +1,4 @@
+import { readRegularFile } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -52,11 +53,11 @@ export async function ensureDir(dir: string): Promise<void> {
 }
 
 /**
- * Read a file, return null if not found
+ * Read a file, return null if not found or not a regular file
  */
 export async function readFileSafe(filePath: string): Promise<string | null> {
   try {
-    return await fse.readFile(expandHome(filePath), 'utf-8');
+    return await readRegularFile(expandHome(filePath), 'utf-8');
   } catch {
     return null;
   }
@@ -70,7 +71,7 @@ export async function readFileSafe(filePath: string): Promise<string | null> {
  */
 export async function readFileIfExists(filePath: string): Promise<string | null> {
   try {
-    return await fse.readFile(expandHome(filePath), 'utf-8');
+    return await readRegularFile(expandHome(filePath), 'utf-8');
   } catch (error) {
     if (errnoCode(error) === 'ENOENT') return null;
     throw error;
@@ -542,7 +543,7 @@ export async function getDirLatestMtime(dirPath: string): Promise<number> {
  */
 export async function fileHash(filePath: string): Promise<string | null> {
   try {
-    const content = await fse.readFile(filePath);
+    const content = await readRegularFile(filePath);
 
     return crypto.createHash('sha256').update(content).digest('hex');
   } catch {
