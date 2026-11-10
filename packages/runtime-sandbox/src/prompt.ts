@@ -3,11 +3,10 @@ import type { OpLedger } from '@teamai/runtime-kit/ledger';
 import { redact, redactJson } from '@teamai/shared/redact';
 import type { z } from 'zod';
 import { placeOf } from './attempt-socket.js';
-import type { ExecOperations } from './exec.js';
+import { givenCredentials, type ExecOperations } from './exec.js';
 import type { Journal, Outcome } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf } from './judge.js';
 import { inSandbox, maskedAsGiven, rewrittenMasks } from './loopback.js';
-import { sandboxOf } from './provider.js';
 import type { Ready } from './runtime.js';
 import { runStep, stepToolOf } from './step.js';
 
@@ -31,7 +30,7 @@ export function prompts({ journal, ledger, env, execs, creation }: {
   creation: <T>(handle: string, work: Promise<T>) => Promise<T>;
 }) {
   const { write } = ledger;
-  const { claim, finish, replay } = execs;
+  const { accept, claim, finish, replay } = execs;
 
   /** Ends `op` failed with `failure`, before this process ran anything of it. */
   const fail = (op: OpId, failure: RuntimeFailure): void => ledger.end({ op, state: 'failed', failure });
@@ -72,28 +71,16 @@ export function prompts({ journal, ledger, env, execs, creation }: {
       return;
     }
 
-    journal.saveExec(op, { handle, runner: process.pid });
-    write({ op, event: 'accepted' });
-    const found = await sandboxOf(place, provider);
+    const id = await accept(op, { handle, place, provider });
 
-    if (!found.ok || found.id === undefined) {
-      finish(op, { state: 'failed', failure: found.ok ? { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } : found.failure });
+    if (id === undefined) return;
 
-      return;
-    }
-
-    if (journal.isCancelled(op)) {
-      finish(op, { state: 'cancelled' });
-
-      return;
-    }
-
-    // A credential the prompt withholds is not set; the lease's names win over a credential, and the attempt's tool home
-    // over both, as teamai sets an exec runtime's tool on it.
-    const given = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), host);
+    // The lease's names win over a credential, and the attempt's tool home over both, as teamai sets an exec runtime's
+    // tool on it.
+    const given = givenCredentials(request, host);
 
     const ended = await runStep({
-      request, tool: { name: lease.tool, profile }, command: instance?.command ?? extended, provider, id: found.id,
+      request, tool: { name: lease.tool, profile }, command: instance?.command ?? extended, provider, id,
       env: { ...given, ...request.env, ...place.toolHome }, masks: maskedAsGiven(request.credentials, given),
     });
 

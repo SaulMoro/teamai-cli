@@ -5,7 +5,7 @@ import type { z } from 'zod';
 import { placeOf } from './attempt-socket.js';
 import { boundedTail } from './bounded-tail.js';
 import { BOUND_MS, by } from './deadline.js';
-import type { ExecRecord, Journal, Outcome } from './journal.js';
+import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { inSandbox, maskedAsGiven, rewrittenMasks } from './loopback.js';
 import { sandboxOf, type Provider } from './provider.js';
 import type { Ready } from './runtime.js';
@@ -81,6 +81,16 @@ function maskedStream(masks: Record<string, string>) {
       return masked(last);
     },
   };
+}
+
+/** The failure of an op whose place `handle` has no sandbox open. */
+function noSandbox(handle: string): Outcome {
+  return { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } };
+}
+
+/** The credentials an exec or a prompt step gets in its sandbox: a credential it withholds is not set. */
+export function givenCredentials(request: { credentials: Record<string, string>; unset: readonly string[] }, host: Ready['host']): Record<string, string> {
+  return inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), host);
 }
 
 /** The execs and confined prompts of one runtime process, which the journal keeps and the ledger ends. */
@@ -220,6 +230,38 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
     return undefined;
   };
 
+  /**
+   * Journals `op`, which this process claimed, on `handle`, answers it accepted, and finds `place`'s sandbox: its id, or
+   * undefined once `op` ended, its sandbox gone or a cancel come meanwhile. Journaled and accepted first: a runtime that
+   * died before it kept the sandbox id leaves it to its labels, a lookup that takes the engine's time, and a cancel or a
+   * close meanwhile finds the op and keeps it from starting.
+   */
+  const accept = async (op: OpId, { handle, place, provider }: { handle: string; place: PlaceRecord; provider: Provider }): Promise<string | undefined> => {
+    journal.saveExec(op, { handle, runner: process.pid });
+    write({ op, event: 'accepted' });
+    const found = await sandboxOf(place, provider);
+
+    if (!found.ok) {
+      finish(op, { state: 'failed', failure: found.failure });
+
+      return undefined;
+    }
+
+    if (found.id === undefined) {
+      finish(op, noSandbox(handle));
+
+      return undefined;
+    }
+
+    if (journal.isCancelled(op)) {
+      finish(op, { state: 'cancelled' });
+
+      return undefined;
+    }
+
+    return found.id;
+  };
+
   const exec = async (request: ExecRequest, { provider, host }: Ready): Promise<void> => {
     const { op } = request;
     const handle = placeOf(request.handle);
@@ -237,42 +279,18 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
       return;
     }
 
-    const noSandbox: Outcome = { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } };
-
     if (place === undefined) {
-      finish(op, noSandbox);
+      finish(op, noSandbox(handle));
 
       return;
     }
 
-    journal.saveExec(op, { handle, runner: process.pid });
-    write({ op, event: 'accepted' });
-    // Journaled and accepted first: a runtime that died before it kept the sandbox id leaves it to its labels, a lookup
-    // that takes the engine's time, and a cancel or a close meanwhile finds this exec and keeps it from starting.
-    const found = await sandboxOf(place, provider);
+    const id = await accept(op, { handle, place, provider });
 
-    if (!found.ok) {
-      finish(op, { state: 'failed', failure: found.failure });
+    if (id === undefined) return;
 
-      return;
-    }
-
-    const { id } = found;
-
-    if (id === undefined) {
-      finish(op, noSandbox);
-
-      return;
-    }
-
-    if (journal.isCancelled(op)) {
-      finish(op, { state: 'cancelled' });
-
-      return;
-    }
-
-    // A credential the exec withholds is not set; a name the exec sets itself wins over a credential.
-    const scoped = inSandbox(Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name))), host);
+    // A name the exec sets itself wins over a credential.
+    const scoped = givenCredentials(request, host);
     // teamai masks what the step prints with the values it gave. A URL on this machine itself reached the step as the
     // sandbox names it, which teamai cannot know, so that value is masked here first.
     const rewritten = rewrittenMasks(request.credentials, scoped);
@@ -451,6 +469,7 @@ export function execOperations({ journal, ledger }: { journal: Journal; ledger: 
     claim,
     finish,
     replay,
+    accept,
     cancel: cancelGuarded,
     /** Marks each op of `ops` this process runs cancelled, and gives what resolves once each has ended. */
     stopIn: (ops: ReadonlyArray<{ op: OpId }>): Array<Promise<void>> => ops.flatMap(({ op }) => {
