@@ -65,7 +65,7 @@ T3, `t3.json`, a script with `runOnWorktreeCreate` writes it as the worktree is 
 The step fails, and `.setup-out` is still in the place:
 
 ```text
-Step "fix" left .setup-out in /work/teamai-fix, which the step did not report changing, so nothing was committed or pushed. If your host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.
+Step "fix" left .setup-out in /work/teamai-fix, which the step did not report changing, so nothing was committed or pushed. If your session host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.
 ```
 
 Wait for that script to finish before `adopt`, or make it write only files git ignores. `npm install` into `node_modules/` does not fail when `.gitignore` lists `node_modules/`:

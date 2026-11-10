@@ -283,11 +283,11 @@ function stoppedBeforeTheStep(code: string): boolean {
     || code === 'unreported_changes';
 }
 
-const HOST_SETUP_ADVICE = 'If your host\'s setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.';
+const SESSION_HOST_SETUP_ADVICE = 'If your session host\'s setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.';
 
 /** The failure an adopted place shows when `paths` were not part of the step's reported work. `because` is the clause after the path list. */
 export function unreportedChangesMessage(step: string, dir: string, paths: readonly string[], because: string): string {
-  return `Step "${step}" left ${paths.join(', ')} in ${dir}, ${because} ${HOST_SETUP_ADVICE}`;
+  return `Step "${step}" left ${paths.join(', ')} in ${dir}, ${because} ${SESSION_HOST_SETUP_ADVICE}`;
 }
 
 /** `message` with the sentence a failed step's message adds when its commits could not be pushed. */

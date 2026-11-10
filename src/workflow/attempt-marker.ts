@@ -66,7 +66,7 @@ export function withoutAgentEvidence(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
 /**
  * Why this process may not start or drive a workflow run: it runs inside a workflow attempt, as the marker says; or, for
  * a start, it works in a workflow's place: a worktree under `.teamai/workflow-worktrees`, or a checkout on a workflow
- * branch, the only trace a place the host made keeps.
+ * branch, the only trace a place the session host made keeps.
  */
 export type Nested =
   | { kind: 'marker'; attempt: string }

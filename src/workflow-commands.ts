@@ -1017,7 +1017,7 @@ function refusedDriverFlag(command: 'next' | 'report'): z.ZodOptional<z.ZodUndef
 
 /**
  * The flags of `workflow next` for a driver that sends `--json`: `--prepare`, with `--attempt` for an attempt already
- * leased to it and `--adopt` for the place its host made. The skill driver's flags are refused, the first given in
+ * leased to it and `--adopt` for the place its session host made. The skill driver's flags are refused, the first given in
  * this order.
  */
 const JsonNextOptionsSchema = z.object({
@@ -1032,7 +1032,7 @@ const JsonNextOptionsSchema = z.object({
   attempt: z.string().optional(),
   adopt: z.string().optional(),
 }).superRefine((options, ctx) => {
-  if (options.adopt !== undefined && options.attempt === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: '--adopt needs --attempt, the attempt whose place the host made' });
+  if (options.adopt !== undefined && options.attempt === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: '--adopt needs --attempt, the attempt whose place the session host made' });
   else if (options.attempt !== undefined && !options.prepare) ctx.addIssue({ code: z.ZodIssueCode.custom, message: '--attempt needs --prepare' });
 }).transform((options, ctx): JsonNextOptions => {
   const next: JsonNextOptions = {};

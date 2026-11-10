@@ -92,7 +92,7 @@ const PlaceFields = {
   /** The checkout the place belongs to: a copy is one of its worktrees. */
   root: z.string(),
   dir: z.string(),
-  /** The host made the place at `dir`, whatever the lease does there, so TeamAI never removes it. */
+  /** The session host made the place at `dir`, whatever the lease does there, so TeamAI never removes it. */
   adopted: z.literal(true).optional(),
   interactive: z.literal(true).optional(),
   readOnly: z.literal(true).optional(),
@@ -108,7 +108,7 @@ const PlaceRecordSchema = z.discriminatedUnion('phase', [
   /**
    * Git is not done in the copy at `dir`. Recorded before git touches it, so the next prepare of an attempt killed
    * meanwhile knows what this one did there: `created` when the copy is new to TeamAI, so its setup still runs: one
-   * that did not exist, or one the host made that no earlier attempt of the run finished in; and a writer's
+   * that did not exist, or one the session host made that no earlier attempt of the run finished in; and a writer's
    * `rangeFrom` once the copy is open, taken before any merge, so the merges stay in the step's changes.
    */
   z.object({ ...PlaceFields, phase: z.literal('opening'), created: z.literal(true).optional(), rangeFrom: z.string().optional() }),

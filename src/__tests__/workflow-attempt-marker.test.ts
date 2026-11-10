@@ -36,7 +36,7 @@ describe('nested workflow starts', () => {
     expect(await nestedStart({}, dir)).toEqual({ kind: 'worktree-path', dir, checkout: main });
   });
 
-  it('refuses a start in a checkout on a workflow branch, as a place the host made is, and not on a branch that only looks like one', async () => {
+  it('refuses a start in a checkout on a workflow branch, as a place the session host made is, and not on a branch that only looks like one', async () => {
     const main = checkout();
     execFileSync('git', ['switch', '-q', '-c', 'teamai/r0123456789abcdef/work/p1'], { cwd: main });
     expect(await nestedStart({}, main)).toEqual({ kind: 'workflow-branch', dir: main, branch: 'teamai/r0123456789abcdef/work/p1' });

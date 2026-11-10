@@ -228,7 +228,7 @@ describe('workflow next, report, start and resume without --driver skill', () =>
     ['next', { takeover: true }, '--takeover needs --driver skill'],
     ['next', { choice: 'h1' }, '--choice needs --driver skill'],
     ['next', { ack: 'dispatch.a00000000' }, '--ack needs --driver skill'],
-    ['next', { adopt: '/place' }, '--adopt needs --attempt, the attempt whose place the host made'],
+    ['next', { adopt: '/place' }, '--adopt needs --attempt, the attempt whose place the session host made'],
     ['next', { attempt: 'bogus' }, '--attempt needs --prepare'],
     ['next', { prepare: true, attempt: 'bogus' }, '--attempt takes the attempt of a lease, such as a1b2c3d4e; got bogus'],
     ['report', { driver: 'local' }, 'report takes --driver skill, not --driver local'],

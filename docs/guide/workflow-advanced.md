@@ -2157,7 +2157,7 @@ A driver can leave the workspace and its git to TeamAI. `next <run> --prepare --
 
 `report` then finishes the attempt. It commits, pushes, and fills `changes` or `read` itself, so a report of a prepared attempt that carries `changes` or `read` answers `invalid_report`. TeamAI removes the worktree only after it accepts a successful report whose answer allows cleanup. A failed attempt keeps its work for a retry.
 
-To prepare an attempt the driver already leased, run `next <run> --prepare --attempt <attempt>`. It answers `wrong_attempt` when the run no longer leases that attempt to the driver. With `--adopt <dir>`, the attempt runs in a place the host made: a clean worktree of this repository on the lease's workspace branch, or detached at its start, as `git worktree add` makes it. A place that does not fit answers `adopt_mismatch`, and the attempt stays leased. TeamAI commits and pushes there as in its own worktree, and never removes the place.
+To prepare an attempt the driver already leased, run `next <run> --prepare --attempt <attempt>`. It answers `wrong_attempt` when the run no longer leases that attempt to the driver. With `--adopt <dir>`, the attempt runs in a place the session host made: a clean worktree of this repository on the lease's workspace branch, or detached at its start, as `git worktree add` makes it. A place that does not fit answers `adopt_mismatch`, and the attempt stays leased. TeamAI commits and pushes there as in its own worktree, and never removes the place.
 
 A prompt step's child lists every path it changed, relative to the place, on `changed` in `attempts/<attempt>/result.json`. A rename lists both paths. TeamAI commits those paths. A path git would commit that is missing from the list fails the step with `unreported_changes`: nothing is committed or pushed, and the file stays. That is also the failure when the step ran and reported a failure of its own. A failure from before the step ran, such as a model this session cannot run, stays that failure, and the file is still not committed. A file the preparation merge staged, and that the step left as the merge wrote it, is part of that merge. It does not have to be in the list.
 
@@ -2192,7 +2192,7 @@ T3 runs each `t3.json` script with `runOnWorktreeCreate` the same way:
 The step then fails:
 
 ```text
-Step "fix" left .setup-out in /work/teamai-fix, which the step did not report changing, so nothing was committed or pushed. If your host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.
+Step "fix" left .setup-out in /work/teamai-fix, which the step did not report changing, so nothing was committed or pushed. If your session host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.
 ```
 
 An install into an ignored directory does not fail. With `node_modules/` in `.gitignore`, this Paseo setup leaves the install in the place and out of the commit:

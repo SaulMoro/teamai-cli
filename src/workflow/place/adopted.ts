@@ -1,5 +1,5 @@
 /**
- * A place the host made for a lease, which TeamAI adopts as the copy of the lease's branch instead of creating one. The
+ * A place the session host made for a lease, which TeamAI adopts as the copy of the lease's branch instead of creating one. The
  * checks change nothing, so a refused place costs the attempt nothing, and TeamAI never adds or removes the worktree.
  */
 import fs from 'node:fs/promises';
@@ -13,7 +13,7 @@ import type { PlaceRecord } from './record.js';
 interface Adoption {
   /** The checkout the run started from. */
   root: string;
-  /** The place the host made. */
+  /** The place the session host made. */
   dir: string;
   run: string;
   attempt: string;
@@ -23,7 +23,7 @@ interface Adoption {
 /**
  * Why attempt `lease.attempt` cannot adopt `adopt`, as the message `adopt_mismatch` answers with, or undefined when it
  * can, or adopts nothing. A place recorded for the attempt answers for itself, so only that place may be adopted again.
- * A lease in the checkout adopts none, and a reader only `hosted`, the place the host made for its branch.
+ * A lease in the checkout adopts none, and a reader only `hosted`, the place the session host made for its branch.
  */
 export async function adoptRefusal(input: {
   /** The checkout the run started from. */

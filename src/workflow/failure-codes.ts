@@ -49,7 +49,7 @@ export const FAILURE_CODES = [
   'unattended_denied',
   // Refusals of a workflow command from inside a workflow attempt, or of a start from a workflow's place.
   'nested_workflow',
-  // A place the host made that a prepare cannot adopt; the attempt stays leased.
+  // A place the session host made that a prepare cannot adopt; the attempt stays leased.
   'adopt_mismatch',
   // Refusals of a --driver skill call, answered to the agent with the command it can run instead.
   'confirm_needed', 'needs_local_driver', 'not_skill_run', 'orchestrator_active', 'choice_pending', 'unknown_choice', 'unknown_offer', 'unknown_attempt', 'not_dispatched', 'tool_needed',

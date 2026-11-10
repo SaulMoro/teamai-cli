@@ -63,8 +63,8 @@ export function placeOf(lease: { cwd?: string; workspace?: WorkspaceContract }, 
 }
 
 /**
- * The attempt among `others` that holds the place `lease` would get under `root`, the place the host made for its
- * branch, or the place the host made at `adopt`, with the place it holds: one whose prepare began there and whose place
+ * The attempt among `others` that holds the place `lease` would get under `root`, the place the session host made for its
+ * branch, or the place the session host made at `adopt`, with the place it holds: one whose prepare began there and whose place
  * is not finished or given up, so a prepare killed before its git was done still holds it. Two attempts of one driver
  * never share a place.
  */
@@ -86,7 +86,7 @@ export async function placeHeldBy(input: { config: LocalConfig; run: RunId; root
 }
 
 /**
- * The place the host made that the last attempt of `run` to finish on `branch` was prepared in: every later lease on
+ * The place the session host made that the last attempt of `run` to finish on `branch` was prepared in: every later lease on
  * that branch goes on there while it passes the adopt checks, as one goes on in a worktree TeamAI made.
  */
 export async function adoptedPlaceOf(input: { config: LocalConfig; run: RunId; branch: string }): Promise<string | undefined> {
@@ -145,7 +145,7 @@ export function placeLeaseOf(lease: LeaseWire): PlaceLease {
 
 /**
  * The directory the step runs in, and its prompt with what the place adds to it: a merge conflict to resolve. `refused`
- * when the place the host made cannot be adopted, which leaves the attempt as it was.
+ * when the place the session host made cannot be adopted, which leaves the attempt as it was.
  */
 export type PlacePrepared =
   | { kind: 'prepared'; dir: string; prompt?: string }
@@ -207,8 +207,8 @@ function baseOf(record: Placed): PlaceRecordBase {
  * other gets the worktree of its branch, with its start, merges and the base agent configuration in place, and setup
  * left to `runPlaceSetup`. A second prepare of the attempt returns the recorded place, unless it was abandoned: then
  * the place is as prepare found it, and a resumed lease whose step stopped prepares it again. A prepare killed before
- * the place is ready is finished by the next. With `adopt`, a writer's copy is the place the host made there, once
- * `adoptRefusal` accepts it. Without it, a lease on a branch whose last attempt finished in a place the host made goes
+ * the place is ready is finished by the next. With `adopt`, a writer's copy is the place the session host made there, once
+ * `adoptRefusal` accepts it. Without it, a lease on a branch whose last attempt finished in a place the session host made goes
  * on there while that place passes the same checks, and TeamAI makes the copy once it does not.
  */
 export async function preparePlace(input: { config: LocalConfig; lock: RunLock; root: string; lease: PlaceLease; adopt?: string }): Promise<PlacePrepared> {
@@ -279,12 +279,12 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
   // While the host's place has the branch checked out, git refuses TeamAI's own worktree of it, so the failure leads with
   // why that place was passed over.
   const explained = (opening: WorkflowFailure): WorkflowFailure => adopt === undefined && hosted !== undefined && passedOver !== undefined
-    ? { ...opening, message: `TeamAI did not go on in ${hosted}, the place the host made for branch ${workspace.branch}: ${passedOver} Making its own worktree of the branch failed too: ${opening.message}` }
+    ? { ...opening, message: `TeamAI did not go on in ${hosted}, the place the session host made for branch ${workspace.branch}: ${passedOver} Making its own worktree of the branch failed too: ${opening.message}` }
     : opening;
 
   const prepared: PlacePrepared = 'code' in opened ? { kind: 'failed', failure: explained(opened) } : await stageRole({ config, base, lease, workspace, ...opened });
 
-  // The step does not run in a place the host made whose prepare failed, so the host's own hooks run there again.
+  // The step does not run in a place the session host made whose prepare failed, so the session host's own hooks run there again.
   if (prepared.kind === 'failed' && adopt !== undefined) await clearWorktreeHooks(adopt);
 
   return prepared;
@@ -439,7 +439,7 @@ async function recordedResult(config: LocalConfig, recorded: PlaceRecord | undef
 
 /**
  * Opens the copy of `workspace.branch`: `reopened`, the one a killed prepare recorded `opening`, else `adopt`, else the
- * worktree of the branch. `hosted` is the place the host made that the branch's last attempt finished in. The
+ * worktree of the branch. `hosted` is the place the session host made that the branch's last attempt finished in. The
  * `opening` record comes before git touches the copy.
  */
 async function openCopy(input: {
@@ -679,7 +679,7 @@ export type SetupOn = (setup: { command: string; dir: string; env: Record<string
 /**
  * Runs the setup of a place `preparePlace` left `staged`, with the team env resolved for it, then makes it ready.
  * Setup gets its own keys and none of the step's, the attempt marker and the run's `mode`. `signal` stops setup, which then fails, and the worktree it was
- * preparing is removed, or, when the host made it, gets the branch agent files back. Nothing to do for any other place.
+ * preparing is removed, or, when the session host made it, gets the branch agent files back. Nothing to do for any other place.
  * `on` runs setup's command on the step's runtime instead of here: it gets setup's keys over the runtime's own
  * environment, without the names setup withholds, and brings setup's work back before the checks read it.
  */
@@ -694,7 +694,7 @@ export async function runPlaceSetup(input: { config: LocalConfig; run: RunId; at
   const scoped = await stepEnvironment(env, scope);
 
   if (!scoped.ok) return setupFailed(config, recorded, scoped.failure);
-  // The mark stays in the place until setup finishes, so a place the host made is not adopted again after a setup that did not.
+  // The mark stays in the place until setup finishes, so a place the session host made is not adopted again after a setup that did not.
   await markSetup(recorded.dir, 'unfinished');
   const settingUp: SettingUp = { ...baseOf(recorded), phase: 'setting-up' };
   await writePlaceRecord(config, settingUp);
@@ -723,7 +723,8 @@ async function setupFailed(config: LocalConfig, record: Extract<PlaceRecord, { p
 
 /**
  * Gives up the place of a setup that failed or was cut short: the worktree prepare created is removed, and a place
- * the host made gets the branch agent files back. `unrestored` is the sentence a failure adds when they are not back.
+ * the session host made gets the branch agent files back. `unrestored` is the sentence a failure adds when they are
+ * not back.
  */
 async function giveUpSetup(config: LocalConfig, record: Extract<PlaceRecord, { phase: 'staged' }> | SettingUp): Promise<{ abandoned: PlaceRecord; unrestored?: string }> {
   const { place, dir } = record;
@@ -849,7 +850,7 @@ export async function finishPlace(input: {
   const finished = await finishRole(config, placeFiles(config, run, attempt), recorded, end, input.changed);
   await writePlaceRecord(config, { ...baseOf(recorded), phase: 'finished', at: new Date().toISOString(), finished: PlaceFinishedSchema.parse(redactJson(finished, secrets)) });
 
-  // Once the step's work is committed, the host's own hooks run again in a place it made.
+  // Once the step's work is committed, the session host's own hooks run again in a place it made.
   if (recorded.adopted) await clearWorktreeHooks(recorded.dir);
 
   return finished;
@@ -1047,7 +1048,7 @@ export async function abandonPlace(input: { config: LocalConfig; lock: RunLock; 
   if (!recorded || recorded.phase === 'finished' || recorded.phase === 'abandoned' || recorded.phase === 'retired' || recorded.phase === 'kept') return undefined;
   const { dir } = recorded;
 
-  // Once the place is put back, the host's own hooks run again in a place it made.
+  // Once the place is put back, the session host's own hooks run again in a place it made.
   const left = async (unrestored: string | undefined): Promise<string | undefined> => {
     if (recorded.adopted) await clearWorktreeHooks(dir);
 
@@ -1236,7 +1237,7 @@ export async function placeRecorded(input: { config: LocalConfig; run: RunId; at
 
 /**
  * After an accepted success with `cleanup`: removes the worktree prepare created, and the role it ran with. A step in
- * the checkout leaves it, and so does one in a place the host made, a reader's included.
+ * the checkout leaves it, and so does one in a place the session host made, a reader's included.
  */
 export async function releasePlace(input: { config: LocalConfig; lock: RunLock; attempt: AttemptId }): Promise<'removed' | 'left'> {
   const read = await readPlaceRecord(input.config, input.lock.run, input.attempt);
@@ -1255,7 +1256,7 @@ export async function releasePlace(input: { config: LocalConfig; lock: RunLock; 
   }
 
   if (!recorded || recorded.phase === 'opening' || !isWorktreeCopy(recorded.place)) return 'left';
-  // The role it ran with goes with the copy, and from a place the host made, which it leaves.
+  // The role it ran with goes with the copy, and from a place the session host made, which it leaves.
   await releaseWorktreeRole(recorded.dir);
 
   if (recorded.adopted) return 'left';

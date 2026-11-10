@@ -426,7 +426,7 @@ steps:
   });
 });
 
-describe('places the host made', () => {
+describe('places the session host made', () => {
   const SETUP = (command: string) => `schemaVersion: v1alpha1
 name: build
 description: Build in a set-up place the host makes.
@@ -486,7 +486,7 @@ steps:
     fs.writeFileSync(path.join(dir, 'code.txt'), 'step\n');
     fs.writeFileSync(path.join(dir, '.setup-out'), 'host\n');
     const answer = await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver }, { changed: ['code.txt'] });
-    const message = `Step "fix" left .setup-out in ${dir}, which the step did not report changing, so nothing was committed or pushed. If your host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.`;
+    const message = `Step "fix" left .setup-out in ${dir}, which the step did not report changing, so nothing was committed or pushed. If your session host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.`;
 
     expect(answer).toMatchObject({ data: { accepted: true, step: { status: 'failed', failure: { code: 'unreported_changes', message } } } });
     expect(git(dir, 'rev-parse', 'HEAD')).toBe(lease.workspace.start.commit);
@@ -555,7 +555,7 @@ steps:
     expect(await f.client.next(f.runId, body(f), { prepare: { attempt: lease.attempt, adopt: dir } })).toMatchObject({ data: { lease: { cwd: dir } } });
     fs.writeFileSync(path.join(dir, '.setup-out'), 'host\n');
     fs.writeFileSync(path.join(dir, 'extra.txt'), 'also\n');
-    const message = `Step "fix" left .setup-out, extra.txt in ${dir}, which the step did not report changing, so nothing was committed or pushed. If your host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.`;
+    const message = `Step "fix" left .setup-out, extra.txt in ${dir}, which the step did not report changing, so nothing was committed or pushed. If your session host's setup wrote it, make setup write only files git ignores, or wait for it to finish before adopt. Otherwise remove it, then retry the step.`;
 
     expect(await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver }, { changed: [] }))
       .toMatchObject({ data: { accepted: true, step: { status: 'failed', failure: { code: 'unreported_changes', message } } } });
@@ -739,7 +739,7 @@ steps:
       },
       answer: { error: { code: 'lease_cancelled' } },
     },
-  ])('leaves a place the host made with its own hooks when its step $end', async ({ report, answer }) => {
+  ])('leaves a place the session host made with its own hooks when its step $end', async ({ report, answer }) => {
     const f = await fixture();
     const lease = await leased(f);
     const dir = lease.host('ended', '--detach');
@@ -851,7 +851,7 @@ steps:
     expect(fs.readFileSync(path.resolve(dir, git(dir, 'rev-parse', '--git-path', 'setup-runs')), 'utf8')).toBe('ran\n');
   });
 
-  it('goes on in the place the host made for a later command and reader on its branch, and leaves it after the last with its own hooks', async () => {
+  it('goes on in the place the session host made for a later command and reader on its branch, and leaves it after the last with its own hooks', async () => {
     const f = await fixture(`schemaVersion: v1alpha1
 name: build
 description: Write a change, check it, then review it, in a place the host makes.
@@ -895,7 +895,7 @@ steps:
     expect(git(dir, 'config', '--worktree', '--default', '', '--get', 'core.hooksPath')).toBe('');
   });
 
-  it('says why the place the host made was passed over when the copy TeamAI then makes of its branch fails', async () => {
+  it('says why the place the session host made was passed over when the copy TeamAI then makes of its branch fails', async () => {
     const f = await fixture(`schemaVersion: v1alpha1
 name: build
 description: Write a change, then check it, in a place the host makes.
@@ -928,7 +928,7 @@ steps:
     const check = await lease();
     expect(await withRunLock(f.config, run, (lock) => f.client.prepare(lock, check.raw), { waitMs: 0 })).toEqual({ kind: 'failed', failure: {
       code: 'workspace_base',
-      message: expect.stringMatching(new RegExp(`^TeamAI did not go on in ${dir}, the place the host made for branch ${write.workspace.branch}: ${dir} has changes the step would commit \\(\\?\\? stray\\.txt\\).* Making its own worktree of the branch failed too: .*already used by worktree`, 's')),
+      message: expect.stringMatching(new RegExp(`^TeamAI did not go on in ${dir}, the place the session host made for branch ${write.workspace.branch}: ${dir} has changes the step would commit \\(\\?\\? stray\\.txt\\).* Making its own worktree of the branch failed too: .*already used by worktree`, 's')),
     } });
   });
 
