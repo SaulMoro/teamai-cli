@@ -48,7 +48,7 @@ import { memberTools } from '../../tool-launch/member-tools.js';
 import { launchExecutableOf } from '../../tool-launch/tools.js';
 import { driverIdentity } from '../../driver-identity.js';
 import { stepEnvironment, withRunningCli } from '../../env-exec.js';
-import { resolveRunMode } from '../../launch-context.js';
+import { resolveRunMode, WORKFLOW_DIR_ENV } from '../../launch-context.js';
 import { archiveSessions, openSessionArchive } from '../../session-flow/archive.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
 import { JsonValueSchema, type JsonValue } from '../../utils/json.js';
@@ -911,7 +911,8 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
     const result = path.dirname(attemptResultPath(config, run, attempt));
     const runDir = runScratchDir(config, run);
     await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
-    const opened = await running.open({ worktree: work, readonly: [path.join(work, '.git')], result, runDir, toolHome: {} });
+    const folder = WorkflowFolder.named(config, env[WORKFLOW_DIR_ENV]);
+    const opened = await running.open({ worktree: work, readonly: [path.join(work, '.git'), ...folder === undefined ? [] : [folder]], result, runDir, toolHome: {} });
 
     if (!opened.ok) return failed(opened.failure.message);
 

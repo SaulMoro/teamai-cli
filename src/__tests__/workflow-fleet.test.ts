@@ -11,7 +11,7 @@ import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRu
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { CANCEL_WRITE_MS, cancelFleetAttempt, fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
-import { RuntimeOptionsSchema, WAKE_COMMAND } from '@teamai/runtime-protocol';
+import { RuntimeOptionsSchema, WAKE_COMMAND, type PlaceView } from '@teamai/runtime-protocol';
 import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { newOpId, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
@@ -637,6 +637,23 @@ describe('a member taking an attempt', () => {
     const to = record?.state === 'finished' ? record.result.to ?? '' : '';
     git(alice.checkout, 'fetch', '-q', 'origin', to);
     expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
+  });
+
+  // A runtime that runs the step elsewhere, such as a sandbox, makes only what the place names reachable there.
+  it('names the workflow folder among the read-only paths of the place it opens on its own step runtime', async () => {
+    const local = hostStepRuntime();
+    const views: PlaceView[] = [];
+    const runtime: StepRuntime<DriverCan> = { ...local, open: (request, events) => {
+      if (request.view) views.push(request.view);
+
+      return local.open(request, events);
+    } };
+    const folder = { 'WORKFLOW.yaml': MARK.replace('echo written > "$MARK"', 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"'), 'mark.txt': 'written\n' };
+
+    const { taken } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"' }; }, undefined, { folder }, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+    expect(views).toEqual([expect.objectContaining({ readonly: expect.arrayContaining([expect.stringMatching(/[\\/]workflows[\\/]folders[\\/][0-9a-f]{64}$/)]) })]);
   });
 
   it('refuses a step of a workflow a from step admitted, naming that step, and runs nothing', async () => {
