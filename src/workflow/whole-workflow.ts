@@ -39,6 +39,10 @@ export function wholeFit(
 
     return inner.prompt === undefined ? [] : [{ step: inner, executor: 'prompt', requires: inEffect(inner) }];
   });
+  // A step that requires the host is pinned to this machine (`isPinnedToHost`), as `notWhole` keeps the derived pins here.
+  const pinned = runs.find((run) => run.requires.host === true);
+
+  if (pinned !== undefined) return { unfit: `step "${pinned.step.id}" runs only on this machine` };
 
   return { child: file, runs };
 }
