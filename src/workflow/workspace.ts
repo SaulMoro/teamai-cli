@@ -4,7 +4,7 @@
  */
 import { z } from 'zod';
 import { sameDriver } from '../driver-identity.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { jsonType } from './expression.js';
 import { itemsAfter, itemsOf } from './fan-out.js';
 import { isUnder, passesWithin, runPasses, type RunPass } from './loop.js';

@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import { ImportInputError } from './import-from-repo.js';
 import type { Install } from './locate.js';
-import type { JsonValue } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import type { ShortcutEnd } from './workflow-commands.js';
 import { listFilesRecursive, readFileSafe, writeFile, ensureDir } from './utils/fs.js';
 import { log } from '@teamai/shared/log';

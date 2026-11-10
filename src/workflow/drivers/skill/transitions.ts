@@ -4,7 +4,7 @@
  * are the tables under `## The skill driver` in docs/dev/workflow-engine.md, cell by cell.
  */
 import type { RunMode } from '../../../launch-context.js';
-import type { JsonValue } from '../../../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import type { ScoredLabels } from '../../../scorers/engine-hooks.js';
 import type { ToolId } from '../../../tools.js';
 import type { Judging, PersonHandoff, RunReadied, RunVersion, StartedRun } from '../../protocol.js';

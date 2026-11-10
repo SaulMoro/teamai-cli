@@ -6,14 +6,13 @@
  * Ansible loop stay as written.
  */
 import { z } from 'zod';
-import type { JsonValue } from '../types.js';
+import { type JsonValue, isJsonObject } from '@teamai/shared/json';
 import {
   evaluateExpression, expressionPaths, parseExpression, parseFields, resolvePath, schemaAt,
   readsLikeExpression, type Expression, type ExpressionContext, type ExpressionPath, type PathField,
 } from './expression.js';
 import type { StepState } from './step-state.js';
 import type { OutputSchema, WorkflowFailure, WorkflowStep } from './types.js';
-import { isJsonObject } from '../types.js';
 
 /** A `{{ with.<name>… }}` read: a value the step's own `with` names. Only templates read it; an `if` cannot. */
 export interface WithPath {

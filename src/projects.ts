@@ -8,7 +8,8 @@ import {
   HAND_DECLARED_RESOURCE_TYPES, HandDeclaredNamespaceFields, type NamespaceEntry, parseManifestOnce,
 } from './manifest-schema.js';
 import { loadRolesManifest, loadRolesManifestIfPresent, resolveRoleResourceNamespaces, type ResourceNamespaces } from './roles.js';
-import type { JsonValue, LocalConfig } from './types.js';
+import type { LocalConfig } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 
 /**
  * Project resource types. Unlike roles, `learnings` is an ACTIVE dimension here:

@@ -4,9 +4,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { lstat, readdir, realpath, rm } from 'node:fs/promises';
 import { z } from 'zod';
-import { readJson, readJsonObject, writeJson, writeJsonKeepingComments, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
+import { readJson, readJsonObject, writeJson, writeJsonKeepingComments, readFileSafe, writeFile, ensureDir, pathExists } from './utils/fs.js';
 import { log } from '@teamai/shared/log';
-import { mapStrings, type JsonSyntax } from '@teamai/shared/json';
+import { mapStrings, type JsonSyntax, isJsonObject, JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import {
   COPILOT_TOOL_ID,
   TEAMAI_HOOK_DESCRIPTION_PREFIX,
@@ -21,8 +21,7 @@ import {
   hookToolPathsForConfig,
   toolGateRoot,
 } from './types.js';
-import { isJsonObject, JsonValueSchema } from './types.js';
-import type { HookDef, JsonValue, TeamaiConfig, LocalConfig, ManagedMcpManifest, Scope } from './types.js';
+import type { HookDef, TeamaiConfig, LocalConfig, ManagedMcpManifest, Scope } from './types.js';
 import type { ToolId } from './tools.js';
 import {
   CODEX_TOOL_ID,
@@ -46,7 +45,7 @@ import { DeliveredFolders } from './resources/delivered-folders.js';
 import { deliverHookFolders, historicalFolderHookDef, pruneHookFolders, parseTeamHooks, readBuiltinOverride, resolveTeamHooks, teamHookToDef } from './resources/hooks.js';
 import { entryLayout } from './namespaced-entries.js';
 import { historicalContents } from './utils/team-history.js';
-import { getUserHome } from '@teamai/shared/home';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { LEGACY_CLAUDE_HOOK_OTHER_HOST_SKIP, claudeHookOtherHostSkip, claudeHookUsesPowerShell, copilotRunsEntries } from './claude-hook-host.js';
 import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { staleWorkspaces } from './utils/partition.js';

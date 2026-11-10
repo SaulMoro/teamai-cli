@@ -11,8 +11,9 @@ import { readEvents, dataHomeKey, isHumanPromptEntry, TranscriptEntrySchema, typ
 import { readFileSafe, ensureDir, pathExists, readJson } from './utils/fs.js';
 import { log } from '@teamai/shared/log';
 import type { RequestCostMetrics } from './types.js';
+import { JsonObjectSchema } from '@teamai/shared/json';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
-import { getDataHome, getTeamaiHomeDir, JsonObjectSchema } from './types.js';
+import { getDataHome, getTeamaiHomeDir } from './types.js';
 import { emptyTokenUsage } from '@teamai/tool-core/tokens';
 import { projectsRootDir } from './utils/partition.js';
 import { parseDailySnapshot, SnapshotCountSchema, type DailySessionSnapshot, type ReportedDailySessions } from './session-trends.js';

@@ -14,8 +14,9 @@ import { SessionOutcomes, type FoldInput } from './session-outcomes.js';
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from '@teamai/shared/log';
 import type { UserStats, UserModeStats, UserInterventionStats, SessionMetrics, DashboardEvent, LocalConfig, RequestCostMetrics, UserVotesV2 } from './types.js';
+import { JsonValueSchema, JsonObjectSchema } from '@teamai/shared/json';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
-import { getVotesDir, getDataHome, getReportsDir, usesBranchWorktree, JsonValueSchema, parseUserStats, JsonObjectSchema } from './types.js';
+import { getVotesDir, getDataHome, getReportsDir, usesBranchWorktree, parseUserStats } from './types.js';
 import { emptyTokenUsage, addTokenUsage } from '@teamai/tool-core/tokens';
 import { filterEventsByScope, runsOfLog } from './dashboard-scope.js';
 import {

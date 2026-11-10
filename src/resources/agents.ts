@@ -5,7 +5,7 @@ import matter from 'gray-matter';
 import { z } from 'zod';
 import { holdsMarker, unreadMarker } from '../folder-markers.js';
 import { ResourceHandler, type PlacementRecords, type ScanForPushOptions } from './base.js';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../types.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel, Scope } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, fileContentEqualToBuffer, getFileMtime, writeFile, readFileSafe, fileHash } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';

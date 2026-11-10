@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { getCurrentVersion } from '../package-info.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { writeFileAtomic } from './fs.js';
 import { log } from '@teamai/shared/log';
 

@@ -1,4 +1,4 @@
-import type { JsonValue } from '../../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

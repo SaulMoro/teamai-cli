@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { loadMemberSettings, ownMemberSettings } from '../config.js';
 import { getDataHome, getUserConfigPath, installScopeName, type LocalConfig } from '../types.js';
-import { expandHome } from '../utils/fs.js';
+import { expandHome } from '@teamai/shared/home';
 
 /** Where the member names the tool for teamai's AI work, the most specific first. */
 export type MemberToolSource = 'TEAMAI_AI_TOOL' | 'ai.tool (project)' | 'ai.tool (machine)';

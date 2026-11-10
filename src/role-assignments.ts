@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseYaml } from '@teamai/shared/yaml';
-import type { JsonValue } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { z } from 'zod';
 import { caseFoldKey, emptyManifestError, parseManifest, parseManifestOnce, readManifestFile } from './manifest-schema.js';
 import { getDefaultBranch, getFileContentAtRev, getHeadCommit, readFileAtRev } from './utils/git.js';

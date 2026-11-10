@@ -76,6 +76,7 @@ const SKILL_IMPORTS = {
   'src/launch-context.ts': { names: ['resolveRunMode', 'RunMode', 'RUN_MODES', 'RunModeSchema'] },
   'src/utils/fs.ts': {},
   'src/types.ts': { typeOnly: true },
+  '@teamai/shared/json': { typeOnly: true },
   // The usage limits a run's tools hit, which the skill driver keeps between calls and holds steps on as the local driver does.
   'src/workflow/usage-limits.ts': { names: ['UsageLimits', 'KeptLimitSchema', 'KeptLimit', 'WhenIdle'] },
   // The command a failure names to retry its step, which every driver spells the same way.

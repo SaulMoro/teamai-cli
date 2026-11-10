@@ -8,7 +8,7 @@
 import https from 'node:https';
 import { z } from 'zod';
 
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 
 // ─── 常量 ──────────────────────────────────────────────────

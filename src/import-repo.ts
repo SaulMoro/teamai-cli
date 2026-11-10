@@ -16,7 +16,7 @@ import { log } from '@teamai/shared/log';
 import { hasFrontmatter, stripFrontmatter } from './utils/frontmatter.js';
 import { resolveTeamwiki } from './utils/teamwiki-root.js';
 import { SourceManifestSchema } from './wiki-engine/code-knowledge/code-collector.js';
-import { JsonObjectSchema } from './types.js';
+import { JsonObjectSchema } from '@teamai/shared/json';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Cross-Repo Edge Detection ─────────────────────────

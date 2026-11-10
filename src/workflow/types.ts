@@ -13,7 +13,7 @@ import type { ConfinedLease } from './lease-wire.js';
 import type { StepModel } from './step-model.js';
 import type { RunId } from './store.js';
 import type { ClonePlace } from './clone.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import type { DriverName } from './driver-name.js';
 
 /** The driver's lease ownership, independent of its per-request capabilities. */

@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncOptions, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { spawnCommand, spawnCommandSync } from '@teamai/shared/exec';
 import { z } from 'zod';
-import type { JsonValue } from '../../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { isInteractive } from '../../utils/prompt.js';

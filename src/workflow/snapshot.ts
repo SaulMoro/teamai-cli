@@ -6,7 +6,7 @@ import { RunOriginSchema } from '../default-workflows.js';
 import { RunModeSchema } from '../launch-context.js';
 import { canonicalJson } from '../utils/canonical-json.js';
 import { redact } from '@teamai/shared/redact';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { isRecord } from './expression.js';
 import { CommitIdSchema, DeliveryReceiptSchema, UnresolvedCreateSchema } from './delivery-schema.js';
 import { privateSteps } from './scope.js';

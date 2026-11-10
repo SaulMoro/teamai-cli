@@ -33,7 +33,6 @@ vi.mock('../utils/fs.js', async (importOriginal) => ({
     listDirs: vi.fn().mockResolvedValue([]),
     listFiles: vi.fn().mockResolvedValue([]),
     listFilesRecursive: vi.fn().mockResolvedValue([]),
-    expandHome: vi.fn((p: string) => p),
     symlinkTarget: vi.fn(async (p: string) => p),
 }));
 

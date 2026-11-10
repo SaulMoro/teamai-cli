@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { composedOffer, composedStepRuntime, nestedOptions } from '../workflow/runtimes/composed.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { newOpId, type Initialized, type OpenRequest, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';

@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from './types.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { shellQuoteValue } from './utils/shell-profile.js';
 import { findGitBashWindows } from './bundled-runtime.js';
 import { readRegularFileSync } from '@teamai/shared/regular-file';

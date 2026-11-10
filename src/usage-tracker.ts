@@ -10,10 +10,10 @@ import {
   getTeamaiHomeDir,
   HookPayloadSchema,
   SKILL_NAME_REGEX,
-  type JsonValue,
   type LocalConfig,
   type UsageEvent,
 } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { readJson, writeJson, writeFileAtomic, pathExists } from './utils/fs.js';
 import { appendJsonl, readJsonl, rewriteJsonl, type JsonlStoreOptions } from './utils/jsonl-store.js';
 import { getUserHome } from '@teamai/shared/home';

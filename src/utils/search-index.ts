@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import matter from 'gray-matter';
 import { z } from 'zod';
-import { errnoCode, expandHome, readFileSafe, readJson, writeJsonAtomic, listFiles, pathExists, isDraft, isIgnored } from './fs.js';
+import { errnoCode, readFileSafe, readJson, writeJsonAtomic, listFiles, pathExists, isDraft, isIgnored } from './fs.js';
 import { tokenize, wordSegments, MAX_TOKENIZE_CHARS } from './tokenizer.js';
 import { log } from '@teamai/shared/log';
 import { teamRuleBody, teamRuleData } from '../resources/team-rule.js';
@@ -23,7 +23,7 @@ import {
   UserVotesSchema,
   UserVotesV2Schema,
 } from '../types.js';
-import { getUserHome } from '@teamai/shared/home';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { walkLearningsTree } from './learnings-roots.js';
 import { parseRelatedBlock, relationsFromLinks } from '../resource-relations.js';
 import type { StoredRelation } from '../resource-relations.js';

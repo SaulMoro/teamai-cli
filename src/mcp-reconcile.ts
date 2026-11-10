@@ -4,7 +4,6 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type {
-  JsonValue,
   LocalConfig,
   TeamaiConfig,
   McpServerDef,
@@ -54,9 +53,9 @@ import {
   readFileSafe,
   readFileIfExists,
   pathExists,
-  expandHome,
 } from './utils/fs.js';
-import { mapStrings, parseJson, type JsonSyntax } from '@teamai/shared/json';
+import { expandHome } from '@teamai/shared/home';
+import { mapStrings, parseJson, type JsonSyntax, type JsonValue, isJsonObject, type JsonObject } from '@teamai/shared/json';
 import { isPlainJson, parseJsonAs } from './utils/json.js';
 import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
@@ -87,7 +86,6 @@ import {
 } from './mcp-resolved-files.js';
 import { hasWorkspaceChildren } from './workspace-children.js';
 import { DeliveredFolders, type PlacedFolders } from './resources/delivered-folders.js';
-import { isJsonObject, type JsonObject } from './types.js';
 
 // ─── Reconcile engine ────────────────────────────────────────
 //

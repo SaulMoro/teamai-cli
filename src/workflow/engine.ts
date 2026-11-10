@@ -13,7 +13,8 @@ import { resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.j
 import { log } from '@teamai/shared/log';
 import { execCommand } from '@teamai/shared/exec';
 import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
-import { getDataHome, JsonObjectSchema, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
+import { getDataHome, SYNC_LOCK_FILENAME, type LocalConfig } from '../types.js';
+import { JsonObjectSchema, type JsonValue } from '@teamai/shared/json';
 import { acquireLock, releaseLock } from '../update.js';
 import { folderOf, loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias, type PinnedFolder } from './cache.js';
 import { claimRun, leaseRefusal, publishRunEnd, reconcileTakenCopies, takeoverFor, type HandoffError } from './handoff.js';

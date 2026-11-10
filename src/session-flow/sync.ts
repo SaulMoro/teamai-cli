@@ -40,11 +40,10 @@ import { z } from 'zod';
 import { AgentObservationSchema, CommitStateSchema, type AgentObservation } from '../agent-observation.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema, isJsonObject } from '../types.js';
 import { titleSpellsLocalPath, type LocalPathRoots } from './scrub.js';
 import { ArchivedEvidenceSchema, type ArchivedEvidence } from './session-evidence.js';
 import { messageToDict, messageFromDict } from '@teamai/tool-core/sessions/ir';
-import { parseJson } from '@teamai/shared/json';
+import { parseJson, JsonValueSchema, isJsonObject } from '@teamai/shared/json';
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -11,7 +11,6 @@ vi.mock('../utils/fs.js', () => ({
   writeJson: vi.fn(async (filePath: string, data: unknown) => {
     mockFiles[filePath] = JSON.parse(JSON.stringify(data));
   }),
-  expandHome: (p: string) => p,
   ensureDir: vi.fn(),
 }));
 

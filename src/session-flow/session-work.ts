@@ -24,9 +24,9 @@ import { GeneratedQuestions, type QuestionSession, type QuestionSwitches } from 
 import { skillsEvidence, type SkillsEvidence } from '../scorers/skill-evidence.js';
 import type { Subject } from '../scorers/subject.js';
 import { typedIn, usedSkills } from '../skill-use.js';
-import { getDataHome, isJsonObject, JsonValueSchema, type JsonValue, type LocalConfig } from '../types.js';
+import { getDataHome, type LocalConfig } from '../types.js';
 import { readWorkspaceChildren } from '../workspace-children.js';
-import { mapStrings } from '@teamai/shared/json';
+import { mapStrings, isJsonObject, JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { redact } from '@teamai/shared/redact';
 import { AgentSession, sessionKey } from './agent-session.js';
 import type { SubagentsRead } from '@teamai/tool-core/sessions/base';

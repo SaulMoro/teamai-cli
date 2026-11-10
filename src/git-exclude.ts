@@ -9,7 +9,7 @@ import { checkoutLocation } from './utils/git.js';
 import { withoutGitRepositoryEnv } from './utils/git-env.js';
 import { getUserHome } from '@teamai/shared/home';
 import { z } from 'zod';
-import { isJsonObject, type JsonObject, type JsonValue } from './types.js';
+import { isJsonObject, type JsonObject, type JsonValue } from '@teamai/shared/json';
 
 // ─── Git exclude blocks ──────────────────────────────────────
 //

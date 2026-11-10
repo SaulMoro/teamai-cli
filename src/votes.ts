@@ -7,10 +7,11 @@ import { z } from 'zod';
 import { parseYaml } from '@teamai/shared/yaml';
 
 import { UserVotesSchema, UserVotesV2Schema } from './types.js';
-import { isJsonObject, type JsonValue } from './types.js';
+import { isJsonObject, type JsonValue } from '@teamai/shared/json';
 import type { LocalConfig, PendingVoteSync, UpvoteLedger, UserVotes, UserVotesV2, VoteDelta, VoteEntryV2 } from './types.js';
 import type { CreditLine } from './recall-log.js';
-import { readFileSafe, writeFileAtomic, ensureDir, expandHome } from './utils/fs.js';
+import { readFileSafe, writeFileAtomic, ensureDir } from './utils/fs.js';
+import { expandHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
 
 /**

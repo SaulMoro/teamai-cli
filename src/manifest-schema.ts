@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { expandHome } from './utils/fs.js';
+import { expandHome } from '@teamai/shared/home';
 import { z } from 'zod';
-import type { JsonValue } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { warnOnce } from './utils/warn-once.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

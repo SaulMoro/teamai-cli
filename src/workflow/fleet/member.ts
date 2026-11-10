@@ -50,8 +50,7 @@ import { stepEnvironment, withRunningCli } from '../../env-exec.js';
 import { resolveRunMode, WORKFLOW_DIR_ENV } from '../../launch-context.js';
 import { archiveSessions, openSessionArchive } from '../../session-flow/archive.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
-import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
-import { isJsonObject } from '../../types.js';
+import { JsonValueSchema, type JsonValue, isJsonObject } from '@teamai/shared/json';
 import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 

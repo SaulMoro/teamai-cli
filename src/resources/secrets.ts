@@ -17,7 +17,8 @@ import {
   entryLayout, missingTopLevelKeyReason, readEntryFileText, resolveEntries, resolveEntriesFor, unknownEntryKeys,
   writtenList, type EntryLayout, type EntryReader, type EntryResolution,
 } from '../namespaced-entries.js';
-import { isJsonObject, type JsonValue, type LocalConfig } from '../types.js';
+import { type LocalConfig } from '../types.js';
+import { isJsonObject, type JsonValue } from '@teamai/shared/json';
 import { ensureDir, readFileSafe, writeFile } from '../utils/fs.js';
 import { ENV_KEY_RE, envName } from './env-key.js';
 

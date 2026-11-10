@@ -4,7 +4,8 @@
  * never learns how a pass is scored.
  */
 import type { RunMode } from '../launch-context.js';
-import type { JsonValue, LocalConfig } from '../types.js';
+import type { LocalConfig } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 import type { StartedRun, WorkflowClient } from '../workflow/protocol.js';
 import type { RunState } from '../workflow/types.js';

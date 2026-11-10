@@ -9,7 +9,7 @@ import { RunModeSchema } from '../launch-context.js';
 import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import { ConfinedUsageSchema, type ConfinedUsage } from '@teamai/tool-core/stdout';
 import { canonicalJson } from '../utils/canonical-json.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 
 export const RunSubjectSchema = z.object({ runId: z.string().min(1), step: z.string().min(1), pass: z.number().int().positive() });
 

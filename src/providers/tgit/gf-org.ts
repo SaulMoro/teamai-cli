@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { JsonValue } from '../../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import type { OrgRepoInfo } from '../types.js';
 import { getTGitToken, tgitAuthHeaders } from './rest-auth.js';
 import { log } from '@teamai/shared/log';

@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { loadTeamConfig } from '../config.js';
-import { isJsonObject, type JsonValue, type LocalConfig } from '../types.js';
+import { type LocalConfig } from '../types.js';
+import { isJsonObject, type JsonValue } from '@teamai/shared/json';
 import { shellQuoteValue } from '../utils/shell-profile.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {

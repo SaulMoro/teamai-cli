@@ -11,7 +11,7 @@ import {
 } from './hooks.js';
 import { codexTeamHookIndexPath } from './codex-team-hooks.js';
 import { codebuddyTeamHookPayload } from './codebuddy-team-hooks.js';
-import { mapStrings } from '@teamai/shared/json';
+import { mapStrings, type JsonValue } from '@teamai/shared/json';
 import { parseJsonAs } from './utils/json.js';
 import { bridgedTeamHookDir, bridgedTeamHookFile, isBridgedTeamHookTool } from './bridged-team-hooks.js';
 import {
@@ -54,7 +54,6 @@ import {
   type LocalConfig,
   type Scope,
   type ManagedMcpManifest,
-  type JsonValue,
   installScopeName,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
@@ -92,13 +91,12 @@ import {
   listDirs,
   listFiles,
   listFilesRecursive,
-  expandHome,
   pruneEmptyDirs,
 } from './utils/fs.js';
 import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from '@teamai/shared/log';
 import { askConfirmation } from './utils/prompt.js';
-import { getUserHome } from '@teamai/shared/home';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { gitCommonDir, listWorktrees } from './utils/git.js';
 import {
   envLoaderProfiles,

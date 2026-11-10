@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RuntimeOptions } from '@teamai/runtime-protocol';
 import { bundleOnce, bundleRuntime } from '@teamai/runtime-testing/bundle';
-import type { JsonValue } from '../../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 
 const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'runtime-t3', 'src');
 const FAKE_T3 = path.join(PACKAGE, 'testing', 'fake-t3.mjs');

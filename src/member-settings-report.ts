@@ -22,13 +22,11 @@ import {
   MemberSettingsSchema,
   resolveAutoCompactTokens,
   resolveCoAuthor,
-  type JsonValue,
   type LocalConfig,
   type TeamaiConfig,
-  JsonObjectSchema,
 } from './types.js';
 import { readFileSafe } from './utils/fs.js';
-import { parseJson } from '@teamai/shared/json';
+import { parseJson, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 
 /** `http-team`: an HTTP team repo, which keeps no session archive, so it turns session publishing off whatever a level sets. */
 export type MemberSettingLevel = 'environment' | 'scope' | 'machine' | 'team' | 'http-team' | 'default';

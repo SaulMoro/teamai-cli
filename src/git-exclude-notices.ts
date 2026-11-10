@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { updateFileLocked } from './git-exclude.js';
-import { getDataHome, isJsonObject, type GlobalOptions, type JsonObject, type JsonValue, type LocalConfig } from './types.js';
+import { getDataHome, type GlobalOptions, type LocalConfig } from './types.js';
+import { isJsonObject, type JsonObject, type JsonValue } from '@teamai/shared/json';
 import { pathExists, readFileSafe } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';

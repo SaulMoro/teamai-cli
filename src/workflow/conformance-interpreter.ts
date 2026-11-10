@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { resolveRunMode } from '../launch-context.js';
-import { isJsonObject, type JsonValue } from '../types.js';
+import { isJsonObject, type JsonValue } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
 import { agentEvidence } from './attempt-marker.js';
 import { commandOutputs, type NextPrepare, type WorkflowClient } from './protocol.js';

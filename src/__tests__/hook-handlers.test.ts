@@ -197,7 +197,8 @@ vi.mock('node:child_process', async (importOriginal) => ({ ...(await importOrigi
 import { buildAdoptedSummary, buildHandlerRegistry, filterHandlersForConfig } from '../hook-handlers.js';
 import { createDispatcher } from '../hook-dispatch.js';
 import { GIT_HOOK_EVENTS } from '../git-hook.js';
-import type { JsonValue, LocalConfig } from '../types.js';
+import type { LocalConfig } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 
 /** The scope hook-dispatch resolved for the hook's cwd, handed to every handler. */

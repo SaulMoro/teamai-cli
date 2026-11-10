@@ -12,7 +12,7 @@ import { withTimeout } from './utils/async.js';
 import { getProvider, detectProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
 import { probeSelfHostedGitLab } from './providers/gitlab/probe.js';
-import { ensureDir, writeFile, writeFileAtomic, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
+import { ensureDir, writeFile, writeFileAtomic, pathExists, readFileSafe, remove } from './utils/fs.js';
 import { queueOwner, sameQueueOwner, setAsideQueueOnModeSwitch } from './utils/pending-learnings.js';
 import { dropAllSearchIndexes } from './utils/search-index.js';
 import { reportsBranch } from './utils/reports-branch.js';
@@ -196,7 +196,7 @@ import {
   installScopeName,
   selfModeGitignorePath,
 } from './types.js';
-import { getUserHome } from '@teamai/shared/home';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { loadProjectsManifest, listProjectIds, type ProjectsManifest } from './projects.js';

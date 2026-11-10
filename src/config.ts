@@ -26,12 +26,12 @@ import {
   type MemberSettings,
   type MemberWorkflowSettings,
   type RoleAssignment,
-  type JsonValue,
   SELF_BRANCH_HOME_DIRNAME,
 } from './types.js';
-import { readFileIfExists, readFileSafe, readJson, writeFileAtomic, writeJsonAtomic, expandHome, pathExists } from './utils/fs.js';
+import type { JsonValue } from '@teamai/shared/json';
+import { readFileIfExists, readFileSafe, readJson, writeFileAtomic, writeJsonAtomic, pathExists } from './utils/fs.js';
 import { nearestGitEntry, resolveAnchors } from './utils/git.js';
-import { getUserHome } from '@teamai/shared/home';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { EPHEMERAL_CONFIG_ENV } from './launch-context.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from '@teamai/shared/log';

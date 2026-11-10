@@ -11,8 +11,10 @@ import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigFor
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { log } from '@teamai/shared/log';
-import { errnoCode, expandHome, ensureDir } from './utils/fs.js';
-import { getTeamaiHomeDir, getUpdateLockPath, JsonValueSchema, type LocalConfig } from './types.js';
+import { errnoCode, ensureDir } from './utils/fs.js';
+import { expandHome } from '@teamai/shared/home';
+import { getTeamaiHomeDir, getUpdateLockPath, type LocalConfig } from './types.js';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { askConfirmation, isInteractive } from './utils/prompt.js';
 
 // `getCurrentVersion` and `getCurrentPackageName` live in `./package-info.ts`

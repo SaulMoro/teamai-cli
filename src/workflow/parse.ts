@@ -16,7 +16,8 @@ import {
   conditionDiagnostics, endDiagnostics, expressionSite, readDiagnostics, readScope, splitReads, type ConditionNode, type Ending, type ReadSite,
 } from './reads.js';
 import { parseHitl } from './parse-hitl.js';
-import { isDataBranch, JsonValueSchema, type JsonValue } from '../types.js';
+import { isDataBranch } from '../types.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { outputMismatch } from './output.js';
 import { roleDiagnostics } from './parse-roles.js';
 import { loopProblems, stepLoops } from './loop.js';

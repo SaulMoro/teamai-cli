@@ -9,7 +9,8 @@ import { confinedEnvNames, isConfinedTool, runConfined, type ConfinedResult, typ
 import type { ConfinedTool } from '../launch-registry.js';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
 import { isAgentToolId } from '../tool-registry.js';
-import { JsonValueSchema, type JsonValue, type LocalConfig } from '../types.js';
+import { type LocalConfig } from '../types.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { observedModel } from '../agent-observation.js';
 import { AttemptResult } from './attempt-result.js';
 import type { ReportInput } from './engine.js';

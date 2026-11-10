@@ -48,7 +48,8 @@ import type {
   SourceInstallManifest,
   GlobalOptions,
 } from './types.js';
-import { isAgentExcluded, isJsonObject, resolveBaseDir, scopedToolPaths, SOURCE_PULL_TTL_MS } from './types.js';
+import { isJsonObject } from '@teamai/shared/json';
+import { isAgentExcluded, resolveBaseDir, scopedToolPaths, SOURCE_PULL_TTL_MS } from './types.js';
 import type { DeliveryRecorder } from './git-exclude-delivered.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

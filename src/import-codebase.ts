@@ -5,7 +5,7 @@ import fs from 'fs-extra';
 import { z } from 'zod';
 
 import { extractCodebase, sourceRepositoryMetadata } from './codebase-extract.js';
-import { type JsonValue, JsonObjectSchema } from './types.js';
+import { type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { SourceManifestSchema } from './wiki-engine/code-knowledge/code-collector.js';
 import type { TeamaiInit } from './config.js';
 import { log } from '@teamai/shared/log';

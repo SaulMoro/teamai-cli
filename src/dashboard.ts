@@ -12,10 +12,10 @@ import {
   DASHBOARD_PID_CHECK_INTERVAL_MS,
   type DashboardEvent,
   getDataHome,
-  type JsonValue,
   type LocalConfig,
   type RunModeSplit,
 } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { getDashboardHtml } from './dashboard-html.js';
 import { getUserHome } from '@teamai/shared/home';
 import type { VizSummary } from './viz.js';

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { type JsonSyntax } from '@teamai/shared/json';
+import { type JsonSyntax, isJsonObject, JsonValueSchema, type JsonObject, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { parseJsonAs } from '../utils/json.js';
 import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
@@ -17,7 +17,7 @@ import { acquireLock, releaseLock } from '../update.js';
 import { entryHash } from '../resources/mcp-format.js';
 import { detectShellProfile, SHELL_PROFILE_CANDIDATE_NAMES, shellQuoteValue, toGeneratedForm } from '../utils/shell-profile.js';
 import { resolveMemberToolRoots } from '../config.js';
-import { isJsonObject, JsonValueSchema, recordedToolRootDir, RELOCATABLE_TOOLS, type JsonObject, type JsonValue, type LocalConfig, JsonObjectSchema } from '../types.js';
+import { recordedToolRootDir, RELOCATABLE_TOOLS, type LocalConfig } from '../types.js';
 import { ALL_MODEL_AGENTS, ModelAgentSchema, type ModelAgent, type ModelProtocol, type ResolvedModelProfile, sameTeamIdentity } from './profile.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

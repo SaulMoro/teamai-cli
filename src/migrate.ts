@@ -7,10 +7,10 @@ import { isSelfMode, LocalConfigSchema, SYNC_LOCK_FILENAME, WORKTREE_DIRNAMES, t
 import { getRemoteUrl, resolveAnchors } from './utils/git.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { realpath } from 'node:fs/promises';
-import { expandHome, listFilesRecursive, pathExists, readFileIfExists, readFileSafe, remove, writeFile } from './utils/fs.js';
+import { listFilesRecursive, pathExists, readFileIfExists, readFileSafe, remove, writeFile } from './utils/fs.js';
 import { acquireLock, releaseLock } from './update.js';
 import { detectProjectConfig, readConfigFrom } from './config.js';
-import { getUserHome } from '@teamai/shared/home';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
 import { acquireQueueLock, countQueued, pendingLearningsDir, queueOwner, sameQueueOwner, setAsideCheckoutQueue, withQueueLock, type QueueOwner } from './utils/pending-learnings.js';
 import { copyRegularTree } from '@teamai/shared/regular-file';

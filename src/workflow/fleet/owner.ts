@@ -25,7 +25,7 @@ import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, ty
 import { workflowRunBy, type WorkflowFailure } from '../types.js';
 import type { WholeEnd } from '../whole-workflow.js';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
-import { isJsonObject } from '../../types.js';
+import { isJsonObject } from '@teamai/shared/json';
 import { copyGit, placeEditsOf } from '../place/place.js';
 import { git } from '../worktree.js';
 import { hostStepRuntime } from '../runtimes/host.js';

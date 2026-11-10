@@ -12,7 +12,7 @@ import fs from 'fs-extra';
 import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 
-import { type JsonValue, JsonObjectSchema } from './types.js';
+import { type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 import { writeFileAtomic } from './utils/fs.js';
 import { withFileLock } from './update.js';

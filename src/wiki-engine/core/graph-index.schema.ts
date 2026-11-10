@@ -2,7 +2,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import type { JsonValue } from "../../types.js";
+import type { JsonValue } from '@teamai/shared/json';
 import { CONFIDENCE_SCORE_DEFAULTS, WIKI_CATEGORIES, type WikiCategory, type WikiConfidence, type WikiEvidence } from "./wiki-protocol.js";
 import { readRegularFile } from "@teamai/shared/regular-file";
 

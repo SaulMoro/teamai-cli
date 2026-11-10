@@ -102,8 +102,6 @@ import {
   managedMcpWorkspaceId,
   type DashboardEvent,
   type DeliveryTarget,
-  JsonValueSchema,
-  type JsonValue,
   type LocalConfig,
   type ManagedMcpManifest,
   type ManagedMcpRecord,
@@ -126,8 +124,7 @@ import { skillOrigin, withSkillFrontmatter } from './resources/skills.js';
 import { hookSettingsFile, installOf, locate, ownOf, writable, type FilePlace } from './locate.js';
 import { mcpFormatOf } from './tool-registry.js';
 import { acquireLock, releaseLock } from './update.js';
-import { isJsonObject, type JsonObject } from './types.js';
-import { parseJson } from '@teamai/shared/json';
+import { parseJson, JsonValueSchema, type JsonValue, isJsonObject, type JsonObject } from '@teamai/shared/json';
 
 const execFileAsync = promisify(execFile);
 

@@ -16,7 +16,7 @@ import { composedStepRuntime } from '../workflow/runtimes/composed.js';
 import type { OpId, OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecEvents, type ExecQuestion, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
 import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';

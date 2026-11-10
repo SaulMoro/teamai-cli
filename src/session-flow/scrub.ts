@@ -22,10 +22,9 @@ import { z } from 'zod';
 import type { Session, Message, ContentBlock, MessageMetadata, ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '../types.js';
 import { maskCutSecret } from '@teamai/tool-core/sessions/title';
 import { claudeProjectDirName } from '@teamai/tool-core/sessions/fs';
-import { mapStrings } from '@teamai/shared/json';
+import { mapStrings, JsonValueSchema } from '@teamai/shared/json';
 
 export interface ScrubResult {
   session: Session;

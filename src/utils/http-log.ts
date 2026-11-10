@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { log } from '@teamai/shared/log';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 
 /** Header names whose values must be masked before logging. */
 const SENSITIVE_HEADER_RE = /^(authorization|x-api-token|x-api-key|cookie)$/i;

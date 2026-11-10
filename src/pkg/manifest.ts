@@ -6,7 +6,8 @@ import YAML from 'yaml';
 import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 
-import { getDataHome, getTeamaiHome, isSelfMode, type JsonValue, type LocalConfig, isJsonObject } from '../types.js';
+import { getDataHome, getTeamaiHome, isSelfMode, type LocalConfig } from '../types.js';
+import { type JsonValue, isJsonObject } from '@teamai/shared/json';
 import { pathExists, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { copyRegularTree } from '@teamai/shared/regular-file';

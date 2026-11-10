@@ -17,7 +17,7 @@ import { parseJsonAs } from '../utils/json.js';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { execCommand, probeBinary } from '@teamai/shared/exec';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import type { ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import type { ConfinedUsage } from '@teamai/tool-core/stdout';
 import { confinedVariables } from '@teamai/tool-launch/confined-launch';
