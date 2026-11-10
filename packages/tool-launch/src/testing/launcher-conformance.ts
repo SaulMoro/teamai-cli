@@ -60,14 +60,14 @@ export function toolLauncherConformance(name: string, adapter: () => Promise<{ s
       const watched = await watch(start, { cwd, script: 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);', onStarted: (stop) => { setTimeout(() => { void stop(); }, 200); } });
 
       expect(watched.started).toBe(true);
-      expect('failure' in watched.closed || watched.closed.exitCode !== 0).toBe(true);
+      expect('failure' in watched.closed || watched.closed.exitCode !== 0, `closed as ${JSON.stringify(watched.closed)}`).toBe(true);
     }, 30_000);
 
     it('closes a process that cannot start, with no success', async () => {
       const { start, cwd } = await adapter();
       const watched = await watch(start, { cwd, executable: '/nonexistent/teamai-no-such-tool', script: '' });
 
-      expect('failure' in watched.closed || watched.closed.exitCode !== 0 || watched.closed.error !== undefined).toBe(true);
+      expect('failure' in watched.closed || watched.closed.exitCode !== 0 || watched.closed.error !== undefined, `closed as ${JSON.stringify(watched.closed)}`).toBe(true);
     }, 30_000);
   });
 }
