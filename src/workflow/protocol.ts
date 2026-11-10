@@ -346,14 +346,6 @@ export async function resumeRefusal(
 
 /** The failure a call answers when the cache holds no unambiguous runnable version of workflow or alias `name`. */
 /**
- * Starts `name` as one of the CLI's own automatic starts, in run mode `mode`: with no agent evidence, so no agent gave its
- * inputs, and recorded as started by `cli`, which hand labels and policy overrides never trust as a person.
- */
-export function startAsCli(client: Pick<WorkflowClient, 'start'>, name: string, { mode, ...options }: Omit<Parameters<WorkflowClient['start']>[1], 'caller' | 'startedBy' | 'instead'> & { mode: RunMode }): Promise<WorkflowEnvelope> {
-  return client.start(name, { ...options, caller: { evidence: { kind: 'none' }, confirmed: false, mode }, startedBy: 'cli' });
-}
-
-/**
  * The settled attempt of the step that started the conversation step `step` of run `run` goes on in: with
  * `session: continue`, its own first earlier pass; else its `session.from` step, or, along a chain where C goes on from
  * B and B from A, the first step A, as a lease's `continue` names it. For a driver whose report records no session of
