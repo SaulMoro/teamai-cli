@@ -104,6 +104,24 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     expect(ran).toMatchObject({ exitCode: 1, failure: { code: 'tool_failed', message: 'claude printed nothing for longer than the step runtime\'s own idle limit. Raise that limit if this tool works silently for longer.' } });
   });
 
+  it('asks the runtime to stop the tool at the step\'s budget, timeout and idle limit, and ends the step at the limit the runtime stopped it at', async () => {
+    const leases: unknown[] = [];
+    const run: AttemptRun = {
+      ...promptOnlyRun().run,
+      prompt: async (request) => {
+        leases.push(request.lease);
+
+        return { kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: {}, usage: { input: 900, output: 200 }, stopped: 'budget' };
+      },
+    };
+
+    const ran = await runtimePrompter(run, { view, runId: RunIdSchema.parse('r0123abcd'), step: 'review', tool: 'claude', provided: [], unset: [], credentials: {}, setUp: async () => undefined })
+      .run('claude', { prompt: 'Review.', expected: undefined, cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {}, budget: 1000, timeoutMs: 60_000, idleTimeoutMs: 30_000 }, undefined);
+
+    expect(leases).toEqual([expect.objectContaining({ limits: { budget: { tokens: 1000 }, timeoutMs: 60_000, idleMs: 30_000 } })]);
+    expect(ran).toMatchObject({ exitCode: 0, session: 's-1', stoppedBy: 'budget', tokens: { input: 900, output: 200 } });
+  });
+
   it('says it started fresh when the runtime resumed no session, even when its place could not be collected', async () => {
     const { run } = promptOnlyRun();
     const uncollectable: AttemptRun = { ...run, collect: async () => ({ code: 'runtime_failed', message: 'The place could not be collected.' }) };

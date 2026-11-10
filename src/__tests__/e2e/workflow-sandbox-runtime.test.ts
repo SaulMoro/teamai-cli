@@ -31,6 +31,13 @@ const session = at === -1 ? 'sess-' + path.basename(process.env.TEAMAI_WORKFLOW_
 const project = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', ${CLAUDE_SESSIONS.project});
 fs.mkdirSync(project, { recursive: true });
 fs.appendFileSync(path.join(project, session + '.jsonl'), JSON.stringify(${CLAUDE_SESSIONS.record}) + '\\n');
+// A prompt that asks it to spend streams usage until it is stopped, as a long answer does.
+if (args[args.indexOf('-p') + 1].includes('Spend')) {
+  console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: session, model: 'claude-sonnet-4-5' }));
+  let n = 0;
+  setInterval(() => { n += 1; console.log(JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm' + n, usage: { input_tokens: 100, output_tokens: 1 } } } })); }, 20);
+  return;
+}
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', session_id: session, usage: { input_tokens: 10, output_tokens: 5 } }));
 `;
@@ -126,6 +133,7 @@ beforeAll(async () => {
     runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }, { use: 'tools' }],
   }));
   fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'spend.yaml'), 'schemaVersion: v1alpha1\nname: spend\ndescription: spend\nsteps:\n  - id: spend\n    tool: claude\n    prompt: Spend tokens.\n    budget: { tokens: 300 }\n    on_limit: end_turn\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'pair.yaml'), 'schemaVersion: v1alpha1\nname: pair\ndescription: pair\nsteps:\n  - id: plan\n    tool: claude\n    prompt: Plan the change.\n    output:\n      ok: boolean\n  - id: apply\n    needs: [plan]\n    session:\n      from: plan\n    prompt: Make the change you planned.\n    output:\n      ok: boolean\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'review.yaml'), 'schemaVersion: v1alpha1\nname: review\ndescription: review\nsteps:\n  - id: review\n    tool: claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
   // Setup prints the names it gets, then fails, so its output is quoted in the failure.
@@ -209,3 +217,12 @@ it("runs a Claude prompt step's tool itself in the attempt's container, keeps it
   expect(transcripts.length).toBeGreaterThan(0);
   expect(transcripts.every((file) => file.includes(`tool-home${path.sep}claude${path.sep}projects`))).toBe(true);
 });
+
+it('stops a prompt step past its budget in the container, and ends its turn there with its session', async () => {
+  const ran = await runCLI(['workflow', 'start', 'spend', '--driver', 'boxed'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
+
+  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  const [spend] = readRunState(ran).steps;
+  expect(spend).toMatchObject({ status: 'succeeded', limit: 'budget', session: expect.stringMatching(/^sess-/) });
+});
+

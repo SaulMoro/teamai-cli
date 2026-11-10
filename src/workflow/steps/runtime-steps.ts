@@ -366,6 +366,16 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
     if (continues) lease.continue = continues;
 
     if (input.maxTurns !== undefined) lease.maxTurns = input.maxTurns;
+
+    // The limits a runtime that starts the tool's process stops it at; teamai checks the budget once the prompt ends all
+    // the same, for one that cannot.
+    const limits = {
+      ...(input.budget !== undefined && input.budget > 0 && { budget: { tokens: input.budget } }),
+      ...(input.timeoutMs !== undefined && input.timeoutMs > 0 && { timeoutMs: input.timeoutMs }),
+      ...(input.idleTimeoutMs !== undefined && input.idleTimeoutMs > 0 && { idleMs: input.idleTimeoutMs }),
+    };
+
+    if (Object.keys(limits).length > 0) lease.limits = limits;
     const env = stringEnv(input.env ?? {});
 
     if (input.launchEnv) Object.assign(env, input.launchEnv);

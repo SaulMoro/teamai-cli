@@ -526,6 +526,9 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   else if (endsAtTurns !== undefined) input.maxTurns = endsAtTurns;
 
   if (budget !== undefined) input.budget = budget;
+  // A runtime that launches agents its own way is asked to stop the tool at the budget (`limits`); the budget is checked
+  // once its prompt ends all the same.
+  else if (onRuntime?.launchesAgents && limits?.budget !== undefined) input.budget = limits.budget.tokens;
 
   if (limits?.timeoutMs !== undefined) input.timeoutMs = limits.timeoutMs;
 
