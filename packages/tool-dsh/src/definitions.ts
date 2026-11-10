@@ -16,7 +16,7 @@ export const tools = {
     },
     agents: NONE,
     mcp: NONE,
-    hooks: { user: { channel: 'adapter', adapter: 'dsh-hooks', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'dsh-hooks', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: 'none',
     launch: 'none',
     autoCompact: 'dsh',

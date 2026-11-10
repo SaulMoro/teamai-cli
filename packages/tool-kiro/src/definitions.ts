@@ -23,7 +23,7 @@ export const tools = {
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.kiro/settings/mcp.json', when: 'workspaceUnder', evidence: 'docs' }] },
     },
     // Kiro CLI V3 loads every hook file in ~/.kiro/hooks, whatever agent runs (#1341).
-    hooks: { user: { channel: 'adapter', adapter: 'kiro-hooks', evidence: 'docs' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'kiro-hooks', evidence: 'docs' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Kiro CLI docs: sessions under ~/.kiro, moved by KIRO_HOME.
     sessions: 'none',
     launch: 'kiro',

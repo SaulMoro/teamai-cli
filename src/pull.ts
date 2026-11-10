@@ -1,3 +1,4 @@
+import { findSkippedFolders, reportSkippedFolders } from './folder-markers.js';
 import { hookToolPathsForConfig, parseUserStats } from './types.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,7 +35,8 @@ import { CODEX_TOOL, codexSkillsSplit, mayDeleteSkillCopy, skillOrigin } from '.
 import { installOf, locate, ownOf, SHARED_AGENT_SKILLS_PATH, writable, writesOf, type Install } from './locate.js';
 import { isWithin } from './utils/agent-path.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
-import { describeInvalidToolHomes, realHost } from './tool-home.js';
+import { describeInvalidToolHomes, realHost, toolHome } from './tool-home.js';
+import { isToolId, ruleFolderReachOf } from './tool-registry.js';
 import { placesOf, placesRecordOf, placesUnmoved, recordPlaces, type PlacesRecord, type SessionToolHomes } from './resources/places.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
@@ -180,7 +182,7 @@ async function refreshTeamRepo(
   }
 
   if (localConfig.repo.kind === 'self') {
-    // Single-repo mode: knowledge lives under <business-repo>/.teamai on main and
+    // Self mode: knowledge lives under <business-repo>/.teamai on main and
     // arrives with the business repo's own `git clone`/`git pull`. teamai must NOT
     // run `git pull` on localPath here — that would operate on the business repo
     // root and touch the user's active working tree. Just read the current HEAD as
@@ -207,7 +209,7 @@ async function refreshTeamRepo(
       version = null;
     }
 
-    return { label: 'single-repo (knowledge on main)', version, submodulesFailed: false, submodulesChanged: false };
+    return { label: 'self mode (knowledge on main)', version, submodulesFailed: false, submodulesChanged: false };
   }
 
   // The shared team clone is mutated here (git pull + flushPendingLearnings'
@@ -1079,7 +1081,7 @@ export async function liveCheckoutRecords(
   const commonDir = await gitCommonDir(projectRoot);
 
   if (!commonDir) return records;
-  const identity = (await resolveAnchors(projectRoot))?.projectAnchor;
+  const identity = (await resolveAnchors(projectRoot))?.repoAnchor;
 
   const kept = await Promise.all(Object.entries(records).map(async ([key, record]) => {
     const { root } = record;
@@ -1162,7 +1164,7 @@ export function addPushBaseRev(record: CheckoutRecord, rev: string): void {
 export async function checkoutRecordKey(localConfig: LocalConfig): Promise<string | undefined> {
   switch (localConfig.scope) {
     case 'user':
-      return checkoutKey(getUserHome());
+      return checkoutKey(await canonicalUserHome());
     case 'project':
       return localConfig.projectRoot ? checkoutKey(localConfig.projectRoot) : undefined;
     default: {
@@ -1170,6 +1172,106 @@ export async function checkoutRecordKey(localConfig: LocalConfig): Promise<strin
       throw new Error(`Unknown scope: ${String(unhandled)}`);
     }
   }
+}
+
+/**
+ * Remove syntactic aliases such as a trailing separator before keying HOME.
+ * Symlink and Windows-case aliases migrate through the sole legacy user record
+ * instead of realpath/lowercasing here: macOS exposes `/var` through
+ * `/private/var`, and changing that long-standing key would hide records from
+ * readers outside pull.
+ */
+async function canonicalUserHome(): Promise<string> {
+  return path.resolve(getUserHome());
+}
+
+/**
+ * Rewrite a recorded destination below an equivalent spelling of HOME to the
+ * spelling this process uses. The record key alone is not enough: delivery
+ * hashes are keyed by absolute paths, so a symlink or Windows casing change
+ * would otherwise make every previously delivered copy look unrecorded.
+ */
+async function currentUserPath(recorded: string, currentHome: string, canonicalHome: string): Promise<string> {
+  if (!path.isAbsolute(recorded)) return recorded;
+  let ancestor = path.resolve(recorded);
+
+  while (true) {
+    const resolved = await realpath(ancestor).catch(() => ancestor);
+    const comparable = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+
+    if (comparable === canonicalHome) return path.join(currentHome, path.relative(ancestor, recorded));
+    const parent = path.dirname(ancestor);
+
+    if (parent === ancestor) return recorded;
+    ancestor = parent;
+  }
+}
+
+/** Re-key a user record's absolute delivery paths to this process's HOME spelling. */
+async function rebaseUserDelivered(record: CheckoutRecord): Promise<void> {
+  if (!record.delivered) return;
+  const currentHome = path.resolve(getUserHome());
+  const resolvedHome = await realpath(currentHome).catch(() => currentHome);
+  const canonicalHome = process.platform === 'win32' ? resolvedHome.toLowerCase() : resolvedHome;
+  const rebased: DeliveredHashes = {};
+
+  const entries = await Promise.all(Object.entries(record.delivered).map(async ([file, hash]) => ({
+    file,
+    hash,
+    current: await currentUserPath(file, currentHome, canonicalHome),
+  })));
+
+  // Exact current-spelling entries win when a previous interrupted pull left
+  // both them and legacy aliases in the record.
+  for (const { file, hash, current } of entries) {
+    if (file === current) rebased[file] = hash;
+  }
+
+  for (const { hash, current } of entries) {
+    if (rebased[current] === undefined) rebased[current] = hash;
+  }
+
+  record.delivered = rebased;
+}
+
+/**
+ * The checkout record and the key that currently holds it. User-scope state
+ * has exactly one logical checkout (HOME), so a sole record written by an
+ * older CLI is that checkout even when HOME was spelled differently. An
+ * ambiguous legacy state is left alone rather than borrowing another record.
+ */
+async function checkoutRecordEntry(
+  localConfig: LocalConfig,
+  state: Pick<State, 'lastPullByWorkspace'>,
+): Promise<{ key: string | undefined; storedKey: string | undefined; record: CheckoutRecord | undefined }> {
+  if (localConfig.scope === 'user') return userScopeRecordEntry(state);
+  const key = await checkoutRecordKey(localConfig);
+
+  if (!key) return { key, storedKey: undefined, record: undefined };
+  const exact = state.lastPullByWorkspace?.[key];
+
+  return { key, storedKey: exact ? key : undefined, record: exact };
+}
+
+async function userScopeRecordEntry(
+  state: Pick<State, 'lastPullByWorkspace'>,
+): Promise<{ key: string; storedKey: string | undefined; record: CheckoutRecord | undefined }> {
+  const key = await checkoutKey(await canonicalUserHome());
+  const exact = state.lastPullByWorkspace?.[key];
+
+  if (exact) {
+    await rebaseUserDelivered(exact);
+
+    return { key, storedKey: key, record: exact };
+  }
+
+  const entries = Object.entries(state.lastPullByWorkspace ?? {});
+
+  if (entries.length === 1) await rebaseUserDelivered(entries[0][1]);
+
+  return entries.length === 1
+    ? { key, storedKey: entries[0][0], record: entries[0][1] }
+    : { key, storedKey: undefined, record: undefined };
 }
 
 /**
@@ -1190,8 +1292,7 @@ export async function resolveCheckoutBases(
   localConfig: LocalConfig,
   state: Pick<State, 'lastPullRev' | 'lastInheritedPullRev' | 'lastPullByWorkspace'>,
 ): Promise<CheckoutBases> {
-  const key = await checkoutRecordKey(localConfig);
-  const record = key ? state.lastPullByWorkspace?.[key] : undefined;
+  const { key, record } = await checkoutRecordEntry(localConfig, state);
   const revs = checkoutBaseRevs(record);
 
   if (record && revs.length > 0) return { source: 'checkout', record, revs };
@@ -1220,27 +1321,25 @@ function homeRevs(state: Pick<State, 'lastPullRev' | 'lastInheritedPullRev'>): s
  * one of its push bases (#823).
  */
 export async function userScopeRecord(state: State): Promise<CheckoutRecord> {
-  const key = await checkoutKey(getUserHome());
+  const { key, storedKey, record: stored } = await userScopeRecordEntry(state);
   const rev = state.lastPullRev ?? FORCED_FULL_SYNC_REV;
   const pushBaseRevs = homeRevs(state).filter((base) => base !== rev);
 
   const fromSharedFields: CheckoutRecord = { rev, targets: state.lastPullTargets ?? [] };
 
   if (pushBaseRevs.length > 0) fromSharedFields.pushBaseRevs = pushBaseRevs;
-  const record = state.lastPullByWorkspace?.[key] ?? fromSharedFields;
+  const record = stored ?? fromSharedFields;
+  const records = { ...state.lastPullByWorkspace };
 
-  state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [key]: record };
+  if (storedKey && storedKey !== key) delete records[storedKey];
+  state.lastPullByWorkspace = { ...records, [key]: record };
 
   return record;
 }
 
 /** The record of the checkout `localConfig`'s pulls deliver into, if any. */
 export async function deliveringCheckoutRecord(localConfig: LocalConfig, state?: State): Promise<CheckoutRecord | undefined> {
-  const key = await checkoutRecordKey(localConfig);
-
-  if (!key) return undefined;
-
-  return (state ?? await loadStateForScope(localConfig)).lastPullByWorkspace?.[key];
+  return (await checkoutRecordEntry(localConfig, state ?? await loadStateForScope(localConfig))).record;
 }
 
 /**
@@ -1280,8 +1379,7 @@ export type TeamDelivery =
  */
 export async function teamDelivery(localConfig: LocalConfig, tool: string, options: { beforeOwnPull?: boolean } = {}): Promise<TeamDelivery> {
   const state = await loadStateForScope(localConfig);
-  const key = await checkoutRecordKey(localConfig);
-  const record = key ? state.lastPullByWorkspace?.[key] : undefined;
+  const { key, record } = await checkoutRecordEntry(localConfig, state);
 
   const gap = (reason: DeliveryGap): TeamDelivery => (record
     ? { complete: false, key, record, gap: reason }
@@ -1369,6 +1467,50 @@ async function excludeWorkspaceInstructions(localConfig: LocalConfig, options: G
   }
 }
 
+/**
+ * Let each tool whose rule folder cell is `grant` (Claude Code) read the rule folders this scope delivers (#1787):
+ * the scope's delivered `rules` directory in `permissions.additionalDirectories` of the tool's user settings, owned
+ * through the checkout record. Only user scope needs it: a project's folders sit in the worktree, which the tool reads
+ * anyway. While the scope delivers no rule folder there, what an earlier pull added is taken back.
+ */
+async function grantRuleFolders(localConfig: LocalConfig, options: GlobalOptions): Promise<void> {
+  if (options.dryRun) return;
+
+  try {
+    const state = await loadStateForScope(localConfig);
+    const record = await deliveringCheckoutRecord(localConfig, state);
+    const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+
+    if (!record || !teamConfig) return;
+    const { DeliveredFolders } = await import('./resources/delivered-folders.js');
+    const { RuleFolders } = await import('./resources/rule-folders.js');
+    const rulesDir = path.join(DeliveredFolders.root(localConfig, 'rules'), 'rules');
+    const delivers = DeliveredFolders.worktreeRoot(localConfig) === null && (await listDirs(rulesDir)).length > 0;
+
+    const settingsFiles = (await rulesReceivingTools(teamConfig, localConfig))
+      .filter((tool) => !isAgentExcluded(localConfig, tool) && ruleFolderReachOf(tool).reach === 'grant')
+      .flatMap((tool) => (isToolId(tool) ? [path.join(toolHome(tool), 'settings.json')] : []));
+
+    const previous = record.ruleFolderGrants ?? {};
+    const granted: Record<string, string[]> = {};
+
+    for (const settingsFile of new Set([...Object.keys(previous), ...settingsFiles])) {
+      const dirs = delivers && settingsFiles.includes(settingsFile) ? [rulesDir] : [];
+      const owned = await RuleFolders.grant({ settingsFile, dirs, previous: previous[settingsFile] ?? [] });
+
+      if (owned.length > 0) granted[settingsFile] = owned;
+    }
+
+    if (JSON.stringify(granted) === JSON.stringify(previous)) return;
+
+    if (Object.keys(granted).length > 0) record.ruleFolderGrants = granted;
+    else delete record.ruleFolderGrants;
+    await saveStateForScope(state, localConfig);
+  } catch (e) {
+    log.warn(`[${installScopeName(localConfig.scope)}] Claude Code may ask before it reads the files of team rule folders: their directory was not added to its settings (${e instanceof Error ? e.message : String(e)}). Run \`teamai pull\` to retry.`);
+  }
+}
+
 /** Which children a workspace's checkout was delivered with (#913), for the fast path. */
 function setChildren(record: CheckoutRecord, localConfig: LocalConfig): void {
   if (localConfig.scope !== 'project') return;
@@ -1413,13 +1555,13 @@ function setAgentModels(record: CheckoutRecord, agentModels: AgentModelRecords):
 
 /** The ledger a pull of that checkout starts from (see DeliveryLedger), carrying the pull's `recorder` when it has one. */
 async function openCheckoutLedger(localConfig: LocalConfig, state?: State, recorder?: DeliveryRecorder): Promise<DeliveryLedger> {
-  const key = await checkoutRecordKey(localConfig);
-  const records = (state ?? await loadStateForScope(localConfig)).lastPullByWorkspace ?? {};
-  const record = key ? records[key] : undefined;
+  const loaded = state ?? await loadStateForScope(localConfig);
+  const records = loaded.lastPullByWorkspace ?? {};
+  const { storedKey, record } = await checkoutRecordEntry(localConfig, loaded);
 
   // Only words a kept copy (#993): a record lost to a new key is not this checkout's.
   const otherRecords: DeliveredHashes = Object.assign({}, ...Object.entries(records)
-    .filter(([other]) => other !== key)
+    .filter(([other]) => other !== storedKey)
     .map(([, other]) => other.delivered ?? {}));
 
   const ledger = openLedger(record?.delivered, record?.agentModels, otherRecords);
@@ -1442,9 +1584,8 @@ export async function editDeliveryRecord(localConfig: LocalConfig): Promise<{ le
     ledger,
     save: async () => {
       if (JSON.stringify(ledger.hashes) === opened) return;
-      const key = await checkoutRecordKey(localConfig);
       const state = await loadStateForScope(localConfig);
-      const record = key ? state.lastPullByWorkspace?.[key] : undefined;
+      const record = (await checkoutRecordEntry(localConfig, state)).record;
 
       if (!record) return;
       record.delivered = ledger.hashes;
@@ -1634,6 +1775,8 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
 
     if (record.claudeMdExcludes) reset.claudeMdExcludes = record.claudeMdExcludes;
 
+    if (record.ruleFolderGrants) reset.ruleFolderGrants = record.ruleFolderGrants;
+
     return [key, pushBaseRevs.length === 0 ? reset : { ...reset, pushBaseRevs }];
   }));
 }
@@ -1758,7 +1901,7 @@ async function pullForScope(
   // whose file the team deleted stops being one, and in legacy mode one
   // shadowed by a new shared-root file of the same name is withdrawn (#649
   // review, #707).
-  // A single-repo checkout or pinned clone may lack files still on the default
+  // A checkout in self mode or pinned clone may lack files still on the default
   // branch. Settle against origin/<default>, since a dropped record never comes
   // back when that checkout returns to the default branch (#649 review).
   if (!options.dryRun) {
@@ -1785,7 +1928,7 @@ async function pullForScope(
   }
 
   // Publish what contribute queued. Here rather than inside the refresh, which
-  // returns early for single-repo and HTTP: contribute tells the member the next
+  // returns early for self mode and HTTP: contribute tells the member the next
   // pull will retry, and that has to hold in every mode. pull() holds the
   // partition sync lock across this scope and the lock is not reentrant, so
   // publishing must not try to take it again. Never let it block the pull.
@@ -1824,6 +1967,13 @@ async function pullForScope(
 
     return;
   }
+
+  // Every scan below leaves out a folder of a type this release cannot read
+  // (#1791). Said here, before the revision fast path, so every pull says it.
+  const skippedFolders = await findSkippedFolders(localConfig.repo.localPath);
+  reportSkippedFolders(skippedFolders);
+
+  if (skippedFolders.length > 0) reported.add('skipped-folders');
 
   // Resolve role-scoped instruction sources before the revision fast path so
   // CLI upgrades can refresh managed instruction blocks without a repo change.
@@ -2139,7 +2289,7 @@ async function pullForScope(
       const sameChildren = !workspaceKey || state.lastPullByWorkspace?.[workspaceKey]?.children === localConfig.children?.fingerprint;
 
       if (!sameChildren) log.debug(`[${scopeLabel}] The workspace's children changed, syncing`);
-      const checkout = recordKey ? state.lastPullByWorkspace?.[recordKey] : undefined;
+      const checkout = (await checkoutRecordEntry(localConfig, state)).record;
 
       // A change in manifest/members.yaml arrives with the fetch and can leave
       // the checked-out revision where it was — a pinned workspace reads
@@ -2155,8 +2305,14 @@ async function pullForScope(
         || isDeepStrictEqual(rolesDeliveredFor(checkout.selection), rolesDeliveredFor(deliverySelection(localConfig)));
 
       if (!sameRoles) log.debug(`[${scopeLabel}] The roles delivered for changed, syncing`);
+      // A release that skips a folder an older one delivered from must remove
+      // those copies at once, not on the team's next commit (#1791). A record
+      // without the list read no folder as skipped.
+      const sameSkipped = isDeepStrictEqual(checkout?.skippedFolders ?? [], skippedFolders.map((folder) => folder.path));
 
-      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev && recorded.teamRef === localConfig.repo.ref && listed && sameChildren && sameRoles) {
+      if (!sameSkipped) log.debug(`[${scopeLabel}] The folders this release skips changed, syncing`);
+
+      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev && recorded.teamRef === localConfig.repo.ref && listed && sameChildren && sameRoles && sameSkipped) {
         currentTargets = await getInstalledResourceTargets(freshConfig, localConfig);
         const previousTargets = recorded.targets;
         const syncedTargets = new Set(previousTargets ?? []);
@@ -2314,7 +2470,7 @@ async function pullForScope(
   // and this pull's writes are recorded when the state is saved (#822).
   // A dry run's writers report what they would write, for its preview of the block.
   const ledger = await openCheckoutLedger(localConfig, undefined, policy.recorder);
-  const previousRecord = recordKey ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[recordKey] : undefined;
+  const previousRecord = (await checkoutRecordEntry(localConfig, await loadStateForScope(localConfig))).record;
   const unpinnedRef = localConfig.repo.ref === undefined ? previousRecord?.teamRef : undefined;
 
   const reportKeptCopies = (): number => {
@@ -2883,7 +3039,7 @@ async function pullForScope(
   try {
     const { deployBuiltinRules } = await import('./builtin-rules.js');
     const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun, toolsMissingRules: ledger.toolsMissingRules });
+    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun, toolsMissingRules: ledger.toolsMissingRules, ledger });
 
     if (deployed > 0 && !dryRun) {
       log.debug(`[${scopeLabel}] Deployed built-in rules to ${deployed} tool(s)`);
@@ -2922,7 +3078,7 @@ async function pullForScope(
   let syncedSessionToolHomes: SessionToolHomes | undefined;
 
   if (!options.dryRun && resourceTypes.includes('skills')) {
-    const previous = recordKey ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[recordKey] : undefined;
+    const previous = (await checkoutRecordEntry(localConfig, await loadStateForScope(localConfig))).record;
     // A resource a collision held, or this pull did not sync, keeps the places recorded before.
     const syncedCurrent: PlacesRecord = { blocks: current.blocks };
 
@@ -3006,6 +3162,7 @@ async function pullForScope(
       if (rootsSeeded) record.rootsSeeded = true;
       setChildren(record, localConfig);
       record.selection = deliverySelection(localConfig);
+      record.skippedFolders = skippedFolders.map((folder) => folder.path);
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
       record.places = syncedPlaces;
@@ -3040,9 +3197,11 @@ async function pullForScope(
       const others = previousRev === null && live ? awaitingFullSync(live) : live;
       // The delivered paths are rewritten after the last writer of this pull
       // (see syncDeliveredGitExclude): until then, the checkout's previous ones.
-      const gitExcludePaths = state.lastPullByWorkspace?.[recordKey]?.gitExcludePaths;
-      const seeded = rootsSeeded || state.lastPullByWorkspace?.[recordKey]?.rootsSeeded;
-      const claudeMdExcludes = state.lastPullByWorkspace?.[recordKey]?.claudeMdExcludes;
+      const storedRecord = (await checkoutRecordEntry(localConfig, state)).record;
+      const gitExcludePaths = storedRecord?.gitExcludePaths;
+      const seeded = rootsSeeded || storedRecord?.rootsSeeded;
+      const claudeMdExcludes = storedRecord?.claudeMdExcludes;
+      const ruleFolderGrants = storedRecord?.ruleFolderGrants;
 
       const record: CheckoutRecord = { rev: deliveredRev, targets: syncedTargets, delivered: ledger.hashes };
 
@@ -3060,8 +3219,11 @@ async function pullForScope(
 
       if (claudeMdExcludes) record.claudeMdExcludes = claudeMdExcludes;
 
+      if (ruleFolderGrants) record.ruleFolderGrants = ruleFolderGrants;
+
       setChildren(record, localConfig);
       record.selection = deliverySelection(localConfig);
+      record.skippedFolders = skippedFolders.map((folder) => folder.path);
       setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = {
         ...others,
@@ -3110,13 +3272,16 @@ async function pullForScope(
   }
 
   // Every checkout of the repo keeps `workspaces/<id>/` in the shared data home
-  // (search index, managed MCP, resource cache), and a removed worktree's stays
+  // (search index, managed MCP, hook records, resource cache), and a removed worktree's stays
   // behind. A full sync records its own root there and drops the directories of
-  // checkouts that are gone; the fast path probes none (#808, #993).
+  // checkouts that are gone, after taking back the hooks they recorded in HOME
+  // (#1787); the fast path probes none (#808, #993).
   if (localConfig.scope === 'project' && localConfig.projectRoot && !options.dryRun) {
     try {
       const { pruneWorkspaceDirs, writeWorkspaceRoot } = await import('./utils/partition.js');
+      const { releaseRemovedCheckoutHooks } = await import('./hooks.js');
       await writeWorkspaceRoot(getDataHome(localConfig), localConfig.projectRoot);
+      await releaseRemovedCheckoutHooks(freshConfig, localConfig);
       const removed = await pruneWorkspaceDirs(getDataHome(localConfig), localConfig.projectRoot);
 
       if (removed.length > 0) log.debug(`[${scopeLabel}] removed ${removed.length} directory(ies) of removed worktrees`);
@@ -3264,8 +3429,8 @@ export async function resolveInstructionBlocks(
   const recallEnabled = isRecallEnabled(localConfig, config);
 
   const blocks: InstructionBlocks = {
-    recall: recallEnabled ? compileRecallRulesBlock() : null,
-    directRecall: recallEnabled ? compileDirectRecallRulesBlock() : null,
+    recall: recallEnabled ? await compileRecallRulesBlock(config.language, localConfig.repo.localPath) : null,
+    directRecall: recallEnabled ? await compileDirectRecallRulesBlock(config.language, localConfig.repo.localPath) : null,
   };
 
   try {
@@ -3408,46 +3573,23 @@ async function reportInstructionFiles(
   recorder.succeeded('instructions');
 }
 
+/** `body` between the recall markers, with the line that says teamai keeps it. */
+function recallBlock(body: string): string {
+    return [TEAMAI_RECALL_RULES_START, '<!-- DO NOT EDIT: This section is auto-managed by teamai -->', '', body, '', TEAMAI_RECALL_RULES_END].join('\n');
+}
+
 /**
  * The recall block for a tool without the `teamai-recall` subagent (#945):
  * the agent runs `teamai recall` itself. Same markers as
  * compileRecallRulesBlock, so every reader and remover treats both alike.
+ * The text is `block-direct.md` of the recall folder that applies with the
+ * team repo at `repoPath` (#1787), in `language` when it has that file;
+ * teamai ships it in English only.
  */
-export function compileDirectRecallRulesBlock(): string {
-    return [
-        TEAMAI_RECALL_RULES_START,
-        '<!-- DO NOT EDIT: This section is auto-managed by teamai -->',
-        '',
-        '## Team Knowledge Recall (teamai)',
-        '',
-        '**Before** starting a task that involves code changes, debugging,',
-        'or design decisions, you **SHOULD** search the team knowledge base',
-        '(learnings, docs, skills, rules and the codebase wiki) by running:',
-        '',
-        '```bash',
-        'teamai recall "<3-6 high-signal keywords from the task>"',
-        '```',
-        '',
-        'unless one of these skip conditions applies:',
-        '',
-        '1. **User already provided context** — the user referenced specific files,',
-        '   gave a solution, or said "the answer is in this directory/file".',
-        '2. **Local files have the answer** — the task info is directly available',
-        '   from the current workspace (e.g. fixing an obvious bug in the current file).',
-        '3. **Trivial/local change** — small modifications to known files (typo fix,',
-        '   parameter tweak, formatting) that need no additional knowledge.',
-        '4. **Task domain is outside team knowledge coverage** — the task is',
-        '   unrelated to this team\'s systems/workflows. `teamai recall --check "<keywords>"`',
-        '   answers `RELEVANT` or `NOT_RELEVANT` without reading anything.',
-        '',
-        'Matching is lexical: give each domain term in every language the team',
-        'writes in, and keep names, identifiers, error codes and paths as they are.',
-        'Read the files recall returns for their full content. If its output contains',
-        '`Nothing was searched:`, show that line to the user instead of concluding the',
-        'team has no knowledge on the topic.',
-        '',
-        TEAMAI_RECALL_RULES_END,
-    ].join('\n');
+export async function compileDirectRecallRulesBlock(language?: 'en' | 'zh', repoPath?: string): Promise<string> {
+    const { recallTexts } = await import('./builtin-rules.js');
+
+    return recallBlock((await recallTexts(language, repoPath)).directBlock);
 }
 
 /**
@@ -3457,62 +3599,15 @@ export function compileDirectRecallRulesBlock(): string {
  *   2. Declare which doc_ids were actually consulted at task completion.
  *
  * Delivered to the instruction targets of tools with the subagent (an
- * `agents` path) — see syncManagedInstructions.
+ * `agents` path) — see syncManagedInstructions. The text is `block.md` of the
+ * recall folder that applies with the team repo at `repoPath` (#1787);
+ * `teamai.yaml` `language: en` takes `block.en.md`, which drops the Chinese
+ * self-exemption, as the recall rule does (#1014).
  */
-export function compileRecallRulesBlock(): string {
-    const lines = [
-        TEAMAI_RECALL_RULES_START,
-        '<!-- DO NOT EDIT: This section is auto-managed by teamai -->',
-        '',
-        '## Team Knowledge Recall (teamai)',
-        '',
-        '> **Self-exemption (must read first):** If you ARE the `teamai-recall` subagent yourself, this rule does NOT apply to you — do not invoke `teamai-recall` (or any recall) again. Proceed directly to performing the knowledge search that is your task. This prevents infinite subagent recursion in tools (e.g. Cursor) whose always-apply rules leak into subagent sessions.',
-        '>',
-        '> **自豁免（务必先读）：** 如果你自己就是 `teamai-recall` subagent，本规则对你不适用——不要再调用 `teamai-recall`（或任何 recall），直接执行你本职的知识检索任务。此举防止在（如 Cursor 等）会把 always-apply 规则泄漏进 subagent 会话的工具中发生无限递归。',
-        '',
-        '**Before** starting a task that involves code changes, debugging,',
-        'or design decisions, you **SHOULD** invoke the `teamai-recall`',
-        'subagent via the Agent tool with a concise natural-language',
-        'description of the task — unless one of these skip conditions applies:',
-        '',
-        '1. **User already provided context** — the user referenced specific files,',
-        '   gave a solution, or said "the answer is in this directory/file".',
-        '2. **Local files have the answer** — the task info is directly available',
-        '   from the current workspace (e.g. fixing an obvious bug in the current file).',
-        '3. **Trivial/local change** — small modifications to known files (typo fix,',
-        '   parameter tweak, formatting) that need no additional knowledge.',
-        '4. **Task domain is outside team knowledge coverage** — the task is',
-        '   unrelated to this team\'s systems/workflows (e.g. generic language',
-        '   questions, pure frontend styling with no team-specific context).',
-        '   The recall subagent also runs a relevance precheck and returns fast',
-        '   for unrelated tasks, but skipping outright saves a subagent round-trip.',
-        '',
-        'The subagent will return a compact summary of relevant team knowledge',
-        '(skills, learnings, docs, rules) without polluting this conversation',
-        'with raw content. For **feature/large tasks**, recall returns a',
-        '"Candidate change files" list — check your planned changes cover all',
-        'listed files before starting. For **bugfix/small tasks**, recall runs',
-        'a lighter pass and you may skip it entirely per condition 2–3 above.',
-        '',
-        '**Important constraints on agent sequencing (when recall is invoked):**',
-        '1. Invoke `teamai-recall` subagent **first and alone** — never',
-        '   launch it in parallel with Explore or other research agents.',
-        '2. After recall returns results, use Read to get full content of the',
-        '   returned files if you need more detail. Do NOT launch Explore agents',
-        '   to search for the same topics — recall results + Read is the complete',
-        '   workflow for accessing team knowledge.',
-        '3. Explore/research agents have their own scope and must NOT overlap',
-        '   with recall:',
-        '   - **recall subagent covers:** team learnings, codebase docs, skills,',
-        '     rules, and anything under `.teamai/`, `learnings/`, `docs/team-codebase/`.',
-        '   - **Explore agents cover:** navigating source code in the current',
-        '     working directory, and web search for external information.',
-        '   - Explore agents must never search paths covered by recall.',
-        '',
-        TEAMAI_RECALL_RULES_END,
-    ];
+export async function compileRecallRulesBlock(language?: 'en' | 'zh', repoPath?: string): Promise<string> {
+    const { recallTexts } = await import('./builtin-rules.js');
 
-    return lines.join('\n');
+    return recallBlock((await recallTexts(language, repoPath)).block);
 }
 
 /**
@@ -3856,6 +3951,7 @@ export async function pull(
               resourceTypes: ['skills', 'rules', 'docs', 'env', 'agents'],
               revisionField: 'lastInheritedPullRev',
             }, syncResult);
+            await grantRuleFolders(inheritedUserConfig, options);
           }
         } else {
           activeUserConfig = loadedUserConfig;
@@ -3866,6 +3962,7 @@ export async function pull(
             // cannot prompt, and the hook cannot spare the wait.
             if (!options.dryRun && !options.inline) await runTeamScript(activeUserConfig, 'prePull');
             await pullForScope(activeUserConfig, options, reported, {}, syncResult, teamEnvs, instructions);
+            await grantRuleFolders(activeUserConfig, options);
           }
         }
       } else if (inheritUserScope) {
@@ -3901,6 +3998,7 @@ export async function pull(
 
         if (pinRequired && syncResult.teamRepoFailed) return;
         await excludeWorkspaceInstructions(projectConfig, options);
+        await grantRuleFolders(projectConfig, options);
       }
     } catch (e) {
       if (e instanceof EnvScopesUnreadableError) process.exitCode = 1;
@@ -4827,7 +4925,8 @@ async function reconcileMcpAllScopes(
         }
       }
     } catch (e) {
-      log.debug(`[${installScopeName(localConfig.scope)}] MCP reconcile skipped: ${e instanceof Error ? e.message : String(e)}`);
+      log.warn(`[${installScopeName(localConfig.scope)}] Team MCP servers were not applied: ${e instanceof Error ? e.message : String(e)}. `
+        + 'Fix the cause, then run `teamai pull` again.');
       errors.push(`[${installScopeName(localConfig.scope)}] MCP: ${e instanceof Error ? e.message : String(e)}`);
     }
   }

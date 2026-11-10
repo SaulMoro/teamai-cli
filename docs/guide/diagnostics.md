@@ -15,7 +15,7 @@ teamai remove skills <name>
 teamai remove rules <name> --force
 ```
 
-`doctor` exits 1 when any check fails. `doctor --fix` also removes what workflow runs left once `workflows.retention` has passed, and deletes again the branches a succeeded run could not delete ([The branches a run leaves](./workflow.md#the-branches-a-run-leaves)). `stats` adds a recall section when that scope has recall runs. See [Recall adoption and upvotes](./knowledge.md#recall-adoption-and-upvotes).
+`doctor` exits 1 when any check fails. `doctor --fix` also removes what workflow runs left once `workflows.retention` has passed, and deletes again the branches a succeeded run could not delete ([The branches a run leaves](./workflow.md#the-branches-a-run-leaves)). It also removes the team hook entries a removed worktree of the repository left in HOME. `stats` adds a recall section when that scope has recall runs. See [Recall adoption and upvotes](./knowledge.md#recall-adoption-and-upvotes).
 
 For tools with known agent search paths, `doctor` also checks that the configured agents directory is one the tool reads. A successful delivery to a custom directory alone does not pass this check; correct `toolPaths.<tool>.agents` in the team repo and pull again.
 
@@ -23,7 +23,7 @@ Generated-hook checks accept a launcher from another installation when the handl
 
 If a file occupies a tool's skills directory, `pull` keeps it, names the blocked path, and continues delivering to other tools. `doctor` fails the skills-directory check instead of treating the skipped tool as delivered. Move the file aside, then run `teamai pull` again to deliver the missing skills. `uninstall` preserves the blocking file and continues cleaning the tool's other managed resources.
 
-ZCode's CLI reads hooks from `~/.zcode/cli/config.json` even in single-repo mode. `hooks inject` moves teamai's old project-file entries there, keeps personal settings, and gates team hooks to their project. `hooks list` and `doctor` check that same HOME file.
+ZCode's CLI reads hooks from `~/.zcode/cli/config.json` even in self mode. `hooks inject` moves teamai's old project-file entries there, keeps personal settings, and gates team hooks to their project. `hooks list` and `doctor` check that same HOME file.
 
 Manual `teamai update`, `teamai update --check`, and `teamai update --dry-run` always query the npm registry. If the registry cannot be reached, they report the last check from the past 12 hours, or say the update status is unknown. Automatic checks reuse the registry version for up to 12 hours and compare each installed copy against it. A legacy cached null is checked again because it does not identify the registry version. `--dry-run` does not save the check result or install an update.
 
@@ -38,6 +38,8 @@ autoUpdate: false
 # ~/.teamai/config.yaml, else ~/.teamai/projects/<slug>/config.yaml
 updatePolicy: skip    # auto, prompt, or skip
 ```
+
+The update handler records `ok` for a completed update, `skipped` when no install is needed or allowed, and `failed` for a failed check, install or hook refresh. Automatic hooks record unsupported install layouts at debug level. Run `teamai update` to see their manual upgrade instructions.
 
 For OpenClaw's default workspace, `doctor` checks the whole `AGENTS.md`, including personal text, against `agents.defaults.bootstrapMaxChars` and `bootstrapTotalMaxChars` in the resolved `openclaw.json`. Their defaults are 20,000 and 60,000 characters. Shorten the file or review these limits if it would be truncated or skipped; `pull` does not truncate your instructions. Per-agent overrides require checking that agent's configuration separately.
 

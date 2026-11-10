@@ -54,7 +54,7 @@ export const tools = {
         ],
       },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'opencode-plugin', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'opencode-plugin', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['opencode'],
     launch: 'opencode',
     autoCompact: 'none',

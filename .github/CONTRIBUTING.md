@@ -49,7 +49,7 @@ git status   # nothing under .teamai/ or tool dirs should be staged for this rep
 Pitfalls:
 
 - Init the **canonical hub URL**, not a personal fork. `teamai init <url>` treats that URL as the team repo; a fork diverges immediately, and GitHub push/PR today targets the configured remote (no fork-to-upstream flow).
-- Do **not** run `teamai init .`. That is single-repo mode: it turns the CLI source tree into the team repo and writes scaffolding at the repo root (easy to commit by mistake).
+- Do **not** run `teamai init .`. That is self mode: it turns the CLI source tree into the team repo and writes scaffolding at the repo root (easy to commit by mistake).
 - A member-registration warning is **expected** without write access. It names the failure reason, or says another write holds `teamai-reports`. Local config is still saved and `teamai pull` still works. Fix the cause or wait for the other write, then re-run the same `teamai init` command to retry registration.
 
 #### Write access and team stats
@@ -95,7 +95,7 @@ Before you change `src/workflow/`, read [docs/dev/workflow-engine.md](../docs/de
 
 1. Update from `upstream/main`, then create a feature branch. Prefer a git worktree for code changes when practical.
 2. Write tests for your change (we target 80%+ coverage).
-3. Run `npx vitest run`, `npx tsc --noEmit` and `npm run lint` — all must pass.
+3. Run the test files that cover what you changed (`npx vitest run <test files>`), `npx tsc --noEmit` and `npm run lint` — all must pass. CI runs the full unit suite on every push to a PR. Run the full suite yourself (`npx vitest run`) when the change touches shared test setup (`src/__tests__/helpers/`), a `vitest*.config.ts`, `package.json` or `package-lock.json`.
 4. Use conventional commits where possible: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`.
 5. Push the branch to your fork and open a PR against `Tencent/teamai-cli:main`. Describe the problem, the fix, and anything reviewers should pay attention to.
 
@@ -127,7 +127,7 @@ What `npm run lint` reports, and the fix:
 | `path.join(process.env.HOME ?? '', '.teamai')` in `src/sync-cache.ts` | `teamai(home-env): Read the user home through getUserHome() in src/utils/home.ts so USERPROFILE and platform fallbacks remain supported.` | `path.join(getUserHome(), '.teamai')` |
 | `execFileSync('gh', ['pr', 'merge', String(pr), '--auto'])` in `src/providers/github/` | `teamai(no-provider-merge): Providers and workflow delivery must not merge, accept or enable auto-merge on pull requests.` | Leave merging to a maintainer; providers only find and create requests. |
 | `import { startRun } from '../../engine.js'` in `src/workflow/drivers/skill/report.ts` | `teamai(workflow-boundaries): Workflow module boundary forbids src/workflow/drivers/skill/report.ts -> src/workflow/engine.ts.` | Import from `protocol.ts`, which the skill driver may use. |
-| `const team = YAML.parse(text)` in `src/config.ts` | `teamai(yaml-parse): Parse YAML with parseYaml() from src/utils/yaml.ts: it returns JSON values, where yaml's parse turns !!set, !!binary and !!timestamp into a Set, Buffer or Date.` | `const team = parseYaml(text)`, then a zod schema. |
+| `const team = YAML.parse(text)` in `src/config.ts` | `teamai(yaml-parse): Parse YAML with parseYaml() from @teamai/tool-core/yaml: it returns JSON values, where yaml's parse turns !!set, !!binary and !!timestamp into a Set, Buffer or Date.` | `const team = parseYaml(text)`, then a zod schema. |
 | `` `push failed: ${(e as Error).message}` `` | `` teamai(require-safety-comment-for-type-assertion): This type assertion has no `SAFETY:` justification. `` | `` `push failed: ${e instanceof Error ? e.message : String(e)}` `` |
 | `typeof lock.pid === 'number' ? lock.pid : undefined` on a parsed lock file | `` teamai(no-runtime-typeof): A `typeof` check narrows a representation without establishing its contract. `` | Parse the file once: `LockSchema.safeParse(parseYaml(text))`, with `pid: z.number().optional()`. |
 
@@ -162,7 +162,7 @@ node scripts/check-docs.mjs --write
 node scripts/check-docs.mjs
 ```
 
-For example, an invented `teamai skill gett core` in a served skill fails check mode as an unknown subcommand. Fix the skill text rather than regenerating away that failure. The command's check/write tests live in `scripts/check-docs.test.ts`.
+For example, an invented `teamai skill gett core` in a served skill fails check mode as an unknown subcommand. Fix the skill text rather than regenerating away that failure. The command's check/write tests live in `scripts/check-docs.test.ts`. To iterate on one doc check, add `--only=<check>` (an unknown name lists the valid ones); the generated files are compared on every run.
 
 Iterate on the affected E2E files; run the full suite when changing the E2E runner, shared fixtures, or test isolation:
 
@@ -175,6 +175,8 @@ The runner first rejects `TMPDIR` (or `TMP` / `TEMP` on Windows) inside any Git 
 Workers share the prepared `dist/` and OpenCode binary: never rebuild or reinstall them inside a test. Cases needing remote credentials skip without them ([CI E2E setup](../docs/dev/ci-e2e-setup.md)). PRs changing runtime behavior (not docs-, tests- or lint-rule-only) include one real-CLI verification, such as a focused E2E run, with its command and result.
 
 ### When a test fails only on CI
+
+Unit tests retry once on CI. A case that passed only on retry is listed under **Flaky Tests** in the job summary, not in the log. Treat it as a failure from the table below.
 
 Find the failed cases, from the first attempt when a rerun passed:
 

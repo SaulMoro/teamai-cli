@@ -23,7 +23,7 @@ export const tools = {
     },
     mcp: NONE,
     // ~/.joycode/hooks.json and <project>/.joycode/hooks.json take Claude-shaped hooks (command type, timeout in seconds).
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.joycode/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.joycode/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.joycode/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.joycode/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['joycode'],
     launch: 'none',
     autoCompact: 'none',

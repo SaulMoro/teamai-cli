@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { ToolArgumentsSchema, type ContentBlock, type Message, type Session, type ThinkingBlock } from '@teamai/tool-core/sessions/ir';
 import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
-import { OptionalString, TextOrBlocksSchema } from '@teamai/tool-core/sessions/fs';
+import { OptionalString, resolveRealCwd, TextOrBlocksSchema } from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema } from '@teamai/tool-core/json';
 
 /** A time as ISO 8601, from epoch milliseconds or a date string; anything that is not a time reads as absent. */
@@ -322,7 +322,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private parsed(sessionId?: string, projectPath?: string): ParsedFile[] {
-    const wanted = projectPath ? path.resolve(projectPath) : undefined;
+    const wanted = projectPath ? resolveRealCwd(projectPath) : undefined;
 
     return this.files(this.projectStorageRoot(projectPath)).flatMap((file) => {
       const parsed = parseFile(file);
@@ -333,7 +333,7 @@ export class PiAdapter extends AgentAdapter {
 
       if (!id || (sessionId !== undefined && id !== sessionId)) return [];
 
-      if (wanted !== undefined && (!cwd || path.resolve(cwd) !== wanted)) return [];
+      if (wanted !== undefined && (!cwd || resolveRealCwd(cwd) !== wanted)) return [];
 
       return [parsed];
     });

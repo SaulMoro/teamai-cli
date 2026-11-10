@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildHandlerRegistry } from '../hook-handlers.js';
 import { readContributeState, writeContributeState } from '../contribute-check.js';
-import { CONTRIBUTE_BASE_THRESHOLD, CONTRIBUTE_SMART_THRESHOLD } from '../types.js';
+
+/** min_tools and min_score of hooks/teamai-friction-reminder/HOOK.yaml, teamai's default. */
+const CONTRIBUTE_BASE_THRESHOLD = 15;
+const CONTRIBUTE_SMART_THRESHOLD = 20;
 
 describe('Codex Stop hint handoff with persisted session state', () => {
   let tmpHome: string;
@@ -50,7 +53,7 @@ describe('Codex Stop hint handoff with persisted session state', () => {
     expect(state.pendingHint).toContain('teamai skill get share');
     expect(await stop.execute(stdin, 'codex', null)).toBeNull();
     expect((await readContributeState(stdin.session_id)).pendingHint).toBe(state.pendingHint);
-    expect(JSON.parse((await prompt.execute(stdin, 'codex', null))!)).toEqual({
+    expect(JSON.parse(String(await prompt.execute(stdin, 'codex', null)))).toEqual({
       hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: state.pendingHint },
     });
     expect((await readContributeState(stdin.session_id)).pendingHint).toBeUndefined();
@@ -89,7 +92,7 @@ describe('Codex Stop hint handoff with persisted session state', () => {
       lastEvaluated: Date.now(),
       friction: { interrupt: 0, toolReject: 0, correction: 1, toolError: 0 },
     });
-    const payload = JSON.parse((await stop.execute(fresh, 'claude', null))!);
+    const payload = JSON.parse(String(await stop.execute(fresh, 'claude', null)));
     expect(payload.hookSpecificOutput.additionalContext).toContain('[teamai]');
     expect(payload.hookSpecificOutput.additionalContext).not.toContain('verbatim');
   });

@@ -1,0 +1,93 @@
+schemaVersion: v1alpha1
+name: teamai-import-from-mr
+description: Turn merged MRs or PRs into team learnings - the AI tool drafts one per MR, the person accepts, edits or skips each draft, and the accepted ones are published as teamai contribute does. Use when the person wants learnings from merged MRs or PRs, such as the ones the session-start hint lists.
+invoke: ask
+private: true
+# teamai import --from-mr starts it too; its publish step also updates the teamwiki of each repository whose evidence
+# the team repo holds. mrs: the MR or PR URLs. all: accept every draft without asking. publish: false writes and pushes
+# nothing, so the drafts are only this run's outputs. dir: the team repo, or with output true, the directory each draft
+# is written into as learning.md (learning-<n>.md for several). discussions: read the review threads. language: the
+# language the learning is written in, teamai.yaml's language.
+inputs:
+  mrs: [string]
+  all: boolean
+  publish: boolean
+  dir: string
+  output: boolean
+  discussions: boolean
+  language: en | zh
+# A caller that publishes nothing has no directory to give.
+defaults:
+  inputs: { dir: "" }
+steps:
+  - id: extract
+    for_each: { items: inputs.mrs }
+    # One MR that fails leaves the others; finish names it and the command exits 1.
+    continue_on_failure: true
+    workflow:
+      outputs:
+        title: steps.draft.outputs.title
+        file: steps.draft.outputs.file
+        tags: steps.draft.outputs.tags
+        overlaps: steps.draft.outputs.overlaps
+        repo_url: steps.draft.outputs.repo_url
+      steps:
+        - id: fetch
+          command: teamai import fetch-mr --url "$URL" --mrs "$MRS" --threads "$THREADS"
+          env: { URL: "{{ item }}", MRS: "{{ inputs.mrs }}", THREADS: "{{ inputs.discussions }}" }
+          output: { url: string, title: string, description: string, commits: string, diff: string, threads: string, thread_count: number, author: string, date: string }
+        - id: ask-en
+          needs: [fetch]
+          if: inputs.language == 'en'
+          answer_file: draft.en.md
+          output: { text: string }
+          timeout: 600s
+        - id: ask-zh
+          needs: [fetch]
+          if: inputs.language == 'zh'
+          answer_file: draft.zh.md
+          output: { text: string }
+          timeout: 600s
+        - id: draft
+          needs: [fetch, ask-en, ask-zh]
+          # Only one of the two prompts ran; the other renders as nothing.
+          command: teamai import draft-mr --url "$URL" --title "$TITLE" --reply "$REPLY"
+          env: { URL: "{{ steps.fetch.outputs.url }}", TITLE: "{{ steps.fetch.outputs.title }}", REPLY: "{{ steps.ask-en.outputs.text }}{{ steps.ask-zh.outputs.text }}" }
+          output: { title: string, file: string, tags: [string], overlaps: [string], repo_url: string }
+  - id: review
+    needs: [extract]
+    if: "(steps.extract.outcome == 'success' || steps.extract.outcome == 'failed') && inputs.publish && !inputs.all"
+    for_each: "filter(steps.extract.results, .outcome == 'success')"
+    workflow:
+      outputs: { choice: steps.ask.choice, note: steps.ask.note }
+      steps:
+        - id: ask
+          choose:
+            message: |-
+              {{ item.outputs.title }} from {{ item.item }}
+              Tags: {{ item.outputs.tags }}
+              Overlapping learnings: {{ item.outputs.overlaps }}
+              Draft: {{ item.outputs.file }}
+              accept publishes it; edit publishes it with your note as its title; skip leaves it out.
+            options: [accept, edit, skip]
+  - id: publish
+    needs: [extract, review]
+    if: "(steps.extract.outcome == 'success' || steps.extract.outcome == 'failed') && inputs.publish"
+    command: teamai import publish-mr --extracted "$EXTRACTED" --reviewed "$REVIEWED" --target "$DIR" --drafts "$DRAFTS"
+    env:
+      EXTRACTED: "{{ steps.extract.results }}"
+      REVIEWED: "{{ steps.review.results }}"
+      DIR: "{{ inputs.dir }}"
+      DRAFTS: "{{ inputs.output }}"
+    writes: ["{{ inputs.dir }}"]
+    output: { published: [string] }
+  - id: finish
+    needs: [extract, publish]
+    if: steps.extract.outcome == 'success' || steps.extract.outcome == 'failed'
+    command: teamai import finish-mr --extracted "$EXTRACTED"
+    env: { EXTRACTED: "{{ steps.extract.results }}" }
+    output: { text: string, exit_code: number, learnings: [{ url: string, title: string, file: string, repo_url: string }] }
+outputs:
+  text: steps.finish.outputs.text
+  exit_code: steps.finish.outputs.exit_code
+  learnings: steps.finish.outputs.learnings

@@ -41,6 +41,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   omp: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(sessionStoreDir('omp', toolRoots)),
   muse: (toolRoots) => BUILT_IN_TOOLS.muse.platforms.muse.adapter(sessionStoreDir('muse', toolRoots)),
   hermes: (toolRoots) => BUILT_IN_TOOLS.hermes.platforms.hermes.adapter(sessionStoreDir('hermes', toolRoots)),
+  copilot: (toolRoots) => BUILT_IN_TOOLS.copilot.platforms.copilot.adapter(sessionStoreDir('copilot', toolRoots)),
   // TeamAI variants (different path prefixes, identical format)
   'claude-internal': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(sessionStoreDir('claude-internal', toolRoots)),
   tclaude: (toolRoots) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(sessionStoreDir('tclaude', toolRoots)),

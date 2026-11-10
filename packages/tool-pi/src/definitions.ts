@@ -24,7 +24,7 @@ export const tools = {
       user: { format: 'pi', reads: [{ base: 'home', path: '.pi/agent/mcp.json', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'pi', reads: [{ base: 'project', path: '.pi/mcp.json', when: 'cwdOnly', evidence: 'verified' }], readGates: ['pi-project-trust'] },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'pi-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'pi-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Pi 1.4.0: v3 JSONL under --session-dir > PI_CODING_AGENT_SESSION_DIR > the sessionDir setting > PI_CODING_AGENT_DIR/sessions.
     sessions: ['pi'],
     launch: 'pi',
@@ -74,7 +74,7 @@ export const tools = {
       user: { format: 'claude', reads: [{ base: 'home', path: '.omp/agent/mcp.json', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.omp/mcp.json', when: 'cwdOnly', evidence: 'verified' }] },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'omp-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'omp-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Oh My Pi 18.12.6: Pi v3 JSONL with a leading title record under the resolved profile agent root.
     sessions: ['omp'],
     launch: 'omp',

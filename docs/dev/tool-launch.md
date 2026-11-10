@@ -55,7 +55,8 @@ teamai(launch-through-workflows): Only a workflow driver launches an AI tool. Ru
 - **A tool instance launches on its own command, once accepted.** A step whose tool is an instance (`tools/<name>.yaml` in the team repo, or `~/.teamai/tools/`) runs through the adapter of the tool it extends: `launchTargetOf` in `tool-launch/tools.ts` resolves the name, and `LocalToolRun.command` in `local-tool-adapter.ts` carries the instance's `command`, which is looked up with `resolvePathCommand` (`@teamai/tool-core/cli-path`) in the PATH directories alone: on Windows `where $PATH:<name>`, since a bare `where` searches the current directory, the checkout, first. Before a team instance's command runs, the local driver calls `acceptToolCommand` in `tool-instances.ts`, which asks a person attended, through the driver's one terminal reader (it closes an open HITL question until answered, the step's abort ends it, and Ctrl-C stops the run as `interrupted`), and refuses unattended with `tool_not_accepted` until that file content is accepted. Answer steps and judges do not launch instances.
 - **A launched session says who launched it.** Answer steps, prompt steps and judges set `LAUNCHED_BY_ENV`
   (`launch-context.ts`). `hook-dispatch-cli.ts` skips every hook of a session teamai launched, except a workflow
-  step's, so the member's hooks neither capture nor judge an answer.
+  step's, so the member's hooks neither capture nor judge an answer. `hook-fast-path.ts` makes the same check before
+  the CLI bundle loads, with a copy of the variable's name that `hook-fast-path.test.ts` keeps equal.
 - **The support page follows the adapters.** The `workflows` and `aiBackend` cells in `src/tools.ts` stay hand-written,
   for their evidence and notes, and `tools.test.ts` fails when a cell marks a feature built that the adapter has no
   profile for, or the reverse.

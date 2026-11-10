@@ -20,7 +20,7 @@ export const tools = {
     },
     agents: NONE,
     mcp: NONE,
-    hooks: { user: { channel: 'adapter', adapter: 'hermes-plugin', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'hermes-plugin', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['hermes'],
     launch: 'hermes',
     autoCompact: 'none',

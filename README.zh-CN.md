@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/teamai-cli-logo.svg" alt="teamai-cli">
+  <img src="docs/assets/teamai-cli-logo.svg" alt="teamai-cli">
 </p>
 
 <h1 align="center">TeamAI — Make Every Team AI Native</h1>
@@ -19,14 +19,14 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
-**TeamAI 通过 git 仓库，管理团队的 skills、rules、agents、learnings、models、MCP 等 AI 资产。**
+**TeamAI 通过 git 仓库，管理团队的 skills、rules、agents、learnings、models、MCP 等 Agent 资源。**
 
-团队成员一次初始化，后续自动同步团队最新 AI 资产。
+团队成员一次初始化，后续自动同步团队最新 Agent 资源。
 
 ## 为什么选择 TeamAI
 
 <p align="center">
-  <img src="assets/use-cases.zh-CN.png" alt="八个日常场景：使用 TeamAI 前后对比" width="100%">
+  <img src="docs/assets/use-cases.zh-CN.png" alt="八个日常场景：使用 TeamAI 前后对比" width="100%">
 </p>
 
 ## 快速开始
@@ -71,7 +71,7 @@ Skills、Rules、MCP 等 Agent 能用的资源都可以分享：
 /teamai 帮我打开 TeamAI 看板
 ```
 
-团队成员完成接入后，打开 Agent 即可使用团队的全部 AI 资产。
+团队成员完成接入后，打开 Agent 即可使用团队的全部 Agent 资源。
 
 <details>
 <summary>命令行安装</summary>
@@ -132,7 +132,7 @@ teamai init https://github.com/your-org/your-repo --scope user
     <tr><td>Cursor</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td></tr>
     <tr><td>CodeBuddy</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td></tr>
     <tr><td>WorkBuddy</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td></tr>
-    <tr><td>GitHub Copilot CLI</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓³</td><td align="center">—</td></tr>
+    <tr><td>GitHub Copilot CLI</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td></tr>
     <tr><td>OpenCode</td><td align="center">✓</td><td align="center">✓¹</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td></tr>
     <tr><td>Pi Coding Agent</td><td align="center">✓</td><td align="center">✓¹</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓²</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">—</td></tr>
     <tr><td>Oh My Pi</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">—</td></tr>

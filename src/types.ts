@@ -129,7 +129,7 @@ export const SharingConfigSchema = z.object({
     /** Auto-apply team hooks during `teamai pull`. When false, pull only hints;
      *  the user must run `teamai hooks inject` to apply (explicit consent). */
     autoApply: z.boolean().default(true),
-    /** Restrict team hook commands to scripts under ~/.teamai/team-scripts/. */
+    /** Keep only team hook commands that run from their hook folder through ${TEAMAI_HOOK_DIR} or from ~/.teamai/team-scripts/. */
     requireTeamScripts: z.boolean().default(false),
   }).optional(),
   recall: z.object({
@@ -679,6 +679,12 @@ export const DEFAULT_TOOL_PATHS = {
   // .codebuddy/rules, which the two share (one copy), and in user scope its
   // own ~/.workbuddy/rules (#946). Its install probe stays .workbuddy
   // (`locate`'s install gate), whatever directory its rules land in.
+  //
+  // `rules` and `agents` are the project-scope values, so `userScope` restates
+  // both for the user scope: the engine resolves them against the app's data
+  // root (`<configDir>/rules`, `<configDir>/agents`), not against the
+  // project's `.codebuddy/`. The restatement is what `applyWorkBuddyLiveRoot`
+  // moves to the live root — the project paths must not follow it.
   workbuddy: {
     skills: '.workbuddy/skills',
     rules: '.codebuddy/rules',
@@ -687,7 +693,7 @@ export const DEFAULT_TOOL_PATHS = {
     agents: '.workbuddy/agents',
     mcp: '.workbuddy/mcp.json',
     mcpProject: '.mcp.json',
-    userScope: { rules: '.workbuddy/rules' },
+    userScope: { rules: '.workbuddy/rules', agents: '.workbuddy/agents' },
   },
   // OpenCode reads project config from <root>/.opencode/ but user config from
   // ~/.config/opencode/ — a different prefix, hence userScope. Skills are also
@@ -744,11 +750,11 @@ export const TeamaiConfigBaseSchema = z.object({
    */
   scope: ScopeEnum.optional(),
   /**
-   * Single-repo mode marker. Committed to main inside <repo>/.teamai/teamai.yaml
+   * Self mode marker. Committed to main inside <repo>/.teamai/teamai.yaml
    * so it travels with `git clone`. When a teammate clones a repo carrying
    * `mode: self` but has no local config yet, teamai auto-bootstraps the machine
    * side (write local config, inject hooks, register member). undefined = a
-   * standalone team repo (existing behavior). See detectProjectConfig / bootstrapSelfRepo.
+   * standalone team repo (existing behavior). See detectProjectConfig / bootstrapSelfMode.
    */
   mode: z.enum(['self']).optional(),
   reviewers: z.array(z.string()).default([]),
@@ -777,13 +783,15 @@ export const TeamaiConfigBaseSchema = z.object({
   workflows: z.object({ retention: z.unknown().optional(), driver: z.unknown().optional() }).optional().catch(undefined),
   /**
    * Language of the agent-facing texts teamai injects: the built-in
-   * teamai-recall rule, the todowrite-hint, and the mr-hint.
-   * `en` is English only. `zh` or omitted keeps the historical bilingual
-   * text, byte for byte (#1014).
+   * teamai-recall rule, the todowrite-hint, the mr-hint, and the friction
+   * reminder. `en` is English only. `zh` or omitted keeps the historical
+   * bilingual text, byte for byte (#1014), except that `zh` shows the friction
+   * reminder in Chinese. A hint's `<text>.en.md` or `<text>.zh.md` is used when
+   * its folder has one (#1787).
    */
   language: z.enum(['en', 'zh']).optional(),
   /** Team-owned Node scripts. Distinct from `sharing.hooks.requireTeamScripts`
-   * (the `~/.teamai/team-scripts/` trust boundary for hook commands). Every
+   * (which keeps only hook commands from a hook folder or `~/.teamai/team-scripts/`). Every
    * entry is optional. An older CLI that only knows `postPull` strips the
    * other keys instead of rejecting the file, so a team can add one before
    * every member upgrades. Each `path` is relative to the team repo root and
@@ -979,7 +987,7 @@ export const LocalConfigSchema = z.object({
      * Team repo backend. Defaults to 'git' for backward compatibility.
      * - 'git':  a standalone team repo cloned to <home>/team-repo.
      * - 'http': a git-free HTTP team repo (read-only consumer).
-     * - 'self': single-repo mode — the business repo IS the team repo.
+     * - 'self': self mode — the business repo IS the team repo.
      *           Knowledge lives on main under <businessRepoRoot>/.teamai/;
      *           reports (members/sessions/votes/stats) live on the
      *           `teamai-reports` orphan branch. localPath = <businessRepoRoot>/.teamai.
@@ -1230,7 +1238,7 @@ const PlacementRecordSchema = z.object({ path: z.string(), blob: z.string() });
 export type PlacementRecord = z.infer<typeof PlacementRecordSchema>;
 
 /**
- * The member's choices that decide which team assets a pull delivers (#1178), as that pull read them from
+ * The member's choices that decide which team resources a pull delivers (#1178), as that pull read them from
  * `LocalConfig`. The lists are sorted, so the same choices compare equal however they were entered.
  */
 export const DeliverySelectionSchema = z.object({
@@ -1331,11 +1339,18 @@ export const StateSchema = z.object({
     children: z.string().optional(),
     /** The selection the last pull that delivered into this checkout read. Absent in a record an older CLI wrote. */
     selection: DeliverySelectionSchema.optional(),
+    /** The folders the last full pull of this checkout left out (#1791), by path. Absent in a record an older CLI wrote. */
+    skippedFolders: z.array(z.string()).optional(),
     /**
      * The `claudeMdExcludes` entries teamai wrote into this checkout's
      * `.claude/settings.local.json` for the workspaces above it (#913).
      */
     claudeMdExcludes: z.array(z.string()).optional(),
+    /**
+     * The `permissions.additionalDirectories` entries teamai added to a tool's user settings so the tool reads the
+     * rule folders this scope delivers (#1787), by settings file.
+     */
+    ruleFolderGrants: z.record(z.string(), z.array(z.string())).optional(),
   })).optional(),
   /**
    * The exclude files holding each git exclude owner's block that this
@@ -1501,6 +1516,8 @@ export interface ResourceItem {
   needsDeliveredBlob?: boolean;
   /** Repo-backed resources placed into a namespace: the shared-root path the author keeps editing. */
   prePlacementPath?: string;
+  /** Rules only: a rule folder, `rules/[<ns>/]<name>/RULE.md` with the files it names (#1787). `sourcePath` is its RULE.md. */
+  folder?: true;
 }
 
 export interface ResourceDiff {
@@ -1606,6 +1623,18 @@ export interface HookDef {
   description: string;
   /** Team hooks only: restrict to these tools (default = all hook-capable tools). */
   tools?: string[];
+  /** A team hook folder's (#1787): `command` rendered from this, with its folder delivered at `dest`. */
+  folder?: TeamHookFolder;
+}
+
+/** Where a team hook folder's command comes from, so each tool can render it as its file needs (#1787, common rule 10). */
+export interface TeamHookFolder {
+  /** The command as `HOOK.yaml` writes it, `${TEAMAI_HOOK_DIR}` included. */
+  readonly command: string;
+  /** The absolute path the folder is delivered at. */
+  readonly dest: string;
+  /** Self mode: the worktree the folder is delivered in, which a tool's project-directory variable can stand for; else null. */
+  readonly projectRoot: string | null;
 }
 
 // ─── Hook payloads (what an agent sends a hook on stdin) ─────
@@ -1709,7 +1738,7 @@ export type ManagedMcpManifest = Record<string, ManagedMcpRecord[]>;
 /**
  * Ownership key for the managed-MCP manifest, per tool and scope.
  *
- * The P1 partition (issue #374) keys the data home by the shared `projectAnchor`,
+ * The P1 partition (issue #374) keys the data home by the shared `repoAnchor`,
  * so the main checkout and every linked worktree share ONE managed-mcp.json.
  * But a project MCP file (`<workspace>/.mcp.json`, `.codex/config.toml`, …) is
  * per-worktree. If the manifest key were just `<tool>:project`, one worktree's
@@ -2189,12 +2218,12 @@ export interface DashboardEvent {
    */
   dataHome?: string;
   /**
-   * Stable identity of the git repo holding `cwd` (`resolveAnchors().projectAnchor`),
+   * Stable identity of the git repo holding `cwd` (`resolveAnchors().repoAnchor`),
    * shared by all of its worktrees, so a session is attributed to its repo even
    * after its worktree is removed (#809). An event whose `cwd` no longer exists
    * carries the session's last anchor (#810). Absent outside git, on events that
    * record no `cwd` (Copilot), and on events written before this field existed;
-   * attribution then uses the session's last anchor, else `cwd`.
+   * attribution then uses the session's last anchor, else `cwd`. The key keeps its first name: events on disk carry it.
    */
   projectAnchor?: string;
   /**
@@ -2504,53 +2533,8 @@ export const SessionShareOfferedSchema = z.object({ publish: z.boolean(), scorer
 
 export type SessionShareOffered = z.infer<typeof SessionShareOfferedSchema>;
 
-/**
- * Layer 1 (fast-path) threshold: if toolCount < this, skip reading events.jsonl.
- * Also doubles as a HARD GATE on hint emission — a session with fewer than this
- * many tool calls never triggers a hint no matter how much friction it shows
- * (a one-command session the user rejected is not knowledge-base material).
- */
-export const CONTRIBUTE_BASE_THRESHOLD = 15;
-
-/**
- * Friction score threshold: minimum score to show contribute hint.
- *
- * Calibrated so ONE clear primary friction signal (a single interrupt, rejection,
- * or correction — each worth CONTRIBUTE_*_WEIGHT = 20) crosses it, while the scale
- * nudge alone (diversity + skill, max ~10) never can. Combined with the toolCount
- * hard gate, this fires only on substantive sessions that actually hit friction.
- */
-export const CONTRIBUTE_SMART_THRESHOLD = 20;
-
-// ─── Friction score weights ──────────────────────────
-//  A session earns points from signals that the user had to correct or the AI
-//  had to fight — not from raw activity. Any single strong signal (one interrupt,
-//  one rejection, one correction) lands near the threshold; scale (tool count /
-//  duration) only nudges and can never trigger on its own.
-
-/** Points per user interrupt (ESC mid-output — the user stopped a wrong direction). */
-export const CONTRIBUTE_INTERRUPT_WEIGHT = 20;
-
-/** Points per tool rejection (user denied a tool call — explicit course block). */
-export const CONTRIBUTE_REJECT_WEIGHT = 20;
-
-/** Points per correction (re-prompt with a correction keyword right after a stop). */
-export const CONTRIBUTE_CORRECTION_WEIGHT = 20;
-
-/**
- * Tool-error (retry) score gradient: genuine tool failures the AI had to work
- * around. Keyed by count thresholds → points; the highest matching tier wins.
- * Distinct from a single fluke error — it takes a few to signal a real struggle.
- */
-export const CONTRIBUTE_TOOLERROR_TIERS: ReadonlyArray<{ min: number; points: number }> = [
-  { min: 8, points: 25 },
-  { min: 5, points: 18 },
-  { min: 3, points: 10 },
-];
-
-/** Small scale bonus (diversity + skill use) — nudges, never triggers alone. Max ~10. */
-export const CONTRIBUTE_SKILL_BONUS = 5;
-export const CONTRIBUTE_DIVERSITY_BONUS_MAX = 5;
+// The friction reminder's thresholds and weights are `with:` of
+// hooks/teamai-friction-reminder/HOOK.yaml (#1787), which a team may replace.
 
 /**
  * Debounce TTL for contribute-check re-evaluation. Within this window the
@@ -2559,15 +2543,6 @@ export const CONTRIBUTE_DIVERSITY_BONUS_MAX = 5;
  * zero-score snapshot.
  */
 export const CONTRIBUTE_FASTPATH_TTL_MS = 5 * 60 * 1000;
-
-/** Phase 2: bonus when all recalls return zero results (knowledge gap) */
-export const CONTRIBUTE_KNOWLEDGE_GAP_BONUS = 20;
-
-/** Phase 2: bonus when recalls return results but top score is very low */
-export const CONTRIBUTE_LOW_QUALITY_BONUS = 10;
-
-/** Phase 2: threshold below which recall results are considered low quality */
-export const CONTRIBUTE_LOW_QUALITY_THRESHOLD = 5.0;
 
 /** Phase 2: git commit is neutral (no bonus, no penalty) */
 export const CONTRIBUTE_GIT_COMMIT_DOWNWEIGHT = 0;
@@ -2644,14 +2619,14 @@ export interface SearchIndexEntry {
   /** Snippet from codebase graph recall (depth-dependent content preview). */
   snippet?: string;
   /**
-   * The asset's path in the team tree (e.g. `rules/payments.md`,
+   * The resource's path in the team tree (e.g. `rules/payments.md`,
    * `learnings/<id>`, `skills/<namespace>/<skill>`), set at index build time.
    * Relations resolve against this, never against the absolute `path`, which
    * differs per member and per checkout (#1552).
    */
   treePath?: string;
-  /** Outgoing asset relations declared in `related:` frontmatter or derived from local links (#1552). */
-  related?: import('./asset-relations.js').StoredRelation[];
+  /** Outgoing resource relations declared in `related:` frontmatter or derived from local links (#1552). */
+  related?: import('./resource-relations.js').StoredRelation[];
 }
 
 /** Schema version of the on-disk search-index.json (bump on breaking change). */
@@ -2890,7 +2865,7 @@ export type CultureFrontmatter = z.infer<typeof CultureFrontmatterSchema>;
  * workspace root (subdirectory/worktree aware via `resolveAnchors`).
  *
  * This is deliberately separate from the per-project machine-data home: a later
- * phase (P1) keys machine-local data by the shared `projectAnchor` (the repository identity) under `~/.teamai/projects/<slug>/`, while resources continue to land
+ * phase (P1) keys machine-local data by the shared `repoAnchor` (the repository identity) under `~/.teamai/projects/<slug>/`, while resources continue to land
  * at the workspace root returned here. This function only ever governs resource
  * landing, never machine-data location.
  */
@@ -2918,12 +2893,40 @@ export const DEFAULT_CLAUDE_ROOT = '.claude';
 
 export const CODEX_TOOL_ID = 'codex';
 
-/** WorkBuddy's toolPaths id and pre-5.7 root segment (#946). */
+/**
+ * WorkBuddy's toolPaths id and its data root under $HOME.
+ *
+ * Both roots are the app's, not two generations of one app: `.workbuddy` is
+ * WorkBuddy's, `.workbuddy-ai` is WorkBuddy AI's (the international edition,
+ * a separate install with its own `WorkBuddyAI.exe` and update channel). A
+ * machine can hold both, so which one is live is read, never assumed (#1273).
+ */
 export const WORKBUDDY_TOOL_ID = 'workbuddy';
 export const WORKBUDDY_TOOL_ROOT = '.workbuddy';
 
-/** WorkBuddy 5.7+'s runtime root (#1273). */
-export const WORKBUDDY_NEW_GENERATION_ROOT = '.workbuddy-ai';
+/** WorkBuddy AI's data root — the sibling product's, resolved the same way (#1273). */
+export const WORKBUDDY_AI_ROOT = '.workbuddy-ai';
+
+/** The file the app rewrites in the root it starts from, whose timestamp names the live app (#1273). */
+export const WORKBUDDY_LAST_LAUNCH_FILE = 'last-launch.json';
+
+/**
+ * The user-scope leaves that sit directly under WorkBuddy's data root and move
+ * with it (#1273). Both `.mcp.json` spellings are here because the engine reads
+ * them in that order.
+ *
+ * `settings.json` is absent on purpose: hooks are resolved from it and hooks
+ * still write the default root, so moving it would report a delivery that never
+ * lands. Any other spelling — a team's `userScope.rules: '.workbuddy/shared-rules'`
+ * — is an override, and an override names a destination that must be kept.
+ */
+export const WORKBUDDY_LIVE_ROOT_LEAVES: ReadonlySet<string> = new Set([
+  'skills',
+  'rules',
+  'agents',
+  'mcp.json',
+  '.mcp.json',
+]);
 
 /** Muse Code (Meta), whose CLI binary is `muse`. */
 export const MUSE_TOOL_ID = 'muse';
@@ -2959,8 +2962,31 @@ export interface RelocatableTool {
  * The home and path flavor a tool root resolves against: this process's by
  * default, or a member's machine described by `locate`'s host, so a Linux test
  * can resolve a Windows member's recorded roots.
+ *
+ * `readTextNow` and `existsNow` default to this process's filesystem, and carry
+ * the names `Host` already uses, so a `Host` is a `HomePaths` and `locate` reads
+ * the machine it was asked about rather than the one running the inspection (#1273).
  */
-export type HomePaths = { readonly home: string; readonly path: path.PlatformPath };
+export type HomePaths = {
+  readonly home: string;
+  readonly path: path.PlatformPath;
+  readonly readTextNow?: (file: string) => string | null;
+  readonly existsNow?: (file: string) => boolean;
+};
+
+function readTextAt(at: HomePaths, file: string): string | null {
+  if (at.readTextNow !== undefined) return at.readTextNow(file);
+
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function existsAt(at: HomePaths, file: string): boolean {
+  return at.existsNow !== undefined ? at.existsNow(file) : fs.existsSync(file);
+}
 
 function processHomePaths(): HomePaths {
   return { home: getUserHome(), path };
@@ -3084,7 +3110,7 @@ export function toolRootRejection(dir: string, at: HomePaths = processHomePaths(
  *
  * Read in exactly two commands: `teamai init` records the answer into
  * `toolRoots.<tool>`, and `teamai doctor` reports a recorded value that no
- * longer matches. Everything else reads the recorded value, so a teamai run
+ * longer matches. The verify ledger also reads it, to check the shell's homes. Everything else reads the recorded value, so a teamai run
  * from a shell that happens not to export the variable (a hook, a cron, a
  * different terminal) still writes where that tool reads.
  */
@@ -3132,7 +3158,7 @@ export function isAgentDisabled(localConfig: { disabledAgents?: string[] }, tool
  */
 /**
  * Synthetic toolPaths key used only to make `teamai push` scan the active tree's
- * .teamai/{skills,rules} in single-repo mode (see pushCore). It is never written
+ * .teamai/{skills,rules} in self mode (see pushCore). It is never written
  * to disk and never used by pull — the leading marker keeps it from colliding
  * with any real agent id. It is not a tool, so tool exclusions never apply to it.
  */
@@ -3363,35 +3389,127 @@ export function rerootToolPaths(paths: z.infer<typeof ToolPathsSchema>, newRoot:
 }
 
 /**
- * WorkBuddy 5.7+ moved its runtime to `.workbuddy-ai/` and stops reading
- * `.workbuddy/` (#1273), so skills go to the directory the app actually scans
- * — live-verified in the issue (13 team skills showed in the live `/` menu).
- * The new root wins whenever it exists, because an upgrade leaves the old one
- * behind as an unread leftover. Only the default skills path swaps, so a team
- * that redirected on purpose keeps its own. Every other surface keeps its
- * `.workbuddy/` path: written there while that root exists, held by `locate`
- * once it is gone. Returns the same object when no swap fires.
+ * Which WorkBuddy root the app on this machine last started from (#1273).
+ *
+ * `.workbuddy/` belongs to WorkBuddy and `.workbuddy-ai/` to WorkBuddy AI, and
+ * either can outlive the other: uninstalling one leaves its root behind, and
+ * then both exist while only one has a running app behind it. Presence cannot
+ * tell which. `last-launch.json` can — the app rewrites it in the root it
+ * starts from, so the newer timestamp names the app that is actually there.
+ *
+ * `undecided` when neither root records a launch — a project directory, or a
+ * build that predates the file. Callers then fall back to presence, the only
+ * evidence there was before this check.
  */
-function applyWorkBuddyGeneration(
+export function workbuddyLaunchedFrom(
+  roots: { readonly old: string; readonly new: string },
+  readText: (file: string) => string | null,
+  joinPath: (dir: string, file: string) => string = path.join,
+): 'old' | 'new' | 'undecided' {
+  const launchedAt = (root: string): number | undefined => {
+    const text = readText(joinPath(root, WORKBUDDY_LAST_LAUNCH_FILE));
+
+    if (text === null) return undefined;
+
+    try {
+      const record = z.object({ timestamp: z.string() }).safeParse(JSON.parse(text));
+      const at = record.success ? Date.parse(record.data.timestamp) : Number.NaN;
+
+      return Number.isNaN(at) ? undefined : at;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const oldAt = launchedAt(roots.old);
+  const newAt = launchedAt(roots.new);
+
+  if (oldAt === undefined) return newAt === undefined ? 'undecided' : 'new';
+
+  if (newAt === undefined) return 'old';
+
+  return newAt >= oldAt ? 'new' : 'old';
+}
+
+/**
+ * WorkBuddy keeps its per-user data under a root the app picks, and the
+ * surfaces teamai writes resolve as fixed leaves under it (#1273): the engine
+ * reads `<configDir>/rules`, `<configDir>/agents` and `<configDir>/mcp.json`
+ * (plus `skills/` beside them). `WORKBUDDY_CONFIG_DIR` names that root at
+ * runtime; the fallback is `~/.workbuddy` for WorkBuddy and `~/.workbuddy-ai`
+ * for WorkBuddy AI, its international edition. Those are two products with a
+ * root each, not two generations of one, so both can sit on one machine.
+ *
+ * Which of the two is running comes from `workbuddyLaunchedFrom`: the launch
+ * record is rewritten in the root the app starts from, so the newer one wins
+ * even when the other product left its root behind. When neither root records
+ * a launch, the new root existing still wins, the rule this had before (#1290).
+ *
+ * Only the four default paths swap, so a team that redirected on purpose keeps
+ * its own. `settings` deliberately stays put — the hooks half of #1273 owns it.
+ * Project scope keeps every project path (only `skills` moves there, as
+ * before): its rules and agents live under the project's `.codebuddy/`, which
+ * no root change touches. Returns the same object when no swap fires.
+ */
+function applyWorkBuddyLiveRoot(
   toolPaths: Record<string, z.infer<typeof ToolPathsSchema>>,
   localConfig: { scope?: Scope; projectRoot?: string },
+  at: HomePaths,
 ): z.infer<typeof ToolPathsTableSchema> {
   const workbuddy = toolPaths[WORKBUDDY_TOOL_ID];
 
-  if (!workbuddy || workbuddy.skills !== '.workbuddy/skills') return toolPaths;
+  if (!workbuddy || workbuddy.skills !== `${WORKBUDDY_TOOL_ROOT}/skills`) return toolPaths;
 
-  const baseDir = localConfig.scope === 'project' && localConfig.projectRoot !== undefined
-    ? localConfig.projectRoot
-    : getUserHome();
+  const projectRoot = localConfig.scope === 'project' ? localConfig.projectRoot : undefined;
+  const projectScope = projectRoot !== undefined;
 
-  // The new root present means 5.7+ is the live generation (an upgrade leaves
-  // `.workbuddy/` behind as a leftover the app no longer reads), so it wins
-  // even when both roots exist (#1290).
-  if (fs.existsSync(path.join(baseDir, WORKBUDDY_NEW_GENERATION_ROOT))) {
-    return { ...toolPaths, [WORKBUDDY_TOOL_ID]: { ...workbuddy, skills: `${WORKBUDDY_NEW_GENERATION_ROOT}/skills` } };
+  // `at.home`, not this process's home: `locate` answers about the machine it
+  // was handed, and the swap has to read that machine's `last-launch.json` (#1273).
+  const baseDir = projectRoot ?? at.home;
+  const newRoot = at.path.join(baseDir, WORKBUDDY_AI_ROOT);
+  const oldRoot = at.path.join(baseDir, WORKBUDDY_TOOL_ROOT);
+
+  const launched = workbuddyLaunchedFrom(
+    { old: oldRoot, new: newRoot },
+    (file) => readTextAt(at, file),
+    (dir, file) => at.path.join(dir, file),
+  );
+
+  if (launched !== 'new' && !(launched === 'undecided' && existsAt(at, newRoot))) return toolPaths;
+
+  if (projectScope) {
+    return { ...toolPaths, [WORKBUDDY_TOOL_ID]: { ...workbuddy, skills: `${WORKBUDDY_AI_ROOT}/skills` } };
   }
 
-  return toolPaths;
+  return { ...toolPaths, [WORKBUDDY_TOOL_ID]: moveWorkbuddyUserPaths(workbuddy) };
+}
+
+/**
+ * The WorkBuddy user paths that move with the live root: skills, the MCP file,
+ * and the user rules and agents `userScope` restates for the engine's
+ * `<configDir>/…` leaves. Each value moves only while it still holds its
+ * default, so a team override survives.
+ */
+function moveWorkbuddyUserPaths(
+  workbuddy: z.infer<typeof ToolPathsSchema>,
+): z.infer<typeof ToolPathsSchema> {
+  const moved = (value: string | undefined, leaf: string): string | undefined =>
+    value === `${WORKBUDDY_TOOL_ROOT}/${leaf}` ? `${WORKBUDDY_AI_ROOT}/${leaf}` : value;
+
+  const userScope = workbuddy.userScope;
+
+  if (userScope === undefined) return { ...workbuddy, skills: `${WORKBUDDY_AI_ROOT}/skills` };
+
+  return {
+    ...workbuddy,
+    skills: `${WORKBUDDY_AI_ROOT}/skills`,
+    mcp: moved(workbuddy.mcp, 'mcp.json'),
+    userScope: {
+      ...userScope,
+      rules: userScope.rules === null ? null : moved(userScope.rules, 'rules'),
+      agents: moved(userScope.agents, 'agents'),
+    },
+  };
 }
 
 /**
@@ -3419,10 +3537,11 @@ export function scopedToolPaths(
   localConfig: { scope?: Scope; toolRoots?: Readonly<Record<string, string>> },
   at?: HomePaths,
 ): Record<string, z.infer<typeof ToolPathsSchema>> {
-  const generationAdjusted = applyWorkBuddyGeneration(teamConfig.toolPaths, localConfig);
+  const at0 = at ?? processHomePaths();
+  const liveRootAdjusted = applyWorkBuddyLiveRoot(teamConfig.toolPaths, localConfig, at0);
 
-  if (localConfig.scope !== 'user') return generationAdjusted;
-  const rooted = applyToolRoots(generationAdjusted, localConfig.toolRoots, at);
+  if (localConfig.scope !== 'user') return liveRootAdjusted;
+  const rooted = applyToolRoots(liveRootAdjusted, localConfig.toolRoots, at);
   const out: Record<string, z.infer<typeof ToolPathsSchema>> = {};
 
   for (const [tool, paths] of Object.entries(rooted)) {
@@ -3451,13 +3570,13 @@ export function scopedToolPaths(
 
   if (copilot?.hooks) out[COPILOT_TOOL_ID] = { ...copilot, hooks: `hooks/${path.basename(copilot.hooks)}` };
 
-  // Re-apply the WorkBuddy generation swap after the user-scope merge: a
+  // Re-apply the live-root swap after the user-scope merge: a
   // `userScope.skills` carrying the default `.workbuddy/skills` restores the
-  // unread old path over the adjusted one (#1290).
-  return applyWorkBuddyGeneration(out, localConfig);
+  // other product's path over the live one (#1290).
+  return applyWorkBuddyLiveRoot(out, localConfig, at0);
 }
 
-/** True when the local config is single-repo mode (the business repo is the team repo). */
+/** True when the local config is self mode (the business repo is the team repo). */
 export function isSelfMode(localConfig: { repo: { kind?: string } }): boolean {
   return localConfig.repo.kind === 'self';
 }
@@ -3536,14 +3655,14 @@ export const BOOTSTRAP_LOCK_FILENAME = '.bootstrap-lock';
 /**
  * Lock filename (in the project data home) serializing writes to the SHARED team
  * clone during pull/push. All worktrees of a repo resolve to the same partition
- * (keyed on projectAnchor), so this lock coordinates a `git pull`/`git push` that
+ * (keyed on repoAnchor), so this lock coordinates a `git pull`/`git push` that
  * could otherwise run concurrently from the main checkout and a worktree and
  * corrupt the shared clone.
  */
 export const SYNC_LOCK_FILENAME = '.sync-lock';
 
 /**
- * Directory holding team knowledge assets (skills/rules/docs/learnings/...).
+ * Directory holding team knowledge resources (skills/rules/docs/learnings/...).
  * All modes read/write knowledge under localConfig.repo.localPath:
  * - git/http: <home>/team-repo
  * - self:     <businessRepoRoot>/.teamai  (committed to main)
@@ -3559,14 +3678,14 @@ export function getKnowledgeDir(localConfig: LocalConfig): string {
  * phase — config.yaml/state.json and the team-repo clone).
  *
  * This is the single source of truth for the machine-data home, sitting beside
- * `getKnowledgeDir` (team knowledge assets) and `resolveBaseDir` (AI-tool
+ * `getKnowledgeDir` (team knowledge resources) and `resolveBaseDir` (AI-tool
  * resource landing = the workspace root). The three are orthogonal:
  * knowledge / resource-landing / machine-data.
  *
  * Today it returns `getTeamaiHome(scope, projectRoot)` — i.e. `<projectRoot>/.teamai`
  * for project scope, `~/.teamai` for user scope. A later phase (P1) redirects the
  * project-scope case to a per-project partition under `~/.teamai/projects/<slug>/`
- * keyed by the shared `projectAnchor`; every consumer already routes through this
+ * keyed by the shared `repoAnchor`; every consumer already routes through this
  * function, so that redirect happens in one place.
  */
 export function getDataHome(localConfig: LocalConfig): string {
@@ -3676,7 +3795,7 @@ export function getTeamaiHome(scope: Scope, projectRoot?: string): string {
  * backup: an older version may have left a secret there that the failed pull
  * must not apply.
  *
- * Normally this is `<teamaiHome>/env`. But in single-repo mode `<teamaiHome>` is
+ * Normally this is `<teamaiHome>/env`. But in self mode `<teamaiHome>` is
  * `<repo>/.teamai`, where `env/` is a committed DIRECTORY holding the shared
  * `env.yaml` — writing a file at `<teamaiHome>/env` there would collide with that
  * directory (EISDIR). So self mode uses `env.local`, which is gitignored (see
@@ -3773,7 +3892,7 @@ export function legacyManagedHooksPath(projectRoot: string): string {
  * - Non-self project scope → HOME + user manifest. `~/.claude` always exists,
  *   so the gate passes; the dispatch runtime identifies the active project via
  *   detectProjectConfig(stdin.cwd), so a projectRoot copy is unnecessary (#264).
- * - Self single-repo mode → projectRoot (its resolveBaseDir). Hooks live in the
+ * - Self mode → projectRoot (its resolveBaseDir). Hooks live in the
  *   business repo's tool dirs and are committed to main so a teammate's clone
  *   carries the session-start hook that self-heals ("clone = initialized").
  * - User scope → HOME (its resolveBaseDir).
@@ -3857,7 +3976,7 @@ export function recordedToolRootDir(
  * Returns null when there is nothing project-owned to sweep:
  * - user scope (only ever HOME),
  * - project scope without a projectRoot,
- * - self single-repo mode. Self mode's alternate location is HOME, which is
+ * - self mode. Self mode's alternate location is HOME, which is
  *   shared with any user-scope install and its user manifest — a blind
  *   removeAll there would clobber genuine user-scope hooks, so we never sweep
  *   it. (The cross-scope collision itself is tracked separately.)

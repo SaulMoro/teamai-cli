@@ -10,6 +10,9 @@ export const tools = {
       user: { channel: 'dir', format: 'verbatim', reads: [{ base: 'home', path: '.claude/rules', evidence: 'verified' }] },
       project: { channel: 'dir', format: 'verbatim', reads: [{ base: 'project', path: '.claude/rules', when: 'workspaceUnder', evidence: 'verified' }] },
     },
+    // Claude Code 2.1.319: `claude -p` reads a file outside the project with no permission denial once its directory
+    // is in `permissions.additionalDirectories` of ~/.claude/settings.json, and is denied the read without it.
+    ruleFolders: { reach: 'grant', setting: 'permissions.additionalDirectories', evidence: 'verified' },
     blocks: {
       user: { channel: 'file', file: { in: 'claudemd' }, reads: [{ base: 'home', path: '.claude/CLAUDE.md', evidence: 'verified' }] },
       // CLAUDE.local.md would stop Claude's native AGENTS.md load (#945).
@@ -42,6 +45,8 @@ export const tools = {
       stopReply: true,
       shell: 'system',
       teamHooks: 'main-checkout',
+      projectDirVariable: 'CLAUDE_PROJECT_DIR',
+      needsBundle: false,
     },
     sessions: ['claude-code'],
     launch: 'claude',
@@ -71,7 +76,7 @@ export const tools = {
     blocks: { user: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' }, project: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' } },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['claude-internal'],
     launch: 'claude',
     autoCompact: 'claude',
@@ -103,7 +108,7 @@ export const tools = {
       user: { format: 'claude', reads: 'unknown' },
       project: { judgedTeamaiOnly: false, format: 'claude', writtenBy: 'claude', reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'assumed' }] },
     },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['tclaude'],
     launch: 'claude',
     autoCompact: 'claude',

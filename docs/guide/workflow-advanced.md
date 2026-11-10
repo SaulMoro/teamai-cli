@@ -720,7 +720,7 @@ steps:
 
 | Output type | Holds |
 | --- | --- |
-| `workflow` | A bundle: `definition`, the workflow to run, and optionally `workflows`, the named workflows it runs, `scorers`, generated scorer pins, and `teamRevision`, the team commit whose scorers it uses. |
+| `workflow` | A bundle: `definition`, the workflow to run, and optionally `workflows`, the named workflows it runs. |
 | `json` | Any JSON value. Expressions cannot read into it; top-level `outputs` can pass it whole. |
 
 `workflow: { from: <step> }` runs the bundle of a step it `needs`. When that step reports, teamai checks the bundle as `workflow start` checks a file, pins it, and keeps it for the run. A bundle it cannot take, one that holds a secret value, a `from` step, a `prompt_file` step or `finally` steps, fails the producing step `invalid_output` with the reason. The producing step runs once, outside any loop or `for_each`. A run with a `from` step is [isolated](#isolated-runs).
@@ -748,6 +748,7 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 ```
 
 - `output` is required. `{ text: string }` takes the reply as text. Any other output names the JSON the reply holds, and the local driver asks the tool for it.
+- `answer_file: <file>` takes the prompt from a file in place of `answer`: a file of the [workflow folder](workflow.md#workflow-folders), or outside a folder one under `prompts/`, as `prompt_file` does. Its text is a template, as `answer` is. A workflow a [`from` step](#run-a-workflow-a-step-printed) prints cannot use it.
 - The step names no tool: the driver that runs it answers it. The skill driver gives it to a child agent of the session, and a driver of your own answers it with its own model. The local driver launches the tool teamai's own AI calls use: `TEAMAI_AI_TOOL`, then the project's `ai.tool`, then the machine's, then the first installed tool teamai launches. Pull rejects `tool`, `agent`, `model` and `session` on the step, and any `workspace` but `new`.
 - The launch is marked as teamai's own, so the member's hooks do not capture it.
 - It reserves the checkout until it finishes, so answers and commands using that checkout run one at a time, even
@@ -763,6 +764,17 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 Another driver gets an answer step as a prompt lease with `answer: true` and no separate workspace, or with
 `workspace: new` a read-only `workspace` contract on a branch of its own. It prepares the lease, answers in `cwd`, and
 reports the outputs; preparation reserves and snapshots the checkout, or that worktree, as for other read-only steps.
+
+## Workflow folders in a run
+
+A run keeps its own copy of each [workflow folder](workflow.md#workflow-folders) it uses:
+
+- `workflow start` stores the folder's files once per content, in `workflows/folders/<sourceHash>/` under the TeamAI data directory, and `$TEAMAI_WORKFLOW_DIR` names that copy for the run's whole life, whatever a later pull changes or deletes. The hash covers each file's path, its executable bit as git records it, and its text with LF line endings, so checkouts on Windows, macOS and Linux agree.
+- `workflow publish` does not carry the files. `workflow resume --claim` on another machine rebuilds the folder as it rebuilds the definitions: from the team commit the run ran at, or for one of teamai's default workflows from this teamai's package, refused with `definition_mismatch` when that differs.
+- `teamai doctor --fix` removes a stored folder that no run on the machine and no pulled workflow uses, once it is an hour old. A run whose leftovers `doctor --fix` removed past `workflows.retention` no longer uses its folder: no retry reopens it.
+- Pull refuses a folder that holds a symlink, a file that is not UTF-8 text, or more than 1 MB in all, `README.md` included, with `workflow_folder_invalid`. The message names the file, or the five largest files when the folder is too big. Like every coded diagnostic, it drops the last valid version too, so the workflow has nothing to run until the folder is fixed.
+- A [confined step](workflow.md#a-prompt-confined-to-a-directory) reads only its own directory, so pull warns when its prompt names the folder: `step <id> is confined and may not be able to read $TEAMAI_WORKFLOW_DIR`.
+- A [benchmark](benchmarks.md) arm cannot run a workflow folder yet, nor a workflow that runs one, since a trial runs copies of the workflow, which carry no files. Plan refuses the arm: `benchmark arms cannot run workflow folders yet`.
 
 ## Let a command write in the checkout
 
@@ -812,7 +824,7 @@ steps:
     prompt: Fix the failing test.
 ```
 
-A step with `workspace: { clone: { commit, repo?, team } }` runs in a fresh clone of `commit` outside the checkout: its own git data, no remotes, hooks off. `team` names the team assets installed for it, under a home of its own: `{ treatment: none }`, or `{ revision, selection, treatment }` with `treatment` `pulled`, a ref, or `{ without: [<path>, ...] }`, and `recall: true` to deploy the team's recall, which a clone otherwise leaves off — a key [benchmarks](benchmarks.md#arms-that-run-with-recall) set on an arm, and a workflow step that measures recall may set too. `selection` holds `primaryRole`, `additionalRoles`, `projects`, `subscribedTags` and `excludedSkills` as your config names them, and `enabledAgents`, the tools the assets install for: by default the tool of the step that opens the clone, else your enabled agents. While `manifest/members.yaml` exists at `revision`, it decides your roles in the clone as it does in your checkout: a `primaryRole` or `additionalRoles` other than the ones it assigns you fails the clone with `clone_prepare_failed`. Leave them out; to run the step with a role's knowledge, also set `role` on it. teamai makes the clone offline, from the run's checkout or the commit cache; `repo` only names the cache, never a URL. A workflow step that opens a clone owns it for every `continue` step under it. Nothing in a clone is pushed or delivered. [Benchmarks](benchmarks.md) write these steps for you.
+A step with `workspace: { clone: { commit, repo?, team } }` runs in a fresh clone of `commit` outside the checkout: its own git data, no remotes, hooks off. `team` names the team resources installed for it, under a home of its own: `{ treatment: none }`, or `{ revision, selection, treatment }` with `treatment` `pulled`, a ref, or `{ without: [<path>, ...] }`, and `recall: true` to deploy the team's recall, which a clone otherwise leaves off — a key [benchmarks](benchmarks.md#arms-that-run-with-recall) set on an arm, and a workflow step that measures recall may set too. `selection` holds `primaryRole`, `additionalRoles`, `projects`, `subscribedTags` and `excludedSkills` as your config names them, and `enabledAgents`, the tools the resources install for: by default the tool of the step that opens the clone, else your enabled agents. While `manifest/members.yaml` exists at `revision`, it decides your roles in the clone as it does in your checkout: a `primaryRole` or `additionalRoles` other than the ones it assigns you fails the clone with `clone_prepare_failed`. Leave them out; to run the step with a role's knowledge, also set `role` on it. teamai makes the clone offline, from the run's checkout or the commit cache; `repo` only names the cache, never a URL. A workflow step that opens a clone owns it for every `continue` step under it. Nothing in a clone is pushed or delivered. [Benchmarks](benchmarks.md) write these steps for you.
 
 ### Run a step as a team role
 
@@ -1577,11 +1589,11 @@ What TeamAI records to prepare an attempt stays on this machine: paths and file 
 teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}},"running":[]}'
 ```
 
-With `--prepare`, teamai makes a [clone step](#clone-workspaces)'s clone on this machine, installs its team assets and runs setup, then answers the lease with `cwd`, the clone. A call can take as long as setup takes. A clone step is held from a driver that does not list `clone` in `workspace` or does not ask with `--prepare`, and `wait.held[].missing` names `workspace.clone` or `prepare`. A clone that runs as a team role also needs `can.role`. A step [confined to a directory](#confined-steps-in-your-own-driver) needs no place: `--prepare` answers its lease with `cwd`, its `confined.dir`, and makes, sets up or snapshots nothing of the checkout for it.
+With `--prepare`, teamai makes a [clone step](#clone-workspaces)'s clone on this machine, installs its team resources and runs setup, then answers the lease with `cwd`, the clone. A call can take as long as setup takes. A clone step is held from a driver that does not list `clone` in `workspace` or does not ask with `--prepare`, and `wait.held[].missing` names `workspace.clone` or `prepare`. A clone that runs as a team role also needs `can.role`. A step [confined to a directory](#confined-steps-in-your-own-driver) needs no place: `--prepare` answers its lease with `cwd`, its `confined.dir`, and makes, sets up or snapshots nothing of the checkout for it.
 
 For each lease the driver:
 
-1. Runs every process with `lease.env` and `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`, so a `teamai` call from it changes no run, and without the names in `lease.envScope.withhold`. A command lease's `env` already carries `TEAMAI_WORKFLOW_ATTEMPT`, `TEAMAI_RUN_DIR` and `TEAMAI_MODE`, so the `teamai score` steps of [`teamai-score`](scorers.md) run under any driver. It runs a command lease, such as `teamai benchmark check`, in `cwd`, or in its own workspace for a lease without one, and reports the JSON it prints as `outputs`.
+1. Runs every process with `lease.env` and `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`, so a `teamai` call from it changes no run, and without the names in `lease.envScope.withhold`. A command lease's `env` already carries `TEAMAI_WORKFLOW_ATTEMPT`, `TEAMAI_RUN_DIR` and `TEAMAI_MODE`, so the `teamai score` steps of [`teamai-score`](scorers.md) run under any driver. Every lease of a step of a workflow folder carries `TEAMAI_WORKFLOW_DIR` in `env` too. It runs a command lease, such as `teamai benchmark check`, in `cwd`, or in its own workspace for a lease without one, and reports the JSON it prints as `outputs`.
 2. Launches a prompt lease's `lease.tool` in `cwd` on `lease.prompt`, with `lease.model` as given, and holds it to `lease.limits` from the tool's launch.
 3. Reports a prompt with `tool`, the `model`, `session` and `tokens` the tool reported, `durationMs` measured around the tool launch only, and `cost` (`{"amount":0.12,"unit":"USD"}`) only when the tool stated one. When a limit stopped the tool, the report has `outcome: "success"` and `limit`: `timeout`, `budget` or `max_turns`; a `budget` or `max_turns` the driver could not hold the tool to goes in `unenforced`. A report whose `limit` the lease does not set answers `invalid_report`, as does one with `changes` or `read`, which teamai fills from the clone.
 
@@ -1598,7 +1610,7 @@ $ teamai workflow report r245b… --json '{"attempt":"afd63…","revision":2,"ou
 {"data":{"accepted":true,"revision":3,"step":{"id":"judge","status":"succeeded","outcome":"success"}}}
 ```
 
-A step [confined to a directory](workflow.md#a-prompt-confined-to-a-directory) is leased only to a driver with a `can.confined` offer at its level or above. Its lease carries `confined`: `dir`, `level`, `tools`, the tools of the offers that reach the level in their order with those `prefer` names first, in its order, and `schema` when `confined.json` names one. A step whose model none of those tools resolves on this machine waits, with `wait.held[].missing` naming `model`, as one no offer reaches names `confined`.
+A step [confined to a directory](workflow.md#a-prompt-confined-to-a-directory) is leased only to a driver with a `can.confined` offer at its level or above. Its lease carries `confined`: `dir`, `level`, `tools`, the tools of the offers that reach the level in their order with those `prefer` names first, in its order, or only the one `require` names, and `schema` when `confined.json` names one. A step whose model none of those tools resolves on this machine waits, with `wait.held[].missing` naming `model`, as one no offer reaches, or no offer with its required tool reaches, names `confined`.
 
 The driver runs `lease.prompt` on the first of `tools` that resolves `lease.model`, with `dir` as the tool's working directory and only readable root, none of the team's env, and no session kept. It reports the reply as `outputs`, which TeamAI checks against the step's `output`, and `confined` as that run measured it: `tool`, `isolation`, `access`, and `model`, `effort` and `usage` when the tool reported them. A driver that finds no tool to run reports `outcome: "released"`. `confinedConformanceScenarios` in `src/workflow/conformance/confined.ts` checks the leasing rules.
 

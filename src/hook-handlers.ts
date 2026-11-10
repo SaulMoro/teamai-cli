@@ -67,15 +67,16 @@ export interface HandlerRegistration {
  * unified <5s cap guarantees that with margin. Healthy endpoints answer in well
  * under a second, so this is invisible in normal use; it only bounds the worst
  * case (slow/unreachable endpoint). Any network side-effect truncated here (e.g.
- * a large first-time resource sync, vote-delta push) is completed later by the
- * background (detached) pass, which is not awaited by the host.
+ * a large first-time resource sync) is completed later by the background
+ * (detached) pass, which is not awaited by the host. The vote push runs there
+ * from the start (votes-push): the exit after a timeout here cuts a git push.
  */
 const FOREGROUND_HOOK_TIMEOUT_MS = 4_500;
 
 /**
- * TodoWrite runs on a PostToolUse matcher whose host cap is only 3s
- * (builtin-hooks.ts), so it needs a tighter budget than the shared foreground
- * cap. It is a local dedup-cache check that completes in microseconds anyway.
+ * The TodoWrite hint keeps the budget its own 3s entry gave it until #1788,
+ * tighter than the shared foreground cap: it is a local dedup-cache check that
+ * completes in microseconds anyway.
  */
 const TODOWRITE_HINT_TIMEOUT_MS = 2_500;
 
@@ -85,6 +86,14 @@ const TODOWRITE_HINT_TIMEOUT_MS = 2_500;
  * resource downloads. Foreground local-agent runs use FOREGROUND_HOOK_TIMEOUT_MS.
  */
 const LOCAL_AGENT_TIMEOUT_MS = 15_000;
+
+/**
+ * Background (detached) vote push: a fetch, then a push of the reports branch
+ * with its fetch + rebase retries, each a round trip to the team remote that a
+ * credential helper or a proxy can stretch to seconds. Detached, so it never
+ * delays the host Stop.
+ */
+const VOTES_PUSH_TIMEOUT_MS = 30_000;
 
 /**
  * Budget for the detached session-start pull.
@@ -181,6 +190,18 @@ const sessionCaptureHandler: HookHandler = {
     const { SessionCaptures } = await import('./session-flow/captures.js');
     await SessionCaptures.addToolVersion(config, tool, stdin);
     await SessionCaptures.sweep(config).catch((cause: unknown) => log.debug(`session capture: could not sweep captures: ${cause instanceof Error ? cause.message : String(cause)}`));
+
+    return null;
+  },
+};
+
+/** Records how a captured session's checkout ends at each Stop (`SessionCaptures.atStop`), so a past session still names its solution. */
+const sessionEndHandler: HookHandler = {
+  name: 'session-end-record',
+  async execute(stdin, tool, config) {
+    if (!config) return null;
+    const { SessionCaptures } = await import('./session-flow/captures.js');
+    await SessionCaptures.atStop(config, tool, stdin);
 
     return null;
   },
@@ -328,7 +349,7 @@ const GIT_PULL_FETCH_CAP_MS = 5_000;
  * changed. With a separate team repo, the team repo is fetched inline within
  * GIT_PULL_FETCH_CAP_MS and delivered when its revision moved (the rev fast
  * path skips it otherwise); past the cap, and for learnings, reports and
- * sources, a detached pull takes over. In single-repo (self) mode the team
+ * sources, a detached pull takes over. In self mode the team
  * repo is the working tree `git pull` just updated: delivered with no network.
  */
 const gitPullHandler: HookHandler = {
@@ -483,7 +504,13 @@ const updateHandler: HookHandler = {
   name: 'update',
   async execute(_stdin, _tool, config) {
     const { doUpdate } = await import('./update.js');
-    await doUpdate(config);
+    const outcome = await doUpdate(config, { automatic: true });
+
+    if (outcome === 'failed' || outcome === 'unreachable') {
+      throw new Error('Automatic update failed; see debug.log for the cause.');
+    }
+
+    if (outcome === 'skipped') return { outcome };
 
     return null;
   },
@@ -516,7 +543,7 @@ const dashboardReportHandler: HookHandler = {
   async execute(stdin, tool, config) {
     // Registered with requiresConfig: a session outside any scope is not recorded.
     if (!config) return null;
-    const { parseHookEvent, appendEvent, compactEvents, dataHomeKey, eventProjectAnchor, addGitStateAtStart, addGitHeadAtStop, gitStateIn } = await import('./dashboard-collector.js');
+    const { parseHookEvent, appendEvent, compactEvents, dataHomeKey, eventRepoAnchor, addGitStateAtStart, addGitHeadAtStop, gitStateIn } = await import('./dashboard-collector.js');
     const { getDataHome } = await import('./types.js');
     const raw = JSON.stringify(stdin);
     // The dispatcher's scope, which knows the project even when the event
@@ -534,13 +561,13 @@ const dashboardReportHandler: HookHandler = {
     if (event) {
       event.dataHomeKey = scopeKey;
 
-      const [projectAnchor] = await Promise.all([
-        eventProjectAnchor(event.cwd, event.sessionId),
+      const [repoAnchor] = await Promise.all([
+        eventRepoAnchor(event.cwd, event.sessionId),
         addGitStateAtStart(event, gitStateIn(stdin)),
         addGitHeadAtStop(event),
       ]);
 
-      event.projectAnchor = projectAnchor;
+      event.projectAnchor = repoAnchor;
       // The foreground dispatcher's, so a background pass records what the session's own environment said.
       const { readSessionRun } = await import('./launch-context.js');
       Object.assign(event, readSessionRun(stdin));
@@ -575,6 +602,26 @@ const skillUseHandler: HookHandler = {
 };
 
 /**
+ * Whether recall is on for the hook's scope: `TEAMAI_RECALL_DISABLED=1`, then
+ * the member's `recallEnabled`, then the team's `sharing.recall.enabled`, off
+ * by default. Read at every event, so `teamai recall disable` and `enable`
+ * take effect at the next one: nothing is installed or removed (#1788). An
+ * unreadable `teamai.yaml` leaves the team's half at its default.
+ */
+async function isRecallOn(config: LocalConfig): Promise<boolean> {
+  const { isRecallEnabled } = await import('./types.js');
+  const { loadTeamConfig } = await import('./config.js');
+
+  try {
+    return isRecallEnabled(config, await loadTeamConfig(config.repo.localPath) ?? {});
+  } catch (error) {
+    log.debug(`teamai.yaml cannot be read, so the recall hooks take the team's recall setting as off: ${error instanceof Error ? error.message : String(error)}`);
+
+    return isRecallEnabled(config, {});
+  }
+}
+
+/**
  * PostToolUse: record a recall claim or a read of team knowledge in the recall
  * log, for the reducer votes-sync runs at Stop, SubagentStop and SessionEnd (#884). One
  * write per call, whatever number of run ids, docs read or files a search
@@ -584,7 +631,7 @@ const skillUseHandler: HookHandler = {
 const recallAttributionHandler: HookHandler = {
   name: 'recall-attribution',
   async execute(stdin, tool, config) {
-    if (process.env.TEAMAI_RECALL_DISABLED === '1' || !config) return null;
+    if (!config || !await isRecallOn(config)) return null;
     const { recordToolCall } = await import('./recall-adoption.js');
     await recordToolCall(stdin, tool, config);
 
@@ -670,7 +717,7 @@ const contributeCheckHandler: HookHandler = {
     const { readSessionRun, sessionRun } = await import('./launch-context.js');
     const run = readSessionRun(stdin) ?? sessionRun(process.env);
     const offer = localConfig ? async () => (await import('./session-share.js')).SessionShare.reminderOffer(localConfig, { tool, sessionId, cwd: cwd ?? process.cwd(), run }) : undefined;
-    const { hint } = await contributeCheckForSession(sessionId, cwd, transcriptPath, stash, offer);
+    const { hint } = await contributeCheckForSession(sessionId, cwd, transcriptPath, stash, offer, localConfig);
 
     if (!hint) return null;
 
@@ -742,11 +789,11 @@ const packagePendingHintHandler: HookHandler = {
 const votesSyncHandler: HookHandler = {
   name: 'votes-sync',
   async execute(stdin, tool, localConfig) {
-    if (process.env.TEAMAI_RECALL_DISABLED === '1' || !localConfig) return null;
+    if (!localConfig || !await isRecallOn(localConfig)) return null;
 
     try {
       const { creditAdoptedDocs } = await import('./recall-adoption.js');
-      const { syncVotesToTeam, pruneUpvoteLedger } = await import('./votes.js');
+      const { pruneUpvoteLedger } = await import('./votes.js');
       const { getVotesDir } = await import('./types.js');
       const votesDir = getVotesDir(localConfig);
       const votePath = path.join(votesDir, `${localConfig.username}.yaml`);
@@ -763,13 +810,14 @@ const votesSyncHandler: HookHandler = {
       // next Stop retries). Inherited user-scope docs stay read-only.
       const { credited, recalled } = await creditAdoptedDocs(localConfig, sessionId);
       const adoptedDocIds = credited ?? [];
-      // A subagent's end is not the end of the turn: the main agent waits on
-      // this hook, so it only credits locally. The ledger prune and the vote
-      // push, a git round trip, wait for the next Stop or pull.
+      // This handler only credits locally: the vote push, a fetch and a push to
+      // the team remote, is votes-push's, in the detached pass of Stop and
+      // SessionEnd. A subagent's end is not the end of the turn either: the
+      // main agent waits on this hook, so the ledger prune waits for the next Stop.
       const hookEvent = stdinString(stdin, 'hook_event_name')?.toLowerCase() ?? '';
       const subagentStop = hookEvent === 'subagentstop';
-      // Copilot's SessionEnd ends the session: it pushes as Stop does, but no
-      // one reads its reply, so it prints no summary.
+      // Copilot's SessionEnd ends the session: no one reads its reply, so it
+      // prints no summary.
       const sessionEnd = hookEvent === 'sessionend';
 
       // Bound the in-file session ledger even in the default (judge-off) config,
@@ -777,62 +825,6 @@ const votesSyncHandler: HookHandler = {
       // so would never prune (issue #723 review). This runs every Stop, is locked,
       // and only writes when it actually drops a stale entry.
       if (!subagentStop) await pruneUpvoteLedger(votePath).catch(() => undefined);
-
-      const { usesBranchWorktree } = await import('./types.js');
-
-      if (subagentStop) {
-        // Nothing to push now: see above.
-      } else if (usesBranchWorktree(localConfig)) {
-        // Votes are report data → the teamai-reports orphan branch, written
-        // through an isolated worktree (never the default branch / active tree).
-        // Stop fires every turn: skip the fetch when nothing is pending.
-        try {
-          const { hasPendingVoteDeltas, stageVotesMerge, confirmVotesSynced, readUserVotesFromContent } = await import('./votes.js');
-
-          if (await hasPendingVoteDeltas(votesDir, localConfig.username)) {
-            const { updateReports, readReportsOriginFile } = await import('./utils/reports-branch.js');
-            await updateReports(localConfig, async (wt, { onDelivered }) => {
-              // Origin's confirmed snapshot is the merge base, never the
-              // worktree copy: that copy may already hold this machine's own
-              // merged-but-unpushed deltas, and merging onto it again would
-              // count them twice on a retry (#1027).
-              const origin = await readReportsOriginFile(wt, `votes/${localConfig.username}.yaml`);
-
-              const staged = await stageVotesMerge(
-                wt,
-                localConfig.username,
-                votesDir,
-                origin === null ? null : readUserVotesFromContent(origin),
-              );
-
-              if (!staged) {
-                return {
-                  files: [],
-                  message: `[teamai] Update votes for ${localConfig.username}`,
-                };
-              }
-
-              // Deltas are dropped only once origin holds them, and under the
-              // reports lock, so a concurrent sync cannot stage the same deltas
-              // between this publish and this clear. A busy lock, a failed
-              // push, or a crash before delivery keeps them pending for the
-              // next Stop (#1027).
-              onDelivered(() => confirmVotesSynced(votePath, staged.syncedDeltas));
-
-              return {
-                files: [`votes/${localConfig.username}.yaml`],
-                message: `[teamai] Update votes for ${localConfig.username}`,
-              };
-            });
-          }
-        } catch {
-          // Push failed — the deltas stay pending and retry next session
-        }
-      } else {
-        await syncVotesToTeam(localConfig.repo.localPath, localConfig.username, votesDir).catch(() => {
-          // Push failed — will retry next session
-        });
-      }
 
       // A/B measurement (opt-in): one line per Stop. `adopted` is the count
       // newly credited this turn (after per-session dedup), so summing the log
@@ -885,6 +877,75 @@ const votesSyncHandler: HookHandler = {
   },
 };
 
+/**
+ * Push the vote deltas this machine still owes the team, in the detached pass
+ * of Stop and SessionEnd. Inline, a fetch and a push to a remote a few seconds
+ * away outlast FOREGROUND_HOOK_TIMEOUT_MS, and the dispatcher's exit cut the
+ * push and left the vote commit unpushed. This pass starts beside votes-sync,
+ * so a credit it writes after this pass read the deltas goes with the next
+ * Stop or pull.
+ */
+const votesPushHandler: HookHandler = {
+  name: 'votes-push',
+  async execute(_stdin, _tool, localConfig) {
+    if (!localConfig || !await isRecallOn(localConfig)) return null;
+
+    try {
+      const { getVotesDir, usesBranchWorktree } = await import('./types.js');
+      const { syncVotesToTeam, hasPendingVoteDeltas, stageVotesMerge, confirmVotesSynced, readUserVotesFromContent } = await import('./votes.js');
+      const votesDir = getVotesDir(localConfig);
+      const votePath = path.join(votesDir, `${localConfig.username}.yaml`);
+
+      if (!usesBranchWorktree(localConfig)) {
+        await syncVotesToTeam(localConfig.repo.localPath, localConfig.username, votesDir);
+      } else if (await hasPendingVoteDeltas(votesDir, localConfig.username)) {
+        // Votes are report data → the teamai-reports orphan branch, written
+        // through an isolated worktree (never the default branch / active tree).
+        // Stop fires every turn: skip the fetch when nothing is pending.
+        const { updateReports, readReportsOriginFile } = await import('./utils/reports-branch.js');
+        await updateReports(localConfig, async (wt, { onDelivered }) => {
+          // Origin's confirmed snapshot is the merge base, never the
+          // worktree copy: that copy may already hold this machine's own
+          // merged-but-unpushed deltas, and merging onto it again would
+          // count them twice on a retry (#1027).
+          const origin = await readReportsOriginFile(wt, `votes/${localConfig.username}.yaml`);
+
+          const staged = await stageVotesMerge(
+            wt,
+            localConfig.username,
+            votesDir,
+            origin === null ? null : readUserVotesFromContent(origin),
+          );
+
+          if (!staged) {
+            return {
+              files: [],
+              message: `[teamai] Update votes for ${localConfig.username}`,
+            };
+          }
+
+          // Deltas are dropped only once origin holds them, and under the
+          // reports lock, so a concurrent sync cannot stage the same deltas
+          // between this publish and this clear. A busy lock, a failed
+          // push, or a crash before delivery keeps them pending for the
+          // next Stop (#1027).
+          onDelivered(() => confirmVotesSynced(votePath, staged.syncedDeltas));
+
+          return {
+            files: [`votes/${localConfig.username}.yaml`],
+            message: `[teamai] Update votes for ${localConfig.username}`,
+          };
+        });
+      }
+    } catch (error) {
+      // The deltas stay pending for the next Stop or pull.
+      log.debug(`votes-push handler failed: ${(error instanceof Error ? error.stack : undefined) ?? String(error)}`);
+    }
+
+    return null;
+  },
+};
+
 /** `teamai.yaml` `language` for this scope, when that file can be read. */
 async function teamAgentLanguage(config: LocalConfig | null): Promise<'en' | 'zh' | undefined> {
   const { loadTeamAgentLanguage } = await import('./config.js');
@@ -892,27 +953,53 @@ async function teamAgentLanguage(config: LocalConfig | null): Promise<'en' | 'zh
   return loadTeamAgentLanguage(config);
 }
 
+/**
+ * Runs in the PostToolUse `*` pass (#1788). It asks for the tool name first,
+ * so the other calls of that pass read no file here.
+ */
 const todowriteHintHandler: HookHandler = {
   name: 'todowrite-hint',
-  async execute(stdin, _tool, config) {
-    if (process.env.TEAMAI_RECALL_DISABLED === '1') return null;
+  async execute(stdin, tool, config) {
+    if (normalizeToolName(stdinString(stdin, 'tool_name') ?? '') !== 'TodoWrite') return null;
 
-    const toolName = normalizeToolName(stdinString(stdin, 'tool_name') ?? '');
-
-    if (toolName !== 'TodoWrite') return null;
+    if (!config || !await isRecallOn(config) || !await todoWriteHintInstalled(tool, config)) return null;
 
     const { shouldSkipTodoWriteHint, buildHintMessage } = await import('./todowrite-hint.js');
 
     if (shouldSkipTodoWriteHint(deriveSessionId(stdin))) return null;
+    const { DefaultHooks } = await import('./default-hooks.js');
 
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PostToolUse',
-        additionalContext: buildHintMessage(await teamAgentLanguage(config)),
+        additionalContext: buildHintMessage(await DefaultHooks.load('teamai-todowrite-hint', config), await teamAgentLanguage(config)),
       },
     });
   },
 };
+
+/**
+ * Whether the hint would still have its retired TodoWrite entry: only the
+ * tools that had it, and not where the team disables that key or the wildcard
+ * one that now carries it. A hooks file that cannot be read keeps it off, as
+ * skill-use.ts treats its own retired key.
+ */
+async function todoWriteHintInstalled(tool: string, config: LocalConfig): Promise<boolean> {
+  const { POST_TOOL_USE_WILDCARD_KEY, RETIRED_TODOWRITE_HOOK_KEY, takesAllBuiltins } = await import('./builtin-hooks.js');
+
+  if (!takesAllBuiltins(tool)) return false;
+  const { readBuiltinDisabledListing } = await import('./resources/hooks.js');
+
+  for (const key of [RETIRED_TODOWRITE_HOOK_KEY, POST_TOOL_USE_WILDCARD_KEY]) {
+    const listing = await readBuiltinDisabledListing(config, key);
+
+    if (listing === 'unreadable') log.debug('hooks/hooks.yaml cannot be read, so the TodoWrite hint is not given');
+
+    if (listing !== 'not-listed') return false;
+  }
+
+  return true;
+}
 
 const mrHintHandler: HookHandler = {
   name: 'mr-hint',
@@ -969,16 +1056,18 @@ const teamEnvHintHandler: HookHandler = {
       return description ? `${name} (${description})` : name;
     }).join(', ');
 
+    const { DefaultHooks } = await import('./default-hooks.js');
+    const hook = await DefaultHooks.load('teamai-env-hint', config);
+    const language = await teamAgentLanguage(config);
+
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
         additionalContext: [
-          ...plain.length > 0 ? [`Team env variables in this scope: ${described(plain)}.`] : [],
-          ...secrets.length > 0 ? [`Team secrets in this scope: ${described(secrets)}.`] : [],
-          'Run the commands that need them through `teamai env exec -- <command>` so they get this directory\'s team values.',
-          ...secrets.length > 0
-            ? ['Never ask for, read or print a secret value; if one is missing, ask the member to run `teamai env set KEY` in their own terminal.']
-            : [],
+          ...plain.length > 0 ? [hook.text('variables', language).render({ variables: described(plain) })] : [],
+          ...secrets.length > 0 ? [hook.text('secrets', language).render({ secrets: described(secrets) })] : [],
+          hook.text('exec', language).render({}),
+          ...secrets.length > 0 ? [hook.text('secrets-rule', language).render({})] : [],
         ].join(' '),
       },
     });
@@ -1245,9 +1334,10 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'session-end', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     { event: 'session-end', matcher: '*', handler: webhookHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     // Copilot's last turn can end with SessionEnd and no Stop, so the recall
-    // reducer runs here too and pushes the votes (#884). A Stop before it
-    // already credited the same reads, and the ledger counts a doc once.
+    // reducer runs here too, and votes-push pushes in the detached pass (#884).
+    // A Stop before it already credited the same reads, and the ledger counts a doc once.
     { event: 'session-end', matcher: '*', handler: votesSyncHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
+    { event: 'session-end', matcher: '*', handler: votesPushHandler, timeoutMs: VOTES_PUSH_TIMEOUT_MS, background: true, gitOnly: true, requiresConfig: true },
 
     // ─── Stop ─────────────────────────────────────────
     // votes-sync and contribute-check may return a hint the host injects back
@@ -1258,8 +1348,10 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // the declared timeout).
     { event: 'stop', matcher: '*', handler: updateHandler, timeoutMs: UPDATE_BUDGET_MS, background: true },
     { event: 'stop', matcher: '*', handler: votesSyncHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
+    { event: 'stop', matcher: '*', handler: votesPushHandler, timeoutMs: VOTES_PUSH_TIMEOUT_MS, background: true, gitOnly: true, requiresConfig: true },
     { event: 'stop', matcher: '*', handler: contributeCheckHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
     { event: 'stop', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
+    { event: 'stop', matcher: '*', handler: sessionEndHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     { event: 'stop', matcher: '*', handler: localAgentHandler, timeoutMs: LOCAL_AGENT_TIMEOUT_MS, background: true },
     { event: 'stop', matcher: '*', handler: webhookHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
 
@@ -1284,7 +1376,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // host-visible cost is bundle load + spawn.
     { event: 'post-tool-use', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     { event: 'post-tool-use', matcher: '*', handler: recallAttributionHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
-    { event: 'post-tool-use', matcher: 'TodoWrite', handler: todowriteHintHandler, timeoutMs: TODOWRITE_HINT_TIMEOUT_MS, requiresConfig: true },
+    { event: 'post-tool-use', matcher: '*', handler: todowriteHintHandler, timeoutMs: TODOWRITE_HINT_TIMEOUT_MS, requiresConfig: true },
     { event: 'post-tool-use', matcher: '*', handler: localAgentHandler, timeoutMs: LOCAL_AGENT_TIMEOUT_MS, background: true },
     { event: 'post-tool-use', matcher: '*', handler: skillUseHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     // A worktree an agent tool entered without any git hook (Claude Code's EnterWorktree, Codex CLI) gets the
@@ -1294,8 +1386,10 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // ─── UserPromptSubmit ─────────────────────────────
     { event: 'prompt-submit', matcher: '*', handler: pendingHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
     { event: 'prompt-submit', matcher: '*', handler: packagePendingHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
-    { event: 'prompt-submit', matcher: '*', handler: skillMentionHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
-    { event: 'prompt-submit', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
+    // A prompt's records go to the detached child on POSIX, where the fast path then leaves a prompt that waits on no
+    // hint to it (#1788). Windows keeps them inline: a child there is a WMI spawn.
+    { event: 'prompt-submit', matcher: '*', handler: skillMentionHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true, background: process.platform !== 'win32' },
+    { event: 'prompt-submit', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true, background: process.platform !== 'win32' },
     { event: 'prompt-submit', matcher: '*', handler: localAgentHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
 
     // ─── Git (`--tool git`, see git-hook.ts) ──────────

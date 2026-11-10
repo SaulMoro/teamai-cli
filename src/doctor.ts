@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { findSkippedFolders, skippedFolderMessage } from './folder-markers.js';
 import { hookToolPathsForConfig } from './types.js';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -39,7 +40,7 @@ import { samePlace } from './resources/places.js';
 import { describeInvalidToolHomes, envToolHome, ompProfile, realHost, reloadToolHomes, toolHomesPath } from './tool-home.js';
 import { hookFormatOf, hookSyntaxOf, isToolId } from './tool-registry.js';
 import { isCodexTool } from './utils/tool-names.js';
-import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, keptTeamHookEntries, readCodexHookTrustForScope, readHookFile } from './hooks.js';
+import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, keptTeamHookEntries, readCodexHookTrustForScope, readHookFile, releaseRemovedCheckoutHooks } from './hooks.js';
 import { codexBuildSkewMessage } from './codex-trust.js';
 import {
   buildDeliveryChecks,
@@ -66,6 +67,7 @@ import {
   buildEntryResolutionChecks,
   buildSecretValuesCheck,
   buildEntryScopeKeyCheck,
+  retiredBuiltinOverrideNotes,
   entryNamespaceNotes,
   buildDocsCheck,
   keptDocNotes,
@@ -263,13 +265,13 @@ async function installProbeOf(
 const GATED_SURFACES = [['rules', 'rules'], ['blocks', 'team instructions'], ['agents', 'agents'], ['mcp', 'MCP servers']] as const;
 
 /**
- * A tool can take its skills while its other surfaces wait for a root that is
- * not there: on WorkBuddy 5.7+, skills land under `.workbuddy-ai/`, while
- * everything else still needs `.workbuddy/` (#1273). Pull writes none of those,
- * and the delivery checks skip a tool whose gate is unmet, so with
- * `<tool> is installed` passing on the skills root doctor would stay green.
- * Hooks count when the hook writer finds none of its install roots and one of
- * them is a root the other surfaces wait for.
+ * A tool can take its skills while another of its surfaces waits for a root
+ * that is not there. Skills, rules, agents and MCP all follow the live
+ * WorkBuddy root (#1273), but hooks still write the default one until their
+ * half lands, so a member on WorkBuddy AI gets skills delivered and hooks
+ * held. Pull writes none of the held ones, and the delivery checks skip a tool
+ * whose gate is unmet, so with `<tool> is installed` passing on the skills
+ * root doctor would otherwise stay green — the exact report #1273 opened with.
  */
 async function buildHeldSurfaceChecks(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, toolPaths, hookToolPaths, baseDir } = ctx;
@@ -302,9 +304,16 @@ async function buildHeldSurfaceChecks(ctx: DoctorContext): Promise<Check[]> {
       const hookRoots = [hookSettingsFile(tool, baseDir, gateRoot)];
 
       if (localConfig.scope === 'project') hookRoots.push(path.join(localConfig.projectRoot ?? baseDir, gateRoot));
-      const root = hookRoots.find((candidate) => held.has(candidate));
 
-      if (root !== undefined && !(await Promise.all(hookRoots.map((dir) => pathExists(dir)))).includes(true)) held.get(root)?.push('hooks');
+      const present = (await Promise.all(hookRoots.map((dir) => pathExists(dir)))).includes(true);
+
+      if (!present) {
+        const root = hookRoots[0];
+        const surfaces = held.get(root) ?? [];
+
+        surfaces.push('hooks');
+        held.set(root, surfaces);
+      }
     }
 
     for (const [root, surfaces] of held) {
@@ -925,6 +934,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
         + 'next time the same lock is taken; removing them only clears the noise.',
     },
     ...buildWorkspaceChildrenChecks(localConfig),
+    ...await buildSkippedFoldersChecks(localConfig),
     ...await buildGitHookChecks(localConfig, stage),
     ...await buildTrackedHookIndexCheck(localConfig),
     ...buildToolRootChecks(localConfig, teamConfig),
@@ -960,6 +970,25 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
   );
 
   return checks;
+}
+
+/**
+ * The folders every scan of the team repo leaves out, because this release
+ * cannot read their type yet (#1791). A warning, not a failure: the rest of
+ * the team repo is delivered, and `teamai update` is the fix.
+ */
+async function buildSkippedFoldersChecks(localConfig: LocalConfig): Promise<Check[]> {
+  const skipped = await findSkippedFolders(localConfig.repo.localPath);
+
+  if (skipped.length === 0) return [];
+
+  return [{
+    name: 'This teamai reads every folder in the team repo',
+    source: 'local',
+    reportedByPull: 'skipped-folders',
+    check: async () => 'warn',
+    fix: skipped.map(skippedFolderMessage).join('\n    → '),
+  }];
 }
 
 /**
@@ -1185,6 +1214,14 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     }
 
     await sweepRunLeftovers(ctx);
+
+    if (ctx.teamConfig) {
+      try {
+        await releaseRemovedCheckoutHooks(ctx.teamConfig, localConfig);
+      } catch (e) {
+        log.warn(`Could not remove the team hooks a removed checkout left in HOME: ${e instanceof Error ? e.message : String(e)}. Run teamai doctor --fix again.`);
+      }
+    }
   }
 
   // Doctor only: it spawns `codex app-server`, which the post-pull pass skips.
@@ -1235,6 +1272,8 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ...await skillReadNotes(ctx),
     ...await recordedPlaceNotes(ctx, 'rules'),
     ...await recordedPlaceNotes(ctx, 'blocks'),
+    // A team timeout for the TodoWrite entry teamai no longer installs (#1788).
+    ...await retiredBuiltinOverrideNotes(ctx),
   ];
 
   const memberSettings = await memberSettingsReport(ctx);

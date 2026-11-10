@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/teamai-cli-logo.svg" alt="teamai-cli">
+  <img src="docs/assets/teamai-cli-logo.svg" alt="teamai-cli">
 </p>
 
 <h1 align="center">TeamAI — Make Every Team AI Native</h1>
@@ -19,14 +19,14 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
-**TeamAI manages a team's skills, rules, agents, learnings, models, MCP, and other AI assets in a git repo.**
+**TeamAI manages a team's skills, rules, agents, learnings, models, MCP, and other agent resources in a git repo.**
 
-A teammate initializes once. After that, the latest team AI assets sync automatically.
+A teammate initializes once. After that, the latest team agent resources sync automatically.
 
 ## Why TeamAI
 
 <p align="center">
-  <img src="assets/use-cases.png" alt="Eight everyday scenarios, before and after TeamAI" width="100%">
+  <img src="docs/assets/use-cases.png" alt="Eight everyday scenarios, before and after TeamAI" width="100%">
 </p>
 
 ## Quick Start
@@ -65,7 +65,7 @@ Skills, rules, MCP servers, and other agent resources can all be shared:
 /teamai Open the TeamAI dashboard
 ```
 
-Once a teammate is set up, they just open their agent and already have the team's full set of AI assets.
+Once a teammate is set up, they just open their agent and already have the team's full set of agent resources.
 
 <details>
 <summary>Command-line install</summary>
@@ -126,7 +126,7 @@ Three layers of capability, built on Git:
     <tr><td>Cursor</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td></tr>
     <tr><td>CodeBuddy</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td></tr>
     <tr><td>WorkBuddy</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td></tr>
-    <tr><td>GitHub Copilot CLI</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓³</td><td align="center">—</td></tr>
+    <tr><td>GitHub Copilot CLI</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td></tr>
     <tr><td>OpenCode</td><td align="center">✓</td><td align="center">✓¹</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td></tr>
     <tr><td>Pi Coding Agent</td><td align="center">✓</td><td align="center">✓¹</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓²</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">—</td></tr>
     <tr><td>Oh My Pi</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">✓</td><td align="center">—</td><td align="center">✓</td><td align="center">—</td></tr>

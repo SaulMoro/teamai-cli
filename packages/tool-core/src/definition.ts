@@ -307,6 +307,21 @@ export type HooksChannels = {
    * which every linked worktree reads (#955), or in HOME behind a `$PWD` gate.
    */
   readonly teamHooks: 'main-checkout' | 'home';
+  /**
+   * The environment variable the tool sets to the project's root when it runs a hook from a project file, if it has
+   * one. A self-mode hook folder's command names the folder through it, so a project file the repository may
+   * commit holds the same command in every worktree (#1787, common rule 10). Without one, the absolute path is written.
+   */
+  readonly projectDirVariable?: string;
+  /**
+   * Whether hook-dispatch needs the CLI bundle in the foreground before the
+   * background child can take this tool's hook: it translates Antigravity CLI's
+   * payload there, and claims each Copilot CLI event among the copies installed.
+   * Every other tool's hook with nothing to print exits before the bundle loads
+   * (#1788). src/hook-fast-path.ts keeps a copy of this list, which
+   * hook-fast-path.test.ts checks against this field.
+   */
+  readonly needsBundle: boolean;
 };
 
 /**
@@ -357,6 +372,18 @@ export type ToolFeatures = {
   readonly agentHooks: Support;
 };
 
+/**
+ * How the tool reads the support files a user-scope rule folder names through `${TEAMAI_RULE_DIR}` (#1787), in the
+ * data home: `none`, without a prompt; `grant`, once teamai adds that directory to `setting` in the tool's user
+ * settings; `copy`, not without a prompt, so pull warns once. In a project every tool reads the folder in the worktree,
+ * `.teamai/delivered/rules/`, a `copy` tool by its path from the project root. A tool with no cell has no evidence,
+ * and gets `copy`.
+ */
+export type RuleFolderReach =
+  | { readonly reach: 'none'; readonly evidence: Evidence }
+  | { readonly reach: 'grant'; readonly setting: 'permissions.additionalDirectories'; readonly evidence: Evidence }
+  | { readonly reach: 'copy'; readonly evidence?: Evidence };
+
 export type ToolDescriptor<TIds extends DescriptorIds = DescriptorIds> = {
   readonly home: Home;
   readonly skillLoad: SkillLoad;
@@ -372,6 +399,8 @@ export type ToolDescriptor<TIds extends DescriptorIds = DescriptorIds> = {
    */
   readonly skillsFollowSession?: true;
   readonly rules: RulesChannels;
+  /** How the tool reads a user-scope rule folder's files; absent: `copy`, with no evidence. */
+  readonly ruleFolders?: RuleFolderReach;
   readonly blocks: BlocksChannels;
   readonly agents: AgentsChannels;
   readonly mcp: McpChannels<TIds['tool']>;

@@ -25,7 +25,7 @@ export const tools = {
       project: { judgedTeamaiOnly: true, format: 'claude', key: ['mcp', 'servers'], reads: [{ base: 'project', path: '.zcode/config.json', when: 'workspaceUnder', evidence: 'source' }] },
       retired: { user: ['.agents/mcp.json'] },
     },
-    hooks: { user: { channel: 'settings', format: 'zcode', reads: [{ base: 'home', path: '.zcode/cli/config.json', evidence: 'source' }] }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'zcode', reads: [{ base: 'home', path: '.zcode/cli/config.json', evidence: 'source' }] }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: 'none',
     launch: 'none',
     autoCompact: 'none',

@@ -11,13 +11,13 @@ function resetLoop(){loopData=null;loopError='';loopLoading=false;loopHtml='';}
 const loopDelta=(from,to)=>from==null||to==null?null:Math.round((to-from)*100);
 const loopRate=r=>r.planned?r.passed/r.planned:null;
 function loopPts(d){ return d===null?'':'<b class="'+(d>0?'good':d<0?'amber':'muted')+'">'+(d>0?'+':'')+number(d)+' '+label('pts')+'</b>'; }
-/** The team asset a file belongs to: its directory under the team root, and the name under it, such as skills/review. */
-function loopAsset(file){ const parts=file.replace(/^\\.teamai\\//,'').split('/'); return parts.length>2?parts[0]+'/'+parts[1]:parts.length===2?parts[0]+'/'+parts[1].replace(/\\.[a-z]+$/,''):parts[0]; }
-function loopAssets(c){
+/** The team resource a file belongs to: its directory under the team root, and the name under it, such as skills/review. */
+function loopResource(file){ const parts=file.replace(/^\\.teamai\\//,'').split('/'); return parts.length>2?parts[0]+'/'+parts[1]:parts.length===2?parts[0]+'/'+parts[1].replace(/\\.[a-z]+$/,''):parts[0]; }
+function loopResources(c){
  const tasks=new Set(c.tasks), seen=new Map();
- for(const file of c.files){ if(tasks.has(file))continue; const asset=loopAsset(file); seen.set(asset,[...(seen.get(asset)||[]),file]); }
+ for(const file of c.files){ if(tasks.has(file))continue; const resource=loopResource(file); seen.set(resource,[...(seen.get(resource)||[]),file]); }
  const chips=[...seen.entries()];
- return chips.length?chips.slice(0,4).map(([asset,files])=>'<span class="tag" data-verbatim title="'+e(files.join('\\n'))+'">'+e(asset)+'</span>').join(' ')+(chips.length>4?' <span class="muted">+'+number(chips.length-4)+'</span>':''):'<span class="muted">'+label('Only regression tasks')+'</span>';
+ return chips.length?chips.slice(0,4).map(([resource,files])=>'<span class="tag" data-verbatim title="'+e(files.join('\\n'))+'">'+e(resource)+'</span>').join(' ')+(chips.length>4?' <span class="muted">+'+number(chips.length-4)+'</span>':''):'<span class="muted">'+label('Only regression tasks')+'</span>';
 }
 function loopProof(c){
  if(!c.proof)return '<span class="muted">'+label('Not run yet')+'</span>'+(loopData.setup.jobs.proof?'':'<small>'+label('No CI job proves changes yet')+'</small>');
@@ -49,13 +49,13 @@ function loopWhen(c){
 function loopCells(c){
  const scorer='<button class="link" data-loop-scorer="'+e(c.scorer)+'" data-verbatim>'+e(c.scorer)+'</button>';
  if(c.state==='closed')return [loopState(c)+' <span data-verbatim>'+e(c.title)+'</span>',scorer,'<span class="muted">—</span>','<span class="muted">—</span>','<span class="muted">'+label('Never landed')+'</span>',loopWhen(c),loopOpen(c)];
- return [loopState(c)+' <span data-verbatim>'+e(c.title)+'</span><small>'+number(c.tasks.length)+' '+(c.tasks.length===1?label('regression task'):label('regression tasks'))+'</small>',scorer,loopAssets(c),loopProof(c),loopImpact(c),loopWhen(c),loopOpen(c)];
+ return [loopState(c)+' <span data-verbatim>'+e(c.title)+'</span><small>'+number(c.tasks.length)+' '+(c.tasks.length===1?label('regression task'):label('regression tasks'))+'</small>',scorer,loopResources(c),loopProof(c),loopImpact(c),loopWhen(c),loopOpen(c)];
 }
 function loopChanges(d){
  const counts={all:d.changes.length}; for(const k of ['proposed','landed','closed'])counts[k]=d.changes.filter(c=>c.state===k).length;
  const rows=d.changes.filter(c=>loopFilter==='all'||c.state===loopFilter);
  const tabs='<div class="imp-tabs" role="tablist">'+[['all','All'],['proposed','Proposed'],['landed','Landed'],['closed','Closed']].filter(([k])=>k!=='closed'||counts.closed).map(([k,n])=>'<button role="tab" data-loop-filter="'+k+'" aria-selected="'+(k===loopFilter)+'" class="'+(k===loopFilter?'active':'')+'">'+label(n)+' <span>'+number(counts[k])+'</span></button>').join('')+'</div>';
- const heads=['CHANGE','SCORER','ASSETS','PROOF ON THE REGRESSION SUITE','PASS RATE BEFORE → AFTER','WHEN','OPEN'];
+ const heads=['CHANGE','SCORER','RESOURCES','PROOF ON THE REGRESSION SUITE','PASS RATE BEFORE → AFTER','WHEN','OPEN'];
  const body=rows.length?'<div class="table-scroll"><table class="session-table loop-changes"><thead><tr>'+heads.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'
   +rows.map(c=>{const cells=loopCells(c);
    return '<tr>'+cells.map((x,i)=>'<td data-label="'+e(t(heads[i]))+'">'+x+'</td>').join('')+'</tr>';}).join('')+'</tbody></table></div>'
@@ -109,7 +109,7 @@ function loopSetup(d){
  const s=d.setup, regressions=s.suites.filter(x=>x.regressions);
  const items=[
   loopCheck(d.scorers.length>0,'Scorer labels reach teamai-reports',d.scorers.length?number(d.scorers.length)+' '+label('scorers with labels in the last 30 days'):label('Push a scorer and let it label work, then publish with teamai score --push.')),
-  loopCheck(s.suites.length>0,'A regression suite',s.suites.length?s.suites.map(x=>'<span class="tag" data-verbatim title="'+e(x.path)+'">'+e(x.name)+'</span> '+number(x.tasks)+' '+label('tasks')+', '+number(x.regressions)+' '+label('from failures')).join(' · '):label('Push benchmarks/regressions/suite.yaml with team: [main, pulled].')),
+  loopCheck(s.suites.length>0,'A regression suite',s.suites.length?s.suites.map(x=>'<span class="tag" data-verbatim title="'+e(x.path)+'">'+e(x.name)+'</span> '+number(x.tasks)+' '+label('tasks')+', '+number(x.regressions)+' '+label('from failures')).join(' · '):label('Push benchmarks/regressions/SUITE.yaml with team: [main, pulled].')),
   loopCheck(!!s.jobs.improve,'A CI job runs the loop',s.jobs.improve?'<span data-verbatim>'+e(s.jobs.improve)+'</span>':label('Add a scheduled job that runs teamai self-improvement run on a runner it throws away.')),
   loopCheck(!!s.jobs.proof,'A CI job proves each change',s.jobs.proof?'<span data-verbatim>'+e(s.jobs.proof)+'</span>':label('Add a pull request job that runs teamai benchmark run on the regression suite.')),
   loopCheck(s.workflow.source!=='missing','The workflow',s.workflow.source==='team'?label('The team\\'s')+' <span data-verbatim>'+e(s.workflow.path)+'</span>':s.workflow.source==='default'?label('teamai\\'s default teamai-self-improvement'):label('Not found. Run teamai pull.')),

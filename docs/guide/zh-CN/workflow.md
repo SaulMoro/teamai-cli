@@ -2,7 +2,7 @@
 
 > 本文是 [TeamAI CLI 使用指南](../../usage-guide.zh-CN.md) 的一部分。
 
-工作流是团队仓库里的 `workflows/<name>.yaml`。它运行命令步骤和提示词步骤，每个步骤在它依赖的步骤之后运行。没有 workspace 的命令是只读的；[工作区](#工作区)说明步骤如何在自己的分支上改代码。[高级工作流](workflow-advanced.md) 介绍并行步骤、循环、`for_each`、到达结局时仍在运行的步骤会怎样，以及完整的表达式语言。
+工作流是团队仓库里的 `workflows/<name>.yaml`，也可以是一个[文件夹](#工作流文件夹)：`workflows/<name>/WORKFLOW.yaml` 加上它需要的文件。它运行命令步骤和提示词步骤，每个步骤在它依赖的步骤之后运行。没有 workspace 的命令是只读的；[工作区](#工作区)说明步骤如何在自己的分支上改代码。[高级工作流](workflow-advanced.md) 介绍并行步骤、循环、`for_each`、到达结局时仍在运行的步骤会怎样，以及完整的表达式语言。
 
 ```yaml
 schemaVersion: v1alpha1
@@ -22,7 +22,7 @@ steps:
     agent: reviewer
 ```
 
-`schemaVersion` 必须是 `v1alpha1`。`name` 必须和文件名一致。`description` 必填。每个步骤有唯一的 `id`，并且只能使用 `command`、`prompt`、`prompt_file`、`workflow` 中的一种动作。带有 `end`、`approve` 或 `choose` 的步骤可以省略动作。提示词步骤可选填 `agent`。`output` 沿用已有简写：`string`、`number`、`boolean`、字面量联合、对象，或只含一种元素类型的数组。TeamAI 会用它校验成功命令的 stdout 或提示词工具返回的 `output`。
+`schemaVersion` 必须是 `v1alpha1`。`name` 必须和文件名一致；工作流文件夹则和文件夹名一致。`description` 必填。每个步骤有唯一的 `id`，并且只能使用 `command`、`prompt`、`prompt_file`、`workflow` 中的一种动作。带有 `end`、`approve` 或 `choose` 的步骤可以省略动作。提示词步骤可选填 `agent`。`output` 沿用已有简写：`string`、`number`、`boolean`、字面量联合、对象，或只含一种元素类型的数组。TeamAI 会用它校验成功命令的 stdout 或提示词工具返回的 `output`。
 
 每个驱动都会把提示词步骤的 `output` 以 JSON Schema 的形式告诉 agent，提示词里不必重复。声明的字段都必填，多出的字段允许。这个步骤：
 
@@ -86,7 +86,7 @@ steps:
 
 除非到达某个结局，运行结果仍是 `failed`。`if` 无法解析、读取了未依赖的步骤，或读取了该步骤 `output` 中没有的字段，都会让该文件无效。`if` 恒为假也会让文件无效，此时即使之前有有效版本，该工作流也没有可运行版本。
 
-`teamai pull` 和 `teamai push` 会检查每个文件，并按被运行工作流的可运行版本检查运行它的步骤。`prompt_file` 必须是团队仓库 `prompts/` 下的普通文件，不能是符号链接。校验时会把文件内容和工作流一起缓存，因此已经开始的运行会继续使用对应修订版，即使源文件后来被修改或删除。新修订版无效时，仍保留上一份有效缓存，前提是这份缓存仍与它运行的工作流相符。这一版 teamai 不认识的字段除外：该工作流没有可运行版本，需要先更新 teamai。
+`teamai pull` 和 `teamai push` 会检查每个文件，并按被运行工作流的可运行版本检查运行它的步骤。`prompt_file` 必须是团队仓库 `prompts/` 下的普通文件，或其[工作流文件夹](#工作流文件夹)里的文件，不能是符号链接。校验时会把文件内容和工作流一起缓存，因此已经开始的运行会继续使用对应修订版，即使源文件后来被修改或删除。新修订版无效时，仍保留上一份有效缓存，前提是这份缓存仍与它运行的工作流相符。这一版 teamai 不认识的字段除外：该工作流没有可运行版本，需要先更新 teamai。
 
 `teamai review --branch <name>` 用同样的规则检查该分支。任一工作流文件无效，或步骤的 `model`、`defaults.model` 是分支的 `models/aliases.yaml` 没有为任何工具映射的别名时，退出码为 1。它不写入任何文件，也不运行工作流。下面这个文件过不了检查：
 
@@ -146,6 +146,8 @@ steps:
     needs: [collect]
     prompt: Draft release notes from the commits listed in the file commits.txt in the directory $TEAMAI_RUN_DIR names.
 ```
+
+[工作流文件夹](#工作流文件夹)的步骤启动的每个进程还会拿到 `TEAMAI_WORKFLOW_DIR`：这次运行自己的那份文件夹副本，位于 TeamAI 数据目录下，在 Windows 上也使用正斜杠。运行会一直使用开始时的那份副本，之后的 pull 怎样改动文件夹都不影响它。提示词按名字引用它，和引用 `TEAMAI_RUN_DIR` 一样（"the file notes.md in the directory $TEAMAI_WORKFLOW_DIR names"）；teamai 不会在 `prompt` 或 `answer` 文本里替换它。步骤运行的工作流看到的是定义它的那个文件所在的文件夹：内联 `workflow:` 用父工作流的，按名字运行的文件夹工作流用自己的，按名字运行的单文件工作流没有。[`from` 步骤](workflow-advanced.md#运行步骤打印的工作流)打印的工作流看到的是打印它的那个工作流的文件夹。单文件工作流拿不到它。
 
 步骤可以用 `workflow: <name>` 运行 `workflows/` 中的另一个工作流，并用 `with` 传入该工作流的输入：
 
@@ -245,6 +247,46 @@ $ teamai workflow start nightly-small --driver local --tools default=claude
 ```
 
 等待 HITL 请求用 `workflow respond <run> <step> <choice>` 回答，失败或卡住的步骤用 `workflow retry <run> <step>` 重试，`workflow cancel <run> [step]` 停止工作，`workflow resume <run>` 继续本地执行，`workflow publish <run>` 让另一台机器接着运行（见[在另一台机器上继续运行](#在另一台机器上继续运行)）。next 返回 lease、hitl、wait 或 done。参见[HITL](workflow-advanced.md#hitl人在回路中)和[重试、取消和继续运行](workflow-advanced.md#重试取消和继续运行)。本地运行以 failed 或 cancelled 结束时退出码为 1。结束运行的操作在锁内排队写入结束记录，在释放锁后发布；重试后仍更新同一路径。回答记录只发布 choice、channel 和 agent，备注、回答时间和回答驱动身份只保存在本地。
+
+## 工作流文件夹
+
+需要脚本、提示词或说明文件的工作流，可以把它们放在同一个文件夹里：
+
+```
+workflows/release/
+├─ WORKFLOW.yaml
+├─ plan.py
+├─ summary.md
+├─ notes.md
+└─ README.md
+```
+
+```yaml
+# workflows/release/WORKFLOW.yaml
+schemaVersion: v1alpha1
+name: release
+description: Plan the release, summarise it and open the PR.
+steps:
+  - id: plan
+    command: python3 "$TEAMAI_WORKFLOW_DIR/plan.py"
+    output: { version: string }
+  - id: summary
+    needs: [plan]
+    prompt_file: summary.md
+  - id: notes
+    needs: [summary]
+    answer_file: notes.md
+    output: { text: string }
+```
+
+- `workflows/` 下（根目录或命名空间里，即 `workflows/<ns>/<name>/`）含有 `WORKFLOW.yaml` 的目录是一个工作流，以目录名命名。没有它的命名空间目录仍是命名空间。文件名按原样匹配，所以小写的 `workflow.yaml` 是名为 `workflow` 的工作流。
+- 文件夹里的其他文件（包括子目录里的）都属于这个工作流；以 `.` 开头的名字会被跳过。文件夹里的其他 `*.yaml` 不是工作流，pull 对每个文件夹提示一次：`workflows/release/ is a workflow folder; checks.yaml in it is not a workflow`。
+- `prompt_file` 和 [`answer_file`](workflow-advanced.md#让成员的-ai-工具给出回答) 指向文件夹里的文件，路径从文件夹根目录算起，可以在子目录里。`..` 或绝对路径会让工作流无效。在文件夹之外，两者都在 `prompts/` 下查找。
+- 同一处有同名的文件和文件夹（例如 `workflows/release.yaml` 和 `workflows/release/`）时，该工作流没有可运行版本，直到删掉其中一个。
+- `teamai-` 开头的文件夹名只用来替换同名的[默认工作流](#默认工作流)。其他这样的文件夹会被 pull 跳过并警告：`workflows/teamai-release/ is skipped: a teamai- name only replaces a teamai default, and teamai has no workflow named teamai-release. Rename the folder.`
+- 文件夹只能包含 UTF-8 文本，总共不超过 1 MB，且不能有符号链接。[运行中的工作流文件夹](workflow-advanced.md#运行中的工作流文件夹)介绍这些限制，以及运行如何保留自己的副本。
+- `README.md` 是给人看的。teamai 从不把它交给智能体，pull 为工作流生成的技能也不包含它。
+- `teamai status` 把一个文件夹算作一个工作流。在 self 模式下，文件夹位于 `.teamai/workflows/` 下，`teamai push` 会推送其中的每个文件。
 
 ## 工作区
 
@@ -411,7 +453,7 @@ steps:
 
 ### 团队工作区
 
-`workspace: { team: { branch } }` 让步骤在团队仓库的一个全新克隆里运行，用于修改团队资产而不是项目的工作。配合 `deliver: pr`，它的 pull request 合入团队仓库的默认分支。
+`workspace: { team: { branch } }` 让步骤在团队仓库的一个全新克隆里运行，用于修改团队资源而不是项目的工作。配合 `deliver: pr`，它的 pull request 合入团队仓库的默认分支。
 
 ```yaml
 schemaVersion: v1alpha1
@@ -429,7 +471,7 @@ steps:
 teamai workflow start tighten-rule --inputs '{"rule":"backend"}'
   克隆团队仓库                     origin 有 tighten/backend？从它继续，并合并 main
                                    否则从 main 新建分支
-  在克隆里运行步骤                 单仓库模式下在项目仓库克隆的 .teamai/ 里
+  在克隆里运行步骤                 self 模式下在项目仓库克隆的 .teamai/ 里
   提交、检查、推送 tighten/backend  以克隆时看到的分支顶端作为 lease
   打开合入 main 的 pull request    或更新已经打开的那个
 ```
@@ -437,7 +479,7 @@ teamai workflow start tighten-rule --inputs '{"rule":"backend"}'
 - `branch` 只能读取 `{{ inputs.* }}` 和步骤所需步骤的输出，例如 `teamai/tasks/{{ steps.draft.outputs.id }}`，这样之后给出相同值的运行会沿用同一个分支和 pull request。它在步骤被租用时渲染。不写时，步骤使用运行为该步骤和 pass 命名的分支。分支是团队仓库的默认分支，或者 git 无法用它命名分支时，步骤以 `workspace_base` 失败。
 - 分支和默认分支冲突时，步骤在运行前以 `merge_conflict` 失败。把默认分支合并进它，或者删除它。
 - 只有只运行一次的 command 或 prompt 步骤能用它，`workflow` 步骤和 `for_each` 不行；它也不能列 `scorers`，因为步骤报告后克隆就被删除了。它也不带 `role`，外层 `workflow` 步骤的也不继承，因为它在自己的克隆里运行，而不在那个步骤的副本里。本地驱动运行它；在会启动子 agent 的宿主上，skill 驱动也运行它：command 在它的后台 runner 里运行，prompt 由在克隆里工作的子 agent 运行。`workflow publish` 会拒绝它的运行，因为克隆只在那台机器上。
-- 推送前，提交必须是 `teamai pull` 会接受的：改动的每个文件都在 pull 放置的目录里（`skills/`、`rules/`、`scorers/`、`benchmarks/` 等），不能是符号链接或子模块，也不能是克隆里某个符号链接也指向的文件，因为步骤可能经由那个符号链接的路径写了它；benchmark 文件必须在 pull 读取的套件里，即带 `suite.yaml` 的 `benchmarks/<suite>/` 或 `benchmarks/<namespace>/<suite>/`；pull 不能拒绝默认分支上原本接受的任何文件，比如步骤删掉了某个工作流所用的评分器。否则步骤以 `push_failed` 失败，逐个列出文件和原因，什么也不推送。
+- 推送前，提交必须是 `teamai pull` 会接受的：改动的每个文件都在 pull 放置的目录里（`skills/`、`rules/`、`scorers/`、`benchmarks/` 等），不能是符号链接或子模块，也不能是克隆里某个符号链接也指向的文件，因为步骤可能经由那个符号链接的路径写了它；benchmark 文件必须在 pull 读取的套件里，即带 `SUITE.yaml` 的 `benchmarks/<suite>/` 或 `benchmarks/<namespace>/<suite>/`；pull 不能拒绝默认分支上原本接受的任何文件，比如步骤删掉了某个工作流所用的评分器。否则步骤以 `push_failed` 失败，逐个列出文件和原因，什么也不推送。
 - 步骤运行期间队友推送到该分支的提交会让步骤以 `push_failed` 失败。origin 保留那个提交，下一次运行从它开始。
 - 分支的内容和默认分支相同时（比如它的 pull request 已被 squash 合并），步骤什么也不推送，也不打开 pull request。
 - 成员的团队仓库被 `teamai pull` 或 `push` 占用时，打开 pull request 会等待。
@@ -507,7 +549,7 @@ teamai workflow start judge-change --driver local
 ```
 
 - `<dir>` 可以是模板，读取输入、`item` 和该步骤所需步骤的输出。它在步骤被租用时渲染，相对路径位于 `$TEAMAI_RUN_DIR` 下。目录在它之外、是符号链接，或没有可读的 `confined.json` 时，步骤以 `confined_invalid` 失败，并说明怎么修。
-- `confined.json` 是 `{ "level": "verified" | "best-effort", "prefer": "<tool>" | ["<tool>", …], "schema": "<file>" }`。`verified` 只在 TeamAI 检查过其受限启动的工具版本上运行，例如 Claude Code 2.1.308、Codex 0.163.0 或 OpenCode 2.1.2；`best-effort` 可在 TeamAI 能受限启动的任何工具上运行，例如 Cursor。`prefer` 最先尝试；列表按其顺序尝试。`schema` 是该目录里的一个 JSON Schema 文件，回答要符合它。级别由写证据的步骤决定：工作流文件不能设置或降低它。
+- `confined.json` 是 `{ "level": "verified" | "best-effort", "prefer": "<tool>" | ["<tool>", …], "require": "<tool>", "schema": "<file>" }`，`prefer` 和 `require` 最多写一个。`verified` 只在 TeamAI 检查过其受限启动的工具版本上运行，例如 Claude Code 2.1.308、Codex 0.163.0 或 OpenCode 2.1.2；`best-effort` 可在 TeamAI 能受限启动的任何工具上运行，例如 Cursor。`prefer` 最先尝试；列表按其顺序尝试。`require` 让步骤只在该工具上运行，并等待提供它的驱动，benchmark 的评判就是这样。`schema` 是该目录里的一个 JSON Schema 文件，回答要符合它。级别由写证据的步骤决定：工作流文件不能设置或降低它。
 - 该步骤只运行一个提示，一次。pull 拒绝把 `workspace: { confined }` 用在命令步骤或 `workflow` 步骤上，也拒绝它与 `for_each`、`scorers`、`requires.env`、`agent`、`tool`、`session`、`role`、`interactive` 或 `deliver` 同时出现。它可以设置 `model`：本机没有一个达到其级别的工具能解析该模型时，步骤保持待处理。
 - 本地 driver 运行它。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。宿主不能启动子 agent 时，若会话所用工具在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的宿主上而该工具不在 PATH 上时，该步骤等待其他 driver。
 - 该步骤记录 `confined`：工具、工具报告的模型和 effort、TeamAI 测得的隔离级别、工具拥有的访问权限，以及用量。成功的报告没有记录，或记录中的工具不在租约提供的工具里，或隔离级别低于该步骤的级别时，步骤以 `confined_report_mismatch` 失败。
@@ -939,7 +981,7 @@ $ teamai workflow next rbb036bfacd4cec62 --driver skill
 jq -r 'select((.prs // []) | index("<url>")) | .run' workflows/runs/*.json
 ```
 
-[benchmark 运行](benchmarks.md)还会写一条 benchmark 记录 `benchmarks/runs/<run id>.json`，套件改动后仍能重建对比。它的 `report` 步骤把记录写到本机上该运行的目录中，并在使用统计上报开启时像运行自己的记录一样发布它：先排队，发布失败时在下一次 `teamai pull` 时重试。它包含套件的名称和 `sourceHash`、重复次数、套件设置了 [trial 限制](benchmarks.md#trial-限制)时的 `limits`、基线团队修订、评判其 trial 的每个评分器及其评分标准的 `sourceHash`（`scorers`：套件的评分器，以及每个按成功标准评判的任务的 `teamai:correctness:<task>`）、每个任务的 id、起始提交、`sourceHash` 和 `baseline`、每个 arm 的名称、工具、团队（`pulled`、`none`、一个 ref 或 `without` 路径，以及它的修订）、运行工作流的 arm 的 `workflow`（名称和 `sourceHash`），以及它的模型别名在该修订上为它的工具解析出的模型和 effort 及其 `source`：`team`，或在 `benchmark run --member-aliases` 下为 `member`。`skillChanges` 列出每个 arm 新增、去掉或改变的团队 skill。每个计划的 trial 有一条条目：任务、arm、重复序号、顺序、trial 的步骤、它的 `result`、trial 限制结束了其 prompt 时的 `limit`、其驱动没有执行的 trial 限制 `unenforced`、prompt 的 `durationMs`（只计工具启动前后）、`tokens` 和 `cost`（`{ amount, unit }`），只按工具自己声明的写，工作流 arm 中有 prompt 未声明时各自带 `complete: false`，`used`：trial 加载的每个团队 skill（`loaded`，或者没加载它的 prompt 未被观察到时为 `unknown`），以及 `scoringCost`（`{ amount, unit, complete }`）：给出该 trial 标签的评判者声明的成本；该 trial 有评分器没有声明成本的标签时 `complete: false`。它还包含 `schemaVersion`、`run`、运行在其 `finally` 步骤之前的 `outcome`、`teamaiVersion`、`startedAt`、`finishedAt`、`username`，以及 `workflow`：运行的 `benchmark` 工作流（`name`、`origin` 和 `sourceHash`）。`baseline` 是在任何 trial 之前，任务的 check 在其起始提交的全新克隆上的结果：在那里失败（任务本应如此）为 `valid`，通过为 `invalid`，没能运行为 `could_not_run`，没有驱动运行它为 `not_run`，按成功标准评判的任务为 `not_needed`。只有 `valid` 任务的 trial 会运行。任务的 check 跑出判定时，结果为 `passed` 或 `failed`；trial 或它的 check 没能完成时为 `error`；按成功标准评判的任务按评判者给出的正确性标签为 `passed` 或 `failed`，评判失败或运行先结束时为 `unscored`；从未开始的 trial 为 `not_run`。套件的评分器在 `report` 运行之前评判每一个 trial，不管其 `samplingRate`。trial 结果从不成为运行的状态或步骤的 outcome，benchmark 运行也不计入任何工作流总量。
+[benchmark 运行](benchmarks.md)还会写一条 benchmark 记录 `benchmarks/runs/<run id>.json`，套件改动后仍能重建对比。它的 `report` 步骤把记录写到本机上该运行的目录中，并在使用统计上报开启时像运行自己的记录一样发布它：先排队，发布失败时在下一次 `teamai pull` 时重试。它包含套件的名称和 `sourceHash`、重复次数、套件设置了 [trial 限制](benchmarks.md#trial-限制)时的 `limits`、基线团队修订、运行固定下来的每个评分器，及其评分标准的 `sourceHash`、`labels`（`value`、`score`）和 `passingScore`（`scorers`：套件的评分器，以及每个任务的 `teamai:correctness:<task>`）、每个任务的 id、起始提交、`sourceHash` 和 `baseline`、每个 arm 的名称、工具、团队（`pulled`、`none`、一个 ref 或 `without` 路径，以及它的修订）、运行工作流的 arm 的 `workflow`（名称和 `sourceHash`），以及它的模型别名在该修订上为它的工具解析出的模型和 effort 及其 `source`：`team`，或在 `benchmark run --member-aliases` 下为 `member`。`skillChanges` 列出每个 arm 新增、去掉或改变的团队 skill。每个计划的 trial 有一条条目：任务、arm、重复序号、顺序、trial 的步骤、它的 `result`、`verdicts`：它的每个评分器的结果，正确性评分器排在最前（见[谁判定一个 trial](benchmarks.md#谁判定一个-trial)）、check 无法运行时的 `failure: { cause }`、trial 限制结束了其 prompt 时的 `limit`、其驱动没有执行的 trial 限制 `unenforced`、prompt 的 `durationMs`（只计工具启动前后）、`tokens` 和 `cost`（`{ amount, unit }`），只按工具自己声明的写，工作流 arm 中有 prompt 未声明时各自带 `complete: false`，`used`：trial 加载的每个团队 skill（`loaded`，或者没加载它的 prompt 未被观察到时为 `unknown`），以及 `scoringCost`（`{ amount, unit, complete }`）：该 trial 每次评判者启动声明的成本，标签被拒绝或未保留的启动也计入；有启动未声明成本时 `complete: false`，所有启动都未声明成本时只有 `{ complete: false }`；没有启动评判者时不写。它还包含 `schemaVersion`，为 2（更早的 teamai 写下的版本 1 记录没有 `verdicts`，评分器也没有 `labels`；它仍会显示，运行只和同一版本的记录比较）、`run`、运行在其 `finally` 步骤之前的 `outcome`、`teamaiVersion`、`startedAt`、`finishedAt`、`username`，以及 `workflow`：运行的 `benchmark` 工作流（`name`、`origin` 和 `sourceHash`）。`baseline` 是在任何 trial 之前，任务的 check 在其起始提交的全新克隆上的结果：在那里失败（任务本应如此）为 `valid`，通过为 `invalid`，没能运行为 `could_not_run`，没有驱动运行它为 `not_run`，没有 check 的任务为 `not_needed`。只有 `valid` 任务的 trial 会运行。结果按 trial 的正确性标签为 `passed` 或 `failed`：check 失败时，或 check 在没有成功标准的任务上通过时，是它保存的标签，否则是评判者给出的标签。没有这个标签时为 `unscored`，比如评判失败或运行先结束；trial 没能完成或它的 check 无法运行时为 `error`；从未开始的 trial 为 `not_run`。套件的评分器在 `report` 运行之前评判每一个 trial，不管其 `samplingRate`。trial 结果从不成为运行的状态或步骤的 outcome，benchmark 运行也不计入任何工作流总量。
 
 benchmark 运行在启动时冻结计划：运行期间修改套件并 pull，不会改变它运行的任何内容。驱动租用之前被取消的 trial 为 `not_run`，租用之后被取消的为 `error`。要只从 benchmark 记录算出每个 arm 的通过率（与表格打印的一致），在团队仓库 `teamai-reports` 分支的检出中运行：
 
@@ -1100,8 +1142,17 @@ teamai 自带一些工作流，团队不用自己编写就能使用：
 | `teamai-import-from-mr` | 把已合入的 MR 或 PR 提炼为经验：你的 AI 工具为每个 MR 起草一条，由用户逐条接受、编辑或跳过，接受的经验按 `teamai contribute` 的方式发布，并更新每个仓库的 teamwiki，由 [`teamai import --from-mr`](knowledge.md#代码知识图谱) 启动。会话开始时的 MR 提示会推荐它。输入：`mrs`、`all`、`publish`、`dir`、`output`、`discussions`、`language`。私有 | 始终：`invoke: ask`，agent 在用户同意后启动它 |
 | `teamai-import-learnings` | 把文件分为 rule、doc 或 learning（一次三个），跳过个人内容，逐条请人 accept、edit 或 skip，再把接受的条目按类型写出。它既不提交也不推送。输入：`candidates`、`dir`、`by_type`、`all`。私有 | 从不：`invoke: deny` |
 | `teamai-benchmark` | 通过 `teamai benchmark run` 运行 [benchmark suite](benchmarks.md#benchmark-工作流) | 始终 |
-| `teamai-self-improvement` | 根据评分器反复判定的失败修改团队资产，每个失败加一个回归任务，作为一个由下次运行更新的拉取请求，通过 [`teamai self-improvement run`](self-improvement.md) 运行。输入：`scorer`、`suite` | 始终 |
-| `teamai-session-to-task` | 把会话完成的工作（如修 bug 或加功能）变成 [benchmark 任务](benchmarks.md#把会话变成任务)，从[团队工作区](#团队工作区)作为拉取请求提议给团队。输入：`session`、`source`、`suite`、`start`、`solution` | 始终 |
+| `teamai-self-improvement` | 根据评分器反复判定的失败修改团队资源，每个失败加一个回归任务，作为一个由下次运行更新的拉取请求，通过 [`teamai self-improvement run`](self-improvement.md) 运行。输入：`scorer`、`suite` | 始终 |
+| `teamai-session-to-task` | 把会话完成的工作（如修 bug 或加功能）变成 [benchmark 任务](benchmarks.md#把会话变成任务)，从[团队工作区](#团队工作区)作为拉取请求提议给团队。输入：`session`、`source`、`suite`、`start`、`solution`，以及队友推送的会话所用的 `team_session` 和 `author`（默认为空） | 始终 |
+| `teamai-sessions-to-tasks` | [从过去的会话构建套件](benchmarks.md#从过去的会话构建套件)：列出套件可以从中取任务的已结束会话，由 AI 按大小挑出有代表性的会话，再对每个选中的会话逐个运行 `teamai-session-to-task`。输入：`suite`、`count`、`sizes`（默认 `S=40,3 M=200,10 L=800,30`） | 始终：`invoke: ask`，本人同意后 agent 才启动它 |
+
+大多数默认工作流是一个文件，即已安装包中的 `workflows/<name>.yaml`。有三个是[工作流文件夹](#工作流文件夹)，把要问 AI 工具的内容放在各自的文件里，并带一个说明输入、输出和相关设置的 `README.md`：
+
+```
+workflows/teamai-import-from-mr/          WORKFLOW.yaml  draft.en.md  draft.zh.md  README.md
+workflows/teamai-codebase-deep-enrich/    WORKFLOW.yaml  component.md  architecture.md  scenarios.md  README.md
+workflows/teamai-import-from-repo/        WORKFLOW.yaml  narrative.md  README.md
+```
 
 启动默认工作流的命令（如 `teamai recall promote <id>`）输出的内容和以前一样。只有在运行结束前停下（如按 Ctrl-C）时，它才会说出这次运行：
 
@@ -1303,6 +1354,34 @@ describe 为调用它的会话提议每个输入并附 `why`：会话第一次�
 ```bash
 cp "$(npm root -g)/teamai-cli/workflows/teamai-share-learnings.yaml" workflows/teamai-share-learnings.yaml
 ```
+
+有三个默认工作流是文件夹，在包中位于 `workflows/<name>/WORKFLOW.yaml`，早期版本是 `workflows/<name>.yaml`：`teamai-import-from-mr`、`teamai-codebase-deep-enrich` 和 `teamai-import-from-repo`。团队已有的 `workflows/<name>.yaml` 仍会替换默认工作流。
+
+文件夹形式的默认工作流要整个复制到相同路径。比如想让英文的 MR learning 写出评审留下的未决问题，先复制 `teamai-import-from-mr`：
+
+```bash
+cp -R "$(npm root -g)/teamai-cli/workflows/teamai-import-from-mr" workflows/
+```
+
+在它的英文提示词 `workflows/teamai-import-from-mr/draft.en.md` 中加一节：
+
+```diff
+ ## Lessons
+ - lesson 1
+ - lesson 2
++
++## Open questions
++- what the review threads left unresolved (or "none")
+```
+
+然后推送并 pull：
+
+```bash
+git add workflows/teamai-import-from-mr && git commit -m "MR learnings name open questions" && git push
+teamai pull
+```
+
+团队的文件夹整体取代 teamai 的版本，包括 `draft.zh.md` 和 `README.md`。保留它的 `WORKFLOW.yaml` 引用的每个文件。
 
 对名字和类型与默认工作流相同的输入，describe 仍然提议值；其他输入留给本人填写：
 

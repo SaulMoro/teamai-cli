@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { packageRoot } from './package-info.js';
 import { parseScorer, type ScorerDefinition, type ScorerDiagnostic } from './scorers/definition.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import { isTemplateRead, parseTemplate, renderText, type Template } from './workflow/template.js';
@@ -8,8 +8,9 @@ import { isTemplateRead, parseTemplate, renderText, type Template } from './work
 // ─── Default scorers (#1391) ─────────────────────────────
 //
 //  The CLI ships the rubrics of the questions it generates per
-//  item, a routing question per team skill and an adoption
-//  question per recalled doc, as
+//  item, a routing question per team skill, an adoption
+//  question per recalled doc and a benchmark task's
+//  correctness question, as
 //  scorers/<name>.md in the npm package. Each is a template:
 //  `{{ skill.name }}` reads a variable of the item, from a set
 //  closed per default. A team file of the same name replaces
@@ -22,6 +23,7 @@ import { isTemplateRead, parseTemplate, renderText, type Template } from './work
 const VARIABLES = {
   'teamai-routing': ['skill.name'],
   'teamai-adoption': ['doc.id', 'doc.path', 'doc.file'],
+  'teamai-correctness': ['task.prompt', 'task.successCriteria'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type DefaultScorerName = keyof typeof VARIABLES;
@@ -35,7 +37,7 @@ export type DefaultScorerCode = 'default_scorer_template' | 'default_scorer_vari
 /** A filled-in rubric: its text, which a run pins, and the scorer it parses to. */
 export type FilledScorer = { content: string; definition: ScorerDefinition };
 
-const NAMES: readonly DefaultScorerName[] = ['teamai-routing', 'teamai-adoption'];
+const NAMES: readonly DefaultScorerName[] = ['teamai-routing', 'teamai-adoption', 'teamai-correctness'];
 
 function isName(name: string): name is DefaultScorerName {
   return NAMES.some((known) => known === name);
@@ -44,18 +46,9 @@ function isName(name: string): name is DefaultScorerName {
 /** The root of every variable any default offers, so a file reading another default's variable is told so. */
 const ROOTS = [...new Set(Object.values(VARIABLES).flatMap((names) => names.map((name) => name.split('.')[0] ?? name)))];
 
-/** `scorers/` in the package root. This file sits one level below it, in src/ and in the bundle in dist/ alike. */
+/** `scorers/` in the package root. */
 function defaultsDir(): string {
-  const modulePath = fileURLToPath(import.meta.url);
-  let moduleDir: string;
-
-  try {
-    moduleDir = path.dirname(fs.realpathSync(modulePath));
-  } catch {
-    moduleDir = path.dirname(modulePath);
-  }
-
-  return path.join(moduleDir, '..', 'scorers');
+  return path.join(packageRoot(), 'scorers');
 }
 
 const shippedTexts = new Map<DefaultScorerName, string>();

@@ -12,7 +12,7 @@ import { completeWorktreeList, gitCommonDir, isLiveCheckout, isLiveProjectChecko
 /**
  * Per-project data partition identity (issue #374 P1).
  *
- * teamai keys a project's machine-local data by the SHARED `projectAnchor` (the
+ * teamai keys a project's machine-local data by the SHARED `repoAnchor` (the
  * repository identity, so every linked worktree resolves to the same partition), NOT
  * the per-worktree workspace root. The partition lives at
  * `~/.teamai/projects/<slug>/`, entirely outside the business workspace.
@@ -143,7 +143,7 @@ function anchorHash(norm: string): string {
 }
 
 /**
- * `<safe-path>-<sha256(normalized anchor)[:16]>` — stable per projectAnchor.
+ * `<safe-path>-<sha256(normalized anchor)[:16]>` — stable per repoAnchor.
  */
 export function projectSlug(anchor: string): string {
   // Normalize once so BOTH the path prefix and the hash are derived from the
@@ -175,7 +175,7 @@ export function legacyProjectSlug(anchor: string): string {
 /**
  * Absolute path of a project's machine-data partition in the CURRENT naming
  * format: `~/.teamai/projects/<slug(anchor)>`. `anchor` MUST be the shared
- * projectAnchor (the repository identity), so all worktrees of one repo share the
+ * repoAnchor (the repository identity), so all worktrees of one repo share the
  * partition. Pure path math — it does not look at the disk. Callers that need
  * "the partition that actually holds this project's data" (detection, init,
  * migration) must use `resolvePartitionDir` instead, which adopts a partition
@@ -355,7 +355,7 @@ export function projectsRootDir(home = getUserHome()): string {
 
 /**
  * The `anchor` reverse-lookup file inside a partition. The slug is a one-way
- * sha256, so this file is the ONLY way back to the original projectAnchor path;
+ * sha256, so this file is the ONLY way back to the original repoAnchor path;
  * it lives inside the partition (off the workspace), preserving zero-residue.
  * Written on both init and migration so every partition carries it (issue #374).
  */
@@ -393,28 +393,33 @@ export async function writeWorkspaceRoot(dataHome: string, root: string): Promis
   await writeFileAtomic(file, root);
 }
 
+/** A `<dataHome>/workspaces/<id>/` of a checkout that no longer exists, and the checkout its `root` file names. */
+export interface StaleWorkspace {
+  readonly dir: string;
+  readonly root: string | null;
+}
+
 /**
- * Remove `<dataHome>/workspaces/<id>/` for every checkout that no longer
- * exists: its search index, managed-MCP record and resource cache belong to a
- * removed worktree (#808). A directory goes when its `root` file names a
+ * The `<dataHome>/workspaces/<id>/` of every checkout that no longer exists:
+ * its search index, managed-MCP record, hook records and resource cache belong
+ * to a removed worktree (#808). A directory is stale when its `root` file names a
  * checkout that no longer shares this Git common directory or TeamAI identity.
  * The identity check retains inherited submodule clones. One without a `root` file (an older
  * teamai's, or one contribute, recall, viz, the MCP writers or the local agent
- * created before its checkout's first full pull) goes only when
+ * created before its checkout's first full pull) is stale only when
  * completeWorktreeList proves its checkout gone: no listed checkout has its
  * id, in the form git printed or realpath'd. Where that list cannot name
  * every checkout (`--separate-git-dir`, a submodule, git before 2.36), or the
  * directory holds the local agent's `local-agent/` (keyed by a path the agent
  * resolved, not by git), it is kept until its own checkout's pull writes
  * `root`. Nothing is removed when git cannot name `currentRoot`'s common
- * directory (#993). Only directories named like a workspace id are touched.
- * Returns the removed directories.
+ * directory (#993). Only directories named like a workspace id are read.
  */
-export async function pruneWorkspaceDirs(dataHome: string, currentRoot: string): Promise<string[]> {
+export async function staleWorkspaces(dataHome: string, currentRoot: string): Promise<StaleWorkspace[]> {
   const commonDir = await gitCommonDir(currentRoot);
 
   if (!commonDir) return [];
-  const identity = (await resolveAnchors(currentRoot))?.projectAnchor;
+  const identity = (await resolveAnchors(currentRoot))?.repoAnchor;
   // The current checkout by the path given and its realpath: a writer may have hashed either.
   const current = new Set([currentRoot, await fs.promises.realpath(currentRoot).catch(() => currentRoot)].map(managedMcpWorkspaceId));
   const workspaces = path.join(dataHome, 'workspaces');
@@ -435,18 +440,23 @@ export async function pruneWorkspaceDirs(dataHome: string, currentRoot: string):
   const listedIds = () => listed ??= completeWorktreeList(currentRoot, commonDir)
     .then((roots) => roots && new Set(roots.map(managedMcpWorkspaceId)));
 
-  const stale = (await Promise.all(candidates.map(async (dir) => {
+  return (await Promise.all(candidates.map(async (dir): Promise<StaleWorkspace | null> => {
     const root = await readFileSafe(path.join(dir, WORKSPACE_ROOT_FILE));
 
     if (root !== null) return await isLiveCheckout(root, commonDir)
-      || (identity && await isLiveProjectCheckout(root, identity)) ? null : dir;
+      || (identity && await isLiveProjectCheckout(root, identity)) ? null : { dir, root };
 
     // The local agent may key its resources by a path git did not print.
     if (await fs.promises.lstat(path.join(dir, 'local-agent')).then(() => true, () => false)) return null;
     const ids = await listedIds();
 
-    return ids && !ids.has(path.basename(dir)) ? dir : null;
-  }))).filter((dir): dir is string => dir !== null);
+    return ids && !ids.has(path.basename(dir)) ? { dir, root: null } : null;
+  }))).filter((stale): stale is StaleWorkspace => stale !== null);
+}
+
+/** Remove the staleWorkspaces directories. Returns the removed directories. */
+export async function pruneWorkspaceDirs(dataHome: string, currentRoot: string): Promise<string[]> {
+  const stale = (await staleWorkspaces(dataHome, currentRoot)).map(({ dir }) => dir);
 
   await Promise.all(stale.map((dir) => fs.promises.rm(dir, { recursive: true, force: true })));
 
