@@ -22,7 +22,7 @@ import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
-import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
@@ -329,9 +329,10 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
  */
 async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { config: LocalConfig; run: RunId; attempt: string; runsOn: string | undefined; checkout: string }): Promise<WorkflowFailure | undefined> {
   const id = AttemptIdSchema.safeParse(attempt);
-  const record = id.success ? await readAttemptRuntime(config, run, id.data) : undefined;
+  const placement = id.success ? await readAttemptPlacement(config, run, id.data) : undefined;
 
-  if (!id.success || !record || record.phase === 'closed' || record.runtime === runsOn) return undefined;
+  // One in teamai's process left its process group, which staging stops; it holds no place elsewhere.
+  if (!id.success || placement?.kind !== 'external' || placement.record.phase === 'closed' || placement.record.runtime === runsOn) return undefined;
   const notStopped = await stopOnRecordedDriver(config, run, id.data, { checkout });
 
   if (notStopped) return notStopped;
@@ -776,7 +777,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     const handle = localHandles.get(attempt);
     const slot = slotOf.get(attempt);
     const logins = slot?.engine.logins ?? [];
-    const closingHandle = slot?.kind === 'external' ? (await readAttemptRuntime(config, runId, attempt))?.open.handle : undefined;
+    const placement = slot?.kind === 'external' ? await readAttemptPlacement(config, runId, attempt) : undefined;
+    const closingHandle = placement?.kind === 'external' ? placement.record.open.handle : undefined;
     attemptRuns.delete(attempt);
     localHandles.delete(attempt);
     slotOf.delete(attempt);

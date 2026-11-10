@@ -125,6 +125,9 @@ const InProcessAttemptRecordSchema = z.object({
   inProcess: z.literal(true),
 }).strict();
 
+/** What `runtime.json` holds: an attempt in teamai's process, or one on an external step runtime. */
+const AttemptRecordSchema = z.union([InProcessAttemptRecordSchema, AttemptRuntimeRecordSchema]);
+
 /**
  * Where an attempt ran, by its record: on an external runtime, in teamai's process, nowhere this teamai recorded, or
  * unknown, from a record that is there but cannot be read (`why`).
@@ -140,7 +143,7 @@ export async function recordInProcessAttempt(config: LocalConfig, run: RunId, at
   await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { runtime, driver, inProcess: true } satisfies z.infer<typeof InProcessAttemptRecordSchema>);
 }
 
-/** Where attempt `attempt` of run `run` ran, by its record. */
+/** Where attempt `attempt` of run `run` ran, by its record: the one reader of `runtime.json`. */
 export async function readAttemptPlacement(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptPlacement> {
   let parsed: unknown;
 
@@ -150,21 +153,18 @@ export async function readAttemptPlacement(config: LocalConfig, run: RunId, atte
     return errnoCode(error) === 'ENOENT' ? { kind: 'unrecorded' } : { kind: 'unreadable', why: error instanceof Error ? error.message : String(error) };
   }
 
-  const inProcess = InProcessAttemptRecordSchema.safeParse(parsed);
+  const record = AttemptRecordSchema.safeParse(parsed);
 
-  if (inProcess.success) return { kind: 'in_process', runtime: inProcess.data.runtime };
-  const external = AttemptRuntimeRecordSchema.safeParse(parsed);
+  if (!record.success) return { kind: 'unreadable', why: 'it is not a runtime record this teamai knows' };
 
-  return external.success ? { kind: 'external', record: external.data } : { kind: 'unreadable', why: 'it is not a runtime record this teamai knows' };
+  return 'inProcess' in record.data ? { kind: 'in_process', runtime: record.data.runtime } : { kind: 'external', record: record.data };
 }
 
-/** The record of attempt `attempt` of run `run` on an external runtime; undefined for any other (`readAttemptPlacement`). */
-export async function readAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptRuntimeRecord | undefined> {
-  try {
-    return AttemptRuntimeRecordSchema.parse(JSON.parse(await readRegularFile(attemptRuntimePath(config, run, attempt), 'utf8')));
-  } catch {
-    return undefined;
-  }
+/** The record of attempt `attempt` of run `run` when it holds a place on an external step runtime; undefined for any other placement. */
+async function externalRecord(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptRuntimeRecord | undefined> {
+  const placement = await readAttemptPlacement(config, run, attempt);
+
+  return placement.kind === 'external' ? placement.record : undefined;
 }
 
 /**
@@ -215,7 +215,7 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
   const attemptId = AttemptIdSchema.safeParse(attempt);
 
   if (!runId.success || !attemptId.success) return undefined;
-  const record = await readAttemptRuntime(config, runId.data, attemptId.data);
+  const record = await externalRecord(config, runId.data, attemptId.data);
   const home = record?.toolHome ?? record?.sessionHome;
   // An instance, as a runtime that launches agents its own way records it, is read as the tool it extends.
   const platform = home && (isExecRuntimeTool(baseToolOf(home.tool)) || keepsSessionsInXdgData(home.tool)) ? AgentSession.platformForTool(home.tool) : undefined;
@@ -238,7 +238,7 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
 
   for (const name of names.sort()) {
     const attempt = AttemptIdSchema.safeParse(name);
-    const record = attempt.success ? await readAttemptRuntime(config, runId.data, attempt.data) : undefined;
+    const record = attempt.success ? await externalRecord(config, runId.data, attempt.data) : undefined;
     const home = record?.toolHome ?? record?.sessionHome;
 
     // A runtime that execs the tool records the home under the tool an instance extends; its session names the instance.
@@ -297,7 +297,7 @@ async function heldIn(config: LocalConfig, run: RunId): Promise<Held[]> {
 
   for (const name of names.sort()) {
     const attempt = AttemptIdSchema.safeParse(name);
-    const record = attempt.success ? await readAttemptRuntime(config, run, attempt.data) : undefined;
+    const record = attempt.success ? await externalRecord(config, run, attempt.data) : undefined;
 
     if (attempt.success && record?.heldFor) held.push({ attempt: attempt.data, record: { ...record, heldFor: record.heldFor } });
   }
@@ -333,7 +333,7 @@ async function conversationOf({ config, run, runtime, driver, sessions, workspac
  * as a turn of an earlier attempt's conversation launched none: that attempt's place holds it. Answers whether it is held.
  */
 async function hold({ config, run, attempt, report, continued, workspace }: { config: LocalConfig; run: RunId; attempt: AttemptId; report: { tool?: string; session?: string; resumed?: SessionRef }; continued: readonly Continued[]; workspace: string | undefined }): Promise<boolean> {
-  const record = await readAttemptRuntime(config, run, attempt);
+  const record = await externalRecord(config, run, attempt);
 
   if (workspace === undefined || !record?.prompt || record.phase === 'closed' || !report.tool || !report.session || (record.prompt.continues && report.resumed)) return false;
   const conversation = { tool: report.tool, id: report.session };
@@ -543,7 +543,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     await writeJsonAtomic(file, next);
   };
 
-  const current = async (): Promise<AttemptRuntimeRecord | undefined> => (record ??= await readAttemptRuntime(config, run, attempt));
+  const current = async (): Promise<AttemptRuntimeRecord | undefined> => (record ??= await externalRecord(config, run, attempt));
 
   /** Keeps what the runtime showed now; one that showed nothing keeps what it showed before. */
   const shown = async (display: RuntimeDisplay | undefined): Promise<void> => {

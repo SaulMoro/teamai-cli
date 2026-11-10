@@ -32,7 +32,7 @@ import { ownRunSweptAt, resolveRetention, type ResolvedRetention } from '../work
 import { loadTeamConfig } from '../config.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../workflow/run-controls.js';
 import { PublishedRuns, type PublishedRun, type Taker } from '../workflow-published-runs.js';
-import { readAttemptRuntime, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
+import { readAttemptPlacement, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { readHeldSteps, type HeldSteps } from '../workflow/runtimes/held.js';
 import { loginWaitFile, LoginWaitSchema, type LoginWait } from '../workflow/runtimes/login.js';
 import { runPasses } from '../workflow/loop.js';
@@ -487,10 +487,12 @@ async function withRuntimes(config: LocalConfig, run: RunState, steps: StepRow[]
 
     if (!attempt.success) return row;
 
-    const [record, loginWait] = await Promise.all([readAttemptRuntime(config, runId.data, attempt.data), readLoginWait(attemptDir(config, runId.data, attempt.data))]);
+    const [placement, loginWait] = await Promise.all([readAttemptPlacement(config, runId.data, attempt.data), readLoginWait(attemptDir(config, runId.data, attempt.data))]);
     const waiting = loginWait ? { ...row, loginWait } : row;
 
-    if (!record) return waiting;
+    // A step in teamai's process ran on no step runtime the details show.
+    if (placement.kind !== 'external') return waiting;
+    const { record } = placement;
     const runtime: NonNullable<StepRow['runtime']> = { name: record.runtime, driver: record.driver, phase: record.phase };
 
     if (record.open.handle !== undefined) runtime.handle = record.open.handle;

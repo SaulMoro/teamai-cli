@@ -6,7 +6,7 @@ import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
-import { attemptRun, attemptRuntimePath, maskAttemptResults, readAttemptRuntime, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { attemptRun, attemptRuntimePath, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, releaseLogin, writeLoginBack } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
@@ -109,9 +109,10 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
     const attempt = AttemptIdSchema.safeParse(name);
 
     if (!attempt.success || leased.has(attempt.data)) continue;
-    const record = await readAttemptRuntime(config, run, attempt.data);
+    // One in teamai's process holds no place: the cancel stops its process group instead.
+    const placement = await readAttemptPlacement(config, run, attempt.data);
 
-    if (record && record.phase !== 'closed') open.push(attempt.data);
+    if (placement.kind === 'external' && placement.record.phase !== 'closed') open.push(attempt.data);
   }
 
   return open;
@@ -127,13 +128,14 @@ const RELEASE = { release: true } as const;
  * confirmed, so the place is kept, or undefined once it is closed, or when the attempt holds no place open there.
  */
 export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, attempt: AttemptId, { checkout }: { checkout: string }): Promise<WorkflowFailure | undefined> {
-  const record = await readAttemptRuntime(config, run, attempt);
+  const placement = await readAttemptPlacement(config, run, attempt);
   const stopped = await stopAttempt(config, run, attempt, { isReleased: false, checkout, isQuiet: true });
 
   // Its login was written back as its place closed; the attempt runs again elsewhere, so it holds it no longer.
   if (stopped.ended === 'closed') for (const tool of LOGIN_TOOLS) await releaseLogin(tool, { run, attempt });
 
-  if (stopped.ended !== 'running' || !record) return undefined;
+  if (stopped.ended !== 'running' || placement.kind !== 'external') return undefined;
+  const { record } = placement;
 
   return {
     code: 'runtime_lost',
@@ -147,9 +149,11 @@ export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, atte
  * to the caller, which reports `why` itself.
  */
 async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<Stopped> {
-  const record = await readAttemptRuntime(config, run, attempt);
+  const placement = await readAttemptPlacement(config, run, attempt);
 
-  if (!record || record.phase === 'closed') return { ended: 'none' };
+  // One in teamai's process holds no place on a step runtime.
+  if (placement.kind !== 'external' || placement.record.phase === 'closed') return { ended: 'none' };
+  const { record } = placement;
 
   const cannot = async (why: string): Promise<Stopped> => {
     if (isReleased) return { ended: await releaseAttempt(config, run, attempt, why, record) };
@@ -229,7 +233,8 @@ async function writeHeldLoginBack(run: RunId, attempt: AttemptId, record: Attemp
  * `before` is its record as the cancel found it open; the release's own close may have closed it since.
  */
 async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, why: string, before: AttemptRuntimeRecord): Promise<'released'> {
-  const record = await readAttemptRuntime(config, run, attempt) ?? before;
+  const now = await readAttemptPlacement(config, run, attempt);
+  const record = now.kind === 'external' ? now.record : before;
   await writeHeldLoginBack(run, attempt, record, { isCollected: record.phase === 'collected' });
 
   if (record.phase !== 'closed') await releaseAttemptRuntime(config, run, attempt, record);
@@ -252,7 +257,8 @@ export async function closeAfterSweep(config: LocalConfig, runs: readonly RunId[
 
     for (const name of await fs.readdir(attemptsDir(config, run)).catch((): string[] => [])) {
       const attempt = AttemptIdSchema.safeParse(name);
-      const record = attempt.success ? await readAttemptRuntime(config, run, attempt.data) : undefined;
+      const placement = attempt.success ? await readAttemptPlacement(config, run, attempt.data) : undefined;
+      const record = placement?.kind === 'external' ? placement.record : undefined;
 
       if (!attempt.success || record?.phase !== 'closed' || record.open.handle === undefined) continue;
       const at = (await fs.stat(attemptRuntimePath(config, run, attempt.data))).mtimeMs;
