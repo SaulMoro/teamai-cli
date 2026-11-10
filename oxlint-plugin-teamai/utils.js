@@ -19,12 +19,16 @@ export const PROCESS_STARTERS = new Set([
   'cross-spawn',
   '@teamai/runtime-testing/connect',
   '@teamai/runtime-testing/leaks',
+  '@teamai/runtime-tools',
+  '@teamai/runtime-tools/answer',
+  '@teamai/runtime-tools/confined',
+  '@teamai/runtime-tools/headless',
   '@teamai/shared/cli-path',
   '@teamai/shared/exec',
   '@teamai/shared/process-group',
-  '@teamai/tool-core/detect',
   '@teamai/tool-core/formats/codex',
   '@teamai/tool-core/sessions/sqlite',
+  '@teamai/tool-testing/conformance',
   '@teamai/tool-testing/fake-agent',
 ]);
 

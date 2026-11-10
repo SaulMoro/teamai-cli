@@ -30,11 +30,11 @@ export const run = () => [execCommand('sqlite3', []), require('child_process')];
   expect(output).toContain('imports child_process');
 }, { filename: 'packages/tool-codex/src/launch.ts' });
 
-rule.invalid('rejects a workspace module that starts a process for its caller, and cross-spawn', `import { execVersion } from '@teamai/tool-core/detect';
+rule.invalid('rejects a workspace module that starts a process for its caller, and cross-spawn', `import { resolveCliPath } from '@teamai/shared/cli-path';
 import spawn from 'cross-spawn';
-export const detect = { zzz: () => execVersion('zzz') };
+export const where = () => resolveCliPath('zzz');
 export const run = () => spawn('zzz');`, (output) => {
-  expect(output).toContain('imports @teamai/tool-core/detect');
+  expect(output).toContain('imports @teamai/shared/cli-path');
   expect(output).toContain('imports cross-spawn');
 }, { filename: 'packages/tool-zzz/src/detect.ts' });
 
@@ -121,11 +121,30 @@ function workspaceModules(): Array<[string, string]> {
   });
 }
 
-it('lists every workspace module that starts a process, so a new wrapper of one is caught', () => {
+it('lists exactly the workspace modules that start a process, so a new wrapper is caught and a stale entry goes', () => {
   const NODE_STARTERS = new Set(['child_process', 'node:child_process', 'cross-spawn']);
-  const starts = (file: string) => sourceModules(file, false).some((specifier) => NODE_STARTERS.has(specifier));
-  const starters = workspaceModules().filter(([, file]) => reachesSource(file, starts, false) !== undefined).map(([name]) => name);
+  const modules = workspaceModules();
+  const fileOf = new Map(modules);
+  const verdicts = new Map<string, boolean>();
+  // A module starts one through node, or through another workspace module it imports by name.
+  const starts = (file: string): boolean => {
+    const known = verdicts.get(file);
+
+    if (known !== undefined) return known;
+    verdicts.set(file, false);
+    const verdict = sourceModules(file, false).some((specifier) => {
+      const target = fileOf.get(specifier);
+
+      return NODE_STARTERS.has(specifier) || (target !== undefined && reachesSource(target, starts, false) !== undefined);
+    });
+
+    verdicts.set(file, verdict);
+
+    return verdict;
+  };
+  const starters = modules.filter(([, file]) => reachesSource(file, starts, false) !== undefined).map(([name]) => name);
 
   expect(starters).toContain('@teamai/shared/exec');
   expect(starters.filter((name) => !PROCESS_STARTERS.has(name))).toEqual([]);
+  expect([...PROCESS_STARTERS].filter((name) => !NODE_STARTERS.has(name) && !starters.includes(name))).toEqual([]);
 });

@@ -9,7 +9,8 @@
 
 import { log } from '@teamai/shared/log';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { readPlistVersion, type VersionDetector } from '@teamai/tool-core/detect';
+import { probeBinary } from '@teamai/shared/exec';
+import { readPlistVersion, readVersion, type VersionDetector } from '@teamai/tool-core/detect';
 import { type ToolId } from './tools.js';
 import { isToolId } from './tool-registry.js';
 
@@ -67,7 +68,7 @@ export async function getAgentVersion(agentType: string): Promise<string> {
 
   if (detector) {
     try {
-      version = await detector();
+      version = await readVersion(detector, probeBinary);
     } catch {
       // best-effort
     }

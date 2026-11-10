@@ -1,12 +1,7 @@
-import { execVersion, type VersionDetector } from '@teamai/tool-core/detect';
-
-async function detectHermesVersion(): Promise<string> {
-  const raw = await execVersion('hermes');
-  // hermes --version may output "(2026.8.7)\nProject: ..." — extract from parens or leading digits.
-  const match = raw.match(/^\(?(\d+(?:\.\d+)*)\)?/);
-
-  return match?.[1] ?? '';
-}
+import type { VersionDetector } from '@teamai/tool-core/detect';
 
 /** How teamai reads the version of Hermes. */
-export const detect = { hermes: detectHermesVersion } as const satisfies Record<string, VersionDetector>;
+export const detect = {
+  // hermes --version may print "(2026.8.7)\nProject: ...": the version is in the parens or leading digits.
+  hermes: { probe: ['hermes', '--version'], read: (raw) => raw.match(/^\(?(\d+(?:\.\d+)*)\)?/)?.[1] ?? '' },
+} as const satisfies Record<string, VersionDetector>;

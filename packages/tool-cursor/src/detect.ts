@@ -1,11 +1,7 @@
-import { execVersion, type VersionDetector } from '@teamai/tool-core/detect';
-
-async function detectCursorVersion(): Promise<string> {
-  // cursor --version outputs multiple lines; version is on the first line
-  const raw = await execVersion('cursor');
-
-  return raw.split('\n')[0]?.trim() ?? '';
-}
+import type { VersionDetector } from '@teamai/tool-core/detect';
 
 /** How teamai reads the version of Cursor. */
-export const detect = { cursor: detectCursorVersion } as const satisfies Record<string, VersionDetector>;
+export const detect = {
+  // cursor --version prints several lines; the version is the first.
+  cursor: { probe: ['cursor', '--version'], read: (raw) => raw.split('\n')[0]?.trim() ?? '' },
+} as const satisfies Record<string, VersionDetector>;

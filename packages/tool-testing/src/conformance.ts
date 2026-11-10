@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { probeBinary } from '@teamai/shared/exec';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readVersion } from '@teamai/tool-core/detect';
 import type { ToolFamily } from '@teamai/tool-core/family';
 import { ACCESS_LEVELS, type CallInput, type LaunchAdapter } from '@teamai/tool-core/launch';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
@@ -247,7 +249,7 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
         vi.stubEnv('PATH', `${dir}${path.delimiter}${process.env.PATH ?? ''}`);
 
         try {
-          expect(await detector()).toBe(recording.version);
+          expect(await readVersion(detector, probeBinary)).toBe(recording.version);
         } finally {
           vi.unstubAllEnvs();
           fs.rmSync(dir, { recursive: true, force: true });

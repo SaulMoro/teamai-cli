@@ -117,7 +117,7 @@
     "teamai/tool-facts": "error",
     // A tool family builds argv and reads output, and never starts a process; its index.ts exports only `family`.
     // Files that still start one to read the tool's sessions go in stillSpawns, a list that only shrinks.
-    "teamai/tool-family-shape": ["error", { "stillSpawns": ["packages/tool-agy/src/detect.ts", "packages/tool-agy/src/session-adapter.ts", "packages/tool-claude/src/detect.ts", "packages/tool-codebuddy/src/detect.ts", "packages/tool-codebuddy/src/workbuddy-store.ts", "packages/tool-codex/src/sessions.ts", "packages/tool-cursor/src/cursor-store.ts", "packages/tool-cursor/src/detect.ts", "packages/tool-dsh/src/detect.ts", "packages/tool-hermes/src/detect.ts", "packages/tool-hermes/src/session-adapter.ts", "packages/tool-joycode/src/sessions.ts", "packages/tool-muse/src/detect.ts", "packages/tool-openclaw/src/detect.ts", "packages/tool-opencode/src/opencode-db.ts", "packages/tool-opencode/src/session-adapter.ts", "packages/tool-pi/src/detect.ts"] }],
+    "teamai/tool-family-shape": ["error", { "stillSpawns": ["packages/tool-agy/src/session-adapter.ts", "packages/tool-codebuddy/src/workbuddy-store.ts", "packages/tool-codex/src/sessions.ts", "packages/tool-cursor/src/cursor-store.ts", "packages/tool-hermes/src/session-adapter.ts", "packages/tool-joycode/src/sessions.ts", "packages/tool-opencode/src/opencode-db.ts", "packages/tool-opencode/src/session-adapter.ts"] }],
     // packages/* never imports src/, src/ never imports a runtime package, and a package is reached only by its name.
     "teamai/package-boundaries": "error",
     // A runtime serves protocol 1 only through @teamai/runtime-kit: no request loop or op end of its own.
