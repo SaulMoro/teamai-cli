@@ -853,7 +853,7 @@ describe('skill driver', () => {
     expect(execFileSync('git', ['log', '--format=%s', `teamai/${run}/work/p1`], { cwd: dir, encoding: 'utf8' }).trim().split('\n')).toHaveLength(3);
   });
 
-  it('resumes a run whose skill state names the session host as earlier versions stored it', async () => {
+  it('goes on with a run whose skill state names the session host as earlier versions stored it', async () => {
     const harness = await skillHarness({ change: `schemaVersion: v1alpha1
 name: change
 description: Write a change
