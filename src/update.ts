@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
-import { readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFile, readRegularFileSync, NotRegularFileError } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -794,6 +794,10 @@ export async function acquireLock(
       await removeIfOwner(sentinel, owner);
     }
   } catch (err) {
+    if (err instanceof NotRegularFileError) {
+      throw new Error(`Cannot acquire lock ${resolved}: ${err.file} is ${err.kind}, not a lock file. Remove it, then run the command again.`, { cause: err });
+    }
+
     throw new Error(`Cannot acquire lock ${resolved}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
 }
