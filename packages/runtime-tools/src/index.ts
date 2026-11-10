@@ -151,9 +151,14 @@ export function toolsStepRuntime<TCan = Can>(deps: ToolsRuntimeDeps<TCan>): Tool
       const entry = {
         handle: request.handle,
         controller,
-        end: launched.then((ran) => {
+        // A launch that throws, such as a result folder it cannot make, fails the prompt rather than leaving it running.
+        end: launched.then(
+          (ran) => promptEnd(tool, ran, controller.signal.aborted),
+          (error: unknown): ToolsEnd => (controller.signal.aborted
+            ? { kind: 'cancelled' }
+            : { kind: 'failed', failure: { code: 'tool_failed', message: `The tools runtime could not launch ${tool}: ${error instanceof Error ? error.message : String(error)}` } }),
+        ).then((end) => {
           running.delete(request.op);
-          const end = promptEnd(tool, ran, controller.signal.aborted);
           ended.set(request.op, { handle: request.handle, end });
 
           return end;
