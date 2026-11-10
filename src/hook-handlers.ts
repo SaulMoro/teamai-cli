@@ -236,8 +236,9 @@ async function needsPreparation(cwd: string, config: LocalConfig): Promise<boole
  * and a submodule have none.
  */
 async function isLinkedWorktree(root: string): Promise<boolean> {
-  const { readFile } = await import('node:fs/promises');
-  const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(path.join(root, '.git'), 'utf8').catch(() => ''));
+  // The checkout may be a step's copy, where the step could leave a FIFO at .git.
+  const { readRegularFile } = await import('@teamai/shared/regular-file');
+  const pointer = /^gitdir:\s*(.+)$/m.exec(await readRegularFile(path.join(root, '.git'), 'utf8').catch(() => ''));
 
   return pointer !== null && pathExists(path.join(path.resolve(root, pointer[1].trim()), 'commondir'));
 }

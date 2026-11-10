@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import { z } from 'zod';
+import { openRegularFile } from '@teamai/shared/regular-file';
 
 import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../json.js';
 import { emptyTokenUsage, type TokenSnapshotScope, type TokenUsage } from '../tokens.js';
@@ -137,7 +137,7 @@ const TAIL_BYTES = 256 * 1024;
 /** The latest cumulative counters in the file's tail, without reading the whole rollout again. */
 async function tailSnapshot(file: string): Promise<string> {
   try {
-    const handle = await fs.promises.open(file, 'r');
+    const handle = await openRegularFile(file);
 
     try {
       const { size } = await handle.stat();
