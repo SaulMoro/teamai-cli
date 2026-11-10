@@ -93,7 +93,7 @@ import { getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../t
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { readCodexHookTrustForScope } from '../hooks.js';
 import { log } from '@teamai/shared/log';
-import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from './helpers/fake-codex.js';
+import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from '@teamai/tool-codex/testing';
 
 describe('pull trusts the Codex project after writing its MCP servers', () => {
   let tempDir: string;

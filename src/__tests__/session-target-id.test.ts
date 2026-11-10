@@ -23,7 +23,7 @@ vi.mock('node:os', async (importOriginal) => {
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import type { Session } from '@teamai/tool-core/sessions/ir';
-import { installFakeOpencode } from '@teamai/tool-testing/fake-opencode';
+import { installFakeOpencode } from '@teamai/tool-opencode/testing';
 import { WRITABLE } from './helpers/writable-platforms.js';
 
 /** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */

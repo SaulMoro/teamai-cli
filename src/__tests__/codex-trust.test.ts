@@ -27,7 +27,7 @@ import { resolveAnchors, listWorktrees } from '../utils/git.js';
 import { log } from '@teamai/shared/log';
 import { CODEX_TOOL_ID } from '../types.js';
 import type { HookDef, LocalConfig, TeamaiConfig } from '../types.js';
-import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from './helpers/fake-codex.js';
+import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from '@teamai/tool-codex/testing';
 
 let home: string;
 let repo: string;

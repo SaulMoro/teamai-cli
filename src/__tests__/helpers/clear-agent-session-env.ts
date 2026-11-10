@@ -62,7 +62,7 @@ delete process.env.BASH_ENV;
 // which would edit the developer's real Codex config. Shadow any `codex` on
 // PATH with one that exits at once, so every test file — and the CLIs it
 // spawns — sees a failing Codex. A test that needs one prepends the fake from
-// helpers/fake-codex.ts.
+// @teamai/tool-codex/testing.
 const shadow = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-no-codex-')));
 fs.writeFileSync(path.join(shadow, 'codex'), '#!/bin/sh\nexit 1\n');
 fs.chmodSync(path.join(shadow, 'codex'), 0o755);

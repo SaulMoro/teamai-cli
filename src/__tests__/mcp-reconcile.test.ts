@@ -66,7 +66,7 @@ import { readWorkspaceChildren } from '../workspace-children.js';
 import { projectDataHome } from '../utils/partition.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { folderVersion } from './helpers/folder-version.js';
-import { installFakeOpencode } from '@teamai/tool-testing/fake-opencode';
+import { installFakeOpencode } from '@teamai/tool-opencode/testing';
 import { buildPluginSource, OPENCODE_HOOK_FILE, resolveOpencodePluginDir } from '../opencode-hooks.js';
 import YAML from 'yaml';
 

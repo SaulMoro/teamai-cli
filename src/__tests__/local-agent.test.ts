@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { agentHookDescription } from '../hooks.js';
 import { keepCodexHookTrust, trustCodexHooks } from '../codex-trust.js';
 import { TEAMAI_CLAUDEMD_START } from '../types.js';
-import { installFakeCodex } from './helpers/fake-codex.js';
+import { installFakeCodex } from '@teamai/tool-codex/testing';
 
 vi.mock('@teamai/shared/log', () => ({
   log: {

@@ -141,7 +141,7 @@ export type OpencodeExport = z.infer<typeof OpencodeExportSchema>;
 
 /** The export a real OpenCode 2.0.29 printed for a session that read a file, ran `ls`, and got an image. */
 export function opencodeExportFixture(): OpencodeExport {
-  const file = fileURLToPath(new URL('./fixtures/opencode/export-tool-calls.json', import.meta.url));
+  const file = fileURLToPath(new URL('../fixtures/opencode-export-tool-calls.json', import.meta.url));
 
   return OpencodeExportSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8')));
 }

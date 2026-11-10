@@ -2,12 +2,11 @@
   "name": "@teamai/tool-testing",
   "private": true,
   "type": "module",
-  "description": "The conformance suite every tool family runs, and the helpers it and the app's tests replay recordings with, such as a stand-in OpenCode CLI; test-only, never bundled.",
+  "description": "The conformance suite every tool family runs, and the helpers it and the app's tests replay recordings with; test-only, never bundled.",
   "exports": {
     "./conformance": "./src/conformance.ts",
     "./fake-agent": "./src/fake-agent.ts",
     "./fake-cli": "./src/fake-cli.ts",
-    "./fake-opencode": "./src/fake-opencode.ts",
     "./replay-transcript": "./src/replay-transcript.ts"
   }
 }

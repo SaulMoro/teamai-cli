@@ -117,11 +117,13 @@ export function installFakeCodex(options: { version?: string; hashIgnores?: stri
   fs.writeFileSync(path.join(dir, 'codex'), `#!/bin/sh\nexec ${node} ${JSON.stringify(script)} "$@"\n`);
   fs.chmodSync(path.join(dir, 'codex'), 0o755);
   fs.writeFileSync(path.join(dir, 'codex.cmd'), `@"${process.execPath}" "${script}" %*\r\n`);
+
   return dir;
 }
 
 export function readFakeCodexState(codexHome: string): FakeCodexState {
   try {
+    // SAFETY: only the fake above writes fake-state.json, and always in the FakeCodexState shape.
     return JSON.parse(fs.readFileSync(path.join(codexHome, 'fake-state.json'), 'utf8')) as FakeCodexState;
   } catch {
     return { projects: {}, hooksState: {}, calls: [] };

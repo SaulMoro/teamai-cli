@@ -25,3 +25,5 @@ export const opencodeFake = {
   process.exit(does('fail') ? 1 : 0);
 `,
 };
+
+export * from './fake-opencode.js';
