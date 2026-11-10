@@ -1761,10 +1761,12 @@ function offerTerms(
   const endTurn = turnLimits(run, scope, step);
   const executor: Executor = step.workflow !== undefined ? 'workflow' : step.command !== undefined ? 'command' : 'prompt';
 
+  const requires = mergeRequirements(scope.requires, step.requires);
+
   const negotiation = negotiate({
     step: id,
     executor,
-    requires: mergeRequirements(scope.requires, step.requires),
+    requires,
     interactive: step.interactive === true,
     hasContract: plan?.contract !== undefined,
     envKeys: Object.keys(step.env ?? {}),
@@ -1784,6 +1786,7 @@ function offerTerms(
       answer: step.answer !== undefined,
       inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined,
       publishes: plan?.contract !== undefined && isPublishContract(plan.contract),
+      requires,
     }),
     answer: step.answer !== undefined,
     ...role,

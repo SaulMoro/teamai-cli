@@ -97,8 +97,9 @@ export interface WorkflowDescription {
      * Each step that runs a command or a prompt, by path, with what the machine that runs it needs: the `requires.env`
      * keys of the step and its setup, its `requires.labels`, and the agent and `tool` of a prompt step, from which the
      * driver picks its tool. `answer`: the step is an answer step, which the local driver runs on the member's AI tool.
+     * `host`: the step runs only on this machine (`isPinnedToHost`), as its `requires.host` or teamai's own pins keep it.
      */
-    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; labels?: string[]; agent?: string; tool?: string; answer?: true }>;
+    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; labels?: string[]; agent?: string; tool?: string; answer?: true; host?: true }>;
     /** Steps the describing driver is held from, by path, with what it lacks, and the `requires.env` keys they need. */
     held: Array<{ step: string; missing: Missing[]; env: string[] }>;
     localRoute?: LocalRoute;
@@ -188,6 +189,9 @@ export function describeWorkflow(input: {
     if (executor === 'prompt' && step.tool !== undefined) run.tool = step.tool;
 
     if (step.answer !== undefined) run.answer = true;
+    const pinned = isPinnedToHost({ executor, answer: step.answer !== undefined, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, publishes: step.deliver === 'publish', requires });
+
+    if (pinned) run.host = true;
     facts.runs.push(run);
 
     const negotiation = negotiate({
@@ -199,7 +203,7 @@ export function describeWorkflow(input: {
       tool: step.tool,
       unattended: step.permissions === 'unattended',
       answer: step.answer !== undefined,
-      pinned: isPinnedToHost({ executor, answer: step.answer !== undefined, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, publishes: step.deliver === 'publish' }),
+      pinned,
     }, can, allow, env);
 
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });

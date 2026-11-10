@@ -27,6 +27,7 @@ steps:
   - id: check
     needs: [draft]
     if: steps.draft.outputs.verdict == 'draft'
+    requires: { host: true }
     command: |
       named() { case "$1" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9_-]*) return 1;; esac; }
       if ! named "$ID"; then
@@ -51,5 +52,6 @@ steps:
     # A task id is unique only in its suite. Two members who draft the same task share its branch and pull request.
     workspace: { team: { branch: "teamai/session-to-task/{{ inputs.suite }}/{{ steps.draft.outputs.id }}" } }
     deliver: pr
+    requires: { host: true }
     command: mkdir -p "$(dirname "$TASK_PATH")" && cp "$FILE" "$TASK_PATH"
     env: { FILE: "{{ steps.draft.outputs.file }}", TASK_PATH: "{{ inputs.suite }}/tasks/{{ steps.draft.outputs.id }}.yaml" }

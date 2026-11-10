@@ -878,6 +878,54 @@ steps:
     expect(review).toMatchObject({ id: 'review', status: 'succeeded', runtime: 'toy' });
   });
 
+  describe('a step that requires the host', () => {
+    it('runs the command steps of a team copy of teamai-score under another name on the host, though a runtime of the definition execs', async () => {
+      const shipped = fs.readFileSync(path.join(ROOT, 'workflows', 'teamai-score.yaml'), 'utf8');
+      fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'acme-score.yaml'), shipped.replace('name: teamai-score', 'name: acme-score'));
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('toyexecscore', [{ use: 'toy', options: { state } }]);
+      const inputs = { subject: 'session:claude:none', scorers: ['quality'], label: '', batch: false, demand: 'named' };
+
+      const scored = await runCLI(['workflow', 'start', 'acme-score', '--driver', 'toyexecscore', '--inputs', JSON.stringify(inputs)], repo, env());
+
+      const [plan] = readRunState(runOf(scored)).steps;
+      expect(plan, scored.stderr).toMatchObject({ id: 'plan', runtime: 'host' });
+      expect(toyOpens()).toBe(0);
+    });
+
+    it('fails a prompt step that requires the host on a definition whose only runtime is off this host, naming host', async () => {
+      writeFlow('hostprompt', `  - id: review
+    prompt: Review the repository without changing it.
+    requires: { host: true }
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('toyonlyhost', [{ use: 'toy', options: { state } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'hostprompt', '--driver', 'toyonlyhost'], repo, env());
+
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'requirement_unmet', message: expect.stringContaining('runtime toy lacks host (the step stays on this machine)') } });
+      expect(toyOpens()).toBe(0);
+    });
+
+    it('runs a prompt step that requires the host on the runtime of the definition that launches tools on this machine', async () => {
+      writeFlow('hostprompt2', `  - id: review
+    prompt: Review the repository without changing it.
+    requires: { host: true }
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('toyandhost', [{ use: 'toy', options: { state } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'hostprompt2', '--driver', 'toyandhost'], repo, env());
+
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review, ran.stderr).toMatchObject({ status: 'succeeded', runtime: 'local' });
+      expect(toyOpens()).toBe(0);
+    });
+  });
+
   it.each([
     {
       tool: 'claude', variable: 'CLAUDE_CONFIG_DIR', file: 'settings.json',
