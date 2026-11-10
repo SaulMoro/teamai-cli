@@ -155,7 +155,7 @@ async function pin(config: LocalConfig, { sourceHash, files }: { sourceHash: str
   const locked = await withFileLock(lockOf(target), PIN_WAIT, () => store(target, files));
 
   if (!locked.held) {
-    throw new Error(`Could not store the workflow folder ${sourceHash}: another teamai process held ${lockOf(target)} for 10 s. Run the command again; if no teamai process is running, delete that file.`);
+    throw new Error(`Could not store the workflow folder ${sourceHash}: another teamai process held ${lockOf(target)} for ${(PIN_WAIT.attempts * PIN_WAIT.delayMs) / 1000} s. Run the command again; if no teamai process is running, delete that file.`);
   }
 }
 

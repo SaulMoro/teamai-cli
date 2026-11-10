@@ -509,7 +509,7 @@ export async function runMigration(
     }
 
     // 1. Copy into a sibling staging dir (NOT the partition itself) so an
-    //    interrupted copy never looks like a built partition. Use raw fse.copy
+    //    interrupted copy never looks like a built partition. Use copyRegularTree
     //    (NOT copyDir): copyDir filters out `.git`, which would corrupt the
     //    team-repo clone. Skip disposable worktrees and lock files.
     await remove(staging);
@@ -913,7 +913,7 @@ async function holdsSelfKnowledge(dir: string): Promise<boolean> {
  * NOT a direct copy onto `dest`. A concurrent self pull/push does NOT take the
  * partition `.sync-lock` (lockScope skips non-git kinds), so it can read
  * `<partition>/env.local` while we relocate: the atomic rename guarantees it sees
- * either the complete file or nothing, never a half-written one. Uses raw fse.copy
+ * either the complete file or nothing, never a half-written one. Uses copyRegularTree
  * (NOT copyDir) so a nested `.git` under workspaces/ survives.
  *
  * False, relocating nothing, when learnings are still queued in the checkout
@@ -1174,7 +1174,7 @@ async function listMigratableEntries(legacyDir: string): Promise<string[]> {
  *  - config.yaml parses as a LocalConfig,
  *  - if the source has a team-repo git clone, the staged copy has its `.git`
  *    AND `git rev-parse HEAD` works on it (proves the copy did NOT drop `.git`
- *    — the copyDir-vs-fse.copy trap — and the clone is actually usable, not just
+ *    — the copyDir-vs-copyRegularTree trap — and the clone is actually usable, not just
  *    present-but-corrupt),
  *  - every migratable top-level entry made it across.
  * Runs on the STAGING copy, before the atomic rename, so any shortfall aborts

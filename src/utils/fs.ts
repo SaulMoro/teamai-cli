@@ -281,7 +281,7 @@ export async function writeJsonAtomic<T>(
 /**
  * Copy a directory recursively.
  * If `dest` is a symlink (e.g. left over from setup-links.sh), remove it first
- * so fse.copy can create a real directory in its place.
+ * so the copy can create a real directory in its place.
  * With `onLink`, a link in `src` is not copied (nor followed): `onLink` gets its
  * path relative to `src`. Without it, links are copied as links.
  */
