@@ -320,3 +320,12 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
 
   return (initial = 'SIGTERM') => (stopping ??= stop(initial));
 }
+
+/** When the process `pid` started, as `ps -o lstart=` prints it; undefined when no process has it or ps cannot run. */
+export function processStart(pid: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout) => {
+      resolve(error ? undefined : stdout.trim() || undefined);
+    });
+  });
+}

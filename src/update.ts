@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { readRegularFile, readRegularFileSync, NotRegularFileError } from '@teamai/shared/regular-file';
+import { processStart } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -463,16 +464,18 @@ interface LockPayload {
  * on-disk lock from a previous install is still evaluated for staleness rather
  * than treated as un-owned garbage.
  */
-/** Who holds a lock: its process, and the owner token of a lock written in the JSON payload format. */
+/** Who holds a lock: its process, and the owner token and time of a lock written in the JSON payload format. */
 interface LockHolder {
   pid: number;
   owner?: string;
+  startedAt?: string;
 }
 
 /** A lock file's JSON: the legacy bare integer PID, or the payload with a numeric pid. */
 const LockContentSchema = z.union([
   z.number().refine(Number.isInteger).transform((pid): LockHolder => ({ pid })),
-  z.object({ pid: z.number(), owner: z.string().optional().catch(undefined) }).transform(({ pid, owner }): LockHolder => ({ pid, owner })),
+  z.object({ pid: z.number(), owner: z.string().optional().catch(undefined), startedAt: z.string().optional().catch(undefined) })
+    .transform(({ pid, owner, startedAt }): LockHolder => ({ pid, owner, startedAt })),
 ]);
 
 function parseLockContent(content: string): LockHolder | null {
@@ -502,6 +505,8 @@ function parseLockContent(content: string): LockHolder | null {
  * another user's 0600 lock), an empty or partly written one (its creator may
  * still be writing it: the O_EXCL fallback and older teamai open the file
  * before writing), and a pid that exists but belongs to another user (EPERM).
+ * A live pid whose process started after the lock was written is not its owner
+ * but a later process that reused the pid, so that lock is stale too.
  * A lock that names no owner, or is permission-denied, stays until removed by hand
  * if a crash left it, so it is named in a warning.
  */
@@ -536,14 +541,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     return { state: 'live' };
   }
 
-  try {
-    process.kill(parsed.pid, 0);
-
-    return { state: 'live' }; // process alive → lock genuinely held
-  } catch (err) {
-    // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
-    if (errnoCode(err) === 'EPERM') return { state: 'live' };
-  }
+  if (!(await isHolderGone(parsed))) return { state: 'live' };
 
   // The owner may have released the lock and exited after the read, and
   // another process created a fresh one: only the dead owner's own file is stale.
@@ -553,6 +551,28 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     if (errnoCode(err) === 'ENOENT') return { state: 'missing' };
     throw err;
   }
+}
+
+/**
+ * Whether the process `holder` names is gone. A live process with its pid holds the lock only if it was already running
+ * when the lock was written: one that started later took a dead holder's pid, as a container hands pids out again.
+ * Without a start to compare, from ps or the lock, a live pid holds it.
+ */
+async function isHolderGone(holder: LockHolder): Promise<boolean> {
+  try {
+    process.kill(holder.pid, 0);
+  } catch (err) {
+    // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
+    if (errnoCode(err) !== 'EPERM') return true;
+  }
+
+  const written = Date.parse(holder.startedAt ?? '');
+
+  if (Number.isNaN(written)) return false;
+  const start = await processStart(holder.pid);
+
+  // ps prints the start to the second, rounded down, so a start it prints past the lock's time is past it.
+  return start !== undefined && Date.parse(start) > written;
 }
 
 /**
@@ -943,19 +963,12 @@ async function walkLockCandidates(roots: string[]): Promise<string[]> {
 }
 
 /** True when `content` is a lock payload whose owning process is provably gone. */
-function isDeadPidLock(content: string): boolean {
+async function isDeadPidLock(content: string): Promise<boolean> {
   const parsed = parseLockContent(content);
 
   if (!parsed) return false; // names no owner: never provably stale (#760)
 
-  try {
-    process.kill(parsed.pid, 0);
-
-    return false;
-  } catch (err) {
-    // EPERM: the pid exists, owned by another user. Anything else: gone.
-    return errnoCode(err) !== 'EPERM';
-  }
+  return isHolderGone(parsed);
 }
 
 /**
@@ -969,7 +982,7 @@ export async function listZombieLocks(roots: string[]): Promise<string[]> {
 
   for (const p of await walkLockCandidates(roots)) {
     try {
-      if (isDeadPidLock(await readRegularFile(p, 'utf-8'))) zombies.push(p);
+      if (await isDeadPidLock(await readRegularFile(p, 'utf-8'))) zombies.push(p);
     } catch {
       // unreadable: leave it alone
     }

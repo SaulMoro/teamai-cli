@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readRegularFile } from '@teamai/shared/regular-file';
 import { acquireLock, releaseLock, sweepHeldLocksOnExit, listZombieLocks, removeZombieLocks } from '../update.js';
 
@@ -36,9 +37,23 @@ beforeEach(() => {
   lockPath = path.join(tmpDir, '.test-lock');
 });
 
+const others: ChildProcess[] = [];
+
 afterEach(() => {
+  for (const other of others.splice(0)) other.kill('SIGKILL');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+/** The pid of a live process that has nothing to do with teamai, started now: one a container may hand a dead holder's pid. */
+function unrelatedProcess(): number {
+  const other = spawn('sleep', ['60'], { stdio: 'ignore' });
+  others.push(other);
+  if (other.pid === undefined) throw new Error('sleep did not start');
+
+  return other.pid;
+}
+
+const AN_HOUR_AGO = () => new Date(Date.now() - 3_600_000).toISOString();
 
 describe('acquireLock (real fs)', () => {
   it('acquires a fresh lock and writes a JSON payload with pid + owner', async () => {
@@ -80,6 +95,21 @@ describe('acquireLock (real fs)', () => {
     expect(await acquireLock(lockPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).pid).toBe(process.pid);
     await releaseLock(lockPath);
+  });
+
+  it.skipIf(process.platform === 'win32')('reclaims a lock whose pid a process started after the lock was written now has, as a container reuses pids', async () => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: unrelatedProcess(), owner: 'dead', startedAt: AN_HOUR_AGO() }));
+
+    expect(await acquireLock(lockPath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).pid).toBe(process.pid);
+    await releaseLock(lockPath);
+  });
+
+  it('keeps a lock whose live holder was already running when it wrote the lock', async () => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'live', startedAt: new Date().toISOString() }));
+
+    expect(await acquireLock(lockPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
   });
 
   it('reclaims a stale legacy plain-PID lock from an older teamai version', async () => {
@@ -567,6 +597,13 @@ describe('listZombieLocks / removeZombieLocks (#1027)', () => {
     fs.writeFileSync(insideGit, JSON.stringify({ pid: 999999, owner: 'gone', startedAt: 'x' }));
 
     expect(await listZombieLocks([tmpDir])).toEqual([dead]);
+  });
+
+  it.skipIf(process.platform === 'win32')('lists a lock whose pid a process started after the lock was written now has', async () => {
+    const reused = path.join(tmpDir, '.sync-lock');
+    fs.writeFileSync(reused, JSON.stringify({ pid: unrelatedProcess(), owner: 'gone', startedAt: AN_HOUR_AGO() }));
+
+    expect(await listZombieLocks([tmpDir])).toEqual([reused]);
   });
 
   it('returns nothing for a missing root', async () => {
