@@ -8,6 +8,7 @@ import { commitPathsOf, mergeStagedPathsOf } from './worktree-snapshot.js';
 import { commitWork, hostGitEnv, mergeBranch, offBranch, pushIfOrigin, untrustedGit, worktreeContentKey, type Git, type MemberConfig } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
+import { retryCommand } from '../runtimes/retry-command.js';
 
 /**
  * Merges each of `merge` into the copy `dir` of a writer. A conflict stops the merging: a command fails
@@ -34,7 +35,7 @@ export async function mergeBranches({ dir, run, step, executor, merge, git }: {
     const result = await mergeBranch(dir, item.commit, git);
 
     if (result.state === 'failed') {
-      return { kind: 'failed', failure: { code: 'workspace_base', message: `Step "${step}" could not merge branch ${item.branch} at ${item.commit} into workspace ${dir}. Git stopped without a conflict to resolve, so the step did not run. Git said: ${result.error.replace(/\.$/, '')}. Fix what git reported in ${dir}, then retry this step with teamai workflow retry ${run} ${step}.` } };
+      return { kind: 'failed', failure: { code: 'workspace_base', message: `Step "${step}" could not merge branch ${item.branch} at ${item.commit} into workspace ${dir}. Git stopped without a conflict to resolve, so the step did not run. Git said: ${result.error.replace(/\.$/, '')}. Fix what git reported in ${dir}, then retry this step with ${retryCommand({ run, step })}.` } };
     }
 
     if (result.state === 'conflict') conflict = { branch: item.branch, files: result.files };

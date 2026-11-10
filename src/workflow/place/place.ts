@@ -32,6 +32,7 @@ import { finishDataCheckout, openDataCheckout, removeDataCheckout } from './data
 import { commitPathsOf } from './worktree-snapshot.js';
 import { finishWriter, mergeBranches, recordMergePreparation, rememberConflicts, unreportedChangesMessage, withUnpushed } from './writer.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
+import { retryCommand } from '../runtimes/retry-command.js';
 
 /**
  * The checkout a driver working from `cwd` makes its places in: `checkout`, the one the run started from, unless `cwd`
@@ -216,7 +217,7 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
   const read = await readPlaceRecord(config, run, lease.attempt);
 
   if (read.kind === 'unreadable') {
-    return { kind: 'failed', failure: { code: 'workspace_base', message: `The place record of attempt ${lease.attempt} cannot be read (${read.reason}). Retry the step with teamai workflow retry ${run} ${lease.step}.` } };
+    return { kind: 'failed', failure: { code: 'workspace_base', message: `The place record of attempt ${lease.attempt} cannot be read (${read.reason}). Retry the step with ${retryCommand({ run, step: lease.step })}.` } };
   }
 
   let recorded = read.kind === 'found' ? read.record : undefined;

@@ -32,6 +32,7 @@ import {
 } from './transitions.js';
 import type { Runners, SkillContext } from './skill-driver.js';
 import type { SkillAnswer } from './turn.js';
+import { retryCommand } from '../../runtimes/retry-command.js';
 
 /** Runners as detached teamai processes, alive while they hold their runner lock. */
 export function detachedRunners(config: LocalConfig): Runners {
@@ -232,7 +233,7 @@ async function prepare(context: SkillContext, lock: RunLock, attempt: AttemptId)
   const job = await readJob(context.config, lock.run, attempt);
 
   if (!job) {
-    return failed({ code: 'run_unreadable', message: `The lease of attempt ${attempt} was not saved where its runner reads it, so the step did not run. Retry it with teamai workflow retry ${lock.run} ${open.step}.` });
+    return failed({ code: 'run_unreadable', message: `The lease of attempt ${attempt} was not saved where its runner reads it, so the step did not run. Retry it with ${retryCommand({ run: lock.run, step: open.step })}.` });
   }
 
   const placed = async (prepared: Awaited<ReturnType<WorkflowClient['prepare']>>): Promise<Stage> => {
