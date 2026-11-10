@@ -89,6 +89,24 @@ describe('local workflow prompt driver', () => {
     });
   });
 
+  it('launches the tool without the marker of a Claude session teamai itself runs in, which turns the tool\'s transcript off', async () => {
+    const { config, workspace, runId } = await fixture();
+    vi.stubEnv('CLAUDE_CODE_CHILD_SESSION', '1');
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_tool, value) => {
+        input = value;
+        return { started: true as const, exitCode: 0, output: { ok: true }, session: 'session-1' };
+      }),
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    expect(input?.env).toBeDefined();
+    expect(input?.env).not.toHaveProperty('CLAUDE_CODE_CHILD_SESSION');
+  });
+
   it('records how long the tool ran and the cost it stated, and neither for a tool that never started', async () => {
     const ran = await fixture();
     const unstarted = await fixture();

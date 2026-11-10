@@ -17,7 +17,7 @@ import { log } from '../../utils/logger.js';
 import { AgentSession, type AgentSessionRef } from '../../session-flow/agent-session.js';
 import { type SessionArchive } from '../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../skill-use.js';
-import { attemptEnv } from '../attempt-marker.js';
+import { attemptEnv, withoutOuterSessionMarkers } from '../attempt-marker.js';
 import { AttemptResult } from '../attempt-result.js';
 import { type ReportInput } from '../engine.js';
 import { type LeaseWire } from '../lease-wire.js';
@@ -487,7 +487,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     secrets,
     expected: expectedOutput(lease.output),
     // The lease `env` is set over the step's environment, as a command's is.
-    env: { ...lease.processEnv ?? process.env, ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
+    env: { ...withoutOuterSessionMarkers(lease.processEnv ?? process.env), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
   };
 
   let launcher = adapter;

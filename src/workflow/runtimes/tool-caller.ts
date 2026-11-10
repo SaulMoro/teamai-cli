@@ -11,6 +11,7 @@ import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
 import { answerLaunch } from '@teamai/runtime-tools/answer';
 import type { z } from 'zod';
+import { withoutOuterSessionMarkers } from '../attempt-marker.js';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 
@@ -90,9 +91,9 @@ async function scopeHere(): Promise<LocalConfig | undefined> {
 
 type Picked = { tool: LaunchOrderTool; executable: string };
 
-/** The environment a call's tool runs in: the member's own, marked as teamai's launch, without an outer launch's checkout. */
+/** The environment a call's tool runs in: the member's own, marked as teamai's launch, without an outer launch's checkout or session markers. */
 function callEnv(launchedBy: LaunchedBy, tool: string): NodeJS.ProcessEnv {
-  const { TEAMAI_LAUNCHED_TOOL: _tool, TEAMAI_LAUNCHED_CHECKOUT: _checkout, ...env } = process.env;
+  const { TEAMAI_LAUNCHED_TOOL: _tool, TEAMAI_LAUNCHED_CHECKOUT: _checkout, ...env } = withoutOuterSessionMarkers(process.env);
 
   const gateway = tool === 'agy' ? agyGatewayEnv(env) : undefined;
 

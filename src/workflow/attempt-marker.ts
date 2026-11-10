@@ -42,6 +42,18 @@ export function agentEvidence(env: NodeJS.ProcessEnv): AgentEvidence {
 }
 
 /**
+ * What a coding session teamai runs inside sets for its own children, and that changes how a tool teamai launches
+ * behaves: Claude Code turns transcript saving off in an interactive session that inherits `CLAUDE_CODE_CHILD_SESSION`,
+ * so teamai would find no session of the step to record, score or resume.
+ */
+const OUTER_SESSION_MARKERS: readonly string[] = ['CLAUDE_CODE_CHILD_SESSION'];
+
+/** `env` without the markers of a coding session teamai runs inside, for a tool teamai launches (`OUTER_SESSION_MARKERS`). */
+export function withoutOuterSessionMarkers(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !OUTER_SESSION_MARKERS.includes(name)));
+}
+
+/**
  * `env` without what `agentEvidence` reads, for a process the CLI starts itself to drive a run of its own: the attempt
  * marker and run directory, and every agent session variable, which a hook inherits from the session it runs in.
  */
