@@ -114,7 +114,7 @@ paseo ls --all --label teamai-parent=1f78c282-039d-452f-9621-bb6677c76eec
 
 ## 评判被评分的轮次
 
-带 `scorers` 的步骤由 `teamai-score` 工作流评判：它的记账命令在本机运行，评判则是一个受限提示词，只读一个证据目录，别的都不读。Paseo 回答这个提示词，所以只有 `paseo` 的定义在没有任何智能体 CLI 的机器上也能运行并评判被评分的步骤：
+带 `scorers` 的步骤由 `teamai-score` 工作流评判：它的记账命令在本机运行，评判则是一个受限提示词，只读一个证据目录，别的都不读。Paseo 回答这个提示词，所以只有 `paseo` 的定义在 teamai 自己不启动任何工具的机器上也能运行并评判被评分的步骤：
 
 ```yaml
 # drivers/paseo-only.yaml

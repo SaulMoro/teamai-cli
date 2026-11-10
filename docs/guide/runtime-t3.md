@@ -262,7 +262,7 @@ T3 runs a project's **setup** script ("Run on worktree creation") in each worktr
 
 ## Score a pass with only T3
 
-T3 can also judge. A member who has T3 but no agent CLI on the machine can run a workflow with [scorers](scorers.md#score-a-step) and have each pass labelled, with a definition that lists only `t3`:
+T3 can also judge. A member who runs their tools only through T3 can run a workflow with [scorers](scorers.md#score-a-step) and have each pass labelled, with a definition that lists only `t3`:
 
 ```yaml
 # .teamai/drivers/t3only.yaml

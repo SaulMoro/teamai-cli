@@ -262,7 +262,7 @@ T3 在线程打开的每个 worktree 里运行项目的 **setup** 脚本（“Ru
 
 ## 只用 T3 为一次 pass 评分
 
-T3 也能当评审。机器上只有 T3、没有任何 agent CLI 的成员，也能运行带[评分器](scorers.md#为步骤评分)的工作流并给每次 pass 打标签，只要驱动定义里只列出 `t3`：
+T3 也能当评审。只通过 T3 运行工具的成员，也能运行带[评分器](scorers.md#为步骤评分)的工作流并给每次 pass 打标签，只要驱动定义里只列出 `t3`：
 
 ```yaml
 # .teamai/drivers/t3only.yaml

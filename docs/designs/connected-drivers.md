@@ -21,7 +21,7 @@ teamai owns the boundary; runtimes own how a process starts somewhere.
 | Evidence: tool transcripts on the host, judging through the `teamai-score` runs teamai drives, `deliver: publish` of sessions and labels | Its own options, images, pools and endpoints |
 | Recovery: kept work on failure, `retry`, `resume`, publish and claim | Reporting the isolation it really enforces |
 
-teamai core imports no sandbox, T3 or Paseo code. The core holds the primitives below, the `local` and `fleet` runtimes, and a toy runtime for development and tests; the first-party runtimes are separate packages that speak the protocol.
+teamai core imports no sandbox, T3 or Paseo code. The core holds the primitives below, the `host`, `tools` and `fleet` runtimes, and a toy runtime for development and tests; the first-party runtimes are separate packages that speak the protocol.
 
 ## Terms
 
@@ -67,7 +67,7 @@ A runtime that keeps the place on the host (a bind mount) returns from `collect`
 - Every git path read-only: the common git directory, the worktree's admin directory (it holds `config.worktree`, `worktree.ts:453`) and the `.git` pointer. The step edits files; teamai stages and commits on the host with `untrustedGit`, so no hook, fsmonitor, replacement, filter, diff or merge driver, signing, ssh, askpass, editor, pager or pack program the step planted in the copy's config runs there. A runtime mounts or copies them read-only as they are. A strict sandbox withholds the forge variables, but it does not scrub git config: a checkout that keeps forge auth there (`actions/checkout`'s persisted `http.<url>.extraheader`, `checkoutCredentials` in `src/utils/git.ts:468`) stays readable by the step, so a team that needs the step kept from it checks out with `persist-credentials: false`.
 - The **workflow folder** read-only, when the step's workflow is a folder: the copy teamai pinned under the data home, at the path `$TEAMAI_WORKFLOW_DIR` names, so the step reads the files the folder carries where it runs (`placeView` in `src/workflow/steps/runtime-steps.ts`, and a fleet member's `runtimeCommand`). A step's own `env:` cannot widen the view: `WorkflowFolder.named` accepts only a path teamai pinned.
 - The attempt's **result directory** read-write at its host path: the result file moves to `attempts/<attempt>/out/result.json` (`src/workflow/store.ts:94`), because the attempt directory itself holds `place.json` and the saved overlay. teamai reads it after the step, as today.
-- A **tool home per attempt and tool** under the attempt directory, read-write, set through the variable the tool's session store reads (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CODEBUDDY_CONFIG_DIR`; `SESSION_PLATFORM_FACTS`, `src/session-flow/adapters/platform-facts.ts:6`). Each attempt owns its home, so parallel attempts never share one and `collect` mirrors only the collecting attempt's home; a retry or a later pass seeds its new home with the resume state of the recorded predecessor home, so `--resume` finds the session. Session lookups for the run's steps (resume in `local-driver.ts:406`, skill use, step scoring, `teamai-score` evidence, session publishing) read the store inside the home the attempt's record names: `sessionStoreDir` (`src/locate.ts:1490`) takes that tool home in place of the member's, so it still adds the store's own directory (`projects` for Claude), and `AgentSession` hands the result to the adapter, which already takes a store directory (`packages/tool-core/src/formats/claude-code.ts:463`), because recorded tool roots are paths under the member's home (`recordedToolRootDir`, `src/types.ts:3798`) and cannot name an attempt directory. The report keeps the transcript's `filePath` (`agent-session.ts:34`), so publishing reads exactly that file. A tool whose store has no such variable is not in the runtime's `tools`: OpenCode, because its adapter reads sessions through the `opencode` CLI with the host's env and uses the store directory only to check it exists (`packages/tool-opencode/src/session-adapter.ts:457`), and its login lives under `XDG_DATA_HOME` too; Pi, because its launch adapter has no step profile (`packages/tool-pi/src/launch.ts`). The member's own tool home is never exposed. The built-in `local` runtime keeps the member's home, as today.
+- A **tool home per attempt and tool** under the attempt directory, read-write, set through the variable the tool's session store reads (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CODEBUDDY_CONFIG_DIR`; `SESSION_PLATFORM_FACTS`, `src/session-flow/adapters/platform-facts.ts:6`). Each attempt owns its home, so parallel attempts never share one and `collect` mirrors only the collecting attempt's home; a retry or a later pass seeds its new home with the resume state of the recorded predecessor home, so `--resume` finds the session. Session lookups for the run's steps (resume in `local-driver.ts:406`, skill use, step scoring, `teamai-score` evidence, session publishing) read the store inside the home the attempt's record names: `sessionStoreDir` (`src/locate.ts:1490`) takes that tool home in place of the member's, so it still adds the store's own directory (`projects` for Claude), and `AgentSession` hands the result to the adapter, which already takes a store directory (`packages/tool-core/src/formats/claude-code.ts:463`), because recorded tool roots are paths under the member's home (`recordedToolRootDir`, `src/types.ts:3798`) and cannot name an attempt directory. The report keeps the transcript's `filePath` (`agent-session.ts:34`), so publishing reads exactly that file. A tool whose store has no such variable is not in the runtime's `tools`: OpenCode, because its adapter reads sessions through the `opencode` CLI with the host's env and uses the store directory only to check it exists (`packages/tool-opencode/src/session-adapter.ts:457`), and its login lives under `XDG_DATA_HOME` too; Pi, because its launch adapter has no step profile (`packages/tool-pi/src/launch.ts`). The member's own tool home is never exposed. The built-in `tools` runtime keeps the member's home, as today.
 - The run's **scratch directory** (`runDir`, the step's `$TEAMAI_RUN_DIR`, a name `@teamai/runtime-protocol` exports as `RUN_DIR_ENV` and a runtime package never spells, `teamai/launch-env`) read-write at its host path, so steps of one run hand files to each other through it as on `local`. Every run path is spelled by its real path (`runsDir`, `src/workflow/store.ts`), so a process resumed under another spelling of `HOME` names the same files as the one that started the run. Integrity rests on the hash checks `teamai-score` keeps on what it reads there.
 - A confined prompt gets none of the above: only its `dir`, read-only, never the run's scratch directory. teamai spells `dir` as the run spells its scratch directory and the prompt names it only as `confined.dir` exactly as sent, so a runtime may mount or copy it at a neutral path and replace that text in the prompt, keeping the member's home, name and project out of the judge's view.
 - Files the step writes are owned by the host user; how is the runtime's concern.
@@ -156,7 +156,7 @@ description: Run each prompt step as a T3 Code thread in a worktree teamai prepa
 runtimes:
   - use: t3
     options: { environment: local, max_parallel: 4 }
-  - use: local            # commands, and prompts T3 cannot take
+  - use: tools            # prompts T3 cannot take; commands run on the host slot
 ```
 
 ```yaml
@@ -170,7 +170,7 @@ runtimes:
       provider: sbx                                            # no agent: each attempt starts from its own tool's template
       # Each member signs in once: Claude with `sbx run claude <dir>`, then /login; Codex with `sbx secret set openai --oauth`
       max_parallel: 4
-  - use: local
+  - use: tools
 ```
 
 ```yaml
@@ -186,7 +186,7 @@ runtimes:
         VERCEL_TEAM_ID: env:VERCEL_TEAM_ID
         VERCEL_PROJECT_ID: env:VERCEL_PROJECT_ID
       credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN }
-  - use: local
+  - use: tools
 ```
 
 ```yaml
@@ -213,7 +213,7 @@ runtimes:
     options:
       t3: { instance: claude-t3-sandbox }        # a T3 provider instance whose Binary path is teamai's wrapper
       sandbox: { provider: sbx, agent: claude }  # any bind-mount provider: sbx, docker, podman, bwrap
-  - use: local
+  - use: tools
 ```
 
 `sandbox` opens the attempt's sandbox on the place view at the same absolute paths and owns its lifecycle. `t3` launches the child with `modelSelection.instanceId` set to a T3 provider instance (T3 Settings → Providers, for example "Claude (t3-sandbox)") whose Binary path is a wrapper teamai ships inside `teamai-runtime-sandbox` (its `tool-exec` mode). The wrapper knows no tool: it is one multicall executable that takes the tool from the name it was called by (`teamai-sandbox-<tool>`), resolves that tool's `command` from the tool registry, finds the sandbox open for its working directory by the attempt's label (`teamai-<run>-<attempt>`), and runs that command there with its argv, stdio, exit status and signals passed through. teamai ships one `bin` per shipped tool, generated from the registry; a team or personal instance is a symlink named after it. A tool it serves must be in the sandbox runtime's `tools`, be installed in the sandbox, and be one T3 drives over stdio; a T3 provider reached on a local port cannot cross the sandbox. With no attempt for its working directory, or a tool it cannot resolve, it exits non-zero and never runs a session on the host. Parallel children share the instance: each runs in its own attempt's worktree, so each wrapper lands in its own sandbox. The child lives in the member's own T3 while the tool runs in the sandbox, and teamai finishes the place on the host as for any runtime. Paths must match, so only bind-mount providers serve as the outer. The wrapper gets the prompt's scoped env from the sandbox runtime over a per-attempt unix socket (mode 0600, in a 0700 directory under the attempt directory), never from T3's env and never on disk, including the tool-home variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CODEBUDDY_CONFIG_DIR`) aimed at the attempt's bind-mounted tool home, so the transcript lands where resume, scoring and `score --drain` read it. `t3` launches the child idle and sends the prompt (`t3_thread_send`) only after the wrapper connects on that socket; a wrapper that never connects fails the attempt with `isolation_unproven` and nothing is sent, so an instance whose Binary path is not the wrapper runs no prompt on the host. The `instance` option names the instance; `init` fails, naming the setup step, when it is missing. teamai knows the isolation is real because the wrapper is its own.
@@ -233,7 +233,7 @@ runtimes:
       stale_after: 30m
       can: { isolation: sandbox, env: true, unattended: true, workspace: [new, continue] }
       max_parallel: 10
-  - use: local
+  - use: tools
 ```
 
 A member is any install that runs `teamai workflow resume --next --pool build --driver <its definition>` in a checkout of the business repository.
@@ -256,7 +256,7 @@ A `workflow:` step goes to the fleet as one attempt when a member can run its su
 |---|---|
 | `start` and `resume` resolve `--driver` through definitions; `local` and `skill` reserved | `src/workflow-commands.ts` |
 | Driver definitions as delivered resources with namespaces, canonical names and shipped defaults | reuse the workflow cache and `default-workflows.ts` |
-| `Runtime` interface with `local` in process and a stdio client; place view, operation ids and handles in the attempt directory, `collect` | `src/workflow/drivers/local/`, `src/workflow/place/` |
+| `Runtime` interface with `host` and `tools` in process and a stdio client; place view, operation ids and handles in the attempt directory, `collect` | `src/workflow/drivers/local/`, `src/workflow/place/` |
 | the argv each family's step profile builds, shared; `sessionStoreDir` takes a tool home and `AgentSession` a store directory, so resume, skill use, scoring and publishing read the store in the attempt's tool home; the report keeps the transcript `filePath` | `packages/tool-launch`, `local-driver.ts`, `src/scorers/scoring-evidence.ts`, `session-publish.ts` |
 | Result file in `attempts/<attempt>/out/` | `src/workflow/store.ts` |
 | `through` entries: ordered open, cancel, close and reattach of two handles; the outer's handle in `open`; per-key `can` | `src/workflow/drivers/local/` |
