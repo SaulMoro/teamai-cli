@@ -47,8 +47,8 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { execSync } from 'node:child_process';
+import { gfGetOAuthToken } from '../providers/tgit/oauth-token.js';
 import {
-  gfGetOAuthToken,
   gfMrCreate,
   gfAuthWhoami,
   gfIsAuthenticated,

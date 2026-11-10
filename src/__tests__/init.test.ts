@@ -74,6 +74,8 @@ const mockCnbOrganizationExists = vi.fn();
 const mockEnsureCnbInstalled = vi.fn();
 
 // Mock the provider-level gf-cli module (init.ts now uses providers)
+vi.mock('../providers/tgit/oauth-token.js', () => ({ gfGetOAuthToken: vi.fn().mockReturnValue('mock-oauth-token') }));
+
 vi.mock('../providers/tgit/gf-cli.js', () => {
   class RepoNotFoundError extends Error {
     constructor(repo: string) {
@@ -86,7 +88,6 @@ vi.mock('../providers/tgit/gf-cli.js', () => {
     gfCreateRepo: (...args: unknown[]) => mockGfCreateRepo(...args),
     gfIsAuthenticated: () => mockGfIsAuthenticated(),
     gfAuthWhoami: () => mockGfAuthWhoami(),
-    gfGetOAuthToken: vi.fn().mockReturnValue('mock-oauth-token'),
     ensureGfInstalled: () => mockEnsureGfInstalled(),
     ensureAuthenticated: vi.fn().mockReturnValue('testuser'),
     isGfInstalled: vi.fn().mockReturnValue(true),
