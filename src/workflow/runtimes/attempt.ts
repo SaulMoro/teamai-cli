@@ -22,7 +22,6 @@ import { loginFileOf } from './login.js';
 import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
-import { credentialSecrets } from './sources.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── An attempt on a step runtime ────────────────────────
@@ -36,6 +35,11 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 /** The tools a step runtime that execs can launch: their session store moves with one variable, into the attempt's tool home. */
 // oxlint-disable-next-line teamai/tool-facts -- a fixed-id table of what step runtimes decided to run, kept apart from TOOLS on purpose; tools without one home variable (OpenCode, Pi) stay out
 export const EXEC_RUNTIME_TOOLS = ['claude', 'codex', 'codebuddy'] as const satisfies readonly LaunchTool[];
+
+/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
+export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
+}
 
 export type ExecRuntimeTool = (typeof EXEC_RUNTIME_TOOLS)[number];
 

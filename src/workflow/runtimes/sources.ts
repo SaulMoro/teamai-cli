@@ -20,7 +20,7 @@ import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
-import { isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
+import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
 import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf } from '../../tool-launch/tools.js';
@@ -39,11 +39,6 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 //  A team runtime is code a teammate pushed, so before its first spawn at a revision a person accepts that revision:
 //  an attended run asks, and an unattended one refuses.
 //
-
-/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
-export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
-}
 
 /**
  * What the `tools` runtime's launch reads from teamai, which its package cannot import: the OpenCode version, the agy

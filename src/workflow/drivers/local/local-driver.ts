@@ -21,7 +21,7 @@ import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
-import { attemptRun, HeldPlace, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
@@ -29,7 +29,6 @@ import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.j
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
-import { credentialSecrets } from '../../runtimes/sources.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
