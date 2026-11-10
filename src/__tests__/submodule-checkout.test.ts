@@ -15,7 +15,7 @@ import { dashboardWorkspaces, workspaceEvents } from '../dashboard/workspaces.js
 import { status } from '../status.js';
 import { localAgentCheckouts } from '../local-agent.js';
 import { deployBuiltinSkills } from '../builtin-skills.js';
-import { allowsSkillDirectory, describeSkippedSkillDirectory, findSkillDirectoryBlock } from '../resources/skills.js';
+import { allowsSkillDirectory, describeSkippedSkillDirectory, findSkillDirectoryBlock } from '../skill-directory.js';
 
 let base: string;
 let parent: string;

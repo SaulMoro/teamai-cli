@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseYaml } from '../utils/yaml.js';
 import { z } from 'zod';
-import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from '../builtin-skills.js';
+import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from '../cli-skill-names.js';
 import { DefaultScorers } from '../default-scorers.js';
 import { adoptionRatio, aggregateConfidenceFactors } from '../maintenance/confidence.js';
 import { defaultScorerRubric } from '../scorers/cache.js';

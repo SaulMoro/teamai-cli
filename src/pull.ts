@@ -42,7 +42,7 @@ import {
   blockingEntries, deliveredSkillFiles, describeMembersDirLeft, removeDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, recordedUnder, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
-import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import { BUILTIN_SKILL_NAMES } from './cli-skill-names.js';
 import type { AgentModelRecords, CodexBuildSkew, CopyOrigin, GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
 import {
   getUserLearningsDir,

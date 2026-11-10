@@ -12,7 +12,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
-import { LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import { LEGACY_BUILTIN_SKILL_NAMES } from './cli-skill-names.js';
 import {
   blockNote,
   detectTeam,

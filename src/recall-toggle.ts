@@ -8,7 +8,8 @@ import { agentFileExtensionForTool } from './resources/agent-format.js';
 import { isAgentToolId } from './tool-registry.js';
 import { cleanupOf, installOf, locate, ownOf } from './locate.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
-import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
+import { builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
+import { LEGACY_RECALL_SKILL_NAMES } from './cli-skill-names.js';
 import {
   isRecallEnabled,
   isAgentExcluded,

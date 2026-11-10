@@ -6,7 +6,7 @@ import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
 import { aggregateUsage } from './stats.js';
 import { collectTeamRepoSkills } from './agent-skills.js';
-import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import { BUILTIN_SKILL_NAMES } from './cli-skill-names.js';
 import { readEvents, aggregateSessionMetrics, dataHomeKey, memberEvents, sessionRuns } from './dashboard-collector.js';
 import { RUN_MODES, type RunMode, type SessionRun } from './launch-context.js';
 import { addOutcomeStats } from './outcomes.js';

@@ -2077,7 +2077,7 @@ async function pushCore(
       return;
     }
 
-    const { isCliOwnedSkillName } = await import('./builtin-skills.js');
+    const { isCliOwnedSkillName } = await import('./cli-skill-names.js');
     const { generatedSkillAt } = await import('./workflow/discovery/generated-marker.js');
     const generated = await generatedSkillAt(skillPath);
 

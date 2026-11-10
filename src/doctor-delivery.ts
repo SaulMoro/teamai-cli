@@ -36,8 +36,8 @@ import { realHost, toolHome } from './tool-home.js';
 import { getsRulesFromExtension, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { isReservedTeamEnvKey } from './env-reserved.js';
-import { skillsGuardBase } from './builtin-skills.js';
-import { findSkillDirectoryBlock, describeSkippedSkillDirectory } from './resources/skills.js';
+import { skillsGuardBase } from './skill-owned-files.js';
+import { findSkillDirectoryBlock, describeSkippedSkillDirectory } from './skill-directory.js';
 
 /**
  * The checks that verify the payload rather than the plumbing: what each tool
@@ -536,7 +536,7 @@ async function moveFix({ tool, own, writes, wrote, members, workspaceHeld }: {
       + (members.length > 0 ? members.join(' ') : 'Run `teamai pull` to sync them there.');
   }
 
-  const { BUILTIN_SKILL_NAMES } = await import('./builtin-skills.js');
+  const { BUILTIN_SKILL_NAMES } = await import('./cli-skill-names.js');
   const reasons = [...members];
 
   if (workspaceHeld.length > 0) reasons.push(`This workspace holds back ${workspaceHeld.join(', ')}: its members deliver different copies. Make the copies equal in the team repo, or rename one.`);
@@ -561,7 +561,7 @@ async function moveHolds(
   located: readonly { readonly tool: string; readonly where: Location<'skills'> }[],
 ): Promise<{ readonly members: Map<string, string[]>; readonly workspaceHeld: readonly string[] }> {
   const members = new Map<string, string[]>();
-  const { keptStubLine, BUILTIN_SKILL_NAMES } = await import('./builtin-skills.js');
+  const [{ keptStubLine }, { BUILTIN_SKILL_NAMES }] = await Promise.all([import('./builtin-skills.js'), import('./cli-skill-names.js')]);
 
   for (const { tool, where } of located) {
     for (const dir of writesOf(where).map((place) => place.path)) {

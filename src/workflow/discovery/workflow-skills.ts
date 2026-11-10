@@ -5,9 +5,8 @@ import { builtinSkillsTarget } from '../../builtin-skills.js';
 import type { DeliveryRecorder } from '../../git-exclude-delivered.js';
 import { SHARED_AGENT_SKILLS_PATH } from '../../locate.js';
 import { keepsTrackedCopy } from '../../resources/delivered-copies.js';
-import {
-  allowsSkillDirectory, CODEX_TOOL, describeSkippedSkillDirectory, findSkillDirectoryBlock, skillTargetsFor,
-} from '../../resources/skills.js';
+import { CODEX_TOOL, skillTargetsFor } from '../../resources/skills.js';
+import { allowsSkillDirectory, describeSkippedSkillDirectory, findSkillDirectoryBlock } from '../../skill-directory.js';
 import { isAgentExcluded, scopedToolPaths, type LocalConfig, type TeamaiConfig } from '../../types.js';
 import { pathExists, writeFileAtomic } from '../../utils/fs.js';
 import { warnOnce } from '../../utils/warn-once.js';
