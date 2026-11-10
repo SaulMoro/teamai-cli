@@ -166,7 +166,7 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
   });
 });
 
-describe.skipIf(process.platform === 'win32')('copying a folder a step may have planted something in', () => {
+describe('copying a folder a step may have planted something in', () => {
   it('copies a folder with each file\'s bytes and mode, keeps links as links, and leaves out what the filter refuses', async () => {
     const dir = scratch();
     const from = path.join(dir, 'skill');
@@ -199,7 +199,7 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     expect(fs.readFileSync(path.join(dir, 'x', 'y', 'a.md'), 'utf8')).toBe('a\n');
   });
 
-  it('refuses a FIFO inside the folder at once, instead of copying it or waiting on it', async () => {
+  it.skipIf(process.platform === 'win32')('refuses a FIFO inside the folder at once, instead of copying it or waiting on it', async () => {
     const dir = scratch();
     const from = path.join(dir, 'skill');
     fs.mkdirSync(from);
@@ -213,7 +213,7 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     expect(settled).toMatchObject({ rejected: { kind: 'a pipe', message: `${at} is a pipe, not a regular file, so teamai does not read it` } });
   });
 
-  it('refuses a device, which a plain copy reads as a file', async () => {
+  it.skipIf(process.platform === 'win32')('refuses a device, which a plain copy reads as a file', async () => {
     const dir = scratch();
 
     await expect(copyRegularTree('/dev/null', path.join(dir, 'null'))).rejects.toMatchObject({ kind: 'a device' });
