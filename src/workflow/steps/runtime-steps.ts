@@ -434,7 +434,12 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
             break;
           case 'idle':
             ran.exitCode = 1;
-            ran.failure = { code: 'tool_failed', message: `${tool} printed nothing for ${(input.idleTimeoutMs ?? 0) / 1000}s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.` };
+            ran.failure = {
+              code: 'tool_failed',
+              message: input.idleTimeoutMs === undefined
+                ? `${tool} printed nothing for longer than the step runtime's own idle limit. Raise that limit if this tool works silently for longer.`
+                : `${tool} printed nothing for ${input.idleTimeoutMs / 1000}s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.`,
+            };
             break;
           default: {
             const unhandled: never = end.stopped;

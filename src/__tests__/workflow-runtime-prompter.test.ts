@@ -96,6 +96,14 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     expect('stoppedBy' in ran).toBe(false);
   });
 
+  it('fails a tool the runtime stopped at an idle limit of its own, with no limit of teamai\'s to name', async () => {
+    const { run } = promptOnlyRun({ stopped: 'idle' });
+
+    const ran = await runtimePrompter(run, { view, runId: RunIdSchema.parse('r0123abcd'), step: 'review', tool: 'claude', provided: [], unset: [], credentials: {}, setUp: async () => undefined }).run('claude', { prompt: 'Review.', expected: undefined, cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, undefined);
+
+    expect(ran).toMatchObject({ exitCode: 1, failure: { code: 'tool_failed', message: 'claude printed nothing for longer than the step runtime\'s own idle limit. Raise that limit if this tool works silently for longer.' } });
+  });
+
   it('says it started fresh when the runtime resumed no session, even when its place could not be collected', async () => {
     const { run } = promptOnlyRun();
     const uncollectable: AttemptRun = { ...run, collect: async () => ({ code: 'runtime_failed', message: 'The place could not be collected.' }) };
