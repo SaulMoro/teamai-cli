@@ -237,7 +237,7 @@ Judge the review.
     const [build, review] = readRunState(runId).steps;
     expect([build, review].map((step) => [step?.id, step?.status])).toEqual([['build', 'succeeded'], ['review', 'succeeded']]);
     expect(runtimeRecord(runId, attemptOf(build))).toMatchObject({ runtime: 'toy', phase: 'closed' });
-    expect(runtimeRecord(runId, attemptOf(review))).toBeUndefined();
+    expect(runtimeRecord(runId, attemptOf(review))).toEqual({ runtime: 'tools', driver: 'toyfirst', inProcess: true });
     // The prompt ran on the host, in the member's own Claude home.
     const launched = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string });
     expect(launched).toEqual([expect.objectContaining({ home: path.join(os.homedir(), '.claude') })]);
@@ -251,7 +251,7 @@ Judge the review.
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const [review] = readRunState(runOf(ran)).steps;
     expect(review).toMatchObject({ id: 'review', status: 'succeeded' });
-    expect(runtimeRecord(runOf(ran), attemptOf(review))).toBeUndefined();
+    expect(runtimeRecord(runOf(ran), attemptOf(review))).toEqual({ runtime: 'tools', driver: 'toynotool', inProcess: true });
     expect(toyOpens()).toBe(0);
   });
 
@@ -844,7 +844,7 @@ steps:
     const runId = runOf(ran);
     const [review] = readRunState(runId).steps;
     expect(review, ran.stderr).toMatchObject({ status: 'succeeded' });
-    expect(runtimeRecord(runId, attemptOf(review))).toBeUndefined();
+    expect(runtimeRecord(runId, attemptOf(review))).toEqual({ runtime: 'tools', driver: 'toyinstance', inProcess: true });
     expect(toyOpens()).toBe(0);
   });
 
@@ -1218,7 +1218,7 @@ steps:
       const [build, review] = readRunState(runId).steps;
       // The command ran on local: the toy runs none, so it has no record of it.
       expect(build).toMatchObject({ id: 'build', status: 'succeeded', outputs: { built: true } });
-      expect(runtimeRecord(runId, attemptOf(build))).toBeUndefined();
+      expect(runtimeRecord(runId, attemptOf(build))).toEqual({ runtime: 'host', driver: 'agentd', inProcess: true });
       // The prompt went to the toy as a prompt, with teamai's result instruction; no tool was launched here.
       const [sent] = sends();
       expect(sends()).toHaveLength(1);
@@ -1532,7 +1532,7 @@ steps:
       const [build, review] = readRunState(runId).steps;
       // The host command slot ran the command: no step runtime has a record of it, and no tool was launched here.
       expect(build).toMatchObject({ id: 'build', status: 'succeeded', outputs: { built: true } });
-      expect(runtimeRecord(runId, attemptOf(build))).toBeUndefined();
+      expect(runtimeRecord(runId, attemptOf(build))).toEqual({ runtime: 'host', driver: 'agentonly', inProcess: true });
       expect(review).toMatchObject({ id: 'review', status: 'succeeded', outputs: { ok: true } });
       expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed' });
       expect(sends()).toEqual([expect.objectContaining({ sent: expect.objectContaining({ step: 'review' }) })]);
@@ -1553,7 +1553,7 @@ steps:
       const runId = runOf(ran);
       const [ask] = readRunState(runId).steps;
       expect(ask).toMatchObject({ id: 'ask', status: 'succeeded', outputs: { text: 'Unpinned dependencies.' } });
-      expect(runtimeRecord(runId, attemptOf(ask))).toBeUndefined();
+      expect(runtimeRecord(runId, attemptOf(ask))).toEqual({ runtime: 'host', driver: 'agentanswer', inProcess: true });
       expect(sends()).toEqual([]);
     });
 
@@ -1836,8 +1836,8 @@ steps:
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const runId = runOf(ran);
-    const ranOn = readRunState(runId).steps.map((step) => (runtimeRecord(runId, attemptOf(step))?.runtime as string | undefined) ?? 'local');
-    expect(ranOn.sort()).toEqual(['local', 'toy']);
+    const ranOn = readRunState(runId).steps.map((step) => (runtimeRecord(runId, attemptOf(step))?.runtime as string | undefined));
+    expect(ranOn.sort()).toEqual(['tools', 'toy']);
     const edges = fs.readFileSync(spans, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { edge: string });
     expect(edges.map((edge) => edge.edge)).toEqual(['start', 'start', 'end', 'end']);
   });
