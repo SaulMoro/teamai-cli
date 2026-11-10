@@ -112,14 +112,14 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
 const NONBLOCKING_WRITE = (process.platform === 'win32' ? fs.constants.O_WRONLY : fs.constants.O_WRONLY | fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
 
 /**
- * The open handle of `file` for writing, created when missing: at its end when `append`, else emptied. Anything but a
- * regular file there rejects with `NotRegularFileError`, and is left as it was.
+ * The open handle of `file` for writing, created when missing, with `mode` when given: at its end when `append`, else
+ * emptied. Anything but a regular file there rejects with `NotRegularFileError`, and is left as it was.
  */
-export async function openRegularFileForWrite(file: string, { append }: { append: boolean }): Promise<FileHandle> {
+export async function openRegularFileForWrite(file: string, { append, mode }: { append: boolean; mode?: number }): Promise<FileHandle> {
   let handle: FileHandle;
 
   try {
-    handle = await fs.promises.open(file, NONBLOCKING_WRITE | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC));
+    handle = await fs.promises.open(file, NONBLOCKING_WRITE | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
     if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, await fs.promises.stat(file), 'write');
@@ -144,6 +144,17 @@ export async function appendRegularFile(file: string, data: string | Uint8Array)
 
   try {
     await handle.appendFile(data);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Writes `data` as the whole of `file`, a regular file or none yet (then created with `mode`), as `openRegularFileForWrite` checks. */
+export async function writeRegularFile(file: string, data: string | Uint8Array, { mode }: { mode?: number } = {}): Promise<void> {
+  const handle = await openRegularFileForWrite(file, { append: false, ...(mode !== undefined && { mode }) });
+
+  try {
+    await handle.writeFile(data);
   } finally {
     await handle.close();
   }

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { appendRegularFile, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync } from './regular-file.js';
+import { appendRegularFile, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
@@ -102,6 +102,26 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     }
 
     expect(fs.readFileSync(file, 'utf8')).toBe('new\n');
+  });
+
+  it('writes a whole file in place of what it held, creating a missing one with the mode it is given', async () => {
+    const dir = scratch();
+    const kept = path.join(dir, 'conflicts.json');
+    fs.writeFileSync(kept, 'old and longer\n');
+    const created = path.join(dir, 'credentials.json');
+
+    await writeRegularFile(kept, '{}\n');
+    await writeRegularFile(created, Buffer.from('secret'), { mode: 0o600 });
+
+    expect(fs.readFileSync(kept, 'utf8')).toBe('{}\n');
+    expect(fs.readFileSync(created, 'utf8')).toBe('secret');
+    expect(fs.statSync(created).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a FIFO no one reads at once in a whole-file write too, as a plain write would wait for a reader', async () => {
+    const at = fifo();
+
+    expect(await settledSoon(at, () => writeRegularFile(at, '{}'))).toMatchObject({ rejected: { kind: 'a pipe' } });
   });
 
   it('refuses a FIFO no one reads at once, saying what is there, instead of waiting for a reader', async () => {
