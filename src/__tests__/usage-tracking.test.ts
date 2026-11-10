@@ -422,7 +422,7 @@ describe('usage file lock (#788)', () => {
   const event = (skill: string): UsageEvent => ({ skill, timestamp: '2026-01-01T00:00:00Z', tool: 'claude' });
   const skills = async () => (await readUsageEvents(userScope())).map((e) => e.skill);
   const writeLock = (pid: number) =>
-    fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }));
+    fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid, startedAt: new Date().toISOString(), owner: 'other' }));
 
   it('reclaims a lock whose owner is gone', async () => {
     await writeLock(spawnSync(process.execPath, ['-e', '']).pid ?? 0);
@@ -645,7 +645,7 @@ describe('usage files in a legacy in-workspace .teamai/ (#788)', () => {
 
   it('keeps an event recorded while the lock is held out of git status', async () => {
     await appendUsageEvent(event('a'), project());
-    await fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid: process.pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }));
+    await fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: 'other' }));
 
     await appendUsageEvent(event('b'), project());
 
@@ -660,7 +660,7 @@ describe('usage files in a legacy in-workspace .teamai/ (#788)', () => {
     spawnSync('mkfifo', [pipe]);
     // A read that waits on the FIFO ends only once another process opens it, from three seconds on.
     const releaser = spawn('sh', ['-c', 'sleep 3; while :; do exec 3<>"$1"; exec 3>&-; sleep 0.1; done', 'sh', pipe], { stdio: 'ignore' });
-    await fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid: process.pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }));
+    await fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: 'other' }));
     const start = Date.now();
 
     try {

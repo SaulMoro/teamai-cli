@@ -2,13 +2,14 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { appendRegularFile, copyRegularFile, copyRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { appendRegularFile, copyRegularFile, copyRegularTree, moveRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const reader of readers.splice(0)) reader.kill();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -165,7 +166,7 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
   });
 });
 
-describe.skipIf(process.platform === 'win32')('copying a folder a step may have planted something in', () => {
+describe('copying a folder a step may have planted something in', () => {
   it('copies a folder with each file\'s bytes and mode, keeps links as links, and leaves out what the filter refuses', async () => {
     const dir = scratch();
     const from = path.join(dir, 'skill');
@@ -183,7 +184,8 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     await copyRegularTree(from, to, { filter: (source) => path.basename(source) !== 'cache' });
 
     expect(fs.readFileSync(path.join(to, 'SKILL.md'), 'utf8')).toBe('# skill\n');
-    expect(fs.statSync(path.join(to, 'scripts', 'run.sh')).mode & 0o777).toBe(0o755);
+    // Windows keeps no POSIX mode to copy.
+    if (process.platform !== 'win32') expect(fs.statSync(path.join(to, 'scripts', 'run.sh')).mode & 0o777).toBe(0o755);
     expect(fs.readlinkSync(path.join(to, 'README.md'))).toBe('SKILL.md');
     expect(fs.readFileSync(path.join(dir, 'outside.md'), 'utf8')).toBe('outside\n');
     expect(fs.existsSync(path.join(to, 'scripts', 'cache'))).toBe(false);
@@ -198,7 +200,7 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     expect(fs.readFileSync(path.join(dir, 'x', 'y', 'a.md'), 'utf8')).toBe('a\n');
   });
 
-  it('refuses a FIFO inside the folder at once, instead of copying it or waiting on it', async () => {
+  it.skipIf(process.platform === 'win32')('refuses a FIFO inside the folder at once, instead of copying it or waiting on it', async () => {
     const dir = scratch();
     const from = path.join(dir, 'skill');
     fs.mkdirSync(from);
@@ -212,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     expect(settled).toMatchObject({ rejected: { kind: 'a pipe', message: `${at} is a pipe, not a regular file, so teamai does not read it` } });
   });
 
-  it('refuses a device, which a plain copy reads as a file', async () => {
+  it.skipIf(process.platform === 'win32')('refuses a device, which a plain copy reads as a file', async () => {
     const dir = scratch();
 
     await expect(copyRegularTree('/dev/null', path.join(dir, 'null'))).rejects.toMatchObject({ kind: 'a device' });
@@ -258,5 +260,61 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     await expect(copyRegularTree(path.join(dir, 'Docs'), path.join(dir, 'docs', 'sub'))).rejects.toThrow('inside');
     expect(fs.readdirSync(path.join(dir, 'Docs'))).toEqual(['a.md']);
     expect(fs.readFileSync(path.join(dir, 'Docs', 'a.md'), 'utf8')).toBe('a\n');
+  });
+});
+
+describe('moving a folder teamai staged', () => {
+  it('renames a folder into a parent it creates, and fails on one already at the destination, leaving both as they were', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    fs.mkdirSync(path.join(dir, 'taken'));
+
+    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside', 'queue'));
+
+    expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'queue', 'a.md'), 'utf8')).toBe('a\n');
+    await expect(moveRegularTree(path.join(dir, 'aside', 'queue'), path.join(dir, 'taken'))).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(fs.readdirSync(path.join(dir, 'taken'))).toEqual([]);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'queue', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it('copies through the regular-file copy across filesystems, then removes the source', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }));
+
+    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
+
+    expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it('retries a rename Windows refuses for a moment, as while a scanner holds a file, instead of failing at once', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }));
+
+    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
+
+    expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a FIFO across filesystems, leaving the source whole and nothing at the destination', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    const at = path.join(dir, 'queue', 'z.md');
+    execFileSync('mkfifo', [at]);
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }));
+
+    const settled = await settledSoon(at, () => moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside')));
+
+    expect(settled).toMatchObject({ rejected: { kind: 'a pipe' } });
+    expect(fs.readdirSync(path.join(dir, 'queue')).sort()).toEqual(['a.md', 'z.md']);
+    expect(fs.readdirSync(dir)).toEqual(['queue']);
   });
 });

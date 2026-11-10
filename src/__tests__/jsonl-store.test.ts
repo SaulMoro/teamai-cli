@@ -11,7 +11,7 @@ let dir: string;
 const file = () => path.join(dir, 'recall-log.jsonl');
 const lockPath = () => `${file()}.lock`;
 const holdLock = (pid = process.pid) =>
-  fse.outputFile(lockPath(), JSON.stringify({ pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }));
+  fse.outputFile(lockPath(), JSON.stringify({ pid, startedAt: new Date().toISOString(), owner: 'other' }));
 const sideRecords = async () => (await fs.promises.readdir(dir)).filter((n) => n.startsWith('recall-log.pending-'));
 const modeOf = async (p: string) => (await fs.promises.stat(p)).mode & 0o777;
 // Windows has no POSIX permission bits to assert on.

@@ -1100,7 +1100,7 @@ steps:
 
 ## 要求和限制
 
-步骤在 `requires` 中声明它需要什么。工作流文件中的 `defaults.requires` 作用于其中每个步骤。步骤自己的键会替换这些键，`env` 列表则会合并。工作流文件还可以设置 `setup`、`timeout` 和 `budget`，prompt 步骤可以设置 `max_turns`、`on_limit` 和 `permissions`。
+步骤在 `requires` 中声明它需要什么。工作流文件中的 `defaults.requires` 作用于其中每个步骤，也作用于它按名称运行的每个工作流，包括团队替换后的该工作流。步骤自己的键，以及下层工作流自己的 `defaults.requires`，会替换 `network` 和 `isolation`（除非 `strict` 设了下限），`env` 和 `labels` 列表会合并，`host: true` 只会添加：下层无法关闭它。工作流文件还可以设置 `setup`、`timeout` 和 `budget`，prompt 步骤可以设置 `max_turns`、`on_limit` 和 `permissions`。
 
 ```yaml
 schemaVersion: v1alpha1

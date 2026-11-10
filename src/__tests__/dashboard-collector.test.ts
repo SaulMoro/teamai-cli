@@ -2520,7 +2520,7 @@ describe('events file lock (#804)', () => {
     await ensureEventsDir();
     await fs.promises.writeFile(
       `${eventsPath()}.lock`,
-      JSON.stringify({ pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }),
+      JSON.stringify({ pid, startedAt: new Date().toISOString(), owner: 'other' }),
       'utf-8',
     );
   };

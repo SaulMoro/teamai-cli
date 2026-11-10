@@ -13,7 +13,7 @@ import { detectProjectConfig, readConfigFrom } from './config.js';
 import { getUserHome, expandHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
 import { acquireQueueLock, countQueued, pendingLearningsDir, queueOwner, sameQueueOwner, setAsideCheckoutQueue, withQueueLock, type QueueOwner } from './utils/pending-learnings.js';
-import { copyRegularTree } from '@teamai/shared/regular-file';
+import { copyRegularTree, moveRegularTree } from '@teamai/shared/regular-file';
 
 /**
  * P1-3 automatic migration (issue #374).
@@ -852,7 +852,7 @@ async function retireSupersededInstall(legacyDir: string, partitionDir: string, 
     await writeFile(path.join(backup, '.gitignore'), BACKUP_GITIGNORE);
   }
 
-  const move = (name: string) => fse.move(path.join(legacyDir, name), path.join(backup, name));
+  const move = (name: string) => moveRegularTree(path.join(legacyDir, name), path.join(backup, name));
 
   for (const name of present) if (name !== 'config.yaml') await move(name);
 

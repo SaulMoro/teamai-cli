@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { readRegularFile, readRegularFileSync, NotRegularFileError } from '@teamai/shared/regular-file';
+import { ownPidNamespace, processStartedAt, processStartTicks } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -455,6 +456,31 @@ interface LockPayload {
   pid: number;
   startedAt: string;
   owner: string;
+  /** On Linux, when the holder started, in clock ticks since boot (`processStartTicks`): tells it from a later process given its pid. */
+  startTicks?: number;
+  /** On Linux, the pid namespace `pid` and `startTicks` belong to (`ownPidNamespace`). */
+  pidNamespace?: string;
+}
+
+/** This process's `startTicks` and `pidNamespace`, read once: they never change. */
+let ownIdentity: Promise<{ startTicks?: number; pidNamespace?: string }> | undefined;
+
+async function readOwnIdentity(): Promise<{ startTicks?: number; pidNamespace?: string }> {
+  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(process.pid), ownPidNamespace()]);
+
+  return { ...(startTicks !== undefined && { startTicks }), ...(pidNamespace !== undefined && { pidNamespace }) };
+}
+
+/** What a lock, a reclaim sentinel or a claim holds: who wrote it, when, and on Linux when that process started, and where. */
+async function lockPayload(owner: string): Promise<string> {
+  return JSON.stringify({
+    pid: process.pid,
+    // By the process's own clock, which neither a faked Date nor a wall-clock step since it started moves, so it compares
+    // with when /proc or ps says the process started (isHolderGone).
+    startedAt: new Date(performance.timeOrigin + performance.now()).toISOString(),
+    owner,
+    ...await (ownIdentity ??= readOwnIdentity()),
+  } satisfies LockPayload);
 }
 
 /**
@@ -463,16 +489,25 @@ interface LockPayload {
  * on-disk lock from a previous install is still evaluated for staleness rather
  * than treated as un-owned garbage.
  */
-/** Who holds a lock: its process, and the owner token of a lock written in the JSON payload format. */
+/** Who holds a lock: its process, and the owner token and time of a lock written in the JSON payload format. */
 interface LockHolder {
   pid: number;
   owner?: string;
+  startedAt?: string;
+  startTicks?: number;
+  pidNamespace?: string;
 }
 
 /** A lock file's JSON: the legacy bare integer PID, or the payload with a numeric pid. */
 const LockContentSchema = z.union([
   z.number().refine(Number.isInteger).transform((pid): LockHolder => ({ pid })),
-  z.object({ pid: z.number(), owner: z.string().optional().catch(undefined) }).transform(({ pid, owner }): LockHolder => ({ pid, owner })),
+  z.object({
+    pid: z.number(),
+    owner: z.string().optional().catch(undefined),
+    startedAt: z.string().optional().catch(undefined),
+    startTicks: z.number().int().optional().catch(undefined),
+    pidNamespace: z.string().optional().catch(undefined),
+  }).transform(({ pid, owner, startedAt, startTicks, pidNamespace }): LockHolder => ({ pid, owner, startedAt, startTicks, pidNamespace })),
 ]);
 
 function parseLockContent(content: string): LockHolder | null {
@@ -501,7 +536,9 @@ function parseLockContent(content: string): LockHolder | null {
  * cannot name a dead owner is held: a file denied by permissions (EACCES, e.g.
  * another user's 0600 lock), an empty or partly written one (its creator may
  * still be writing it: the O_EXCL fallback and older teamai open the file
- * before writing), and a pid that exists but belongs to another user (EPERM).
+ * before writing), and a pid that exists, of this user or another (EPERM),
+ * whose process is the one that wrote the lock. A live pid whose process is a
+ * later one given that pid (isHolderGone) is not its owner, so that lock is stale.
  * A lock that names no owner, or is permission-denied, stays until removed by hand
  * if a crash left it, so it is named in a warning.
  */
@@ -536,14 +573,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     return { state: 'live' };
   }
 
-  try {
-    process.kill(parsed.pid, 0);
-
-    return { state: 'live' }; // process alive → lock genuinely held
-  } catch (err) {
-    // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
-    if (errnoCode(err) === 'EPERM') return { state: 'live' };
-  }
+  if (!(await isHolderGone(parsed))) return { state: 'live' };
 
   // The owner may have released the lock and exited after the read, and
   // another process created a fresh one: only the dead owner's own file is stale.
@@ -553,6 +583,39 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     if (errnoCode(err) === 'ENOENT') return { state: 'missing' };
     throw err;
   }
+}
+
+/**
+ * Whether the process `holder` names is gone. A live process with its pid is the holder only if it is the process that
+ * wrote the lock, not a later one given the pid, as a container hands pids out again: by the start the lock records on
+ * Linux, else by a start after the lock was written. Without either to compare, or when the lock comes from another
+ * pid namespace, a live pid holds it.
+ */
+async function isHolderGone(holder: LockHolder): Promise<boolean> {
+  try {
+    process.kill(holder.pid, 0);
+  } catch (err) {
+    // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
+    if (errnoCode(err) !== 'EPERM') return true;
+  }
+
+  // Written in another pid namespace, as by a container sharing this home: the live process with that pid here is not
+  // the one the lock names, and its start says nothing about the holder.
+  if (holder.pidNamespace !== undefined && holder.pidNamespace !== (await (ownIdentity ??= readOwnIdentity())).pidNamespace) return false;
+
+  if (holder.startTicks !== undefined) {
+    const ticks = await processStartTicks(holder.pid);
+
+    if (ticks !== undefined) return ticks !== holder.startTicks;
+  }
+
+  const written = Date.parse(holder.startedAt ?? '');
+
+  if (Number.isNaN(written)) return false;
+  const started = await processStartedAt(holder.pid);
+
+  // ps prints the start to the second, rounded down, so a start it prints past the lock's time is past it.
+  return started !== undefined && started > written;
 }
 
 /**
@@ -644,11 +707,7 @@ async function removeIfOwner(target: string, owner: string): Promise<void> {
  * stale-lock recovery forever.
  */
 async function acquireReclaimSentinel(sentinel: string, owner: string): Promise<boolean> {
-  const payload = JSON.stringify({
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    owner,
-  } satisfies LockPayload);
+  const payload = await lockPayload(owner);
 
   if (await exclusiveCreate(sentinel, payload)) return true;
 
@@ -679,11 +738,7 @@ async function removeDeadFile(target: string, owner: string): Promise<boolean> {
   const dead = verdict.holder.owner;
   const claim = `${target}.steal-${dead}`;
 
-  const payload = JSON.stringify({
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    owner,
-  } satisfies LockPayload);
+  const payload = await lockPayload(owner);
 
   const claimed = (await exclusiveCreate(claim, payload))
     || ((await removeDeadFile(claim, owner)) && (await exclusiveCreate(claim, payload)));
@@ -742,12 +797,7 @@ export async function acquireLock(
   try {
     if (options.dryRun) return (await lockState(resolved)) !== 'live';
     const owner = randomUUID();
-
-    const payload = JSON.stringify({
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
-      owner,
-    } satisfies LockPayload);
+    const payload = await lockPayload(owner);
 
     // From the first real lock on, a best-effort sweep at process exit removes
     // whatever this process still holds (#1027). Dry runs never register it.
@@ -943,19 +993,12 @@ async function walkLockCandidates(roots: string[]): Promise<string[]> {
 }
 
 /** True when `content` is a lock payload whose owning process is provably gone. */
-function isDeadPidLock(content: string): boolean {
+async function isDeadPidLock(content: string): Promise<boolean> {
   const parsed = parseLockContent(content);
 
   if (!parsed) return false; // names no owner: never provably stale (#760)
 
-  try {
-    process.kill(parsed.pid, 0);
-
-    return false;
-  } catch (err) {
-    // EPERM: the pid exists, owned by another user. Anything else: gone.
-    return errnoCode(err) !== 'EPERM';
-  }
+  return isHolderGone(parsed);
 }
 
 /**
@@ -969,7 +1012,7 @@ export async function listZombieLocks(roots: string[]): Promise<string[]> {
 
   for (const p of await walkLockCandidates(roots)) {
     try {
-      if (isDeadPidLock(await readRegularFile(p, 'utf-8'))) zombies.push(p);
+      if (await isDeadPidLock(await readRegularFile(p, 'utf-8'))) zombies.push(p);
     } catch {
       // unreadable: leave it alone
     }

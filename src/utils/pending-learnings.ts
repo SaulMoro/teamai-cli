@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import fse from 'fs-extra';
 import { parseYaml } from '@teamai/shared/yaml';
 import { ensureDir, listFilesRecursive, readFileSafe } from './fs.js';
 import { expandHome } from '@teamai/shared/home';
@@ -9,7 +8,7 @@ import { normalizeRepoUrlForCompare, redactGitCredentials, remotesMatch } from '
 import { log } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome, getTeamaiHomeDir, isSelfMode, LocalConfigSchema, type LocalConfig } from '../types.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { moveRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Durable queue of learnings a member has written but that are not published
@@ -403,7 +402,7 @@ async function setAside(queue: string, next: LocalConfig, from: PreviousOwner): 
 
   for (let n = 1; fs.existsSync(aside); n++) aside = `${live}.${suffix}.${n}`;
   // A checkout's queue may sit on another filesystem than the data home.
-  await fse.move(queue, aside);
+  await moveRegularTree(queue, aside);
 
   const settle = `Nothing was deleted. If they belong here, move the files into ${live}; ` +
     'otherwise contribute them again from an install of that repository.';

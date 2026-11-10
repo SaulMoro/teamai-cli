@@ -1106,7 +1106,7 @@ Pass the whole list, as `explain` does in `fan-build`, when the prompt needs eve
 
 ## Requirements and limits
 
-A step says what it needs in `requires`. `defaults.requires` in a workflow file applies to each step in it. A step's own keys replace those, and `env` lists add up. The workflow file can also set `setup`, `timeout`, and `budget`, and a prompt step can set `max_turns`, `on_limit` and `permissions`.
+A step says what it needs in `requires`. `defaults.requires` in a workflow file applies to each step in it, and to each workflow it runs by name, a team's replacement of that workflow included. A step's own keys, and a workflow's own `defaults.requires` below that, replace `network` and `isolation` (unless `strict` set a floor), `env` and `labels` lists add up, and `host: true` only adds: nothing below turns it off. The workflow file can also set `setup`, `timeout`, and `budget`, and a prompt step can set `max_turns`, `on_limit` and `permissions`.
 
 ```yaml
 schemaVersion: v1alpha1
