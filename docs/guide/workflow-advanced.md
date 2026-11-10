@@ -1541,7 +1541,7 @@ teamai looks for `<name>.yaml` in this order and uses the first it finds:
 | The user scope's team repo | Only when you start in a project. |
 | Definitions teamai ships | Each one is named `teamai-<name>`. |
 
-`--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `local`, `none`, `skill` and `fleet` are not definition names: a file `drivers/none.yaml` is refused with `driver_invalid`.
+`--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `--driver local`, and a start with no driver set, runs `teamai-local`: yours in `~/.teamai/drivers/`, else the team's, else teamai's. A run that takes yours or the team's says which file it took. `local`, `none`, `skill` and `fleet` are not definition names: a file `drivers/none.yaml` is refused with `driver_invalid`.
 
 A definition lists one runtime or more. teamai offers each step to them in the order listed, and the first that can take it runs it:
 
@@ -1556,25 +1556,25 @@ runtimes:
       provider: docker
       image: ghcr.io/acme/agent:1
       max_parallel: 2
-  - use: local            # takes the rest, such as an interactive step or a required approval
+  - use: tools            # takes the rest, such as an interactive step or a required approval
 ```
 
 A step that no single runtime can take fails `requirement_unmet`, naming what each one lacks:
 
 ```text
-Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime tools lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
 ```
 
 A step that requires strict isolation no runtime of the definition gives is refused at `workflow start`, before the run exists. A step every runtime holds back for a reason of this machine, such as a network your `workflows.allow` refuses, stays pending. An approval or choice waiting for you is still asked meanwhile. Once nothing else runs or waits for an answer, the run stops `busy` with that reason, and the dashboard's run details say which runtime held it back and why.
 
-Every definition keeps a slot on this machine for the steps that stay here: its `local` entry, or, when it lists none, a `host` entry teamai adds last, so no runtime of yours may be named `host`. `host` runs commands with teamai, git and the shell, needs no agent CLI, and never takes a prompt step. The slot takes:
+Every definition keeps a `host` slot on this machine for the steps that stay here, so no runtime of yours may be named `host`. It runs commands with teamai, git and the shell, and needs no agent CLI. It takes the place of the definition's `tools` entry in the order, else it comes last. It launches no prompt step's tool: `tools` does. The slot takes:
 
 - command and setup steps, when no runtime of the definition runs commands (`"exec": false`);
 - the command steps of every workflow teamai ships, such as `teamai-score` and `teamai-share-session`, which plan, check and write labels on this machine, and of a team file that replaces one under its name;
 - a step with `deliver: publish`, which pushes to a data branch from here;
 - an `answer:` step, which your own AI tool answers on this machine, so it needs that tool installed here. `workflow start` refuses it with `requirement_unmet` under strict `defaults.requires` this machine does not meet.
 
-No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to `local`. So a definition of external runtimes alone runs and judges every workflow with no `answer:` step on a machine with no agent CLI:
+No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to the host. So a definition of external runtimes alone runs and judges every workflow with no `answer:` step on a machine with no agent CLI:
 
 ```yaml
 # drivers/sandbox-only.yaml
@@ -1586,9 +1586,9 @@ runtimes:
     options: { provider: sbx }
 ```
 
-A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else, when the definition lists `local`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine. Each step's state in the run records the runtime it ran on as `runtime`: the `use` of its entry, or `host`.
+A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else, when the definition lists `tools`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine. Each step's state in the run records the runtime it ran on as `runtime`: the `use` of its entry, or, for a step in teamai's process, `host` for a command or an answer and `tools` for a prompt.
 
-`use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
+`use: tools` runs prompt steps on this machine's tools, the way `--driver local` does. `use: local` is its old name. Any other name is an external program, found in this order:
 
 ```text
 ~/.teamai/runtimes/<name>/runtime          yours
@@ -1600,10 +1600,11 @@ teamai ships these definitions:
 
 | Definition | Runtimes |
 | --- | --- |
-| `teamai-claude`, `teamai-codex`, `teamai-opencode` | `local`, with prompt steps on that tool |
-| `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`), then `local` |
-| `teamai-paseo` | `paseo` (`max_parallel: 4`, at the address your Paseo config names), then `local` |
-| `teamai-sandbox` | `sandbox` (`provider: sbx`, `max_parallel: 4`), then `local` |
+| `teamai-local` | `tools`, with no tool of its own |
+| `teamai-claude`, `teamai-codex`, `teamai-opencode` | `tools`, with prompt steps on that tool |
+| `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`) |
+| `teamai-paseo` | `paseo` (`max_parallel: 4`, at the address your Paseo config names) |
+| `teamai-sandbox` | `sandbox` (`provider: sbx`, `max_parallel: 4`), then `tools` |
 
 ### Runtime options
 
@@ -1882,10 +1883,10 @@ A tool you cannot run now, such as one that is not signed in, stays out of `can.
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
 ```
 
-When a later runtime of the definition can run the tool, such as `local`, the step runs there instead, and the run says so once, with your reason:
+When a later runtime of the definition can run the tool, such as `tools`, the step runs there instead, and the run says so once, with your reason:
 
 ```text
-⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime local: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
+⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime tools: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
 ```
 
 A runtime that drives an app with a default tool of its own reports it as `can.default_tool`, one of its `can.tools`. A prompt step that names no tool runs on the first of: the step's `tool:`, `--tools <agent>=`, `workflows.tools.<agent>`, `--tools default=`, the definition's `tool`, the runtime's `can.default_tool`, then your own default: `TEAMAI_AI_TOOL`, `workflows.tools.default`, `ai.tool`. So `--driver t3` with no tool named runs as your T3 does, and `ai.tool` still picks the tool on `local`. With none of them set, the step fails `tool_unconfigured`; teamai never falls back to the first tool it finds installed:

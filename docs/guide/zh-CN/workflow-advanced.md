@@ -1535,7 +1535,7 @@ teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
 | 用户作用域的团队仓库 | 只在项目里启动时查找。 |
 | teamai 自带的定义 | 每个都命名为 `teamai-<name>`。 |
 
-没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`local`、`none`、`skill` 和 `fleet` 不能用作定义名：`drivers/none.yaml` 这样的文件会以 `driver_invalid` 被拒绝。
+没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`--driver local`，以及没有设置驱动的启动，运行 `teamai-local`：先找你在 `~/.teamai/drivers/` 中的，再找团队的，最后是 teamai 自带的。运行用了你的或团队的定义时，会说明用的是哪个文件。`local`、`none`、`skill` 和 `fleet` 不能用作定义名：`drivers/none.yaml` 这样的文件会以 `driver_invalid` 被拒绝。
 
 一个定义列出一个或多个运行时。teamai 按列出的顺序把每个步骤交给它们，第一个能接下的运行时运行它：
 
@@ -1550,25 +1550,25 @@ runtimes:
       provider: docker
       image: ghcr.io/acme/agent:1
       max_parallel: 2
-  - use: local            # 接下其余的，例如交互步骤或必须回答的审批
+  - use: tools            # 接下其余的，例如交互步骤或必须回答的审批
 ```
 
 没有任何单个运行时能接下的步骤会失败为 `requirement_unmet`，消息列出每个运行时缺什么：
 
 ```text
-Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime tools lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
 ```
 
 步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。这期间，等你回答的审批或选择仍会照常提问。没有其他步骤在运行、也没有等待回答的问题时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
 
-每个定义都在本机留一个位置，给留在这里的步骤：它的 `local` 条目；没有列出时，teamai 在最后加一个 `host` 条目，所以你的运行时不能叫 `host`。`host` 用 teamai、git 和 shell 运行命令，不需要智能体 CLI，也从不接提示步骤。这个位置接下：
+每个定义都在本机留一个 `host` 位置，给留在这里的步骤，所以你的运行时不能叫 `host`。它用 teamai、git 和 shell 运行命令，不需要智能体 CLI。定义列出 `tools` 时，它占 `tools` 条目在顺序中的位置，否则排在最后。它不启动提示步骤的工具：那是 `tools` 的事。这个位置接下：
 
 - 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
 - teamai 自带的每个工作流（如 `teamai-score` 和 `teamai-share-session`）的命令步骤，它们在本机规划、检查和写入标签；以同名团队文件替换某个自带工作流时，其命令步骤同样如此；
 - 带 `deliver: publish` 的步骤，它从这里推送到数据分支；
 - `answer:` 步骤，由你自己的 AI 工具在本机回答，所以本机需要装有该工具。若 `defaults.requires` 是本机达不到的严格要求，`workflow start` 会以 `requirement_unmet` 拒绝。
 
-其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 `local`。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个没有 `answer:` 步骤的工作流：
+其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 host。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个没有 `answer:` 步骤的工作流：
 
 ```yaml
 # drivers/sandbox-only.yaml
@@ -1580,9 +1580,9 @@ runtimes:
     options: { provider: sbx }
 ```
 
-打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `local` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`，或 `host`。
+打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `tools` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`；在 teamai 进程中运行的步骤，命令和回答记为 `host`，提示记为 `tools`。
 
-`use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
+`use: tools` 按 `--driver local` 的方式，在本机的工具上运行提示步骤。`use: local` 是它的旧名字。其他名字都是外部程序，按下面的顺序查找：
 
 ```text
 ~/.teamai/runtimes/<name>/runtime          你自己的
@@ -1594,10 +1594,11 @@ teamai 自带这些定义：
 
 | 定义 | 运行时 |
 | --- | --- |
-| `teamai-claude`、`teamai-codex`、`teamai-opencode` | `local`，提示步骤用对应的工具 |
-| `teamai-t3` | `t3`（`environment: local`、`max_parallel: 4`），然后 `local` |
-| `teamai-paseo` | `paseo`（`max_parallel: 4`，连接你的 Paseo 配置指定的地址），然后 `local` |
-| `teamai-sandbox` | `sandbox`（`provider: sbx`、`max_parallel: 4`），然后 `local` |
+| `teamai-local` | `tools`，自己不指定工具 |
+| `teamai-claude`、`teamai-codex`、`teamai-opencode` | `tools`，提示步骤用对应的工具 |
+| `teamai-t3` | `t3`（`environment: local`、`max_parallel: 4`） |
+| `teamai-paseo` | `paseo`（`max_parallel: 4`，连接你的 Paseo 配置指定的地址） |
+| `teamai-sandbox` | `sandbox`（`provider: sbx`、`max_parallel: 4`），然后 `tools` |
 
 ### 运行时选项
 
@@ -1876,10 +1877,10 @@ teamai 严格读取每个回复，包括 `init` 的回复：它不认识的键�
 ✖ Step "review" failed with tool_unavailable: Step "review" runs on claude, which the driver of this run cannot launch here: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login. Or remove tool from the step.
 ```
 
-定义中后面的运行时（例如 `local`）能运行这个工具时，步骤改在那里运行，运行会提示一次，并带上你的原因：
+定义中后面的运行时（例如 `tools`）能运行这个工具时，步骤改在那里运行，运行会提示一次，并带上你的原因：
 
 ```text
-⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime local: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
+⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime tools: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
 ```
 
 驱动某个应用、而该应用有自己默认工具的运行时，用 `can.default_tool` 报告它，取值是它的 `can.tools` 之一。没有指定工具的提示词步骤依次取第一个已设置的：步骤的 `tool:`、`--tools <agent>=`、`workflows.tools.<agent>`、`--tools default=`、定义的 `tool`、运行时的 `can.default_tool`，然后是你自己的默认值：`TEAMAI_AI_TOOL`、`workflows.tools.default`、`ai.tool`。因此不指定工具的 `--driver t3` 会像你的 T3 一样运行，而 `local` 上仍由 `ai.tool` 选择工具。这些都没有设置时，步骤以 `tool_unconfigured` 失败；teamai 从不退回到它找到的第一个已安装工具：

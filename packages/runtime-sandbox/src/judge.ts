@@ -87,7 +87,7 @@ const CodexLine = z.discriminatedUnion('type', [
 ]);
 
 /** The tools a judge runs on, by executable. */
-// oxlint-disable-next-line teamai/tool-facts -- the launch of each tool inside a judge container, which the container confines rather than the tool's own confined profile (src/tool-launch/confined.ts)
+// oxlint-disable-next-line teamai/tool-facts -- the launch of each tool inside a judge container, which the container confines rather than the tool's own confined profile (src/workflow/confined-launch.ts)
 const JUDGE_TOOLS = {
   claude: {
     access: 'read',
