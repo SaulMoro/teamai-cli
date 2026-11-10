@@ -17,7 +17,7 @@ import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
-import { attemptToolHome, readAttemptRuntime, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
+import { attemptToolHome, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/definitions.js';
 import { cancelRun } from '../workflow/run-controls.js';
@@ -1307,6 +1307,37 @@ steps:
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'build', status: 'succeeded', runtime: 'host' }] });
   });
+});
+
+describe('the record of an attempt in teamai\'s process', () => {
+  it('names what ran, tools for a prompt and host for a command, on a definition that writes local', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Build, then review the project.
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+  - id: review
+    needs: [build]
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    const claude = claudeBeside(workspace, { answer: '{"ok":true}' });
+    fs.mkdirSync(personalDir('drivers'), { recursive: true });
+    onTestFinished(() => fs.rmSync(personalDir('drivers'), { recursive: true, force: true }));
+    fs.writeFileSync(path.join(personalDir('drivers'), 'mine.yaml'), 'schemaVersion: v1alpha1\nname: mine\nruntimes:\n  - use: local\n');
+    const opened = await openDriver(config, 'mine', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
+    if (!opened.ok) throw new Error(opened.failure.message);
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths, runtimes: { driver: 'mine', asked: 'mine', runtimes: opened.opened.runtimes } }))
+      .toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(run);
+    const placements = await Promise.all(run.steps.map(async (step) => [step.id, await readAttemptPlacement(config, RunIdSchema.parse(runId), AttemptIdSchema.parse(step.status === 'succeeded' ? step.attempt : undefined))]));
+    expect(placements).toEqual([['build', { kind: 'in_process', runtime: 'host' }], ['review', { kind: 'in_process', runtime: 'tools' }]]);
+  }, 30_000);
 });
 
 describe('a fleet wake option that names an in-process runtime', () => {

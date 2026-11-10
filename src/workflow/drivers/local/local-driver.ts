@@ -754,7 +754,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (slot.kind === 'external') return;
     const attempt = AttemptIdSchema.safeParse(lease.attempt);
 
-    if (attempt.success) await recordInProcessAttempt(config, runId, attempt.data, { runtime: slot.use, driver: defined.driver });
+    // Named for what runs, as the step's record is: a prompt on tools, a command or an answer on the host.
+    const runs = lease.prompt !== undefined && !lease.answer ? 'tools' : 'host';
+
+    if (attempt.success) await recordInProcessAttempt(config, runId, attempt.data, { runtime: runs, driver: defined.driver });
     const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
     const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
 
@@ -821,7 +824,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           break;
         }
         case 'in_process':
-          slot = slots.find((candidate) => candidate.kind !== 'external' && candidate.use === placement.runtime) ?? slots.find((candidate) => candidate.kind !== 'external') ?? slots[0];
+          // One slot runs in teamai's process, the host's or the definition's tools, whichever the record names.
+          slot = slots.find((candidate) => candidate.kind !== 'external') ?? slots[0];
           break;
         case 'unrecorded':
           slot = slots[0];
