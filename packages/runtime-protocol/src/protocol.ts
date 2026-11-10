@@ -161,8 +161,8 @@ export const RuntimeOptionsSchema = z.record(z.string(), z.json());
 export type RuntimeOptions = z.infer<typeof RuntimeOptionsSchema>;
 
 /**
- * What a runtime may touch for one attempt: the worktree read-write at its host path, the git paths read-only, the
- * attempt's result directory read-write, the run's scratch directory read-write, which `RUN_DIR_ENV` names in what
+ * What a runtime may touch for one attempt: the worktree read-write at its host path, the git paths and the workflow's
+ * folder read-only, the attempt's result directory read-write, the run's scratch directory read-write, which `RUN_DIR_ENV` names in what
  * runs there, and the attempt's tool home under the variable its tool reads.
  */
 export const PlaceViewSchema = z.object({

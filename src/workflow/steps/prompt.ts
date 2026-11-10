@@ -505,14 +505,14 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     const throughHome = onRuntime.isThrough !== true ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
     const isThroughOuter = onRuntime.isThrough === true;
     launcher = runtimePrompter(onRuntime.run, {
-      view: await placeView(config, lock.run, lease.attempt, cwd, throughHome ?? toolHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
+      view: await placeView(config, lock.run, lease, cwd, throughHome ?? toolHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
       credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter, ...(conversation && { continues: { handle: conversation.handle, op: conversation.op } }),
       ...(toolHome && { toolHome: { tool: toolHome.tool, dir: toolHome.dir } }),
     });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
-    const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
+    const view = await placeView(config, lock.run, lease, cwd, toolHome);
     const start = runtimeLauncher(onRuntime.run, { view, tool: launched, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp });
     // The runtime finds the command where it runs it.
     launcher = stepLauncher(toolsLaunchDeps(), { start, resolveTool: (command) => command, resolveInstanceCommand: (command) => command });
@@ -639,7 +639,7 @@ async function promptPickedThere({ config, lock, driver, lease, onRuntime, signa
   const failed = (failure: WorkflowFailure, tool?: string): ReportInput => ({ attempt: lease.attempt, revision: lease.revision, driver, ...(tool !== undefined && { tool }), ...failureReport(failure) });
   const cwd = lease.cwd ?? driver.workspace;
   const result = attemptResultPath(config, lock.run, lease.attempt);
-  const opened = await run.open(await placeView(config, lock.run, lease.attempt, cwd));
+  const opened = await run.open(await placeView(config, lock.run, lease, cwd));
 
   if (!opened.ok) return failed(opened.failure);
   const unready = await runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env: onRuntime.teamEnv, signal, on: runtimeSetup(run) });

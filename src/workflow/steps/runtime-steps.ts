@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { RunMode } from '../../launch-context.js';
+import { WORKFLOW_DIR_ENV, type RunMode } from '../../launch-context.js';
 import { shellArgv, STOPPED_EXIT_CODE, type GroupedCommandExit } from '../shell-command.js';
 import { attemptEnv } from '../attempt-marker.js';
 import type { LeaseWire } from '../lease-wire.js';
@@ -10,7 +10,7 @@ import { withRetry } from '../runtimes/retry-command.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { AttemptResult } from '../attempt-result.js';
-import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../store.js';
+import { attemptResultPath, runScratchDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
 import type { LocalConfig } from '../../types.js';
@@ -29,15 +29,18 @@ import type { StepLauncher, StepRun, StepRunResult } from '@teamai/runtime-tools
 const STDERR_KEPT = 64 * 1024;
 
 /**
- * What attempt `attempt` gives its runtime: the worktree `cwd` read-write at its host path, its git paths read-only
- * (the common git directory, the worktree's admin directory, which holds `config.worktree`, and the `.git` pointer),
- * the result directory read-write, and the tool home under the variable its tool reads.
+ * What the attempt of `lease` gives its runtime: the worktree `cwd` read-write at its host path, its git paths read-only
+ * (the common git directory, the worktree's admin directory, which holds `config.worktree`, and the `.git` pointer), the
+ * workflow folder its env names read-only, the result directory read-write, and the tool home under the variable its
+ * tool reads.
  */
-export async function placeView(config: LocalConfig, run: RunId, attempt: AttemptId, cwd: string, toolHome?: { variable: string; dir: string }): Promise<PlaceView> {
+export async function placeView(config: LocalConfig, run: RunId, lease: Pick<LeaseWire, 'attempt' | 'env'>, cwd: string, toolHome?: { variable: string; dir: string }): Promise<PlaceView> {
+  const { attempt } = lease;
+  const folder = lease.env?.[WORKFLOW_DIR_ENV];
   const listed = await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir']);
   const gitDirs = listed.code === 0 ? listed.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '') : [];
   const pointer = path.join(cwd, '.git');
-  const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => []))])];
+  const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => [])), ...folder === undefined ? [] : [path.resolve(folder)]])];
   const result = path.dirname(attemptResultPath(config, run, attempt));
   const runDir = runScratchDir(config, run);
   await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);

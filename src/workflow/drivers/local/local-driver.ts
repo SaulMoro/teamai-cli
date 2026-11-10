@@ -1395,7 +1395,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
                 ?? refuseDirtyAdoptedCommand({ config, run: runId, attempt: lease.attempt });
 
               return runtimeCommand({
-                run: stepRun, command, kind: lease.workflow ? 'workflow' : 'command', view: () => placeView(config, runId, lease.attempt, lease.cwd ?? root), setUp,
+                run: stepRun, command, kind: lease.workflow ? 'workflow' : 'command', view: () => placeView(config, runId, lease, lease.cwd ?? root), setUp,
                 ...(lease.workflow && { ask: askGate }),
                 ...runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: runId, mode }),
               });

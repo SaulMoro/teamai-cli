@@ -12,7 +12,9 @@ import { RESOURCE_LAYOUTS, Resources } from '../resources/resolver.js';
 import { getDataHome } from '../types.js';
 import { log } from '../utils/logger.js';
 import { folderOf, loadCachedWorkflow, namespaceConflictOf } from '../workflow/cache.js';
-import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
+import { _setDriverPollMs, runLocalDriver, type DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
+import { hostStepRuntime } from '../workflow/runtimes/host.js';
+import type { PlaceView } from '@teamai/runtime-protocol';
 import { startRun } from '../workflow/engine.js';
 import { WorkflowFolder } from '../workflow/folder.js';
 import { claimRun, publishRun } from '../workflow/handoff.js';
@@ -301,12 +303,12 @@ async function runScope(files: Record<string, string>): Promise<{ config: LocalC
 }
 
 /** Starts `name` and drives it with the local driver to its end, returning each step's outputs by id. */
-async function runToEnd(config: LocalConfig, workspace: string, name: string): Promise<Record<string, unknown>> {
+async function runToEnd(config: LocalConfig, workspace: string, name: string, runtimes?: DriverRuntimes): Promise<Record<string, unknown>> {
   const started = await startRun(config, name, {}, { secrets: await knownSecrets(config) });
 
   if ('error' in started) throw new Error(started.error.message);
   const runId = String(started.data.run);
-  expect(await runLocalDriver(config, runId, workspace, {})).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  expect(await runLocalDriver(config, runId, workspace, { ...(runtimes && { runtimes }) })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   const run = await readRun(config, runId);
 
   if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
@@ -325,6 +327,27 @@ describe('running a workflow folder', () => {
     const outputs = await runToEnd(config, workspace, 'release');
 
     expect(outputs.plan).toEqual({ dir: path.join(getDataHome(config), 'workflows', 'folders', cached?.sourceHash ?? ''), text: 'version 1.2.0\n' });
+  });
+
+  // A runtime that runs the step elsewhere, such as a sandbox, makes only what the place names reachable there.
+  it('names the folder among the read-only paths of a step runtime\'s place, so the step reads it where it runs', async () => {
+    const { config, workspace } = await runScope({
+      'workflows/release/WORKFLOW.yaml': `schemaVersion: v1alpha1\nname: release\ndescription: Release.\nsteps:\n  - id: plan\n    command: ${printsFolder('plan.txt')}\n    output: { dir: string, text: string }\n`,
+      'workflows/release/plan.txt': 'version 1.2.0\n',
+    });
+    const host = hostStepRuntime();
+    const views: PlaceView[] = [];
+    const runtime: typeof host = { ...host, open: (request, events) => {
+      if (request.view) views.push(request.view);
+
+      return host.open(request, events);
+    } };
+    const runtimes: DriverRuntimes = { driver: 'box', asked: 'box', runtimes: [{ kind: 'external', use: 'box', runtime, can: {}, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] };
+
+    const outputs = await runToEnd(config, workspace, 'release', runtimes);
+
+    expect(outputs.plan).toMatchObject({ text: 'version 1.2.0\n' });
+    expect(views.map((view) => view.readonly)).toEqual([expect.arrayContaining([path.join(getDataHome(config), 'workflows', 'folders', (await loadCachedWorkflow(config, 'release'))?.sourceHash ?? '')])]);
   });
 
   it('gives each step of a nested workflow the folder of the file that defines it, and none to a single file', async () => {
