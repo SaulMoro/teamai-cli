@@ -828,6 +828,89 @@ describe('the fleet', () => {
     expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
   }, 180_000);
 
+  /**
+   * Holds `member`'s teamai-reports lock, as `workflow cancel` holds it while it publishes the run, in a process that
+   * takes it once no other write holds it and gives it back after `ms`. Answers once the lock is held, with its
+   * release.
+   */
+  async function holdReportsLock(member: string, ms: number): Promise<{ released: Promise<RunResult> }> {
+    // Beside the teamai-reports checkout, in the data home of the member's checkout.
+    const lock = JSON.stringify(path.join(dataHomeOf(member), '.reports-lock'));
+    const script = `const fs = require('fs');
+const take = () => { try { fs.writeFileSync(${lock}, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: require('crypto').randomUUID() }), { flag: 'wx' }); return true; } catch { return false; } };
+const wait = () => { if (!take()) return setTimeout(wait, 20); console.log('held'); setTimeout(() => fs.rmSync(${lock}), ${ms}); };
+wait();`;
+    let isHeld = false;
+    const holder = new Promise<RunResult>((resolve) => {
+      const child = spawn(process.execPath, ['-e', script], { cwd: homeOf(member), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); isHeld = stdout.includes('held'); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr, envelope: () => ({}) }));
+    });
+    expect(await until(() => isHeld, 10_000), 'the test could not take the teamai-reports lock').toBe(true);
+
+    // Wrapped: returned bare, the promise would be adopted, and the caller would wait for the release.
+    return { released: holder };
+  }
+
+  it('writes the cancel of a live owner once the publish holding its teamai-reports lets it go, and the member stops', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; });
+    await waitOn(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000, () => bobPid, taking);
+
+    const held = await holdReportsLock('alice', 3_000);
+    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+    expect(cancel.code, said(cancel)).toBe(0);
+    expect((await held.released).code).toBe(0);
+
+    const answered = await taking;
+    expect(answered.envelope(), said(answered)).toMatchObject({ data: { cancelled: { run, step: 'long' } } });
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
+    const ended = await started;
+    expect(ended.envelope(), said(ended)).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
+  }, 180_000);
+
+  it('ends a live owner\'s cancel cancel_failed when the publish holds its teamai-reports past the deadline, and a second workflow cancel stops the member', async () => {
+    let alicePid = 0;
+    const started = teamai('alice', ['workflow', 'start', 'slow', '--driver', 'build-fleet'], (pid) => { alicePid = pid; }, 150_000);
+    const before = new Set(offeredRuns());
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    let bobPid = 0;
+    const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; }, 200_000);
+    await waitOn(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000, () => bobPid, taking);
+
+    const held = await holdReportsLock('alice', 75_000);
+    const asked = Date.now();
+    const cancel = await teamai('alice', ['workflow', 'cancel', run]);
+    expect(cancel.code, said(cancel)).toBe(0);
+    const ended = await started;
+    const waited = Date.now() - asked;
+
+    expect(said(ended), said(ended)).toContain(`its cancel could not be written to the record of attempt ${records(run)[0]?.attempt ?? ''} on teamai-reports for 60 s`);
+    expect(said(ended), said(ended)).toContain(`Run teamai workflow cancel ${run} again.`);
+    expect(waited, 'the owner stopped waiting within the deadline and a poll').toBeLessThan(75_000);
+    // The member was never asked to stop: it still runs the step, and its claim is on the record.
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'claimed' })]);
+    expect(isAlive(bobPid)).toBe(true);
+
+    expect((await held.released).code).toBe(0);
+    const again = await teamai('alice', ['workflow', 'cancel', run]);
+    expect(again.code, said(again)).toBe(0);
+    const answered = await taking;
+    expect(answered.envelope(), said(answered)).toMatchObject({ data: { cancelled: { run, step: 'long' } } });
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'cancelled' })]);
+  }, 300_000);
+
   it('withdraws an attempt through its record when the owner\'s driver was stopped before the cancel', async () => {
     const before = new Set(offeredRuns());
     const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
