@@ -14,10 +14,7 @@ const WRITES = new Set(['createWriteStream', 'appendFile', 'appendFileSync']);
 /** The calls that open a path, writing when their flags say so. */
 const OPENS = new Set(['open', 'openSync']);
 
-/** The `fs.constants` an open writes with. */
-const WRITE_FLAGS = new Set(['O_WRONLY', 'O_RDWR', 'O_APPEND', 'O_CREAT', 'O_TRUNC']);
-
-/** The `fs.constants` an open only reads with. */
+/** The `fs.constants` an open only reads with; any other constant, such as `O_WRONLY` or `O_CREAT`, counts as a write. */
 const READ_FLAGS = new Set(['O_RDONLY', 'O_NONBLOCK', 'O_NOFOLLOW', 'O_NOATIME', 'O_CLOEXEC', 'O_DIRECTORY', 'O_SYNC', 'O_DSYNC']);
 
 const MESSAGE = 'Open a file for writing in src/workflow with openRegularFileForWrite or appendRegularFile from @teamai/shared/regular-file, or write it whole with writeJsonAtomic: a step writes the paths the engine writes to, and a FIFO it leaves there blocks a plain open for writing until a reader comes, past every deadline. The helper opens without blocking and refuses anything but a regular file.';
@@ -53,8 +50,8 @@ function constantNames(node) {
 }
 
 /**
- * Whether `flags`, an open's second argument, may write: a string with `w`, `a` or `+`, write constants, or anything
- * this rule cannot read, which counts as a write so the rule fails closed.
+ * Whether `flags`, an open's second argument, may write: a string with `w`, `a` or `+`, a constant that is not a read
+ * constant, or anything this rule cannot read, which counts as a write so the rule fails closed.
  * @param {ESTree.Node | undefined} flags
  * @returns {boolean}
  */
@@ -65,7 +62,7 @@ function writesWith(flags) {
   if (text !== undefined) return /[wa+]/.test(text);
   const names = constantNames(flags);
 
-  return names === undefined || names.some((name) => WRITE_FLAGS.has(name) || !READ_FLAGS.has(name));
+  return names === undefined || names.some((name) => !READ_FLAGS.has(name));
 }
 
 export default defineRule({
