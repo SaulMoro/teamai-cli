@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { CLAUDE_SESSIONS, CLI, fakeTool } from '../helpers/step-runtime-e2e.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { REPORTS_LOCK_FILENAME } from '../../types.js';
 
 const URL = 'https://github.com/acme/business.git';
 
@@ -835,7 +836,7 @@ describe('the fleet', () => {
    */
   async function holdReportsLock(member: string, ms: number): Promise<{ released: Promise<RunResult> }> {
     // Beside the teamai-reports checkout, in the data home of the member's checkout.
-    const lock = JSON.stringify(path.join(dataHomeOf(member), '.reports-lock'));
+    const lock = JSON.stringify(path.join(dataHomeOf(member), REPORTS_LOCK_FILENAME));
     const script = `const fs = require('fs');
 const take = () => { try { fs.writeFileSync(${lock}, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: require('crypto').randomUUID() }), { flag: 'wx' }); return true; } catch { return false; } };
 const wait = () => { if (!take()) return setTimeout(wait, 20); console.log('held'); setTimeout(() => fs.rmSync(${lock}), ${ms}); };
