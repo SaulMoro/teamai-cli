@@ -33,7 +33,7 @@ import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 import * as cliPaths from '@teamai/shared/cli-path';
 import { whileLabelsLocked } from './helpers/label-lock.js';
-import { CONFINED_TOOLS } from '../tool-launch/tools.js';
+import { CONFINED_TOOLS } from '../launch-registry.js';
 
 const SCORER = `---
 labels:

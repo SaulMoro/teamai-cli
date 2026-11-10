@@ -22,7 +22,7 @@ import { isJsonObject } from '../../types.js';
 import { JsonValueSchema, parseJson, type JsonValue } from '@teamai/shared/json';
 import { TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
-import type { TokenUsage } from '../../tool-launch/stdout.js';
+import type { TokenUsage } from '@teamai/tool-core/stdout';
 import { expressionPaths, isIndex, type PathField } from '../expression.js';
 import { firstUnfit, RunDefinitionSchema, type HandoffOwner } from '../snapshot.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';

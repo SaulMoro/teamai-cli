@@ -15,7 +15,7 @@ import {
 } from '../resources/agent-format.js';
 import { isAgentToolId } from '../tool-registry.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
-import { isLaunchTool, launchAdapterIdOf } from '../tool-launch/tools.js';
+import { isLaunchTool, launchAdapterIdOf } from '../launch-registry.js';
 import type { WorkflowFailure } from './types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

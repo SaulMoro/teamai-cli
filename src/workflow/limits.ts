@@ -7,7 +7,7 @@ import { isUnder, passesWithin, runPasses } from './loop.js';
 import type { Limit, TurnLimits } from './requirements.js';
 import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './scope.js';
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
-import { budgeted, type TokenUsage } from '../tool-launch/stdout.js';
+import { budgeted, type TokenUsage } from '@teamai/tool-core/stdout';
 import type { LocalConfig } from '../types.js';
 import { durationMs } from './parse.js';
 import { z } from 'zod';

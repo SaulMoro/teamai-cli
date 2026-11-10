@@ -8,7 +8,7 @@ import { homeVariables, isToolId } from '../../tool-registry.js';
 import { GIT_REPOSITORY_ENV } from '../../utils/git-env.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 import { SESSION_APPS } from '../../workflow/session-apps.js';
-import { LAUNCH_ADAPTERS } from '../../tool-launch/adapters.js';
+import { LAUNCH_ADAPTERS } from '../../launch-registry.js';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),

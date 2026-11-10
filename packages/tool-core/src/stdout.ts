@@ -8,6 +8,18 @@ export interface TokenUsage {
   cachedInput?: number;
 }
 
+/** What a tool stated a run cost, in its own unit, as reports and labels store it. */
+export const CostSchema = z.object({ amount: z.number().finite().nonnegative(), unit: z.string().min(1) });
+
+/** What a confined run's tool reports it used, as far as it reports it. */
+export const ConfinedUsageSchema = z.object({
+  inputTokens: z.number().finite().nonnegative().optional(),
+  outputTokens: z.number().finite().nonnegative().optional(),
+  cost: CostSchema.optional(),
+});
+
+export type ConfinedUsage = z.infer<typeof ConfinedUsageSchema>;
+
 /** What a tool's stdout says about its run: the result it printed, the model, the session, the tokens it billed and what it said they cost. */
 export interface ToolReport {
   output?: unknown;

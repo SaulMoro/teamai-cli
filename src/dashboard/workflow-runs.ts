@@ -37,7 +37,7 @@ import { readHeldSteps, type HeldSteps } from '../workflow/runtimes/held.js';
 import { loginWaitFile, LoginWaitSchema, type LoginWait } from '../workflow/runtimes/login.js';
 import { runPasses } from '../workflow/loop.js';
 import { attemptDir, AttemptIdSchema, installOwner, isRunId, readRun, readRuns, RunIdSchema, runsDir } from '../workflow/store.js';
-import type { TokenUsage } from '../tool-launch/stdout.js';
+import type { TokenUsage } from '@teamai/tool-core/stdout';
 import type { StepHitl, RunState } from '../workflow/types.js';
 import { HttpError, type JsonBody } from './http.js';
 

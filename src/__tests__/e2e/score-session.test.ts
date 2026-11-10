@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
-import { executableOf, LAUNCH_ORDER } from '../../tool-launch/tools.js';
+import { executableOf, LAUNCH_ORDER } from '../../launch-registry.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');

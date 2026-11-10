@@ -10,7 +10,7 @@ import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { retryCommand } from './retry-command.js';
-import type { LaunchTool } from '../../tool-launch/tools.js';
+import type { LaunchTool } from '../../launch-registry.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 // ─── A tool login teamai keeps for step runtimes ─────────

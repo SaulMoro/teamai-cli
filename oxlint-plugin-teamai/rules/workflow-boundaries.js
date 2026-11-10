@@ -53,7 +53,7 @@ const SKILL_IMPORTS = {
   'src/workflow/shell-command.ts': { names: ['startGroupedCommand', 'GroupedCommandExit'] },
   '@teamai/shared/process-group': { names: ['stopRecordedGroup'] },
   // Whether the local driver launches the session's tool, so a local start or resume can name it.
-  'src/tool-launch/tools.ts': { names: ['isLaunchTool', 'LAUNCH_ORDER', 'LaunchTool'] },
+  'src/launch-registry.ts': { names: ['isLaunchTool', 'LAUNCH_ORDER', 'LaunchTool'] },
   'src/builtin-hooks.ts': { names: ['resolveCliEntry'] },
   // The tools (`ToolId`) a session may name with `--tools default=<tool>`, which of them a child's model resolves for, and the
   // skill-data root the host question's reference is under.

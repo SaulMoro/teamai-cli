@@ -411,7 +411,7 @@ export type ToolDescriptor<TIds extends DescriptorIds = DescriptorIds> = {
    * adapter for. `'unknown'`: where it keeps them is unknown.
    */
   readonly sessions: readonly [TIds['platform'], ...TIds['platform'][]] | 'none' | 'unknown';
-  /** The adapter teamai launches the tool headless with (`src/tool-launch/adapters.ts`), or `'none'` when teamai never launches it. */
+  /** The adapter teamai launches the tool headless with (`LAUNCH_ADAPTERS` in `src/launch-registry.ts`), or `'none'` when teamai never launches it. */
   readonly launch: TIds['launch'] | 'none';
   /**
    * Where the dashboard reads the tool's token usage: a format of

@@ -1,9 +1,30 @@
 import { resolveCliPath, resolvePathCommand } from '@teamai/shared/cli-path';
-import { descriptorOf, toolOf, type DescriptorOf } from '../tool-registry.js';
-import type { ResolvedToolInstance } from '../tool-instances.js';
-import type { ToolId } from '../tools.js';
-import { LAUNCH_ADAPTERS } from './adapters.js';
+import { descriptorOf, toolOf, type DescriptorOf } from './tool-registry.js';
+import type { ResolvedToolInstance } from './tool-instances.js';
+import type { ToolId } from './tools.js';
 import type { ConfinedLaunch, LaunchAdapter, StepLaunch } from '@teamai/tool-core/launch';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+
+/** How teamai launches each family of tools headless. A tool picks its adapter with the `launch` facet in `TOOLS`. */
+// oxlint-disable-next-line teamai/tool-facts -- keyed by launch adapter id, which this table defines; a tool picks one with TOOLS.launch
+export const LAUNCH_ADAPTERS = {
+  claude: BUILT_IN_TOOLS.claude.launch.claude,
+  codex: BUILT_IN_TOOLS.codex.launch.codex,
+  opencode: BUILT_IN_TOOLS.opencode.launch.opencode,
+  codebuddy: BUILT_IN_TOOLS.codebuddy.launch.codebuddy,
+  openclaw: BUILT_IN_TOOLS.openclaw.launch.openclaw,
+  cursor: BUILT_IN_TOOLS.cursor.launch.cursor,
+  copilot: BUILT_IN_TOOLS.copilot.launch.copilot,
+  pi: BUILT_IN_TOOLS.pi.launch.pi,
+  omp: BUILT_IN_TOOLS.pi.launch.omp,
+  muse: BUILT_IN_TOOLS.muse.launch.muse,
+  qoder: BUILT_IN_TOOLS.qoder.launch.qoder,
+  kiro: BUILT_IN_TOOLS.kiro.launch.kiro,
+  hermes: BUILT_IN_TOOLS.hermes.launch.hermes,
+  agy: BUILT_IN_TOOLS.agy.launch.agy,
+} as const satisfies Record<string, LaunchAdapter>;
+
+export type LaunchAdapterId = keyof typeof LAUNCH_ADAPTERS;
 
 /** The tools whose `launch` facet names an adapter. */
 export type LaunchedToolId = { [T in ToolId]: DescriptorOf<T>['launch'] extends 'none' ? never : T }[ToolId];

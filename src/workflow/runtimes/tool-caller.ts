@@ -3,10 +3,9 @@ import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV, type LaunchedBy } from '
 import type { LocalConfig } from '../../types.js';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { log } from '@teamai/shared/log';
-import { CallError, memberTools, type MemberTool } from '../../tool-launch/member-tools.js';
-import type { TokenUsage } from '../../tool-launch/stdout.js';
-import { addTokens } from '@teamai/tool-core/stdout';
-import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from '../../tool-launch/tools.js';
+import { CallError, memberTools, type MemberTool } from '../member-tools.js';
+import { addTokens, type TokenUsage } from '@teamai/tool-core/stdout';
+import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from '../../launch-registry.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
 import { answerLaunch } from '@teamai/runtime-tools/answer';

@@ -18,14 +18,13 @@ import { resolveCliPath } from '@teamai/shared/cli-path';
 import { execCommand, probeBinary } from '@teamai/shared/exec';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 import { JsonValueSchema, type JsonValue } from '../types.js';
-import type { ConfinedUsage } from '../tool-launch/confined-level.js';
 import type { CallLaunch, ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { HeadlessRun } from '@teamai/tool-launch/call-launch';
 import { confinedArgs, confinedStdin, confinedVariables } from '@teamai/tool-launch/confined-launch';
 import { runTool } from '@teamai/runtime-tools/headless';
-import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from '../tool-launch/stdout.js';
-import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../tool-launch/tools.js';
+import { stoppedOnUsageLimit, toolStdout, type ConfinedUsage, type TokenUsage } from '@teamai/tool-core/stdout';
+import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../launch-registry.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** A JSON line a tool prints; a field of the wrong type reads as absent. */

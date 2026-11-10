@@ -10,7 +10,7 @@ import { defaultToolHome, homeEnvOf, realHost } from '../../tool-home.js';
 import { baseToolOf, isToolId } from '../../tool-registry.js';
 import { isRecord } from '../expression.js';
 import { log } from '@teamai/shared/log';
-import type { LaunchTool } from '../../tool-launch/tools.js';
+import type { LaunchTool } from '../../launch-registry.js';
 import type { LocalConfig } from '../../types.js';
 import { errnoCode, writeJsonAtomic } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';

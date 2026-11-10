@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { AgentObservationSchema, ObservedEffortSchema, ObservedModelSchema, UsedSchema } from '../agent-observation.js';
 import { RunModeSchema } from '../launch-context.js';
 import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
-import { ConfinedUsageSchema, type ConfinedUsage } from '../tool-launch/confined-level.js';
+import { ConfinedUsageSchema, type ConfinedUsage } from '@teamai/tool-core/stdout';
 import { canonicalJson } from '../utils/canonical-json.js';
 import type { JsonValue } from '../types.js';
 

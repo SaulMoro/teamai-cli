@@ -35,11 +35,11 @@ import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, r
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
-import { memberTools } from '../../../tool-launch/member-tools.js';
+import { memberTools } from '../../member-tools.js';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
 import { startGroupedCommand, type GroupedCommandExit } from '../../shell-command.js';
 import { baseToolOf, instanceNames, isToolId } from '../../../tool-registry.js';
-import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../tool-launch/tools.js';
+import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../launch-registry.js';
 import { confinedOffers, type ConfinedOffer } from '../../confined-launch.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';

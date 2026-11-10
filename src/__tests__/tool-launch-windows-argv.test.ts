@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { batchLaunchOf, spawnCommand, spawnCommandSync } from '@teamai/shared/exec';
 import { runTool } from '@teamai/runtime-tools/headless';
-import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../tool-launch/tools.js';
+import { executableOf, LAUNCH_ORDER, launchAdapterOf } from '../launch-registry.js';
 
 const isWindows = process.platform === 'win32';
 const BACKSLASH = String.fromCodePoint(92);

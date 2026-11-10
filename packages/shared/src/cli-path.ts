@@ -1,7 +1,7 @@
 /**
  * Cross-platform command lookup: resolves a CLI name to an absolute path Node can start on this platform.
  *
- * The AI tool launcher (`tool-launch/`) and the provider CLI wrappers (`providers/github/gh-cli.ts`,
+ * The AI tool launcher (`@teamai/tool-launch`) and the provider CLI wrappers (`providers/github/gh-cli.ts`,
  * `providers/cnb/cnb-cli.ts`) share the same traps (on Windows `which` returns an MSYS path, and npm lists its
  * extension-less shim first), so the lookup lives here once.
  */

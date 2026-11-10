@@ -19,7 +19,7 @@ describe('teamai/launch-through-workflows', () => {
   rule.invalid('rejects a renamed confined launch', `import { runConfined as launch } from './workflow/confined-launch.js';`);
   rule.invalid('rejects a dynamic import of the confined tools, which may launch one', `const confined = await import('./workflow/confined-launch.js');`);
   rule.valid('allows what the confined tools of this machine can do', `import { installedConfinedTools, type ConfinedResult } from './workflow/confined-launch.js';`);
-  rule.valid('allows the tool a member names and the error a bad one raises', `import { CallError, isOverrideInvalid, memberTools } from './tool-launch/member-tools.js';`);
+  rule.valid('allows the tool a member names and the error a bad one raises', `import { CallError, isOverrideInvalid, memberTools } from './workflow/member-tools.js';`);
   rule.valid('allows the types of an AI call', `import type { CallResult } from './workflow/runtimes/tool-caller.js';`);
   rule.invalid('rejects the launch library from a scorer', `import { callLaunch } from '@teamai/tool-launch/call-launch';`, undefined, { filename: 'src/scorers/x.ts' });
   rule.invalid('rejects the tools runtime\'s answer launch outside a workflow driver', `import { answerLaunch } from '@teamai/runtime-tools/answer';`, undefined, { filename: 'src/x.ts' });

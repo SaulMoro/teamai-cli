@@ -20,7 +20,7 @@ import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
 import { readRun, runFilePath, runLockPath, runScratchDir, runsDir, updateRun } from '../workflow/store.js';
-import type { TokenUsage } from '../tool-launch/stdout.js';
+import type { TokenUsage } from '@teamai/tool-core/stdout';
 import type { DriverIdentity, OutputSchema, RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
 

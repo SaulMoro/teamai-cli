@@ -23,7 +23,7 @@ import { composedName, composedOffer, composedStepRuntime, nestedOptions } from 
 import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
-import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf } from '../../tool-launch/tools.js';
+import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf } from '../../launch-registry.js';
 import type { StepLaunchDeps } from '@teamai/runtime-tools';
 import { opencodeMajorVersion } from '../../opencode-version.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';

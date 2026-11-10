@@ -1,6 +1,6 @@
 import { ruleHarness } from '../test/harness.ts';
 
-const rule = ruleHarness('teamai/spawn-command', { filename: 'src/tool-launch/run.ts' });
+const rule = ruleHarness('teamai/spawn-command', { filename: 'src/workflow/shell-command.ts' });
 
 rule.valid('allows tool-core\'s exec module to start processes through cross-spawn', `
 import spawn from 'cross-spawn';

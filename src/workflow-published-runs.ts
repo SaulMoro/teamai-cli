@@ -13,8 +13,8 @@ import { getReportsDir, usesBranchWorktree, type LocalConfig } from './types.js'
 import { describeWorkflow, type WorkflowDescription } from './workflow/describe.js';
 import { canFor, ceilingOf, isLeft, listOf, localReason, personClauses } from './workflow/drivers/skill/skill-driver.js';
 import { launchToolFor } from './workflow/steps/prompt.js';
-import { memberTools, type MemberTool } from './tool-launch/member-tools.js';
-import { launchExecutableOf, type LaunchTarget } from './tool-launch/tools.js';
+import { memberTools, type MemberTool } from './workflow/member-tools.js';
+import { launchExecutableOf, type LaunchTarget } from './launch-registry.js';
 import { sameEnvName } from './resources/env-key.js';
 import { envAdvice, lackedLabels, type EnvFacts } from './workflow/requirements.js';
 import { personSteps, type PersonStep } from './workflow/engine.js';

@@ -41,7 +41,7 @@ import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflo
 import { durationMs } from './workflow/parse.js';
 import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
-import { memberTools } from './tool-launch/member-tools.js';
+import { memberTools } from './workflow/member-tools.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
 import { outdatedBenchmarkPlan, planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { reportBenchmark } from './benchmark/report.js';

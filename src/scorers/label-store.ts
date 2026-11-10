@@ -12,7 +12,7 @@ import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { scoresDir, scoresLocked } from './home.js';
 import { isStageDecider, labelId, type Decider, labelVersion, newestLabels, parseScoreLabel, parseScoreLabels, type ScoreLabel } from './label.js';
-import type { ConfinedUsage } from '../tool-launch/confined-level.js';
+import type { ConfinedUsage } from '@teamai/tool-core/stdout';
 
 function labelsFile(config: LocalConfig): string {
   return path.join(scoresDir(config), 'labels.jsonl');

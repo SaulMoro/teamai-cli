@@ -1,5 +1,5 @@
 /** Before a run: what describe asks the person, and whether a start carries every answer it needs. */
-import { isLaunchTool, LAUNCH_ORDER, type LaunchTool } from '../../../tool-launch/tools.js';
+import { isLaunchTool, LAUNCH_ORDER, type LaunchTool } from '../../../launch-registry.js';
 import { TOOL_ORDER } from '../../../tool-registry.js';
 import type { LocalConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';

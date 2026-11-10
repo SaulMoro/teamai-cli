@@ -33,7 +33,7 @@ function launcherOf(from, specifier) {
   return `${scope}/${name}`;
 }
 
-/** The executable of every tool teamai launches, as `executableOf` in src/tool-launch/tools.ts names it; a test keeps the two equal. */
+/** The executable of every tool teamai launches, as `executableOf` in src/launch-registry.ts names it; a test keeps the two equal. */
 export const TOOL_EXECUTABLES = new Set([
   'claude', 'claude-internal', 'tclaude', 'codex', 'codex-internal', 'tcodex', 'opencode', 'codebuddy', 'workbuddy', 'openclaw',
   'cursor-agent', 'copilot', 'qodercli', 'kiro-cli', 'pi', 'omp', 'muse', 'hermes', 'agy',

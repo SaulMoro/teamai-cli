@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { LAUNCH_ADAPTERS } from '../../tool-launch/adapters.js';
+import { LAUNCH_ADAPTERS } from '../../launch-registry.js';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
 import { stringify } from 'yaml';
 import { z } from 'zod';
