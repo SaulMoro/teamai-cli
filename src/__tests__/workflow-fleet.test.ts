@@ -1301,8 +1301,8 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     expect(await recordIn(alice, run, attempt, 'claimed')).toMatchObject({ member: { user: 'bob' } });
   }, 60_000);
 
-  it('ends the owner\'s cancel cancel_failed at the deadline when origin cannot be read after a cancel write failed', async () => {
-    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '30m' });
+  it('ends the owner\'s cancel cancel_failed at the deadline, not at a shorter stale_after, when origin cannot be read after a cancel write failed', async () => {
+    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
     const { runtime, exec } = await open();
     const op = newOpId();
     const ended = exec(op);
@@ -1316,6 +1316,9 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     fs.renameSync(origin, away);
     releases.push(async () => fs.renameSync(away, origin));
 
+    expect(await within(ended, 3_000)).toBe('waiting');
+    // Past stale_after, short of the deadline: the cancel still waits for its record.
+    vi.setSystemTime(Date.now() + 21_000);
     expect(await within(ended, 3_000)).toBe('waiting');
     passTheDeadline();
     expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/teamai-reports could not be read .* Run teamai workflow cancel r[0-9a-f]+ again\.$/) } });

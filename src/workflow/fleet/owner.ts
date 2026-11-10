@@ -699,10 +699,10 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
       if (record === undefined) {
         if (read.ok) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and its attempt has no record on fleet pool ${pool}, so no member was asked to stop it.` });
 
-        // A cancel write already tried keeps its deadline while origin cannot be read.
-        if (cancelTriedAt !== undefined && Date.now() >= cancelTriedAt + CANCEL_WRITE_MS) return failed(cancelNotWritten({ step, run, attempt, pool }, read.error));
-
-        if (Date.now() - cancelledAt > staleAfterMs) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${read.error.message}` });
+        // A cancel write already tried keeps its deadline, and only it, while origin cannot be read: the place stays kept.
+        if (cancelTriedAt !== undefined) {
+          if (Date.now() >= cancelTriedAt + CANCEL_WRITE_MS) return failed(cancelNotWritten({ step, run, attempt, pool }, read.error));
+        } else if (Date.now() - cancelledAt > staleAfterMs) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${read.error.message}` });
       } else if (record.state === 'offered' || isHeld(record)) {
         cancelTriedAt ??= Date.now();
         const until = cancelTriedAt + CANCEL_WRITE_MS;
@@ -742,8 +742,8 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
     // An answer kept from a failed write waits for the next poll, not for the person.
     const woken = AbortSignal.any([cancel, leave, ...(asked !== undefined && asked.answer === undefined ? [asked.answered.signal] : [])]);
 
-    // A cancel not yet written is tried again at the shortest poll, so its deadline is kept.
-    if (cancel.aborted && !isCancelWritten) pollMs = RECORD_POLL_MS;
+    // A cancel write that is due is tried again at the shortest poll, so its deadline is kept.
+    if (cancel.aborted && !isCancelWritten && cancelTriedAt !== undefined && record?.state !== 'cancelling') pollMs = RECORD_POLL_MS;
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
@@ -759,7 +759,7 @@ function cancelNotWritten({ step, run, attempt, pool }: Pick<WaitInput, 'run' | 
 
 /** Why the last write of a cancel did not land, for the person, whose next step the cancel's message gives instead. */
 function cancelWriteCause(error: FleetError): string {
-  return error.code === 'state_moved' ? 'Another write, such as the member\'s progress, landed on the record before each one.' : error.message.replace(/ Try again\.$/, '');
+  return error.code === 'state_moved' ? 'Another write, such as the member\'s progress, landed on the record first.' : error.message.replace(/ Try again\.$/, '');
 }
 
 /**
