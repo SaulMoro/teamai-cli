@@ -20,6 +20,14 @@ function scratch(): string {
   return dir;
 }
 
+/** Whether the scratch filesystem finds a name spelled in another case, as macOS and Windows do by default. */
+function ignoresCase(): boolean {
+  const dir = scratch();
+  fs.mkdirSync(path.join(dir, 'Case'));
+
+  return fs.existsSync(path.join(dir, 'case'));
+}
+
 /** A FIFO in a scratch folder: a step can leave one where teamai later reads a file it wrote. */
 function fifo(): string {
   const at = path.join(scratch(), 'result.json');
@@ -238,5 +246,17 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     await expect(copyRegularTree(path.join(from, 'scripts', 'run.sh'), path.join(dir, 'taken', 'run.sh'), { existing: 'keep' })).rejects.toThrow('is a folder');
     expect(fs.readFileSync(path.join(from, 'scripts', 'run.sh'), 'utf8')).toBe('echo hi\n');
     expect(fs.existsSync(path.join(from, 'scripts', 'copy'))).toBe(false);
+  });
+
+  it.runIf(ignoresCase())('refuses to copy a folder onto itself or into itself spelled in another case, where the filesystem ignores case, and keeps the source', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'Docs'));
+    fs.writeFileSync(path.join(dir, 'Docs', 'a.md'), 'a\n');
+
+    await expect(copyRegularTree(path.join(dir, 'Docs'), path.join(dir, 'docs'))).rejects.toThrow('inside');
+    await expect(copyRegularTree(path.join(dir, 'Docs', 'a.md'), path.join(dir, 'docs', 'A.md'))).rejects.toThrow('inside');
+    await expect(copyRegularTree(path.join(dir, 'Docs'), path.join(dir, 'docs', 'sub'))).rejects.toThrow('inside');
+    expect(fs.readdirSync(path.join(dir, 'Docs'))).toEqual(['a.md']);
+    expect(fs.readFileSync(path.join(dir, 'Docs', 'a.md'), 'utf8')).toBe('a\n');
   });
 });

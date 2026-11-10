@@ -165,6 +165,8 @@ export async function writeRegularFile(file: string, data: string | Uint8Array, 
   }
 }
 
+const COPY_CHUNK = 1024 * 1024;
+
 /**
  * Copies `from`, a regular file as `openRegularFile` checks, over `to`, a regular file or none yet as
  * `openRegularFileForWrite` checks, keeping `from`'s mode as `fs.copyFile` does.
@@ -173,11 +175,17 @@ export async function copyRegularFile(from: string, to: string): Promise<void> {
   const source = await openRegularFile(from);
 
   try {
-    const [bytes, { mode }] = await Promise.all([source.readFile(), source.stat()]);
+    const { mode } = await source.stat();
     const target = await openRegularFileForWrite(to, { append: false, mode });
 
     try {
-      await target.writeFile(bytes);
+      // In chunks, as a git pack a team clone holds can pass the 2 GiB a whole read allows.
+      const chunk = Buffer.allocUnsafe(COPY_CHUNK);
+
+      for (let { bytesRead } = await source.read(chunk, 0, COPY_CHUNK); bytesRead > 0; { bytesRead } = await source.read(chunk, 0, COPY_CHUNK)) {
+        for (let written = 0; written < bytesRead;) written += (await target.write(chunk, written, bytesRead - written)).bytesWritten;
+      }
+
       await target.chmod(mode & 0o7777);
     } finally {
       await target.close();
@@ -206,18 +214,24 @@ async function lstatOrMissing(file: string): Promise<fs.Stats | undefined> {
   }
 }
 
-/** Where `file` is, with the links of the folders above it resolved, as far as they exist; `file` itself may be a link. */
-async function placeOf(file: string): Promise<string> {
-  const parent = path.dirname(file);
+/**
+ * Whether `to`, or a folder above it, is `from` itself, however either path spells it: by device and inode, so a link
+ * above `to` or a filesystem that ignores case cannot hide it. `to` itself is looked at without following a link there.
+ */
+async function isAtOrInside(from: string, to: string): Promise<boolean> {
+  const source = await fs.promises.lstat(from, { bigint: true });
 
-  if (parent === file) return file;
+  for (let at = path.resolve(to), look = fs.promises.lstat; ; at = path.dirname(at), look = fs.promises.stat) {
+    try {
+      const there = await look(at, { bigint: true });
 
-  try {
-    return path.join(await fs.promises.realpath(parent), path.basename(file));
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      if (there.dev === source.dev && there.ino === source.ino) return true;
+    } catch (error) {
+      // Nothing there yet, or a file where a folder above `to` would be: neither is `from`.
+      if (!(error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR'))) throw error;
+    }
 
-    return path.join(await placeOf(parent), path.basename(file));
+    if (path.dirname(at) === at) return false;
   }
 }
 
@@ -258,9 +272,7 @@ async function makeWay(from: string, to: string, existing: 'replace' | 'keep' | 
  * so a copy never makes way by removing what it copies from.
  */
 export async function copyRegularTree(from: string, to: string, options: CopyTreeOptions = {}): Promise<void> {
-  const [source, target] = await Promise.all([placeOf(from), placeOf(to)]);
-
-  if (target === source || target.startsWith(`${source}${path.sep}`)) throw new Error(`${to} is ${from} or a folder inside it, so teamai does not copy ${from} there`);
+  if (await isAtOrInside(from, to)) throw new Error(`${to} is ${from} or a folder inside it, so teamai does not copy ${from} there`);
 
   await copyEntry(from, to, options);
 }
