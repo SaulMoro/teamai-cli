@@ -1169,6 +1169,19 @@ steps:
     expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: { driver: 'local', offers: [{ runtime: 'tools', can: { isolation: 'worktree', network: true, env: true } }] } }))
       .toMatchObject({ error: { code: 'requirement_unmet', message: 'Step "ask" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.' } });
   });
+
+  it('refuses at start a strict answer step on a sandbox definition, saying it runs only on this machine\'s tools runtime', async () => {
+    const { config } = await workflowFixture(ASK);
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), ASK.replace('steps:\n', 'defaults:\n  requires: { isolation: sandbox, strict: true }\nsteps:\n'));
+    await syncScorersThenWorkflows(config);
+    const offers = [
+      { runtime: 'sandbox', can: { isolation: 'sandbox', network: true, env: true, remote: true } },
+      { runtime: 'tools', inProcess: true, can: { isolation: 'worktree', network: true, env: true } },
+    ] as const;
+
+    expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: { driver: 'teamai-sandbox', offers: [...offers] } }))
+      .toMatchObject({ error: { code: 'requirement_unmet', message: 'Step "ask" requires strict isolation, and it runs only on this machine, on runtime tools of driver "teamai-sandbox", which is not a sandbox. Run the workflow in CI or a container with --sandbox.' } });
+  });
 });
 
 describe('a step an earlier driver leased in teamai\'s process', () => {

@@ -979,15 +979,14 @@ async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
  * prompt step. Unsaid is not met.
  */
 function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<typeof localStrictCan>): SoleDriver {
-  if (!opened) return { driver: 'local', offers: [{ runtime: 'tools', can: localStrict }] };
+  if (!opened) return { driver: 'local', offers: [{ runtime: 'tools', inProcess: true, can: localStrict }] };
 
-  const offer = (entry: OpenedDriver['runtimes'][number]): SoleDriver['offers'][number] => ({
-    runtime: entry.use,
-    can: entry.kind === 'tools' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false, remote: true },
-  });
+  const offer = (entry: OpenedDriver['runtimes'][number]): SoleDriver['offers'][number] => (entry.kind === 'tools'
+    ? { runtime: entry.use, inProcess: true, can: localStrict }
+    : { runtime: entry.use, can: { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false, remote: true } });
 
   const [first, ...rest] = opened.runtimes;
-  const host = opened.runtimes.some((entry) => entry.kind === 'tools') ? [] : [{ runtime: 'host', can: { ...localStrict, prompt: false as const } }];
+  const host = opened.runtimes.some((entry) => entry.kind === 'tools') ? [] : [{ runtime: 'host', inProcess: true as const, can: { ...localStrict, prompt: false as const } }];
 
   return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer), ...host] };
 }

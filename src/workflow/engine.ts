@@ -1979,11 +1979,11 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
   const at = sole.offers.findIndex((_, index) => helds[index]?.get(id) !== 'never');
   const key = helds[at]?.get(id) === 'network' ? 'network' : 'isolation';
   const first = { step: id, key };
-  const strictOn = sole.offers[at]?.runtime;
+  const strictOn = sole.offers[at];
 
   // Pinned to this host, it is judged on this host's slot alone.
-  if (helds.some((held) => held.get(id) === 'never') && (strictOn === 'host' || strictOn === 'local') && !isPlainLocal(sole)) {
-    const here = `runtime ${strictOn} of driver "${sole.driver}"`;
+  if (helds.some((held) => held.get(id) === 'never') && strictOn?.inProcess === true && !isPlainLocal(sole)) {
+    const here = `runtime ${strictOn.runtime} of driver "${sole.driver}"`;
 
     return key === 'isolation'
       ? `Step "${id}" requires strict isolation, and it runs only on this machine, on ${here}, which is not a sandbox. Run the workflow in CI or a container with --sandbox.`
