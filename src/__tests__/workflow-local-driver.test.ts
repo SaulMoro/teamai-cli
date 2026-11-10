@@ -1053,6 +1053,32 @@ steps:
 });
 
 describe('a prompt runtime that runs each tool on the attempt\'s tool home', () => {
+  it('offers a runtime on the attempt\'s tool home only the tools a tool home holds, so a step on another fails before it is leased there', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    tool: opencode
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, can: { tools: ['claude', 'opencode'] }, agent: { output: { ok: true } }, prompt_tool_home: true }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    await runLocalDriver(config, runId, workspace, { runtimes });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: { code: 'tool_unavailable' } }] });
+  }, 30_000);
+
   it('gives each place the attempt\'s tool home, and resumes a session.from step from the earlier one\'s session seeded there', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build

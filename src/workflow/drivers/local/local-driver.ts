@@ -657,7 +657,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
           ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }),
           can: {
-            ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
+            // One that runs its tool on the attempt's tool home, as one that execs it does, runs only the tools a tool home holds.
+            ...entry.can, tools: entry.launchesAgents && entry.runsOnToolHome !== true ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
             ...(unproven(entry.can) && { isolation: 'none' as const }),
           },
         };
