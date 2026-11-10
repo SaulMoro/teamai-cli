@@ -29,7 +29,7 @@ import { expectedOutput } from '../output.js';
 import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv } from './runtime-steps.js';
 import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../runtimes/login.js';
-import { credentialsForTool, toolsLaunchDeps } from '../runtimes/sources.js';
+import { credentialsForTool, toolsLaunchDeps, type OpenedRuntime } from '../runtimes/sources.js';
 import { withRetry } from '../runtimes/retry-command.js';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { attemptDir, attemptResultPath, type RunLock } from '../store.js';
@@ -248,6 +248,28 @@ export type PromptRuntime = {
    */
   conversationHeld?: (sessions: readonly SessionRef[]) => ReturnType<typeof HeldPlace.conversationOf>;
 };
+
+/** What a prompt step's runtime offered when its driver opened it: its `PromptRuntime` but for the attempt's run, team env and held conversation. */
+export type PromptOffer = Omit<PromptRuntime, 'run' | 'teamEnv' | 'conversationHeld'>;
+
+/** A step runtime as its driver opened it, as far as a prompt there reads it: the local driver's slot or a fleet member's entry. */
+type OpenedForPrompt = Pick<Extract<OpenedRuntime, { kind: 'external' }>, 'runtime' | 'can' | 'launchesAgents' | 'engine' | 'credentials' | 'isThrough' | 'runsOnToolHome'> & { found: readonly string[] };
+
+/**
+ * What `opened` offers a prompt step. The one place that reads each offered fact: every key of `PromptOffer` is named
+ * here, so a new one fails the type check until it is read, rather than being dropped by one of the drivers.
+ */
+export function promptOfferOf(opened: OpenedForPrompt): PromptOffer {
+  return {
+    logins: opened.engine.logins, launchesAgents: opened.launchesAgents, credentials: opened.credentials, found: opened.found, defaultTool: opened.can.default_tool,
+    isThrough: opened.isThrough, runsOnToolHome: opened.runsOnToolHome, isToolPickedThere: opened.runtime.isToolPickedThere === true ? true : undefined,
+  } satisfies { [Key in keyof Required<PromptOffer>]: PromptOffer[Key] };
+}
+
+/** The step runtime a prompt runs on: what its runtime offered, with the attempt's run on it and the team env. */
+export function promptRuntimeOn({ run, offered, teamEnv, conversationHeld }: { run: AttemptRun; offered: PromptOffer; teamEnv: WorkflowEnv; conversationHeld?: PromptRuntime['conversationHeld'] }): PromptRuntime {
+  return { ...offered, run, teamEnv, ...(conversationHeld && { conversationHeld }) };
+}
 
 /**
  * Runs prompt step `lease`, staged in its place, and answers the report a driver sends the engine for it: the tool it

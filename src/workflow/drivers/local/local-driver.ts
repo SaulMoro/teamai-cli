@@ -20,7 +20,7 @@ import { inProcessRuntimeOf, type DecidedCan, type DriverCan, type Missing } fro
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
-import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
+import { failureReport, launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
@@ -1502,13 +1502,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           return runPromptStep({
             config, lock, driver, lease, adapter, tools: options.tools, toolPaths: options.toolPaths, archive, signal: controller.signal, mode, staged: launch,
             secrets: { ...turn.secrets, ...maskedCredentials }, askPerson,
-            onRuntime: stepRun && {
-              run: stepRun, logins: slot?.engine.logins ?? [], launchesAgents: slot?.launchesAgents === true, credentials: slot?.credentials ?? {}, found: slot?.found ?? [], teamEnv: turn,
-              ...(slot?.can.default_tool !== undefined && { defaultTool: slot.can.default_tool }), ...(slot?.isThrough && { isThrough: true }), ...(slot?.runsOnToolHome && { runsOnToolHome: true }), ...(slot?.runtime.isToolPickedThere === true && { isToolPickedThere: true }),
-              ...(slot && HeldPlace.holdsOn(slot) && {
+            onRuntime: stepRun && slot && promptRuntimeOn({
+              run: stepRun, offered: promptOfferOf(slot), teamEnv: turn,
+              ...(HeldPlace.holdsOn(slot) && {
                 conversationHeld: async (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions, workspace: await workspaceOf(lease.step) }),
               }),
-            },
+            }),
           });
         })() });
       }

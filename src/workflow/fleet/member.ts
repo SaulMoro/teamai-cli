@@ -41,8 +41,7 @@ import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
-import type { LoginTool } from '../runtimes/login.js';
-import { launchToolFor, runPromptStep, type StagedLease } from '../steps/prompt.js';
+import { launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type PromptOffer, type StagedLease } from '../steps/prompt.js';
 import { memberTools } from '../../tool-launch/member-tools.js';
 import { launchExecutableOf } from '../../tool-launch/tools.js';
 import { driverIdentity } from '../../driver-identity.js';
@@ -68,7 +67,7 @@ const STDERR_KEPT = 4_000;
 type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime<DriverCan>; labels?: readonly string[]; tools?: string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
-type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true; runsOnToolHome?: true };
+type PromptRuntimePlace = RuntimePlace & PromptOffer;
 
 /**
  * Where the member's driver runs each kind of step: a command step's command, a prompt step's tool, and a whole
@@ -111,10 +110,7 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
     if (entry.can.exec !== false) place.command ??= runtime;
 
     if (entry.can.prompt !== false) {
-      place.prompt ??= {
-        ...runtime, launchesAgents: entry.launchesAgents, logins: entry.engine.logins, credentials: entry.credentials, found: entry.found,
-        ...(entry.can.default_tool !== undefined && { defaultTool: entry.can.default_tool }), ...(entry.isThrough && { isThrough: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }),
-      };
+      place.prompt ??= { ...runtime, ...promptOfferOf(entry) };
     }
   }
 
@@ -669,10 +665,7 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
     const body = await runPromptStep({
       config, lock, driver: driverIdentity('local', root), lease, archive: openSessionArchive(config), signal: stopping.signal, mode: resolveRunMode(process.env),
       secrets: { ...teamEnv.secrets, ...secrets },
-      ...(running && place.kind === 'runtime' && { onRuntime: {
-        run: running, logins: place.logins, launchesAgents: place.launchesAgents, credentials: place.credentials, found: place.found, teamEnv,
-        ...(place.defaultTool !== undefined && { defaultTool: place.defaultTool }), ...(place.isThrough && { isThrough: true as const }), ...(place.runsOnToolHome && { runsOnToolHome: true as const }),
-      } }),
+      ...(running && place.kind === 'runtime' && { onRuntime: promptRuntimeOn({ run: running, offered: place, teamEnv }) }),
     });
 
     const unclosed = await running?.close();
