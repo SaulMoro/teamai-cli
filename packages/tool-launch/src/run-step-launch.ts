@@ -103,7 +103,9 @@ export interface ToolProcess {
 
 /**
  * The port a launch starts its tool's process through: a spawn on this machine, or a step runtime's `exec`. `onStart`
- * is called once the process started, after any place and setup before it; `onStdout` gets each decoded chunk.
+ * is called once the process started, after any place and setup before it; `onStdout` gets each decoded chunk. An
+ * adapter never calls `onStdout` before it returns, so the launch holds the process before a limit stops it. Every
+ * adapter passes `toolLauncherConformance` (`@teamai/tool-launch/testing`).
  */
 export type ToolLauncher = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStart: () => void; onStdout: (text: string) => void }) => ToolProcess;
 

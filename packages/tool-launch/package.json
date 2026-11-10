@@ -6,6 +6,7 @@
   "exports": {
     "./call-launch": "./src/call-launch.ts",
     "./confined-launch": "./src/confined-launch.ts",
-    "./run-step-launch": "./src/run-step-launch.ts"
+    "./run-step-launch": "./src/run-step-launch.ts",
+    "./testing": "./src/testing/launcher-conformance.ts"
   }
 }
