@@ -93,7 +93,8 @@ const ENTRIES = [
     // index.ts moves the home of a command a step started in its clone to that clone's own install.
     // check-run.ts clones and sets up the commit a check runs on, for a benchmark and a scorer alike.
     entries: { 'place.ts': ['src/index.ts', 'src/workflow/engine.ts', 'src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow/steps/prompt.ts', 'src/workflow/fleet/owner.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`, 'src/scorers/check-run.ts', 'src/session-flow/task-candidates.ts'], 'setup.ts': ['src/scorers/check-run.ts'] },
-    testEntries: ['place.ts', 'team-without.ts', 'role-copy.ts', 'data.ts'],
+    // worktree-snapshot.ts: what a read-only step changed, tested on its own because the git calls it makes are its cost.
+    testEntries: ['place.ts', 'team-without.ts', 'role-copy.ts', 'data.ts', 'worktree-snapshot.ts'],
   },
   {
     folder: LOCAL,

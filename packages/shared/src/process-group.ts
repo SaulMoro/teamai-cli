@@ -15,16 +15,27 @@ function ps(args: string[]): string {
   return execFileSync('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } });
 }
 
+const STARTS_ARGS = ['-A', '-o', 'pid=,lstart='];
+
 /** The start time of every process, as `ps -o lstart=` prints it, by pid; undefined when ps cannot run. */
 export function processStarts(): Map<number, string> | undefined {
-  let stdout: string;
-
   try {
-    stdout = ps(['-A', '-o', 'pid=,lstart=']);
+    return startsOf(ps(STARTS_ARGS));
   } catch {
     return undefined;
   }
+}
 
+/** `processStarts`, read without holding the event loop while ps runs. */
+function readProcessStarts(): Promise<Map<number, string> | undefined> {
+  return new Promise((resolve) => {
+    execFile('ps', STARTS_ARGS, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout) => {
+      resolve(error ? undefined : startsOf(stdout));
+    });
+  });
+}
+
+function startsOf(stdout: string): Map<number, string> {
   return new Map(stdout.trim().split('\n').map((line) => {
     const [pid, ...start] = line.trim().split(/\s+/);
 
@@ -67,32 +78,46 @@ const GROUP_PREFIX = 'group-';
 /** The name of the file that records one process group, by its pid. */
 const GROUP_FILE = /^group-\d+\.json$/;
 
+/** The ps reads still to finish for records in a directory, by its resolved path, which a stop there waits for first. */
+const pendingStarts = new Map<string, Promise<void>>();
+
 /**
  * Records in `dir` the process group `child` leads, or with `isAttached`, `child` itself, which shares its starter's
- * group, for `stopRecordedGroup` to stop once whatever started it is gone. Synchronous on purpose: a starter killed
- * right after the spawn still leaves the record, which an await would widen.
+ * group, for `stopRecordedGroup` to stop once whatever started it is gone. The first record is written before this
+ * returns: a starter killed right after the spawn still leaves it, which an await would widen.
  *
  * One file per group: a setup and the command of one attempt each start a group in the same directory, and the second
  * must not displace the first, or a stop of the attempt leaves the first running (#1523).
  */
 export function recordGroup(child: ChildProcess, dir: string, { isAttached = false }: { isAttached?: boolean } = {}): void {
   if (child.pid === undefined) return;
-  const file = path.join(dir, `${GROUP_PREFIX}${child.pid}.json`);
+  const { pid } = child;
+  const file = path.join(dir, `${GROUP_PREFIX}${pid}.json`);
 
   // Recorded before ps answers, which takes long enough for the command to start working and its starter to be killed:
   // until then the spawn time stands for the start. A teamai that reads only `start` stops nothing from it, as when
-  // nothing was recorded.
-  writeGroup(file, JSON.stringify({ pid: child.pid, spawnedAt: Date.now(), ...(isAttached && { tree: true }) }));
-  const start = processStarts()?.get(child.pid);
+  // nothing was recorded. ps then runs off the event loop, so a step's command and its output are not held while it does.
+  writeGroup(file, JSON.stringify({ pid, spawnedAt: Date.now(), ...(isAttached && { tree: true }) }));
+  const recordsDir = path.resolve(dir);
 
-  if (start === undefined) return;
-  // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
-  const body = JSON.stringify({ pid: child.pid, start, ...(isAttached && { tree: true }) });
-  writeGroup(file, body);
-  // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
-  // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
-  // stops nothing twice.
-  writeGroup(path.join(dir, LEGACY_GROUP_FILE), body);
+  // ps runs at once; its answer is written after the records begun before it in `dir`, so `group.json` stays the latest.
+  const settled: Promise<void> = Promise.all([readProcessStarts(), pendingStarts.get(recordsDir)]).then(([starts]) => {
+    if (pendingStarts.get(recordsDir) === settled) pendingStarts.delete(recordsDir);
+    const start = starts?.get(pid);
+
+    // Once this process reaped the child, its pid may name another process. A stop in another process may have removed
+    // the record meanwhile: it is not written again.
+    if (start === undefined || child.exitCode !== null || child.signalCode !== null || !fs.existsSync(file)) return;
+    // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
+    const body = JSON.stringify({ pid, start, ...(isAttached && { tree: true }) });
+    writeGroup(file, body);
+    // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
+    // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
+    // stops nothing twice.
+    writeGroup(path.join(dir, LEGACY_GROUP_FILE), body);
+  });
+
+  pendingStarts.set(recordsDir, settled);
 }
 
 /** Writes the record of one process group, so a reader never sees half of it. */
@@ -112,6 +137,9 @@ function writeGroup(file: string, body: string): void {
  * records. A setup and the command of one attempt each start one there, and a stop of the attempt has to reach both.
  */
 export async function stopRecordedGroup(dir: string): Promise<void> {
+  // A record this process is still completing is finished first, so the stop removes it rather than racing its write.
+  await pendingStarts.get(path.resolve(dir));
+
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
 

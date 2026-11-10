@@ -106,16 +106,66 @@ async function hashPath(workspace: string, relative: string): Promise<string> {
   }
 }
 
-async function stagedEntry(workspace: string, relative: string, run: Git): Promise<string> {
-  const listed = await run(workspace, ['ls-files', '-s', '--', relative]);
+/**
+ * The characters of paths one `git ls-files` gets on its command line, well under Windows' 32,767 for the whole line
+ * with the settings `untrustedGit` puts first. `ls-files` reads no pathspec from stdin.
+ */
+const PATHSPEC_CHARS = 8_000;
 
-  const entries = listed.stdout.split('\n').filter((line) => line.trim() !== '').map((line) => {
-    const [mode, blob, stage] = line.split(/\s+/);
+/** `names` in lists whose characters stay within `PATHSPEC_CHARS`, each with at least one name. */
+function pathspecBatches(names: readonly string[]): string[][] {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let size = 0;
 
-    return `${mode}:${blob}:${stage}`;
-  });
+  for (const name of names) {
+    if (current.length > 0 && size + name.length > PATHSPEC_CHARS) {
+      batches.push(current);
+      current = [];
+      size = 0;
+    }
 
-  return entries.join(',') || 'none';
+    current.push(name);
+    size += name.length + 1;
+  }
+
+  if (current.length > 0) batches.push(current);
+
+  return batches;
+}
+
+/**
+ * The index entries git holds at or under each of `names`, as `mode:blob:stage` joined by commas, every stage of a
+ * conflicted path in git's order, or `none`: one `ls-files` per batch of names, each name a literal path.
+ */
+async function stagedEntries(workspace: string, names: readonly string[], run: Git): Promise<Map<string, string>> {
+  const staged = new Map<string, string>();
+
+  // One batch at a time: each untrusted git starts three processes, and a checkout with many untracked files has many batches.
+  for (const batch of pathspecBatches([...new Set(names)])) {
+    const listing = await run(workspace, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...batch]);
+    const asked = new Set(batch);
+    const entries = new Map<string, string[]>();
+
+    for (const record of listing.stdout.split('\0')) {
+      const tab = record.indexOf('\t');
+
+      if (tab === -1) continue;
+      const [mode, blob, stage] = record.slice(0, tab).split(' ');
+      const parts = record.slice(tab + 1).split('/');
+
+      // An entry is the name's own, or one under it when the name is a folder git still tracks files in.
+      for (let depth = parts.length; depth > 0; depth -= 1) {
+        const owner = parts.slice(0, depth).join('/');
+
+        if (asked.has(owner)) entries.set(owner, [...entries.get(owner) ?? [], `${mode}:${blob}:${stage}`]);
+      }
+    }
+
+    for (const name of batch) staged.set(name, entries.get(name)?.join(',') ?? 'none');
+  }
+
+  return staged;
 }
 
 async function worktreeMode(workspace: string, relative: string): Promise<string> {
@@ -144,10 +194,12 @@ export async function snapshotWorktree(workspace: string, run: Git, depth = 0): 
 
   if (!status.ok) return { ok: false, files: new Map(), ...resolved, branch };
   const files = new Map<string, string>();
+  const entries = statusEntries(status.text);
+  const staging = await stagedEntries(workspace, entries.map((entry) => entry.relative), run);
 
-  for (const { mark, relative } of statusEntries(status.text)) {
+  for (const { mark, relative } of entries) {
     if (files.has(relative)) continue;
-    const staged = await stagedEntry(workspace, relative, run);
+    const staged = staging.get(relative) ?? 'none';
     const mode = await worktreeMode(workspace, relative);
     const gitlink = staged.split(',').some((entry) => entry.startsWith('160000:'));
 
