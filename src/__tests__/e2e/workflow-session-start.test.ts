@@ -187,6 +187,35 @@ steps:
     expect(readRunState(run).steps.map((step) => [step.id, step.status])).toEqual([['build', 'succeeded'], ['ship', 'succeeded']]);
   });
 
+  it('sends a run no step of which needs an AI tool to the host driver in the background, which drives it to its gate in one call', async () => {
+    writeT3();
+
+    const described = await runCLI(['workflow', 'start', '--describe', 'shipit', '--driver', 'skill'], repo, thread);
+
+    expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: {
+      kind: 'ask', background: 'Each step runs on this machine in teamai, and no agent runs any of them.',
+      question: { options: [{ start: 'teamai workflow start shipit --driver host' }, { start: 'teamai workflow start shipit --driver host --auto-approve' }] },
+    } } } });
+    expect(inits()).toEqual([]);
+
+    const started = await runCLI(['workflow', 'start', 'shipit', '--driver', 'host'], repo, thread);
+
+    const stopped = envelope(started);
+    const waiting = 'data' in stopped ? stopped.data.hitl_waiting as { run: string; resume: string } | undefined : undefined;
+    const run = waiting?.run ?? '';
+    expect(waiting, started.stderr).toMatchObject({ step: 'ship', kind: 'approve', resume: `teamai workflow resume ${run} --driver host` });
+    expect(readRunState(run).steps.map((step) => [step.id, step.status])).toEqual([['build', 'succeeded'], ['ship', 'waiting']]);
+
+    const answered = await runCLI(['workflow', 'respond', run, 'ship', 'yes', '--pass', '1'], repo, thread);
+    expect(answered.code, `${answered.stdout}\n${answered.stderr}`).toBe(0);
+    const resumed = await runCLI(['workflow', 'resume', run, '--driver', 'host'], repo, thread);
+
+    expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(readRunState(run).steps.map((step) => [step.id, step.status])).toEqual([['build', 'succeeded'], ['ship', 'succeeded']]);
+    expect(fs.existsSync(path.join(dataHome, 'workflows', 'runs', run, 'skill.json'))).toBe(false);
+    expect(inits()).toEqual([]);
+  });
+
   it('gives the resume of a relayed gate the confirmation a workflow the person confirms was started with', async () => {
     writeT3();
 

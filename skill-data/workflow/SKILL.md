@@ -28,12 +28,12 @@ Done when a reply carries `data.turn` with a `run` id, a start in the background
 
 ## In the background
 
-The start runs the workflow on the driver of the app this session runs in, which shows its steps there. Run it in the background, tell the person `ask.background`, and wait for it to end. You interpret no turns.
+The start runs the workflow on the driver it names: the driver of the app this session runs in, which shows its steps there, or teamai's `host` driver, which runs a workflow whose steps need no AI tool on this machine. Run it in the background, tell the person `ask.background`, and wait for it to end. You interpret no turns.
 
 When it ends, act on its last line:
 
 - `data.done`: tell the person the run's `outcome`.
-- `data.hitl_waiting`: the run waits at a gate. Ask the person `message` with your question tool, offering `options`. When `required` is false, replace `<option>` in `respond` with their answer and run it. When it is true, only they may answer: give them `respond` with their answer for the terminal of this app, and wait until they say it is done. Then run `resume` in the background, and act on how it ends the same way.
+- `data.hitl_waiting`: the run waits at a gate. Ask the person `message` with your question tool, offering `options`. When `required` is false, replace `<option>` in `respond` with their answer and run it. When it is true, only they may answer: give them `respond` with their answer for their own terminal, and wait until they say it is done. Then run `resume` in the background, and act on how it ends the same way.
 - `error`: tell the person `message`.
 
 ## The loop
