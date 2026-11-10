@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { NotRegularFileError } from '@teamai/shared/regular-file';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { ResourceHandler, type ScanForPushOptions } from './base.js';
@@ -1516,7 +1517,16 @@ export class SkillsHandler extends ResourceHandler {
         log.debug(`Synced skill ${item.name} → ${tool}`);
       } catch (e) {
         ledger?.recorder?.failed('skills');
-        log.warn(`Failed to sync skill ${item.name} to ${tool}: ${e instanceof Error ? e.message : String(e)}`);
+
+        if (e instanceof NotRegularFileError) {
+          // Copied whole or not at all (copyDir), so the member keeps what an earlier pull delivered, as with a folder pull skips.
+          const message = `Skipped skill ${item.name} for ${tool}: ${e.message}. Nothing of it was copied; a copy an earlier pull delivered stays as it was.`;
+          log.warn(message);
+          log.persist(message);
+        } else {
+          log.warn(`Failed to sync skill ${item.name} to ${tool}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+
         ledger?.failed.push({ name: item.name, tool });
         ledger?.toolsMissingSkills.add(tool);
       }

@@ -93,6 +93,33 @@ describe('a pull and the homes the env moves', () => {
     expect(await fse.pathExists(path.join(blocked, 'deploy', 'SKILL.md'))).toBe(true);
   });
 
+  it.skipIf(process.platform === 'win32')('leaves a team skill with a FIFO in it as an earlier pull delivered it, or not there at all, and names the skill and the file', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'opencode'));
+    await fse.ensureDir(path.join(home, '.hermes'));
+    await pull({});
+    const skillsDirs = [path.join(home, '.config', 'opencode', 'skills'), path.join(home, '.hermes', 'skills')];
+    for (const dir of skillsDirs) expect(await fse.readFile(path.join(dir, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+    for (const skill of ['deploy', 'fresh']) {
+      await fse.outputFile(path.join(repo, 'skills', skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: d\n---\nVersion two.\n`);
+      for (const name of ['a.md', 'b.md', 'c.md']) await fse.outputFile(path.join(repo, 'skills', skill, name), `${name}\n`);
+      execFileSync('mkfifo', [path.join(repo, 'skills', skill, 'notes.md')]);
+      for (const name of ['x.md', 'y.md']) await fse.outputFile(path.join(repo, 'skills', skill, name), `${name}\n`);
+    }
+
+    await pull({ force: true });
+
+    for (const dir of skillsDirs) {
+      expect(await fse.readdir(path.join(dir, 'deploy'))).toEqual(['SKILL.md']);
+      expect(await fse.readFile(path.join(dir, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+      expect((await fse.readdir(dir)).filter((name) => name.includes('deploy') || name.includes('fresh'))).toEqual(['deploy']);
+    }
+    const warned = vi.mocked(log.warn).mock.calls.flat().join('\n');
+    for (const skill of ['deploy', 'fresh']) {
+      expect(warned).toContain(`Skipped skill ${skill} for opencode`);
+      expect(warned).toContain(`${path.join(repo, 'skills', skill, 'notes.md')} is a pipe, not a regular file`);
+    }
+  });
+
   it('records an env-moved home that exists on the first pull that sees it, and keeps an existing record', async () => {
     const xdg = path.join(tmp, 'xdg');
     await fse.ensureDir(path.join(xdg, 'opencode'));

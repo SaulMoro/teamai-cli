@@ -279,9 +279,11 @@ export async function writeJsonAtomic<T>(
 }
 
 /**
- * Copy a directory recursively.
- * If `dest` is a symlink (e.g. left over from setup-links.sh), remove it first
- * so the copy can create a real directory in its place.
+ * Copy a directory recursively, all or nothing: into a folder beside `dest` first, so an entry the copy refuses, such
+ * as a FIFO, leaves `dest` as it was, or absent. The whole copy is then renamed to `dest`, or merged into the folder
+ * already there, which keeps what `skip` names and anything else of the member's in it.
+ * If `dest` is a symlink (e.g. left over from setup-links.sh), it is removed once the copy is whole, so a real
+ * directory takes its place.
  * With `onLink`, a link in `src` is not copied (nor followed): `onLink` gets its
  * path relative to `src`. Without it, links are copied as links.
  */
@@ -289,32 +291,39 @@ export async function copyDir(
   src: string, dest: string, onLink?: (relativePath: string) => void, skip: readonly string[] = [],
 ): Promise<void> {
   const destExpanded = expandHome(dest);
+  const srcExpanded = expandHome(src);
+  const staging = path.join(path.dirname(destExpanded), `.${path.basename(destExpanded)}.${crypto.randomBytes(4).toString('hex')}.staging`);
 
   try {
-    const stat = await fse.lstat(destExpanded);
+    await copyRegularTree(srcExpanded, staging, {
+      filter: async (srcPath: string) => {
+        if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
+        // An entry `skip` names, and everything under it, is left as the destination has it.
+        const rel = path.relative(srcExpanded, srcPath).split(path.sep).join('/');
 
-    if (stat.isSymbolicLink()) {
-      await fse.remove(destExpanded);
+        if (skip.some((entry) => rel === entry || rel.startsWith(`${entry}/`))) return false;
+
+        if (onLink === undefined || srcPath === srcExpanded || !(await fse.lstat(srcPath)).isSymbolicLink()) return true;
+        onLink(path.relative(srcExpanded, srcPath).split(path.sep).join('/'));
+
+        return false;
+      },
+    });
+    let there: fse.Stats | undefined;
+
+    try {
+      there = await fse.lstat(destExpanded);
+    } catch (error) {
+      if (errnoCode(error) !== 'ENOENT') throw error;
     }
-  } catch {
-    // dest doesn't exist yet — that's fine
+
+    if (there?.isSymbolicLink()) await fse.remove(destExpanded);
+
+    if (there === undefined || there.isSymbolicLink()) await fse.rename(staging, destExpanded);
+    else await copyRegularTree(staging, destExpanded);
+  } finally {
+    await fse.remove(staging);
   }
-
-  const srcExpanded = expandHome(src);
-  await copyRegularTree(srcExpanded, destExpanded, {
-    filter: async (srcPath: string) => {
-      if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
-      // An entry `skip` names, and everything under it, is left as the destination has it.
-      const rel = path.relative(srcExpanded, srcPath).split(path.sep).join('/');
-
-      if (skip.some((entry) => rel === entry || rel.startsWith(`${entry}/`))) return false;
-
-      if (onLink === undefined || srcPath === srcExpanded || !(await fse.lstat(srcPath)).isSymbolicLink()) return true;
-      onLink(path.relative(srcExpanded, srcPath).split(path.sep).join('/'));
-
-      return false;
-    },
-  });
 }
 
 /**
