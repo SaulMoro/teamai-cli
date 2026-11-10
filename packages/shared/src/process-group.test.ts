@@ -248,3 +248,53 @@ it.skipIf(process.platform === 'win32')('stops a group recorded before ps answer
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+/** A directory with a `ps` that answers after `seconds`, as on a loaded machine, and the records folder. */
+function slowPs(seconds: number): { directory: string; bin: string; records: string } {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-slow-ps-'));
+  const bin = path.join(directory, 'bin');
+  const records = path.join(directory, 'records');
+  fs.mkdirSync(bin);
+  fs.mkdirSync(records);
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\nsleep ${seconds}\nexec /bin/ps "$@"\n`, { mode: 0o755 });
+  return { directory, bin, records };
+}
+
+it.skipIf(process.platform === 'win32')('records a group without holding the event loop while ps answers', async () => {
+  const { directory, bin, records } = slowPs(0.6);
+  const group = await detachedGroup();
+  try {
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    const started = performance.now();
+    const fired = new Promise<number>((resolve) => { setTimeout(() => resolve(performance.now() - started), 10); });
+    recordGroup(group.shell, records);
+    vi.unstubAllEnvs();
+
+    expect(await fired).toBeLessThan(400);
+    const file = path.join(records, `group-${group.pid}.json`);
+    await vi.waitFor(() => { expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ pid: group.pid, start: group.start }); }, { timeout: 5000 });
+    expect(JSON.parse(fs.readFileSync(path.join(records, 'group.json'), 'utf8'))).toEqual({ pid: group.pid, start: group.start });
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform === 'win32')('stops a group recorded while ps has not answered yet, and leaves no record behind', async () => {
+  const { directory, bin, records } = slowPs(0.6);
+  const group = await detachedGroup();
+  try {
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    recordGroup(group.shell, records, { isAttached: false });
+    vi.unstubAllEnvs();
+
+    await stopRecordedGroup(records);
+
+    expect(group.alive()).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(fs.readdirSync(records)).toEqual([]);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
