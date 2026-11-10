@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolFamily } from '@teamai/tool-core/family';
 import { ACCESS_LEVELS, type CallInput, type LaunchAdapter } from '@teamai/tool-core/launch';
@@ -46,7 +47,7 @@ export interface FamilyRecordings {
 
 /** The text of a recording beside a family's test, such as `new URL('./fixtures/x.json', import.meta.url)`. */
 export function fixtureText(url: URL): string {
-  return fs.readFileSync(fileURLToPath(url), 'utf8');
+  return readRegularFileSync(fileURLToPath(url), 'utf8');
 }
 
 const PROMPT = 'Reply with the name of the test runner.';
