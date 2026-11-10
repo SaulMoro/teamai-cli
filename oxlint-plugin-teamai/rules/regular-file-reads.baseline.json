@@ -18,7 +18,6 @@
   "packages/shared/src/process-group.ts": 1,
   "packages/tool-core/src/detect.ts": 1,
   "packages/tool-core/src/formats/ide-history.ts": 3,
-  "packages/tool-core/src/sessions/sqlite.ts": 2,
   "packages/tool-testing/src/conformance.ts": 1,
   "packages/tool-testing/src/fake-agent.ts": 2,
   "packages/tool-testing/src/fake-opencode.ts": 1,

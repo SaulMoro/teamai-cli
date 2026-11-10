@@ -10,7 +10,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
+import { openRegularFile } from '@teamai/shared/regular-file';
 import { WIN_EXEC_EXTENSIONS } from '../cli-path.js';
 import { execCommand } from '../exec.js';
 
@@ -41,6 +43,11 @@ export function findSqlite3(platform: NodeJS.Platform = process.platform): strin
   return null;
 }
 
+/** Copies `from`, which must be a regular file: a FIFO a tool's process left there is refused, not waited on. */
+async function copyRegularFile(from: string, to: string): Promise<void> {
+  await pipeline((await openRegularFile(from)).createReadStream(), fs.createWriteStream(to));
+}
+
 /**
  * Writes a consistent copy of `db`, a database another tool owns and may be writing in WAL mode, to `target`, without
  * creating anything beside it. While a writer has it open, its `-shm` file exists, and sqlite3 takes the snapshot with a
@@ -50,8 +57,8 @@ export function findSqlite3(platform: NodeJS.Platform = process.platform): strin
  */
 export async function snapshotSqlite(sqlite3: string, db: string, target: string): Promise<void> {
   if (!fs.existsSync(`${db}-shm`)) {
-    await fs.promises.copyFile(db, target);
-    await fs.promises.copyFile(`${db}-wal`, `${target}-wal`).catch((cause: unknown) => {
+    await copyRegularFile(db, target);
+    await copyRegularFile(`${db}-wal`, `${target}-wal`).catch((cause: unknown) => {
       if (!(cause instanceof Error && 'code' in cause && cause.code === 'ENOENT')) throw cause;
     });
 
