@@ -208,6 +208,18 @@ describe('runConfinedStepOnRuntime', () => {
     expect(ended).toMatchObject({ kind: 'ran', report: { outcome: 'success', confined: { model: { alias: 'judge', requested: 'sonnet' } } } });
   });
 
+  // A benchmark verifies its pinned judge by the model the tool reported, and sums what each judge cost.
+  it('reports the model and cost the runtime says the tool ran on', async () => {
+    const dir = await dirWith(root, 'evidence', { 'diff.txt': '+ a line\n' });
+    const cost = { amount: 0.02, unit: 'USD' };
+    const { attemptRun } = judgeRun(() => undefined, { kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { label: 'good' } }, confined: { level: 'best-effort', access: 'read' }, model: 'claude-sonnet-4-5', cost });
+    const lease = { ...leaseIn(dir, { model: 'sonnet' }), confined: { dir, level: 'best-effort' as const, tools: ['claude'] } };
+
+    const ended = await runConfinedStepOnRuntime({ config, run, secrets: {}, lease, signal: new AbortController().signal, runtime: 'toy', attemptRun, offers: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], credentials: {} });
+
+    expect(ended).toMatchObject({ kind: 'ran', report: { outcome: 'success', cost, confined: { model: { requested: 'sonnet', reported: 'claude-sonnet-4-5' }, usage: { cost } } } });
+  });
+
   const limited = 'claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): You\'ve hit your limit · resets 3pm (Europe/Madrid)';
 
   it.each([

@@ -10,6 +10,7 @@ import type { ConfinedTool } from '../tool-launch/tools.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { isAgentToolId } from '../tool-registry.js';
 import { JsonValueSchema, type JsonValue, type LocalConfig } from '../types.js';
+import { observedModel } from '../agent-observation.js';
 import { AttemptResult } from './attempt-result.js';
 import type { ReportInput } from './engine.js';
 import type { ConfinedLease, LeaseWire } from './lease-wire.js';
@@ -281,8 +282,9 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
       const outputs = JsonValueSchema.safeParse(end.result.output);
 
       if (!outputs.success) return failed({ code: 'confined_reply_invalid', message: `${tool} on step runtime "${runtime}" replied with no JSON value.` });
-      const usage = end.usage && { inputTokens: end.usage.input, outputTokens: end.usage.output };
-      const ran: ConfinedRunReport = { tool, isolation: kept.level, access: kept.access, ...(usage && { usage }), ...(model && { model: { requested: model.name, ...(alias !== undefined && { alias }) } }) };
+      const usage = (end.usage || end.cost) && { ...(end.usage && { inputTokens: end.usage.input, outputTokens: end.usage.output }), ...(end.cost && { cost: end.cost }) };
+      const observed = observedModel({ requested: model?.name, reported: end.model, alias });
+      const ran: ConfinedRunReport = { tool, isolation: kept.level, access: kept.access, ...(usage && { usage }), ...(observed && { model: observed }) };
 
       return { outcome: 'success', tool, outputs: outputs.data, durationMs, confined: ran, ...spentOf(usage), ...(model && { model: model.name }) };
     }
