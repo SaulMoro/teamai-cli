@@ -8,7 +8,7 @@ A [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs
 
 The toy runtime in the teamai repository, `src/__tests__/fixtures/runtime-toy/runtime.mjs`, is the template. It runs each command on the host, keeps its handles and outcomes in a state directory so a restarted teamai can reattach, and with its `agent` option it launches agents its own way, as T3 and Paseo do. Copy it, and replace what it runs.
 
-It imports two modules of the teamai repository, which you bundle into your runtime's one executable file, as the tests do with the toy (`src/__tests__/helpers/toy-runtime.ts`):
+You write it in the teamai repository, since the modules it uses are not published: bundle them into your runtime's one executable file, as the tests do with the toy (`src/__tests__/helpers/toy-runtime.ts`). The toy also imports `@teamai/tool-core/sessions/fs`, for its `transcript` option; drop it with that option. The protocol's two modules:
 
 | Module | What it gives you |
 | --- | --- |
@@ -19,7 +19,7 @@ Put the bundled file where teamai finds a runtime, such as `runtimes/<name>/runt
 
 ## Test it against the scenario suite
 
-`src/__tests__/step-runtime-scenarios.test.ts` runs one suite that `host`, `tools`, the sandbox, T3 and Paseo runtimes and the toy pass, through `StepRuntime` alone: open, exec, prompt, cancel, a teamai killed and restarted, close. Add your runtime to `SUBJECTS` as the toy is there:
+`src/__tests__/step-runtime-scenarios.test.ts` runs the scenarios that `host`, `tools`, the sandbox, T3 and Paseo runtimes and the toy pass, through `StepRuntime` alone: open, exec or prompt, cancel, a teamai killed and restarted, close. A runtime that runs commands goes in `SUBJECTS`, as the toy is there:
 
 ```ts
 {
@@ -31,7 +31,7 @@ Put the bundled file where teamai finds a runtime, such as `runtimes/<name>/runt
 },
 ```
 
-`retains: true` says your runtime keeps outcomes across a restart of its own process. A runtime that launches agents its own way goes in `PROMPT_SUBJECTS` too. For tests of your own, `@teamai/runtime-testing/connect` starts your bundled file as teamai does and speaks protocol 1 to it, and `@teamai/runtime-testing/leaks` checks that a test left nothing running.
+`retains: true` says your runtime keeps outcomes across a restart of its own process. A runtime that launches agents its own way goes in `PROMPT_SUBJECTS`, and in `SUBJECTS` too only when it also runs commands. For tests of your own, `@teamai/runtime-testing/connect` starts your bundled file as teamai does and speaks protocol 1 to it, and `@teamai/runtime-testing/leaks` checks that a test left nothing running.
 
 ## The protocol
 
@@ -117,7 +117,7 @@ A workflow's `setup` runs in the step's place on your runtime too, before the st
 → {"type":"exec","op":"op-7a31…","handle":"toy-r…-a…","argv":["claude","-p","…"],…}
 ```
 
-The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. A `cancel` of an operation that already ended answers that end again and stops nothing; only `cancel_failed` is replaced (below). teamai logs a warning, with a count, for an end of an operation it no longer waits on. An option it does not take fails `init` with `bad_option` and the key.
+The other requests are `cancel`, `collect`, `reattach` and `close`, and `wake` for a runtime whose `init` answered `"wake":true`: it starts a fleet member on another machine it reaches with the request's `message`, answers `woken` with `where`, and never follows what it started. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. A `cancel` of an operation that already ended answers that end again and stops nothing; only `cancel_failed` is replaced (below). teamai logs a warning, with a count, for an end of an operation it no longer waits on. An option it does not take fails `init` with `bad_option` and the key.
 
 Answer `closed` to a `close` of a handle you already closed. Once teamai removes a clone or a team folder of a run, it closes again the last place your runtime closed for that run, so your runtime can see at a `close` that the folder is gone, and remove what it added for it.
 
@@ -248,16 +248,7 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 ← {"op":"op-83bf2a9d01e4","event":"failed","failure":{"code":"usage_limited","message":"claude hit its usage limit, which resets at 14:00."}}
 ```
 
-A tool teamai launches itself, on `local` or through a runtime's `exec`, needs no runtime for this: teamai reads the limit in Claude's, Codex's or OpenCode's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too. So does an answer step's call, on the tool `ai.tool` names.
-
-The local driver does not fail such a step. It hands the step back, and launches nothing more on that tool, on any runtime of the driver, until the limit resets; then it runs the step again, in the same workspace, with what the tool did there before it stopped. Steps on other tools go on, and an instance with a home of its own has a limit of its own. So does a fleet member, which signs in with its own account: a limit it meets holds that tool on the fleet only, and a runtime here may run the step meanwhile. Once only the limit holds the steps left, the driver waits for the reset, at most 6 hours when nobody attends. Past that, or for a reset after it, a fleet entry of the driver may take the step; otherwise the run is offered on teamai-reports, as for a step only a person can take. At a terminal, the driver asks instead:
-
-```text
-⚠ Step "review" stopped: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.
-claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here until it resets, or offer run r7a1… to another machine on teamai-reports? [wait/offer]
-```
-
-The skill driver holds such a step the same way when the child that ran it reports `usage_limited`: it keeps the limit with the run between calls, each turn says what the step waits for, and once the limit resets it dispatches the step again. Unattended, past the 6 hours, it offers the run on teamai-reports. When it cannot, the turn says why and ends the loop with the step held: continue the run from the session once the limit resets.
+A tool teamai launches itself needs no runtime for this, and what the run does with a step its tool's limit stopped is in [When a tool hits its usage limit](workflow-advanced.md#when-a-tool-hits-its-usage-limit).
 
 A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed`, ending its message with the command that retries the step: `Then run: teamai workflow retry <run> <step>`. So does a confined prompt, such as a judge's. A confined prompt that stops on its tool's usage limit fails `usage_limited`: teamai does not wait for that limit to reset. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
 

@@ -8,7 +8,7 @@
 
 teamai 仓库中的 toy 运行时 `src/__tests__/fixtures/runtime-toy/runtime.mjs` 就是模板。它在主机上运行每个命令，把句柄和结果保存在一个状态目录里，让重启后的 teamai 能重新连接；加上 `agent` 选项后，它像 T3 和 Paseo 那样自己启动智能体。复制它，再替换它运行的内容。
 
-它导入 teamai 仓库中的两个模块，你要把它们打包进运行时唯一的可执行文件，就像测试对 toy 做的那样（`src/__tests__/helpers/toy-runtime.ts`）：
+你在 teamai 仓库里编写它，因为它用到的模块没有发布：把它们打包进运行时唯一的可执行文件，就像测试对 toy 做的那样（`src/__tests__/helpers/toy-runtime.ts`）。toy 还为它的 `transcript` 选项导入了 `@teamai/tool-core/sessions/fs`；去掉这个选项时一并去掉它。协议的两个模块：
 
 | 模块 | 提供什么 |
 | --- | --- |
@@ -19,7 +19,7 @@ teamai 仓库中的 toy 运行时 `src/__tests__/fixtures/runtime-toy/runtime.mj
 
 ## 用场景测试套件测试它
 
-`src/__tests__/step-runtime-scenarios.test.ts` 运行一套 `host`、`tools`、sandbox、T3、Paseo 运行时和 toy 都通过的测试，只经过 `StepRuntime`：open、exec、prompt、cancel、teamai 被杀掉后重启、close。像 toy 那样把你的运行时加进 `SUBJECTS`：
+`src/__tests__/step-runtime-scenarios.test.ts` 运行 `host`、`tools`、sandbox、T3、Paseo 运行时和 toy 都通过的场景，只经过 `StepRuntime`：open、exec 或 prompt、cancel、teamai 被杀掉后重启、close。运行命令的运行时像 toy 那样加进 `SUBJECTS`：
 
 ```ts
 {
@@ -31,7 +31,7 @@ teamai 仓库中的 toy 运行时 `src/__tests__/fixtures/runtime-toy/runtime.mj
 },
 ```
 
-`retains: true` 表示你的运行时在自己的进程重启后仍保留结果。自己启动智能体的运行时还要加进 `PROMPT_SUBJECTS`。写你自己的测试时，`@teamai/runtime-testing/connect` 像 teamai 那样启动你打包的文件并用协议 1 与它通信，`@teamai/runtime-testing/leaks` 检查测试没有留下任何还在运行的东西。
+`retains: true` 表示你的运行时在自己的进程重启后仍保留结果。自己启动智能体的运行时加进 `PROMPT_SUBJECTS`，只有它也运行命令时才同时加进 `SUBJECTS`。写你自己的测试时，`@teamai/runtime-testing/connect` 像 teamai 那样启动你打包的文件并用协议 1 与它通信，`@teamai/runtime-testing/leaks` 检查测试没有留下任何还在运行的东西。
 
 ## 协议
 
@@ -117,7 +117,7 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 → {"type":"exec","op":"op-7a31…","handle":"toy-r…-a…","argv":["claude","-p","…"],…}
 ```
 
-其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。对已经结束的操作发出的 `cancel`，再次给出那个结束结果，不停止任何东西；只有 `cancel_failed` 会被替换（见下文）。teamai 收到它已不再等待的操作的结束结果时，会记录一条带计数的警告。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
+其他请求是 `cancel`、`collect`、`reattach` 和 `close`；`init` 回答了 `"wake":true` 的运行时还会收到 `wake`：它用请求的 `message` 在它能到达的另一台机器上启动一个 fleet 成员，以带 `where` 的 `woken` 回答，之后不再跟踪它启动的东西。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。对已经结束的操作发出的 `cancel`，再次给出那个结束结果，不停止任何东西；只有 `cancel_failed` 会被替换（见下文）。teamai 收到它已不再等待的操作的结束结果时，会记录一条带计数的警告。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
 对已经关闭过的句柄再次发来的 `close`，回答 `closed`。teamai 删除某次运行的克隆或团队目录后，会再关闭一次你的运行时为这次运行最后关闭的位置，这样你的运行时能在 `close` 时看到那个目录已经不在，并删除它为该目录添加的东西。
 
@@ -248,16 +248,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 ← {"op":"op-83bf2a9d01e4","event":"failed","failure":{"code":"usage_limited","message":"claude hit its usage limit, which resets at 14:00."}}
 ```
 
-teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）不需要运行时做这件事：teamai 从 Claude、Codex 或 OpenCode 自己的错误中识别额度上限，并保留原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算一次。answer 步骤的调用也一样，它用 `ai.tool` 指定的工具。
-
-本地驱动不会让这样的步骤失败。它交还该步骤，在额度重置前不再在驱动的任何运行时上用这个工具启动步骤；重置后在同一个工作区里再运行该步骤，工具停止前在那里做的改动都还在。用其他工具的步骤照常运行，有自己 home 的实例有自己的额度。fleet 成员也是如此，它用自己的账号登录：它遇到的额度只在 fleet 上挡住该工具，这期间本机的运行时可以运行该步骤。剩下的步骤只被额度挡住时，驱动等待重置，无人值守时最多等 6 小时。超过这个时间，或重置在它之后，驱动的 fleet 条目可以接手该步骤；否则运行会在 teamai-reports 上交出，就像只有人能处理的步骤那样。在终端里，驱动会改为询问：
-
-```text
-⚠ Step "review" stopped: claude hit its usage limit: You've hit your limit · resets 3pm (Europe/Madrid). teamai launches no more steps on claude until its limit resets, then runs the step again.
-claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here until it resets, or offer run r7a1… to another machine on teamai-reports? [wait/offer]
-```
-
-运行该步骤的子智能体报告 `usage_limited` 时，skill 驱动也这样挡住该步骤：它在两次调用之间把额度上限和运行一起保存，每一轮都说明该步骤在等什么，额度重置后再次派发该步骤。无人值守时，超过 6 小时，它会在 teamai-reports 上交出运行。交不出时，这一轮会说明原因，并在步骤仍被挡住的情况下结束循环：额度重置后，从该会话继续这个运行。
+teamai 自己启动的工具不需要运行时做这件事。工具的上限让步骤停下后，运行怎么处理它，见 [工具达到用量上限时](workflow-advanced.md#工具达到用量上限时)。
 
 守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，消息末尾带上重试该步骤的命令：`Then run: teamai workflow retry <run> <step>`。受限提示（例如评审的提示）也一样。受限提示因工具的用量上限而停止时，以 `usage_limited` 失败：teamai 不会等待该上限重置。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
 
