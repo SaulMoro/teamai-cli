@@ -21,13 +21,13 @@ const CallLineSchema = z.object({
   kind: z.literal('call'),
   /** The call: `poll` is `next --wait`, `unavailable` is `report --model-unavailable`. */
   call: z.enum(['start', 'resume', 'next', 'poll', 'takeover', 'choose', 'ack', 'adopt', 'respond', 'report', 'unavailable']),
-  /** `orchestrator`: the session that drives the run made it; `session`: another session; `none`: a host that names no session. */
+  /** `orchestrator`: the session that drives the run made it; `session`: another session; `none`: a session host that names no session. */
   by: z.enum(['orchestrator', 'session', 'none']),
   /** Whether it ran from the checkout the run started in, as the orchestrator does: a child that shares its session runs from its own place. */
   inCheckout: z.boolean(),
   attempt: AttemptIdSchema.optional(),
   step: z.string().optional(),
-  /** The host question's option, or the gate's. */
+  /** The session host question's option, or the gate's. */
   choice: z.string().optional(),
   /** The error code; for an ack `acked`, for a report what its runner answer says (`reported`, `repeated`, ...); else `ok`. */
   answer: z.string(),

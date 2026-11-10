@@ -204,7 +204,7 @@ const SkillStateSchema = z.object({
   /**
    * The session host of the run, the coding session that drives it: the key `host` names the session host, and a stored
    * skill state keeps that spelling. `none`: the run has no prompt step. `pending`: the agent has not answered the session
-   * host question yet; a run without a prompt step (`hasPromptStep` false) asks it only for its judge, and a state from
+   * session host question yet; a run without a prompt step (`hasPromptStep` false) asks it only for its judge, and a state from
    * before it was kept had one. `places: 'host'`: the session host makes the places.
    */
   host: z.discriminatedUnion('kind', [

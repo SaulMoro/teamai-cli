@@ -85,7 +85,7 @@ function turnOf(answer: Awaited<ReturnType<Made['call']>>) {
   return answer.data.turn;
 }
 
-/** Starts PAIR, answers the host question, and acks both dispatches, so nothing is left for a poll to show: the dispatches. */
+/** Starts PAIR, answers the session host question, and acks both dispatches, so nothing is left for a poll to show: the dispatches. */
 async function dispatched(made: Made) {
   const { run } = turnOf(await made.call({ kind: 'start', name: 'pair', answers: { parallel: 2, confirmed: false }, inputs: undefined }));
   const turn = turnOf(await made.call({ kind: 'choose', run, choice: 'h1' }));

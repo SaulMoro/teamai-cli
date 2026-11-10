@@ -487,10 +487,10 @@ describe('skill driver', () => {
     expect(fs.existsSync(path.join(getDataHome(harness.config), 'workflows', 'runs'))).toBe(false);
   });
 
-  it('refuses a start of a workflow without invoke from a host that sets no agent session variable, since only a coding agent drives --driver skill', async () => {
+  it('refuses a start of a workflow without invoke from a session host that sets no agent session variable, since only a coding agent drives --driver skill', async () => {
     const harness = await skillHarness({ check: CHECK.replace('invoke: allow\n', '') });
     roots.push(harness.root);
-    // The test env carries no agent session variable, as a host that sets none.
+    // The test env carries no agent session variable, as a session host that sets none.
     const { evidence } = await skillContext({ config: harness.config, toolPaths: harness.context.toolPaths, env: harness.context.env, cwd: harness.work, aiTools: [] });
     const message = 'Workflow "check" has invoke: deny, so no coding agent starts it, with any driver, and this command uses --driver skill, which only a coding agent drives. The person can start it from their own terminal with teamai workflow start check --driver local. To let agents start it, the team sets invoke: allow, or invoke: ask for a start after the person agrees, in workflows/check.yaml.';
     expect(await harness.call({ kind: 'describe', name: 'check' }, { evidence })).toMatchObject({ data: { describe: { ask: { kind: 'local', reason: message, start: 'teamai workflow start check --driver local --tools default=claude' } } } });
@@ -780,7 +780,7 @@ describe('skill driver', () => {
     expect(brief).not.toContain('your last message');
   });
 
-  it('h3 asks the host for a place, adopts it, and a continue step reuses it', async () => {
+  it('h3 asks the session host for a place, adopts it, and a continue step reuses it', async () => {
     const harness = await skillHarness({ change: CHANGE });
     roots.push(harness.root);
     const started = await harness.call({ kind: 'start', name: 'change', answers: { confirmed: false }, inputs: undefined });
@@ -834,7 +834,7 @@ describe('skill driver', () => {
     fs.writeFileSync(result(write.brief), JSON.stringify({ kind: 'output', output: 'Wrote the change.', changed: ['change.txt'] }));
     expect(await harness.call({ kind: 'report', run, attempt: write.attempt, role: 'agent', modelUnavailable: false })).toMatchObject({ data: { runner: { status: 'reported' } } });
 
-    // polish continues the branch in the place the host made, and nobody is asked for another.
+    // polish continues the branch in the place the session host made, and nobody is asked for another.
     const next = await harness.call({ kind: 'next', run, wait: false });
     if (!('data' in next) || !('turn' in next.data)) throw new Error(JSON.stringify(next));
     const [polish] = next.data.turn.actions;
@@ -848,7 +848,7 @@ describe('skill driver', () => {
     await harness.call({ kind: 'report', run, attempt: polish.attempt, role: 'agent', modelUnavailable: false });
     const done = await harness.call({ kind: 'next', run, wait: false });
     expect(done).toMatchObject({ data: { turn: { status: 'done', actions: [{ kind: 'done', outcome: 'succeeded' }] } } });
-    // TeamAI leaves the place to its host, with both steps committed on the branch.
+    // TeamAI leaves the place to its session host, with both steps committed on the branch.
     expect(fs.readFileSync(path.join(dir, 'change.txt'), 'utf8')).toBe('written\npolished\n');
     expect(execFileSync('git', ['log', '--format=%s', `teamai/${run}/work/p1`], { cwd: dir, encoding: 'utf8' }).trim().split('\n')).toHaveLength(3);
   });
@@ -956,7 +956,7 @@ steps:
     expect(execFileSync('git', ['log', '--format=%s', `teamai/${run}/work/p1`], { cwd: dir, encoding: 'utf8' })).not.toContain('.setup-out');
   });
 
-  it('leaves a host file in place when a read-only command in an adopted place is already dirty', async () => {
+  it('leaves a session host file in place when a read-only command in an adopted place is already dirty', async () => {
     const commands: string[] = [];
     const harness = await skillHarness({ change: `schemaVersion: v1alpha1
 name: change
@@ -1301,7 +1301,7 @@ steps:
     expect(await harness.call({ kind: 'describe', name: 'review' }, { tool })).toMatchObject({ data: { describe: { judging: { kind: 'session', tool: 'pi' } } } });
   });
 
-  it('describe tells a session whose host names no tool how to name it, as nobody judges its run here until it does', async () => {
+  it('describe tells a session whose session host names no tool how to name it, as nobody judges its run here until it does', async () => {
     const harness = await skillHarness({ review: REVIEW }, { scorers: { 'review-quality': REVIEW_QUALITY }, tool: null });
     roots.push(harness.root);
     expect(await harness.call({ kind: 'describe', name: 'review' })).toMatchObject({ data: { describe: {
@@ -1310,7 +1310,7 @@ steps:
     } } });
   });
 
-  it('describe tells a session whose host names no tool to name it, when the workflow has prompt steps and nothing scored', async () => {
+  it('describe tells a session whose session host names no tool to name it, when the workflow has prompt steps and nothing scored', async () => {
     const harness = await skillHarness({ review: REVIEW.replace('    scorers: { names: [review-quality], start: workflow }', '    model: claude-opus-4-1') }, { tool: null });
     roots.push(harness.root);
     expect(await harness.call({ kind: 'describe', name: 'review' })).toMatchObject({ data: { describe: { judging: { kind: 'none' }, ask: {
@@ -1318,7 +1318,7 @@ steps:
     } } } });
   });
 
-  it('gives a session whose host names no tool a resume of a run it does not drive with a {tool} slot to fill', async () => {
+  it('gives a session whose session host names no tool a resume of a run it does not drive with a {tool} slot to fill', async () => {
     const harness = await skillHarness({ check: CHECK }, { tool: null });
     roots.push(harness.root);
     const other = await harness.context.client.start('check', { checkout: harness.work, caller: { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' }, startedBy: 'person' });
@@ -1340,7 +1340,7 @@ steps:
     expect(await harness.call({ kind: 'start', name: 'review', answers: { confirmed: false, judge: false }, inputs: undefined })).toMatchObject({ data: { turn: { status: 'driving' } } });
   });
 
-  it('a step that needs a model fails once a session whose host names no tool takes the run over, and says how to name it', async () => {
+  it('a step that needs a model fails once a session whose session host names no tool takes the run over, and says how to name it', async () => {
     const harness = await skillHarness({ review: REVIEW.replace('    prompt: Review the change.', '    prompt: Review the change.\n    model: claude-opus-4-1') }, { tool: null });
     roots.push(harness.root);
     const started = await harness.call({ kind: 'start', name: 'review', answers: { confirmed: false }, inputs: undefined, tool: 'claude' });
@@ -1358,7 +1358,7 @@ steps:
     expect(await harness.call({ kind: 'start', name: 'review', answers: { confirmed: false, judge: false }, inputs: undefined })).toMatchObject({ data: { turn: { status: 'driving' } } });
   });
 
-  it('a step with an exact model dispatches it as written, even once a session whose host names no tool takes the run over', async () => {
+  it('a step with an exact model dispatches it as written, even once a session whose session host names no tool takes the run over', async () => {
     const harness = await skillHarness({ review: REVIEW.replace('    prompt: Review the change.', '    prompt: Review the change.\n    model: { name: claude-opus-4-1, effort: high }') }, { tool: null });
     roots.push(harness.root);
     const started = await harness.call({ kind: 'start', name: 'review', answers: { confirmed: false }, inputs: undefined, tool: 'claude' });
@@ -1490,7 +1490,7 @@ steps:
       .toMatchObject({ error: { code: 'confirm_needed', next: 'teamai workflow start --describe review --driver skill --tools default=claude' } });
   });
 
-  it('a session whose host names no tool names it with --tools: its runner resolves the step\'s model for that tool', async () => {
+  it('a session whose session host names no tool names it with --tools: its runner resolves the step\'s model for that tool', async () => {
     const harness = await skillHarness({ review: REVIEW.replace('    prompt: Review the change.', '    prompt: Review the change.\n    model: claude-opus-4-1') }, { scorers: { 'review-quality': REVIEW_QUALITY }, tool: null });
     roots.push(harness.root);
     unverifiedClaude(harness);
@@ -1499,7 +1499,7 @@ steps:
     expect(done).toMatchObject({ data: { turn: { status: 'done', actions: [{ kind: 'done', outcome: 'succeeded' }] } } });
   });
 
-  it('a session whose host has no child agent judges its run in the background, at best-effort, on its tool on PATH', async () => {
+  it('a session whose session host has no child agent judges its run in the background, at best-effort, on its tool on PATH', async () => {
     const scoring: { label?: RunId } = {};
     const harness = await skillHarness({ review: REVIEW, 'label-pass': LABEL_PASS('best-effort') }, { scorers: { 'review-quality': REVIEW_QUALITY }, client: scoringStarted(scoring) });
     roots.push(harness.root);
@@ -1511,7 +1511,7 @@ steps:
     expect(typeof judged === 'object' && judged.steps.find((step) => step.id === 'score[0].judge')).toMatchObject({ confined: { tool: 'claude', isolation: 'best-effort' } });
   });
 
-  it('a session whose host has no child agent, and whose tool is not on PATH, does not judge its run: choosing h4 turns judging off', async () => {
+  it('a session whose session host has no child agent, and whose tool is not on PATH, does not judge its run: choosing h4 turns judging off', async () => {
     const harness = await skillHarness({ review: REVIEW }, { scorers: { 'review-quality': REVIEW_QUALITY } });
     roots.push(harness.root);
     vi.stubEnv('PATH', path.join(harness.root, 'empty-bin'));
@@ -1520,7 +1520,7 @@ steps:
     expect(done).toMatchObject({ data: { turn: { status: 'done', actions: [{ kind: 'done', outcome: 'succeeded' }] } } });
   });
 
-  it('a run of commands alone that its session judges asks the host question for its judging alone: h4 turns judging off, and its steps still run in a new worktree', async () => {
+  it('a run of commands alone that its session judges asks the session host question for its judging alone: h4 turns judging off, and its steps still run in a new worktree', async () => {
     const build = 'schemaVersion: v1alpha1\nname: build\ndescription: Build\ninvoke: allow\nsteps:\n  - id: edit\n    workspace: new\n    command: node -e "require(\'fs\').writeFileSync(\'built.txt\', \'1\')"\n';
     const gated = 'schemaVersion: v1alpha1\nname: gated\ndescription: Build, scored\ninvoke: allow\nsteps:\n  - id: built\n    workflow: build\n    scorers: [review-quality]\n';
     const harness = await skillHarness({ build, gated }, { scorers: { 'review-quality': REVIEW_QUALITY }, tool: 'pi' });

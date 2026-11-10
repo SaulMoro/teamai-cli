@@ -69,16 +69,16 @@ export interface DispatchAction {
   model: ModelPick;
   ack: Literal;
   report: Literal;
-  /** Present when the model names one: run it instead when the host cannot run that model. */
+  /** Present when the model names one: run it instead when the session host cannot run that model. */
   unavailable?: Literal;
   /** Present when an earlier session was shown this dispatch: what to do about the child it may have started. */
   reissued?: string;
-  /** The child of an earlier step whose conversation this step goes on in: send it the brief when your host can reach it. */
+  /** The child of an earlier step whose conversation this step goes on in: send it the brief when your session host can reach it. */
   continue?: { title: string };
 }
 
 /**
- * A step whose child works in a place the host makes: shown in every foreground turn until `adopt` runs. The host
+ * A step whose child works in a place the session host makes: shown in every foreground turn until `adopt` runs. The host
  * makes a worktree of this repository named `name`, on `branch` from commit `start`, and `adopt`, with its directory
  * in the `{dir}` slot, hands it to TeamAI.
  */
@@ -92,7 +92,7 @@ export interface PlaceAction {
   adopt: Literal;
   /** Why the place adopted last was refused: what to fix in it, or make another. */
   refused?: string;
-  /** The skill-data reference on host places. */
+  /** The skill-data reference on session host places. */
   reference: string;
 }
 
@@ -161,7 +161,7 @@ export interface OfferedAction {
 }
 
 export type Action =
-  /** The agent's own answer, once per run with prompt steps: how its host runs a child. */
+  /** The agent's own answer, once per run with prompt steps: how its session host runs a child. */
   | { kind: 'choose'; about: 'host'; decide: 'agent'; question: string; options: Array<{ id: SessionHostChoice; label: string; run: Literal }>; reference: string }
   | StopAction
   | DispatchAction
@@ -319,9 +319,9 @@ function refusalMessage(refusal: Refusal, local: { invocation: Invocation; tool?
     case 'orchestrator_active':
       return `Run ${refusal.run} is driven by another coding session, which last called ${refusal.idleSeconds} s ago. Ask the person whether that session is gone, and run the command in next only when they agree to take the run over here; otherwise the run goes on from that session.`;
     case 'choice_pending':
-      return `Run ${refusal.run} waits for the host question. Run the next literal, then the run of the option that fits your host.`;
+      return `Run ${refusal.run} waits for the session host question. Run the next literal, then the run of the option that fits your session host.`;
     case 'unknown_choice':
-      return `Run ${refusal.run} asks no host question now: its host is already chosen, or nothing in it needs a child agent. Run the next literal to see the run.`;
+      return `Run ${refusal.run} asks no session host question now: its session host is already chosen, or nothing in it needs a child agent. Run the next literal to see the run.`;
     case 'unknown_offer':
       return `Attempt ${refusal.attempt} of run ${refusal.run} has no dispatch to ack. Run the next literal to see the run.`;
     case 'unknown_attempt':
@@ -346,7 +346,7 @@ export type SkillAnswer =
   /**
    * What a runner answers once it is done with its attempt, and what an agent's report answers: `reported`; `repeated`
    * when the attempt was settled before; `offered` to the agent; `queued` behind the attempt that holds its place;
-   * `placing` when it waits for the agent to adopt a place its host made; `gone` when the attempt closed without its
+   * `placing` when it waits for the agent to adopt a place its session host made; `gone` when the attempt closed without its
    * report; or `held` when another live runner of the attempt holds its lock and this call did nothing.
    */
   | { data: { runner: { attempt: AttemptId; status: 'reported' | 'repeated' | 'offered' | 'queued' | 'placing' | 'gone' | 'held' } } }
@@ -427,7 +427,7 @@ export function scoringWaits(scoring: readonly SkillState[]): boolean {
 }
 
 /**
- * What waits for the agent: the host question; else every child to stop, then every dispatch not acked yet, of this run
+ * What waits for the agent: the session host question; else every child to stop, then every dispatch not acked yet, of this run
  * and of each run in `scoring` (J8), then every place to adopt, then the gate; and the end once the run is done.
  */
 function actionsOf(state: SkillState, scoring: readonly SkillState[]): Action[] {
