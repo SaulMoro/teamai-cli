@@ -139,9 +139,10 @@ beforeAll(async () => {
   }));
   fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'spend.yaml'), 'schemaVersion: v1alpha1\nname: spend\ndescription: spend\nsteps:\n  - id: spend\n    tool: claude\n    prompt: Spend tokens.\n    budget: { tokens: 300 }\n    on_limit: end_turn\n');
+  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'slow.yaml'), 'schemaVersion: v1alpha1\nname: slow\ndescription: slow\nsteps:\n  - id: slow\n    tool: claude\n    prompt: Spend tokens.\n    timeout: 2s\n    on_limit: end_turn\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'pair.yaml'), 'schemaVersion: v1alpha1\nname: pair\ndescription: pair\nsteps:\n  - id: plan\n    tool: claude\n    prompt: Plan the change.\n    output:\n      ok: boolean\n  - id: apply\n    needs: [plan]\n    session:\n      from: plan\n    prompt: Make the change you planned.\n    output:\n      ok: boolean\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'review.yaml'), 'schemaVersion: v1alpha1\nname: review\ndescription: review\nsteps:\n  - id: review\n    tool: claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
-  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'codexreview.yaml'), 'schemaVersion: v1alpha1\nname: codexreview\ndescription: codexreview\nsteps:\n  - id: review\n    tool: codex\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
+  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'codexreview.yaml'), 'schemaVersion: v1alpha1\nname: codexreview\ndescription: codexreview\nsteps:\n  - id: review\n    tool: codex\n    prompt: Review the repository.\n    max_turns: 3\n    output:\n      ok: boolean\n');
   // Setup prints the names it gets, then fails, so its output is quoted in the failure.
   writeFlow('setupnames', 'env | cut -d= -f1 | sort | tr "\\n" " "; exit 3');
   writeFlow('setupsecret', 'printf "%s" "$NPM_TOKEN" > .npmrc');
@@ -224,6 +225,14 @@ it("runs a Claude prompt step's tool itself in the attempt's container, keeps it
   expect(transcripts.every((file) => file.includes(`tool-home${path.sep}claude${path.sep}projects`))).toBe(true);
 });
 
+it('stops a prompt step at its timeout in the container, and ends its turn there with its session', async () => {
+  const ran = await runCLI(['workflow', 'start', 'slow', '--driver', 'boxed'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
+
+  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  const [slow] = readRunState(ran).steps;
+  expect(slow).toMatchObject({ status: 'succeeded', limit: 'timeout', session: expect.stringMatching(/^sess-/) });
+});
+
 it('stops a prompt step past its budget in the container, and ends its turn there with its session', async () => {
   const ran = await runCLI(['workflow', 'start', 'spend', '--driver', 'boxed'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
 
@@ -259,6 +268,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, o
     const ran = await runCLI(['workflow', 'start', 'codexreview', '--driver', 'codexlogin'], repo, engineEnv);
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    // Codex has no turn cap the sandbox could keep, so the step says it was not kept.
+    expect(readRunState(ran).steps).toMatchObject([{ id: 'review', unenforced: [{ requirement: 'max_turns', asked: 3 }] }]);
     expect(engineCalls().slice(before).filter(([command, ...rest]) => command === 'exec' && rest.includes('codex'))).toHaveLength(1);
     expect(fs.readFileSync(dedicated, 'utf8')).toBe(login('r1-next'));
     expect(fs.existsSync(path.join(os.homedir(), '.teamai', 'logins', 'codex.lock'))).toBe(false);
