@@ -17,7 +17,7 @@ import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
-import { attemptToolHome, readAttemptRuntime } from '../workflow/runtimes/attempt.js';
+import { attemptToolHome, readAttemptRuntime, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/definitions.js';
 import { cancelRun } from '../workflow/run-controls.js';
@@ -1331,7 +1331,10 @@ steps:
 });
 
 describe('a step an earlier driver leased in teamai\'s process', () => {
-  it('goes back to the tools runtime of a definition that lists an external runtime before it, not to that runtime', async () => {
+  it.each([
+    { recorded: true, goesTo: 'tools' },
+    { recorded: false, goesTo: 'toy' },
+  ])('with an in-process record $recorded, goes back to $goesTo of a definition that lists the toy before tools', async ({ recorded, goesTo }) => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build
 description: Review the project.
@@ -1352,8 +1355,14 @@ steps:
     fs.writeFileSync(path.join(personalDir('drivers'), 'mine.yaml'), 'schemaVersion: v1alpha1\nname: mine\nruntimes:\n  - use: tools\n');
     const opened = await openDriver(config, 'mine', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
     if (!opened.ok) throw new Error(opened.failure.message);
-    // The earlier driver leased the prompt in its own process, then was killed: its attempt has no runtime record.
-    expect(await leaseNext(config, runId, driverIdentity('local', workspace))).toMatchObject({ data: { lease: { step: 'review' } } });
+    // The earlier driver leased the prompt in its own process and recorded it there, then was killed. Without that record,
+    // as when the file was lost, nothing says the attempt ran here, so it starts on the first runtime, as a new lease would.
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    expect(leased).toMatchObject({ data: { lease: { step: 'review' } } });
+    const leasedRun = await readRun(config, runId);
+    const leasedStep = typeof leasedRun === 'string' ? undefined : leasedRun.steps[0];
+    const attempt = AttemptIdSchema.parse(leasedStep?.status === 'leased' ? leasedStep.lease.attempt : undefined);
+    if (recorded) await recordInProcessAttempt(config, RunIdSchema.parse(runId), attempt, { runtime: 'tools', driver: 'mine' });
     const runtimes: DriverRuntimes = {
       driver: 'mine', asked: 'mine',
       runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }, ...opened.opened.runtimes],
@@ -1361,10 +1370,11 @@ steps:
 
     expect(await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths, runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
-    // The member's Claude ran it here, and the toy was sent no prompt.
-    expect(claude.calls()).toHaveLength(1);
-    expect(fs.existsSync(path.join(state, 'prompts.jsonl')) ? fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8') : '').not.toContain('"review"');
-    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded', tool: 'claude' }] });
+    // On tools the member's Claude ran it here and the toy was sent no prompt; on the toy, the reverse.
+    expect(claude.calls()).toHaveLength(goesTo === 'tools' ? 1 : 0);
+    const toyPrompts = fs.existsSync(path.join(state, 'prompts.jsonl')) ? fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8') : '';
+    expect(toyPrompts.includes('"review"')).toBe(goesTo === 'toy');
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded' }] });
   }, 30_000);
 });
 

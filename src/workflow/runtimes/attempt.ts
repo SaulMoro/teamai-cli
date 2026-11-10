@@ -113,6 +113,48 @@ export function attemptRuntimePath(config: LocalConfig, run: RunId, attempt: Att
   return path.join(attemptDir(config, run, attempt), 'runtime.json');
 }
 
+/**
+ * The record of an attempt that runs in teamai's own process, on the host slot or `tools`, in the file an external
+ * runtime's attempt records itself in. It is written before the attempt starts, so a restart tells an attempt that ran
+ * here from one whose record is gone.
+ */
+const InProcessAttemptRecordSchema = z.object({
+  /** The in-process runtime, as the definition's `use` names it. */
+  runtime: z.string(),
+  driver: z.string(),
+  inProcess: z.literal(true),
+}).strict();
+
+/** Where an attempt ran, by its record: on an external runtime, in teamai's process, or nowhere this teamai recorded. */
+export type AttemptPlacement =
+  | { kind: 'external'; record: AttemptRuntimeRecord }
+  | { kind: 'in_process'; runtime: string }
+  | { kind: 'unrecorded' };
+
+/** Records that attempt `attempt` of run `run` runs in teamai's process, on `runtime` of driver `driver`. */
+export async function recordInProcessAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { runtime, driver }: { runtime: string; driver: string }): Promise<void> {
+  await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { runtime, driver, inProcess: true } satisfies z.infer<typeof InProcessAttemptRecordSchema>);
+}
+
+/** Where attempt `attempt` of run `run` ran, by its record. */
+export async function readAttemptPlacement(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptPlacement> {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(await readRegularFile(attemptRuntimePath(config, run, attempt), 'utf8'));
+  } catch {
+    return { kind: 'unrecorded' };
+  }
+
+  const inProcess = InProcessAttemptRecordSchema.safeParse(parsed);
+
+  if (inProcess.success) return { kind: 'in_process', runtime: inProcess.data.runtime };
+  const external = AttemptRuntimeRecordSchema.safeParse(parsed);
+
+  return external.success ? { kind: 'external', record: external.data } : { kind: 'unrecorded' };
+}
+
+/** The record of attempt `attempt` of run `run` on an external runtime; undefined for any other (`readAttemptPlacement`). */
 export async function readAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptRuntimeRecord | undefined> {
   try {
     return AttemptRuntimeRecordSchema.parse(JSON.parse(await readRegularFile(attemptRuntimePath(config, run, attempt), 'utf8')));

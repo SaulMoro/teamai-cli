@@ -22,7 +22,7 @@ import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
-import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
@@ -752,6 +752,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     sayFellPast(lease, slot);
 
     if (slot.kind === 'external') return;
+    const attempt = AttemptIdSchema.safeParse(lease.attempt);
+
+    if (attempt.success) await recordInProcessAttempt(config, runId, attempt.data, { runtime: slot.use, driver: defined.driver });
     const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
     const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
 
@@ -799,19 +802,36 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const slotHasRoom = (slot: RuntimeSlot): boolean => slot.engine.maxParallel === undefined
     || [...slotOf.values()].filter((bound) => bound === slot).length < slot.engine.maxParallel;
 
-  // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time: an external one by
-  // the runtime its record names, any other to the slot in teamai's process, host or tools.
+  // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time, by its record: an
+  // external one to the runtime the record names, one in teamai's process to the slot here. An attempt with no record
+  // started nowhere, as each kind is recorded before it starts, so it goes to the first slot, as a new lease would.
   const reconnecting: Array<{ attempt: string; slot: RuntimeSlot }> = [];
 
   if (isStarted) {
     for (const step of started.steps) {
       if (step.status !== 'leased') continue;
       const attempt = AttemptIdSchema.safeParse(step.lease.attempt);
-      const record = attempt.success ? await readAttemptRuntime(config, runId, attempt.data) : undefined;
+      const placement = attempt.success ? await readAttemptPlacement(config, runId, attempt.data) : { kind: 'unrecorded' as const };
+      let slot: RuntimeSlot;
 
-      const slot = (record && slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime))
-        ?? (record ? slots.find((candidate) => candidate.kind === 'external') : undefined)
-        ?? slots.find((candidate) => candidate.kind !== 'external') ?? slots[0];
+      switch (placement.kind) {
+        case 'external': {
+          const { runtime } = placement.record;
+          slot = slots.find((candidate) => candidate.kind === 'external' && candidate.use === runtime) ?? slots.find((candidate) => candidate.kind === 'external') ?? slots[0];
+          break;
+        }
+        case 'in_process':
+          slot = slots.find((candidate) => candidate.kind !== 'external' && candidate.use === placement.runtime) ?? slots.find((candidate) => candidate.kind !== 'external') ?? slots[0];
+          break;
+        case 'unrecorded':
+          slot = slots[0];
+          break;
+        default: {
+          const unhandled: never = placement;
+
+          return unhandled;
+        }
+      }
 
       reconnecting.push({ attempt: step.lease.attempt, slot });
     }
