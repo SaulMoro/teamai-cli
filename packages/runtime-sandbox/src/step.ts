@@ -58,7 +58,7 @@ const IN_SANDBOX: StepLaunchHost = {
  * calls `onStdout` only once `start` returned, so a budget stop finds its process. `stderr` gives the end of what the
  * tool printed there, from its first whole line.
  */
-function sandboxProcess(provider: Provider, id: string, unset: string[]) {
+export function sandboxProcess(provider: Provider, id: string, unset: string[]) {
   const stderr = boundedTail(STDERR_CHARS);
   let printed = 0;
 
