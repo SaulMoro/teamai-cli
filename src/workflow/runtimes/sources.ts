@@ -10,7 +10,7 @@ import { writeJsonAtomic } from '../../utils/fs.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { shippedRuntimeFile } from '../../default-drivers.js';
-import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
+import { personalDir, resolveDriver, teamItem, type DriverDefinition, type ResolvedDriver } from './definitions.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '@teamai/shared/log';
@@ -623,11 +623,31 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
 }
 
 /**
+ * The runtimes teamai ships that run no command (`can.exec: false` at every init, as their offer tests pin): t3 and
+ * paseo launch agents in their apps. A run that needs no AI tool gives them no step, so it never opens them, and its
+ * commands run on the host slot.
+ */
+const SHIPPED_AGENTS_ONLY: ReadonlySet<string> = new Set(['t3', 'paseo']);
+
+/** Whether a run that needs no AI tool skips `entry` of `driver`: one of teamai's own runtimes that runs no command. */
+async function isSkippedWithoutAi(driver: ResolvedDriver, entry: DriverDefinition['runtimes'][number]): Promise<boolean> {
+  if (entry.through !== undefined || !SHIPPED_AGENTS_ONLY.has(entry.use)) return false;
+  const located = await locateRuntime(driver, entry.use);
+
+  return located.ok && located.source.kind === 'shipped';
+}
+
+/**
  * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
  * then opens each of its runtimes in order, so a bad option of any fails before a step runs. Each starts in `checkout`,
- * the run's, which its `init` names too.
+ * the run's, which its `init` names too. A drive of a run that `needsAiTool: false` says needs none leaves out the
+ * runtimes teamai ships that run no command, such as t3, which it would only sign in to and ask what it runs.
  */
-export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk, purpose, checkout }: { personal: boolean; mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
+export async function openDriver(
+  config: LocalConfig,
+  name: string,
+  { personal, mode, canAsk, purpose, checkout, needsAiTool = true }: { personal: boolean; mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string; needsAiTool?: boolean },
+): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
   const resolved = await resolveDriver(config, name, { personal });
 
   if (!resolved.ok) return resolved;
@@ -643,6 +663,8 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
   }
 
   for (const entry of driver.definition.runtimes) {
+    if (purpose === 'run' && !needsAiTool && await isSkippedWithoutAi(driver, entry)) continue;
+
     const one = entry.through === undefined
       ? await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), how)
       : await openComposed(driver, { inner: entry.use, outer: entry.through }, entry.options ?? {}, how);

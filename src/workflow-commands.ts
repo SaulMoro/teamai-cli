@@ -9,6 +9,7 @@ import { PassScoring } from './scorers/pass-scoring.js';
 import { Subject } from './scorers/subject.js';
 import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from '@teamai/shared/log';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
+import { definitionNeedsAiTool } from './workflow/describe.js';
 import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
 import { resumeOrPublish, retryCommand } from './workflow/runtimes/retry-command.js';
 import { claimOffered, publishRun, resumeRun, takeoverFor } from './workflow/handoff.js';
@@ -652,7 +653,7 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
     return;
   }
 
-  const defined = await openNamedDriver(config, options.driver, { personal: true });
+  const defined = await openNamedDriver(config, options.driver, { personal: true, needsAiTool: definitionNeedsAiTool(admission.admitted.definition, admission.admitted.workflows ?? {}) });
 
   if (!defined.ok) {
     writeEnvelope({ error: defined.failure }, secrets);
@@ -947,11 +948,15 @@ async function runShortcutIn(loaded: Ready, { workflow, inputs, command, json }:
  * The definition `--driver` names, opened, `teamai-local` for `local`, or undefined for none and `skill`, which is no
  * definition. `personal: false` skips the member's own definitions, for a run taken from another member.
  */
-async function openNamedDriver(config: LocalConfig, name: string | undefined, { personal }: { personal: boolean }): Promise<{ ok: true; opened: OpenedDriver | undefined } | { ok: false; failure: WorkflowFailure }> {
+async function openNamedDriver(
+  config: LocalConfig,
+  name: string | undefined,
+  { personal, needsAiTool }: { personal: boolean; needsAiTool?: boolean },
+): Promise<{ ok: true; opened: OpenedDriver | undefined } | { ok: false; failure: WorkflowFailure }> {
   if (name === undefined || name === 'skill') return { ok: true, opened: undefined };
   const canAsk = process.stdin.isTTY && process.stderr.isTTY;
 
-  return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run', checkout: process.cwd() });
+  return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run', checkout: process.cwd(), ...(needsAiTool !== undefined && { needsAiTool }) });
 }
 
 /**
@@ -1499,7 +1504,9 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
   }
 
   // Without --driver, the run resumes on the definition it was last driven with here, which may no longer resolve, else on local.
-  const defined = await openNamedDriver(loaded.config, options.driver ?? await resumedDriver(loaded.config, run.data) ?? LOCAL_DRIVER, { personal: true });
+  const stored = await readRun(loaded.config, run.data);
+  const needsAiTool = stored === 'missing' || stored === 'corrupt' || definitionNeedsAiTool(stored.definition, stored.workflows ?? {});
+  const defined = await openNamedDriver(loaded.config, options.driver ?? await resumedDriver(loaded.config, run.data) ?? LOCAL_DRIVER, { personal: true, needsAiTool });
 
   if (!defined.ok) {
     writeEnvelope({ error: defined.failure }, secrets);

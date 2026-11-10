@@ -11,6 +11,7 @@ import type { RunState } from '../../workflow/types.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { t3OnFakeServer } from '../helpers/t3-runtime.js';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
 // step goes to the first that can take it. The toy runtime is the member's own here, and `local` runs on the host.
@@ -1756,6 +1757,24 @@ steps:
     expect(fs.existsSync(teamState)).toBe(false);
     fs.rmSync(path.join(repo, '.teamai', 'drivers', 'teamai-claude.yaml'));
   });
+
+  it('runs a workflow of commands on the shipped teamai-t3 without opening T3: its server sees no request', async () => {
+    const t3 = await t3OnFakeServer();
+    const t3State = path.join(sandbox, 'commands-on-t3', 'state');
+    fs.mkdirSync(t3State, { recursive: true });
+    // A T3 Code that would answer, with a provider instance, were it asked.
+    t3.options(t3State, { output: { ok: true } });
+    await t3.ready(t3State);
+    onTestFinished(() => t3.stop(t3State));
+    writeFlow('commandsonly', '  - id: build\n    command: node -e "process.exit(0)"\n  - id: check\n    needs: [build]\n    command: node -e "process.exit(0)"');
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+
+    const ran = await runCLI(['workflow', 'start', 'commandsonly', '--driver', 't3'], repo, env({ T3CODE_HOME: path.join(t3State, 't3-home') }));
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(readRunState(runOf(ran))).toMatchObject({ steps: [{ id: 'build', status: 'succeeded', runtime: 'host' }, { id: 'check', status: 'succeeded', runtime: 'host' }] });
+    expect(fs.existsSync(path.join(t3State, 't3-state', 'calls.jsonl')) ? fs.readFileSync(path.join(t3State, 't3-state', 'calls.jsonl'), 'utf8') : '').toBe('');
+  }, 60_000);
 
   it('resolves the shipped teamai-t3, teamai-claude, teamai-codex and teamai-opencode, by either name', async () => {
     // A T3 home of its own, so a T3 Code the developer runs is never found, nor signed in to through their t3 command.

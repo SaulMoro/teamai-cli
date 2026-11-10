@@ -50,6 +50,22 @@ function guardsOf(step: WorkflowStep, steps: WorkflowStep[], prefix: string): Ga
   return { kind: 'none', waiting: steps.flatMap((other) => (other.needs?.includes(step.id) ? [`${prefix}${other.id}`] : [])) };
 }
 
+/**
+ * Whether a run described by `facts` needs an AI tool: a prompt, interactive or answer step, a scored step, or a step
+ * that runs a workflow another step produces, which may hold any of them. One that needs none runs on the host slot
+ * alone, as the built-in `host` driver does.
+ */
+export function needsAiTool(facts: Pick<WorkflowDescription['facts'], 'prompts' | 'scored' | 'produced'>): boolean {
+  return facts.prompts.length > 0 || facts.scored.length > 0 || facts.produced.length > 0;
+}
+
+/** Whether a run of `definition`, which runs the workflows in `workflows` by name, needs an AI tool, as `needsAiTool` says. */
+export function definitionNeedsAiTool(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>): boolean {
+  const none = new Set<string>();
+
+  return needsAiTool(describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can: {}, allow: {}, env: { declared: none, secrets: none, present: none } }).facts);
+}
+
 /** What a workflow will do, read from its definition before any run, as far as choosing how to start it needs. */
 export interface WorkflowDescription {
   name: string;
@@ -80,6 +96,8 @@ export interface WorkflowDescription {
     scored: Array<{ step: string; scorers: string[] }>;
     /** Prompt steps confined to a directory, by path, which only a confined tool or a fresh child answers. */
     confined: string[];
+    /** `workflow: { from }` steps, by path: each runs a workflow an earlier step produces, whose steps nobody sees before the run. */
+    produced: string[];
     /**
      * Steps that open a pull request once they succeed, by path. `onto`: the delivering step whose branch the step's
      * own starts from, whose pull request it targets; without it, the pull request targets `base`.
@@ -151,7 +169,7 @@ export function describeWorkflow(input: {
   if (definition.timeout !== undefined) limit.timeout = definition.timeout;
 
   const facts: Facts = {
-    prompts: [], interactive: [], modeled: [], width: 0, gates: [], inWorkspace: [], scored: [], confined: [], deliver: [], ...branch,
+    prompts: [], interactive: [], modeled: [], width: 0, gates: [], inWorkspace: [], scored: [], confined: [], produced: [], deliver: [], ...branch,
     requiresEnv: {
       keys: [...runEnvKeys],
       missingHere: [...runEnvKeys].filter((key) => sameEnvName(env.present, key) === undefined),
@@ -310,6 +328,7 @@ export function describeWorkflow(input: {
         own = 1;
         offer(step, path, scope);
       } else if (stepWorkflow(step)?.kind === 'from') {
+        facts.produced.push(path);
         // Its workflow does not exist yet, but every step of it inherits what this one requires: a driver that lacks
         // that is held from the step itself, as from a step that runs in a copy of its own.
         const requires = mergeRequirements(scope.requires, step.requires);
