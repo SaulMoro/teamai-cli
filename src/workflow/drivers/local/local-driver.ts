@@ -798,7 +798,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     || [...slotOf.values()].filter((bound) => bound === slot).length < slot.engine.maxParallel;
 
   // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time: an external one by
-  // the runtime its record names, any other to local, or, without a local runtime, to the definition's first.
+  // the runtime its record names, any other to the slot in teamai's process, host or tools.
   const reconnecting: Array<{ attempt: string; slot: RuntimeSlot }> = [];
 
   if (isStarted) {
@@ -809,7 +809,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       const slot = (record && slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime))
         ?? (record ? slots.find((candidate) => candidate.kind === 'external') : undefined)
-        ?? slots.find((candidate) => candidate.kind === 'host') ?? slots[0];
+        ?? slots.find((candidate) => candidate.kind !== 'external') ?? slots[0];
 
       reconnecting.push({ attempt: step.lease.attempt, slot });
     }

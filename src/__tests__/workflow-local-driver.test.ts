@@ -25,7 +25,8 @@ import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
 import { knownSecrets } from '../env-resolution.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
-import { startRun } from '../workflow/engine.js';
+import { leaseNext, startRun } from '../workflow/engine.js';
+import { driverIdentity } from '../driver-identity.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { commitFile, fakeClaude, git, recordDelivery } from './helpers/delivered-checkout.js';
 import { dirs, endRecord, fixture, memberAiTool, projectAiTool, toolPaths, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
@@ -1168,6 +1169,44 @@ steps:
     expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: { driver: 'local', offers: [{ runtime: 'tools', can: { isolation: 'worktree', network: true, env: true } }] } }))
       .toMatchObject({ error: { code: 'requirement_unmet', message: 'Step "ask" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.' } });
   });
+});
+
+describe('a step an earlier driver leased in teamai\'s process', () => {
+  it('goes back to the tools runtime of a definition that lists an external runtime before it, not to that runtime', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    const claude = claudeBeside(workspace, { answer: '{"ok":true}' });
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true } } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    fs.mkdirSync(personalDir('drivers'), { recursive: true });
+    onTestFinished(() => fs.rmSync(personalDir('drivers'), { recursive: true, force: true }));
+    fs.writeFileSync(path.join(personalDir('drivers'), 'mine.yaml'), 'schemaVersion: v1alpha1\nname: mine\nruntimes:\n  - use: tools\n');
+    const opened = await openDriver(config, 'mine', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
+    if (!opened.ok) throw new Error(opened.failure.message);
+    // The earlier driver leased the prompt in its own process, then was killed: its attempt has no runtime record.
+    expect(await leaseNext(config, runId, driverIdentity('local', workspace))).toMatchObject({ data: { lease: { step: 'review' } } });
+    const runtimes: DriverRuntimes = {
+      driver: 'mine', asked: 'mine',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }, ...opened.opened.runtimes],
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths, runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    // The member's Claude ran it here, and the toy was sent no prompt.
+    expect(claude.calls()).toHaveLength(1);
+    expect(fs.existsSync(path.join(state, 'prompts.jsonl')) ? fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8') : '').not.toContain('"review"');
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded', tool: 'claude' }] });
+  }, 30_000);
 });
 
 describe('a place held open for a conversation a later step continues', () => {
