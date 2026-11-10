@@ -28,7 +28,7 @@ import {
   JsonObjectSchema,
 } from './types.js';
 import { readFileSafe } from './utils/fs.js';
-import { parseJson } from './utils/json.js';
+import { parseJson } from '@teamai/shared/json';
 
 /** `http-team`: an HTTP team repo, which keeps no session archive, so it turns session publishing off whatever a level sets. */
 export type MemberSettingLevel = 'environment' | 'scope' | 'machine' | 'team' | 'http-team' | 'default';

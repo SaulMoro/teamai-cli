@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { DRAFT_SUFFIX, listDirs, listFiles, pathExists, readFileSafe, writeFile } from '../utils/fs.js';
-import { parseJson } from '../utils/json.js';
+import { parseJson } from '@teamai/shared/json';
 import { listLearningFiles } from '../utils/learnings-roots.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { tokenize } from '../utils/tokenizer.js';

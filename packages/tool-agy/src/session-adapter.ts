@@ -22,14 +22,14 @@ import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import type { ContentBlock, Message, Session } from '@teamai/tool-core/sessions/ir';
 import { dirExists, readJsonl, readJsonlHead, resolveRealCwd } from '@teamai/tool-core/sessions/fs';
-import type { JsonlRecord } from '@teamai/tool-core/json';
-import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
+import type { JsonlRecord } from '@teamai/shared/json';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3, snapshotSqlite } from '@teamai/tool-core/sessions/sqlite';
 import { execCommand, type ExecResult } from '@teamai/shared/exec';
 import { log } from '@teamai/tool-core/log';
-import { parseJson } from '@teamai/tool-core/json';
+import { parseJson } from '@teamai/shared/json';
 
 const SummaryRow = z.object({
   conversation_id: z.string(),

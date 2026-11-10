@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { JsonValueSchema } from './json.js';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { extractReply } from './reply.js';
 
 describe('extractReply', () => {

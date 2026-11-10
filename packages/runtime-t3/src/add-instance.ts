@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isJsonObject, parseJson, type JsonValue } from '@teamai/tool-core/json';
+import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
 import { instanceToolHome, SettingsSchema } from './settings.js';

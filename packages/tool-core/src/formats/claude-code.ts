@@ -41,7 +41,7 @@ import {
   coercedText,
   OptionalString,
 } from '../sessions/fs.js';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson, type JsonlRecord } from '../json.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson, type JsonlRecord } from '@teamai/shared/json';
 import {
   cleanTitleText,
   fallbackTitle,

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { jsonLines, reportedTokens, type ConfinedAccess } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { TokenUsage } from '@teamai/tool-core/stdout';

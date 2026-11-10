@@ -1,6 +1,6 @@
 import YAML from 'yaml';
 
-import type { JsonValue } from './json.js';
+import type { JsonValue } from '@teamai/shared/json';
 
 /** The warnings the library gives for the YAML 1.1 tags parseYaml reads as what they are written as. */
 const READ_AS_WRITTEN = ['set', 'omap', 'pairs', 'binary', 'timestamp'].map((tag) => `Unresolved tag: tag:yaml.org,2002:${tag}`);

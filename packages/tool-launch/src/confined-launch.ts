@@ -1,5 +1,5 @@
 import { opencodeModelArgs, type ConfinedLaunch } from '@teamai/tool-core/launch';
-import type { JsonValue } from '@teamai/tool-core/json';
+import type { JsonValue } from '@teamai/shared/json';
 
 /** The variables every confined run keeps from the member's environment, proxies included, beside those its profile reads. */
 const COMMON_ENV = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TERM', 'USER', 'LOGNAME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'];

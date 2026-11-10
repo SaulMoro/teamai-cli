@@ -9,7 +9,7 @@ import { ToolArgumentsSchema, type ContentBlock, type Message, type Session, typ
 import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { OptionalString, resolveRealCwd, TextOrBlocksSchema } from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** A time as ISO 8601, from epoch milliseconds or a date string; anything that is not a time reads as absent. */

@@ -9,7 +9,7 @@ import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { registerThrough, type Registration } from '@teamai/runtime-kit/outer';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { z } from 'zod';
 import type { Creation, Daemon, Model, Target, WaitEnd } from './daemon/connect.js';

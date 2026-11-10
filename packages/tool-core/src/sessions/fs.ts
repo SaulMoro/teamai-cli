@@ -12,7 +12,7 @@ import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import { openRegularFileSync } from '@teamai/shared/regular-file';
-import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '../json.js';
+import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '@teamai/shared/json';
 import type { Session } from './ir.js';
 
 // ---------------------------------------------------------------------------

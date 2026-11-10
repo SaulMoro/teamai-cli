@@ -6,7 +6,7 @@ import { lstat, readdir, realpath, rm } from 'node:fs/promises';
 import { z } from 'zod';
 import { readJson, readJsonObject, writeJson, writeJsonKeepingComments, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
-import { mapStrings, type JsonSyntax } from './utils/json.js';
+import { mapStrings, type JsonSyntax } from '@teamai/shared/json';
 import {
   COPILOT_TOOL_ID,
   TEAMAI_HOOK_DESCRIPTION_PREFIX,

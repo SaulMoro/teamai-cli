@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { openRegularFile } from '@teamai/shared/regular-file';
 
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../json.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { emptyTokenUsage, type TokenSnapshotScope, type TokenUsage } from '../tokens.js';
 import type { TokenReading, TokenRequest, TokenSource, TokenSpeed } from '../tokens.js';
 import { forEachJsonLine } from '../tokens.js';

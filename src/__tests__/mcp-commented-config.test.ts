@@ -11,7 +11,8 @@ vi.mock('@teamai/tool-core/log', () => ({
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { DEFAULT_TOOL_PATHS, type LocalConfig, type TeamaiConfig, TeamaiConfigSchema } from '../types.js';
 import { log } from '../utils/logger.js';
-import { parseJsonAs, type JsonSyntax } from '../utils/json.js';
+import { type JsonSyntax } from '@teamai/shared/json';
+import { parseJsonAs } from '../utils/json.js';
 
 /**
  * A tool that reads its MCP file with comments takes the team's servers when

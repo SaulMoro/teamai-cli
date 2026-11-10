@@ -26,7 +26,7 @@ import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadR
 import { z } from 'zod';
 import type { Session, Message, ContentBlock, ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import {
   encodeCwdGeneric,
   decodeCwdGeneric,
@@ -44,7 +44,7 @@ import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, 
 import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from './cursor-store.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { log } from '@teamai/tool-core/log';
-import type { JsonlRecord } from '@teamai/tool-core/json';
+import type { JsonlRecord } from '@teamai/shared/json';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map

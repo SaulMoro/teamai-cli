@@ -19,7 +19,7 @@ import { writeJsonAtomic } from '../../utils/fs.js';
 import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
 import { isJsonObject } from '../../types.js';
-import { JsonValueSchema, parseJson, type JsonValue } from '../../utils/json.js';
+import { JsonValueSchema, parseJson, type JsonValue } from '@teamai/shared/json';
 import { TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
 import type { TokenUsage } from '../../tool-launch/stdout.js';

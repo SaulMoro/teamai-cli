@@ -1,4 +1,4 @@
-import type { JsonSyntax } from './json.js';
+import type { JsonSyntax } from '@teamai/shared/json';
 
 /** The MCP config formats teamai writes (`src/resources/mcp-format.ts`); a tool's MCP channel names one. */
 export type McpFormat = 'claude' | 'cursor' | 'buddy' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'muse' | 'agy';

@@ -9,7 +9,7 @@ import type { RunMode } from '../../launch-context.js';
 import { isDataBranch, type LocalConfig } from '../../types.js';
 import { gitCommonDir } from '../../utils/git.js';
 import { redactJson } from '@teamai/shared/redact';
-import { parseJson } from '../../utils/json.js';
+import { parseJson } from '@teamai/shared/json';
 import { attemptEnv } from '../attempt-marker.js';
 import type { LeaseWire } from '../lease-wire.js';
 import type { ReportInput } from '../engine.js';

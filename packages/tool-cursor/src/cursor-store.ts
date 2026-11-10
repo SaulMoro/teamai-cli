@@ -21,7 +21,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
-import type { JsonValue } from '@teamai/tool-core/json';
+import type { JsonValue } from '@teamai/shared/json';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import type { ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';

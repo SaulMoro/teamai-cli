@@ -43,7 +43,7 @@ import { z } from 'zod';
 import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '../sessions/base.js';
 import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../sessions/ir.js';
 import { imagePlaceholderText, toolArgumentsFrom } from '../sessions/ir.js';
-import { JsonValueSchema, type JsonValue } from '../json.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { typedTitle, visibleUserText } from '../sessions/title.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '../sessions/ids.js';
 import { findSqlite3 } from '../sessions/sqlite.js';
@@ -63,7 +63,7 @@ import {
   OptionalString,
   TextOrBlocksSchema,
 } from '../sessions/fs.js';
-import type { JsonlRecord } from '../json.js';
+import type { JsonlRecord } from '@teamai/shared/json';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------

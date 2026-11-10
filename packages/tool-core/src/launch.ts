@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Evidence } from './definition.js';
-import { JsonValueSchema, type JsonValue } from './json.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import type { TokenUsage } from './stdout.js';
 
 /** What a tool run confined can do beyond answering: nothing, read its directory, or whatever its tool allows. */

@@ -5,7 +5,7 @@ import type { McpFormat } from '@teamai/tool-core/definition';
 import type { RuleFormatId } from '@teamai/tool-core/definition';
 import { locatesOwnStore, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { SESSION_PLATFORM_FACTS, type SessionPlatform } from './session-flow/adapters/platform-facts.js';
-import type { JsonSyntax } from './utils/json.js';
+import type { JsonSyntax } from '@teamai/shared/json';
 import { TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HookFormat, type InstallGate, type RuleFolderReach, type RunTimeVia } from '@teamai/tool-core/definition';
 

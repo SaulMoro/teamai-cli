@@ -28,7 +28,7 @@ import { AgentAdapter, type SessionMeta, type SessionReadRef, type SubagentsRead
 import { z } from 'zod';
 import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
 import { imagePlaceholderText, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import {
   encodeCwdCodeBuddy,
@@ -45,7 +45,7 @@ import {
   TextOrBlocksSchema,
 } from '@teamai/tool-core/sessions/fs';
 import { cutTitle, isInjectedText, fallbackTitle, titleFromCandidates } from '@teamai/tool-core/sessions/title';
-import type { JsonlRecord } from '@teamai/tool-core/json';
+import type { JsonlRecord } from '@teamai/shared/json';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map

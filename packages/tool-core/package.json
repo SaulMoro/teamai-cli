@@ -9,7 +9,6 @@
     "./family": "./src/family.ts",
     "./formats/*": "./src/formats/*.ts",
     "./instance": "./src/instance.ts",
-    "./json": "./src/json.ts",
     "./launch": "./src/launch.ts",
     "./log": "./src/log.ts",
     "./registry": "./src/registry.ts",

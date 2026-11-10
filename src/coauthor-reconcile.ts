@@ -21,7 +21,7 @@ import {
 } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { hookSyntaxOf } from './tool-registry.js';
-import type { JsonSyntax } from './utils/json.js';
+import type { JsonSyntax } from '@teamai/shared/json';
 
 // ─── Co-author reconcile engine ──────────────────────────────
 //

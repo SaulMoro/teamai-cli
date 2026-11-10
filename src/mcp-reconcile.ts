@@ -55,7 +55,8 @@ import {
   pathExists,
   expandHome,
 } from './utils/fs.js';
-import { isPlainJson, mapStrings, parseJson, parseJsonAs, type JsonSyntax } from './utils/json.js';
+import { mapStrings, parseJson, type JsonSyntax } from '@teamai/shared/json';
+import { isPlainJson, parseJsonAs } from './utils/json.js';
 import { log } from './utils/logger.js';
 import { warnOnce } from './utils/warn-once.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';

@@ -126,7 +126,7 @@ import { hookSettingsFile, installOf, locate, ownOf, writable, type FilePlace } 
 import { mcpFormatOf } from './tool-registry.js';
 import { acquireLock, releaseLock } from './update.js';
 import { isJsonObject, type JsonObject } from './types.js';
-import { parseJson } from './utils/json.js';
+import { parseJson } from '@teamai/shared/json';
 
 const execFileAsync = promisify(execFile);
 

@@ -11,7 +11,8 @@ import {
 } from './hooks.js';
 import { codexTeamHookIndexPath } from './codex-team-hooks.js';
 import { codebuddyTeamHookPayload } from './codebuddy-team-hooks.js';
-import { mapStrings, parseJsonAs } from './utils/json.js';
+import { mapStrings } from '@teamai/shared/json';
+import { parseJsonAs } from './utils/json.js';
 import { bridgedTeamHookDir, bridgedTeamHookFile, isBridgedTeamHookTool } from './bridged-team-hooks.js';
 import {
   removeOpenClawHooks,

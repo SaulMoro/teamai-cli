@@ -31,7 +31,7 @@ import { z } from 'zod';
 import type { ContentBlock, Session, ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { imagePlaceholderText } from '@teamai/tool-core/sessions/ir';
 import { mayReadLocalImageFile, OptionalString, safeFileName } from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { isInjectedText, titleFromUserText , visibleUserText } from '@teamai/tool-core/sessions/title';
 
 // ---------------------------------------------------------------------------

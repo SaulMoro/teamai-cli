@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ConfinedKept, ConfinedPrompt, PromptLease, PromptResult } from '@teamai/runtime-protocol';
-import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import type { PromptRequest } from './conversation.js';
 import type { PlaceRecord, ThreadRecord } from './journal.js';
 import type { NewThread, T3 } from './t3.js';

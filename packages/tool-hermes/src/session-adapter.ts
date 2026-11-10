@@ -10,7 +10,7 @@ import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3, snapshotSqlite } from '@teamai/tool-core/sessions/sqlite';
 import { execCommand, type ExecResult } from '@teamai/shared/exec';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 
 const CODING_SOURCES = ['acp', 'cli', 'desktop', 'gui', 'oneshot', 'tui'] as const;
 const LOCAL_CODING_SOURCES = ['acp', 'cli', 'gui', 'oneshot', 'tui'] as const;

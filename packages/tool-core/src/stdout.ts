@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JsonValueSchema, type JsonValue } from './json.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { isUsageLimitText } from './usage-limit.js';
 
 export interface TokenUsage {

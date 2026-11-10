@@ -15,7 +15,8 @@ import { realFilePath } from './git-exclude.js';
 import { isJsonObject, type JsonObject, type JsonValue } from './types.js';
 import { pathExists, readFileIfExists } from './utils/fs.js';
 import { hookSyntaxOf, mcpSyntaxOf } from './tool-registry.js';
-import { mapStrings, parseJson, parseJsonAs, type JsonSyntax } from './utils/json.js';
+import { mapStrings, parseJson, type JsonSyntax } from '@teamai/shared/json';
+import { parseJsonAs } from './utils/json.js';
 
 /**
  * What teamai holds in the gated place. `summary` opens the fix

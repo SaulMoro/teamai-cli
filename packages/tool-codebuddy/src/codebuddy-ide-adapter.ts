@@ -22,7 +22,7 @@ import * as path from 'node:path';
 import { AgentAdapter, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
 import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import {
   findIdeHistoryDirs,
   findIdeConversationDirs,

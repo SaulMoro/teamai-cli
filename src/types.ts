@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { TokenSnapshotScope, TokenUsage } from '@teamai/tool-core/tokens';
-import { isJsonObject, JsonValueSchema, type JsonObject } from '@teamai/tool-core/json';
+import { isJsonObject, JsonValueSchema, type JsonObject } from '@teamai/shared/json';
 import fs from 'node:fs';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
@@ -16,7 +16,7 @@ import type { RunMode } from './launch-context.js';
 import type { OutcomeKind, SessionUsage, WorkOutcome } from './outcomes.js';
 import { AllowSchema, LabelSchema } from './workflow/requirements.js';
 
-export { isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/tool-core/json';
+export { isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/shared/json';
 
 const COPILOT_USER_MCP_CONFIG = 'mcp-config.json';
 const COPILOT_PROJECT_MCP_CONFIG = '.github/mcp.json';

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import { safeIgnore, toPosix } from "../core/wiki-protocol.js";
-import { lenientList } from "../../utils/json.js";
+import { lenientList } from "@teamai/shared/json";
 import { readRegularFile } from "@teamai/shared/regular-file";
 
 const execFileAsync = promisify(execFile);

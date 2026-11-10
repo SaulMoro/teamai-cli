@@ -20,7 +20,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { isJsonObject, type JsonlRecord, type JsonValue } from '@teamai/tool-core/json';
+import { isJsonObject, type JsonlRecord, type JsonValue } from '@teamai/shared/json';
 import { acquireLock, releaseLock } from '../update.js';
 import { ensureDir, errnoCode } from './fs.js';
 import { log } from './logger.js';

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import readline from 'node:readline';
 import { openRegularFile } from '@teamai/shared/regular-file';
-import type { JsonValue } from './json.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { log } from './log.js';
 
 /**

@@ -25,7 +25,7 @@ import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/ses
 import { JsonValueSchema } from '../types.js';
 import { maskCutSecret } from '@teamai/tool-core/sessions/title';
 import { claudeProjectDirName } from '@teamai/tool-core/sessions/fs';
-import { mapStrings } from '../utils/json.js';
+import { mapStrings } from '@teamai/shared/json';
 
 export interface ScrubResult {
   session: Session;

@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import { DefaultWorkflows } from '../default-workflows.js';
-import { JsonValueSchema, type JsonValue } from '../utils/json.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { expressionPaths, isRecord, parseExpression, type ExpressionPath } from './expression.js';
 import { isPinnedToHost, mergeRequirements, type InEffect } from './requirements.js';
 import { renderStrings, stepPaths, type TemplateContext } from './template.js';

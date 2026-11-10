@@ -8,7 +8,7 @@ import { getCurrentVersion } from './package-info.js';
 import type { CodexBuild, CodexBuildSkew, JsonValue } from './types.js';
 import { JsonValueSchema, JsonObjectSchema } from './types.js';
 import { probeBinary } from '@teamai/shared/exec';
-import { lenientList } from './utils/json.js';
+import { lenientList } from '@teamai/shared/json';
 import { log } from './utils/logger.js';
 import { findOnPath } from '@teamai/shared/lookpath';
 

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { JsonObjectSchema, JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonObjectSchema, JsonValueSchema } from '@teamai/shared/json';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /**
