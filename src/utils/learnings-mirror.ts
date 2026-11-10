@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fse from 'fs-extra';
 import { ensureDir, listDirs, listFiles, listFilesRecursive, pathExists, remove } from './fs.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 
 function visibleFiles(files: string[]): string[] {
   return files.filter((file) => file.split('/').every((segment) => !segment.startsWith('.')));
@@ -28,7 +28,7 @@ async function copyIfChanged(source: string, destination: string): Promise<void>
     if (incoming.equals(existing) && (sourceStat.mode & 0o777) === (destinationStat.mode & 0o777)) return;
   }
 
-  await fse.copy(source, destination, { overwrite: true });
+  await copyRegularTree(source, destination);
 }
 
 /**
@@ -157,5 +157,5 @@ export async function addLearningToCache(
   destinationDir: string,
   relativePath: string,
 ): Promise<void> {
-  await fse.copy(sourceFile, path.join(destinationDir, relativePath), { overwrite: true });
+  await copyRegularTree(sourceFile, path.join(destinationDir, relativePath));
 }

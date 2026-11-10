@@ -18,6 +18,7 @@ import { isOwnedFile, ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuar
 import { keepsTrackedCopy } from './resources/delivered-copies.js';
 import { generatedSkillAt } from './workflow/discovery/generated-marker.js';
 import type { DeliveryRecorder } from './git-exclude-delivered.js';
+import { copyRegularTree } from '@teamai/shared/regular-file';
 
 // ─── Built-in skills deployment ──────────────────────────
 //
@@ -72,7 +73,7 @@ function skillBackupDir(baseDir: string, tool: string, skillRoot: string, skillN
   const rootSlug = skillRoot.replace(/[\\/:]+/g, '-').replace(/^-+/, '');
   // `inheritUserScope` deploys to the user base and then the project base in one
   // process, with the same tool, root and skill name. Without the base in the
-  // path the second pass collides with the first, and `errorOnExist` turns that
+  // path the second pass collides with the first, and `existing: 'fail'` turns that
   // into files it can neither archive nor prune.
   const baseSlug = `${path.basename(baseDir) || 'root'}-${createHash('sha256').update(baseDir).digest('hex').slice(0, 8)}`;
 
@@ -348,7 +349,7 @@ export async function deployBuiltinSkills(
         // references it points at stay together, a working old skill rather
         // than an old skill whose references are gone.
         await fse.ensureDir(destDir);
-        await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });
+        await copyRegularTree(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'));
         // Releases before the discovery stub deployed this same directory with a
         // references/ tree beside SKILL.md, ~39 KB of pre-stub instructions the
         // new SKILL.md no longer points at. The files those releases wrote go —

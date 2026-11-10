@@ -12,7 +12,7 @@ import { log } from '@teamai/shared/log';
 import { remotesMatch } from './utils/git.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
 import { shellQuoteValue } from './utils/shell-profile.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 
 /** The caches an incremental extraction reuses, kept with each codebase's evidence. */
 const INCREMENTAL_CACHES = ['facts-cache.json', 'interfaces-cache.json'] as const;
@@ -22,7 +22,7 @@ const INCREMENTAL_CACHES = ['facts-cache.json', 'interfaces-cache.json'] as cons
  *
  * `--from-repo-list` imports up to `--concurrency` repos in one process, and
  * every import publishes its staging manifest over the shared
- * `teamwiki/source-manifest.json`. `fs.copy(..., { overwrite: true })`
+ * `teamwiki/source-manifest.json`. `copyRegularTree(...)`
  * unlinks the destination before writing, so two repos reaching that line
  * together raced: one unlinked the file the other had just unlinked and the
  * import failed with ENOENT. The root manifest is a single-project baseline
@@ -394,13 +394,13 @@ async function seedBaseline(wikiRoot: string, stagingWiki: string, slug: string)
 
   const stagingEvidence = path.join(stagingWiki, 'evidence', 'code', slug);
   await fs.ensureDir(stagingEvidence);
-  await fs.copy(manifest, path.join(stagingWiki, 'source-manifest.json'));
-  await fs.copy(manifest, path.join(stagingEvidence, 'source-manifest.json'));
+  await copyRegularTree(manifest, path.join(stagingWiki, 'source-manifest.json'));
+  await copyRegularTree(manifest, path.join(stagingEvidence, 'source-manifest.json'));
 
   for (const cache of INCREMENTAL_CACHES) {
     const src = path.join(indices, cache);
 
-    if (await fs.pathExists(src)) await fs.copy(src, path.join(stagingWiki, '.indices', cache));
+    if (await fs.pathExists(src)) await copyRegularTree(src, path.join(stagingWiki, '.indices', cache));
   }
 
   // dependency-paths.md is not seeded: the extractor would keep it as is, and
@@ -552,7 +552,7 @@ export async function publishStaging(opts: StagedCodebase & { legacySlug?: strin
       const published = path.join(evidenceDest, artifact);
 
       if (!(await fs.pathExists(published))) continue;
-      await fs.copy(published, path.join(stagingEvidence, artifact), { overwrite: false, errorOnExist: false });
+      await copyRegularTree(published, path.join(stagingEvidence, artifact), { existing: 'keep' });
     }
 
     const enrichedManifest = opts.skipEnrich ? keepEnrichedComponents({ published: publishedManifest, staged: stagedManifest }) : null;
@@ -621,7 +621,7 @@ export async function publishStaging(opts: StagedCodebase & { legacySlug?: strin
   }
 
   await fs.ensureDir(evidenceDest);
-  await fs.copy(stagingEvidence, evidenceDest, { overwrite: true });
+  await copyRegularTree(stagingEvidence, evidenceDest);
 
   const destIndices = path.join(evidenceDest, '.indices');
   await fs.ensureDir(destIndices);
@@ -629,7 +629,7 @@ export async function publishStaging(opts: StagedCodebase & { legacySlug?: strin
   for (const file of ['graph-index.json', ...INCREMENTAL_CACHES]) {
     const src = path.join(stagingWiki, '.indices', file);
 
-    if (await fs.pathExists(src)) await fs.copy(src, path.join(destIndices, file), { overwrite: true });
+    if (await fs.pathExists(src)) await copyRegularTree(src, path.join(destIndices, file));
   }
 
   const stagingManifest = path.join(stagingWiki, 'source-manifest.json');

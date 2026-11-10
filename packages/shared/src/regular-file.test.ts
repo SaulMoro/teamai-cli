@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { appendRegularFile, copyRegularFile, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
+import { appendRegularFile, copyRegularFile, copyRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
@@ -154,5 +154,70 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     await new Promise((resolve) => { setTimeout(resolve, 200); });
 
     await expect(openRegularFileForWrite(at, { append: true })).rejects.toMatchObject({ kind: 'a pipe' });
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('copying a folder a step may have planted something in', () => {
+  it('copies a folder with each file\'s bytes and mode, keeps links as links, and leaves out what the filter refuses', async () => {
+    const dir = scratch();
+    const from = path.join(dir, 'skill');
+    const to = path.join(dir, 'out', 'skill');
+    fs.mkdirSync(path.join(from, 'scripts', 'cache'), { recursive: true });
+    fs.writeFileSync(path.join(from, 'SKILL.md'), '# skill\n');
+    fs.writeFileSync(path.join(from, 'scripts', 'run.sh'), 'echo hi\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(from, 'scripts', 'cache', 'big.bin'), 'x');
+    fs.symlinkSync('SKILL.md', path.join(from, 'README.md'));
+    fs.mkdirSync(to, { recursive: true });
+    fs.writeFileSync(path.join(to, 'SKILL.md'), 'old and longer\n');
+    fs.writeFileSync(path.join(dir, 'outside.md'), 'outside\n');
+    fs.symlinkSync(path.join(dir, 'outside.md'), path.join(to, 'README.md'));
+
+    await copyRegularTree(from, to, { filter: (source) => path.basename(source) !== 'cache' });
+
+    expect(fs.readFileSync(path.join(to, 'SKILL.md'), 'utf8')).toBe('# skill\n');
+    expect(fs.statSync(path.join(to, 'scripts', 'run.sh')).mode & 0o777).toBe(0o755);
+    expect(fs.readlinkSync(path.join(to, 'README.md'))).toBe('SKILL.md');
+    expect(fs.readFileSync(path.join(dir, 'outside.md'), 'utf8')).toBe('outside\n');
+    expect(fs.existsSync(path.join(to, 'scripts', 'cache'))).toBe(false);
+  });
+
+  it('copies a single file into a folder it creates', async () => {
+    const dir = scratch();
+    fs.writeFileSync(path.join(dir, 'a.md'), 'a\n');
+
+    await copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'x', 'y', 'a.md'));
+
+    expect(fs.readFileSync(path.join(dir, 'x', 'y', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it('refuses a FIFO inside the folder at once, instead of copying it or waiting on it', async () => {
+    const dir = scratch();
+    const from = path.join(dir, 'skill');
+    fs.mkdirSync(from);
+    fs.writeFileSync(path.join(from, 'SKILL.md'), '# skill\n');
+    const at = path.join(from, 'notes.md');
+    execFileSync('mkfifo', [at]);
+
+    const settled = await settledSoon(at, () => copyRegularTree(from, path.join(dir, 'out')));
+
+    expect(settled).toEqual({ rejected: expect.any(NotRegularFileError) });
+    expect(settled).toMatchObject({ rejected: { kind: 'a pipe', message: `${at} is a pipe, not a regular file, so teamai does not read it` } });
+  });
+
+  it('refuses a device, which a plain copy reads as a file', async () => {
+    const dir = scratch();
+
+    await expect(copyRegularTree('/dev/null', path.join(dir, 'null'))).rejects.toMatchObject({ kind: 'a device' });
+    expect(fs.existsSync(path.join(dir, 'null'))).toBe(false);
+  });
+
+  it('fails on a file already at the destination, or keeps it, when asked to, and leaves it as it was', async () => {
+    const dir = scratch();
+    fs.writeFileSync(path.join(dir, 'a.md'), 'new\n');
+    fs.writeFileSync(path.join(dir, 'b.md'), 'kept\n');
+
+    await expect(copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'b.md'), { existing: 'fail' })).rejects.toMatchObject({ code: 'EEXIST' });
+    await copyRegularTree(path.join(dir, 'a.md'), path.join(dir, 'b.md'), { existing: 'keep' });
+    expect(fs.readFileSync(path.join(dir, 'b.md'), 'utf8')).toBe('kept\n');
   });
 });

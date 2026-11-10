@@ -13,6 +13,7 @@ import { detectProjectConfig, readConfigFrom } from './config.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
 import { acquireQueueLock, countQueued, pendingLearningsDir, queueOwner, sameQueueOwner, setAsideCheckoutQueue, withQueueLock, type QueueOwner } from './utils/pending-learnings.js';
+import { copyRegularTree } from '@teamai/shared/regular-file';
 
 /**
  * P1-3 automatic migration (issue #374).
@@ -513,8 +514,7 @@ export async function runMigration(
     //    team-repo clone. Skip disposable worktrees and lock files.
     await remove(staging);
     await fse.ensureDir(path.dirname(partitionDir));
-    await fse.copy(legacyDir, staging, {
-      overwrite: true,
+    await copyRegularTree(legacyDir, staging, {
       filter: (src) => {
         const rel = path.relative(legacyDir, src);
 
@@ -960,7 +960,7 @@ async function migrateSelfA1(legacyDir: string, partitionDir: string, legacyOwne
     // source. A leftover .tmp from an earlier crash is cleared first.
     const tmp = `${dest}.${process.pid}.tmp`;
     await remove(tmp);
-    await fse.copy(src, tmp, { overwrite: true });
+    await copyRegularTree(src, tmp);
     await fse.rename(tmp, dest);
 
     if (!(await pathExists(dest))) {
@@ -1157,7 +1157,7 @@ async function mergeDirIntoPartition(src: string, dest: string): Promise<void> {
     const childSrc = path.join(src, child);
     const tmp = `${childDest}.${process.pid}.tmp`;
     await remove(tmp);
-    await fse.copy(childSrc, tmp, { overwrite: true });
+    await copyRegularTree(childSrc, tmp);
     await fse.rename(tmp, childDest);
   }
 }

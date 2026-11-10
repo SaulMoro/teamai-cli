@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
+import path from 'node:path';
 
 // ─── Reading a file that someone else may have replaced ───
 //
@@ -184,4 +185,69 @@ export async function copyRegularFile(from: string, to: string): Promise<void> {
   } finally {
     await source.close();
   }
+}
+
+/** How `copyRegularTree` treats an entry it copies: `filter` leaves out an entry and all under it; `existing` says what an entry already at the destination gets. */
+export interface CopyTreeOptions {
+  readonly filter?: (source: string) => boolean | Promise<boolean>;
+  /**
+   * `replace` (the default) puts the copy in its place, never writing through a link there; `keep` leaves it and copies
+   * the rest; `fail` rejects with EEXIST and leaves it.
+   */
+  readonly existing?: 'replace' | 'keep' | 'fail';
+}
+
+/** Whether to copy a file or link to `to`, making way for it as `existing` says: false when `keep` finds one there. */
+async function makeWay(to: string, existing: 'replace' | 'keep' | 'fail'): Promise<boolean> {
+  try {
+    await fs.promises.lstat(to);
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    await fs.promises.mkdir(path.dirname(to), { recursive: true });
+
+    return true;
+  }
+
+  switch (existing) {
+    case 'keep':
+      return false;
+    case 'fail':
+      throw Object.assign(new Error(`${to} already exists, so teamai does not copy over it`), { code: 'EEXIST' });
+    case 'replace':
+      await fs.promises.unlink(to);
+
+      return true;
+    default: {
+      const unhandled: never = existing;
+
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * Copies `from`, a file or a folder, to `to`, as fs-extra's `copy` does: folders are merged into, links are copied as
+ * links, and each file keeps its mode. Anything but a regular file, a folder or a link, such as a FIFO or a device,
+ * rejects with `NotRegularFileError`, and each file is read as `openRegularFile` opens it, so nothing waits on a writer.
+ */
+export async function copyRegularTree(from: string, to: string, options: CopyTreeOptions = {}): Promise<void> {
+  if (options.filter !== undefined && !(await options.filter(from))) return;
+  const stats = await fs.promises.lstat(from);
+
+  if (stats.isDirectory()) {
+    const created = await fs.promises.mkdir(to, { recursive: true });
+
+    for (const entry of await fs.promises.readdir(from)) await copyRegularTree(path.join(from, entry), path.join(to, entry), options);
+
+    if (created !== undefined) await fs.promises.chmod(to, stats.mode & 0o7777);
+
+    return;
+  }
+
+  if (!stats.isFile() && !stats.isSymbolicLink()) throw new NotRegularFileError(from, stats);
+
+  if (!(await makeWay(to, options.existing ?? 'replace'))) return;
+
+  if (stats.isSymbolicLink()) await fs.promises.symlink(await fs.promises.readlink(from), to);
+  else await copyRegularFile(from, to);
 }

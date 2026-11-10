@@ -3,8 +3,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { readRegularFile } from '@teamai/shared/regular-file';
-import fse from 'fs-extra';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 import { errnoCode, pathExists, remove } from './utils/fs.js';
 import { COPILOT_TOOL_ID } from './types.js';
 import { openclawWorkspaceDir } from './locate.js';
@@ -245,10 +244,10 @@ export async function removeOwnedFiles(
     // before the delete, so no removal is a one-way door.
     if (backupDir) {
       try {
-        // `errorOnExist` turns a colliding path into a failure rather than a
+        // `existing: 'fail'` turns a colliding path into a failure rather than a
         // silent overwrite: a lost copy would be the data loss this exists to
         // prevent, wearing the log line of a success.
-        await fse.copy(file, path.join(backupDir, relative), { overwrite: false, errorOnExist: true });
+        await copyRegularTree(file, path.join(backupDir, relative), { existing: 'fail' });
         result.backedUp++;
       } catch (e) {
         // A full disk, a read-only home, a colliding copy. Keep the file: a

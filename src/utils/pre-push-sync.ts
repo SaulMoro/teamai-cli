@@ -21,6 +21,7 @@ import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
 import { log } from '@teamai/shared/log';
 import { placedResourcePath } from '../push-namespaces.js';
 import { recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
+import { copyRegularTree } from '@teamai/shared/regular-file';
 
 const CONTRIBUTORS_FILE = 'CONTRIBUTORS';
 
@@ -313,7 +314,7 @@ async function replaceSkillDir(teamSkillDir: string, localSkillDir: string): Pro
   const previous = path.join(parent, `.${tag}.teamai-prev`);
 
   try {
-    await fse.copy(localSkillDir, staged);
+    await copyRegularTree(localSkillDir, staged);
     await copyDir(teamSkillDir, staged);
     await fse.rename(localSkillDir, previous);
   } catch (error) {

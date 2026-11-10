@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import fse from 'fs-extra';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 import { ResourceHandler } from './base.js';
 import { installScopeName, isSelfMode, resolveBaseDir, type ResourceItem, type TeamaiConfig, type LocalConfig } from '../types.js';
 import { expandHome, isDraft, listDirs, pruneEmptyDirs } from '../utils/fs.js';
@@ -496,12 +496,11 @@ async function copyDocs(
     // Prepare replacements while the old entries are still in place. A copy
     // failure must not remove the directory/file it was meant to replace.
     for (const [index, conflict] of conflicts.entries()) {
-      await fse.copy(conflict.source, path.join(staging!, `new-${index}`), { filter: visible });
+      await copyRegularTree(conflict.source, path.join(staging!, `new-${index}`), { filter: visible });
     }
 
     const replacedSources = new Set(conflicts.map(conflict => conflict.source));
-    await fse.copy(source, destination, {
-      overwrite: true,
+    await copyRegularTree(source, destination, {
       filter: src => delivered(src) && !replacedSources.has(src),
     });
 

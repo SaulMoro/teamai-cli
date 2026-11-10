@@ -1,4 +1,4 @@
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -304,8 +304,7 @@ export async function copyDir(
   }
 
   const srcExpanded = expandHome(src);
-  await fse.copy(srcExpanded, destExpanded, {
-    overwrite: true,
+  await copyRegularTree(srcExpanded, destExpanded, {
     filter: async (srcPath: string) => {
       if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
       // An entry `skip` names, and everything under it, is left as the destination has it.
@@ -368,7 +367,7 @@ export async function pruneEmptyDirs(target: string): Promise<boolean> {
 export async function copyFile(src: string, dest: string): Promise<void> {
   const destExpanded = expandHome(dest);
   await fse.ensureDir(path.dirname(destExpanded));
-  await fse.copy(expandHome(src), destExpanded, { overwrite: true });
+  await copyRegularTree(expandHome(src), destExpanded);
 }
 
 /**

@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { getDataHome, getTeamaiHome, isSelfMode, type JsonValue, type LocalConfig, isJsonObject } from '../types.js';
 import { pathExists, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';
+import { copyRegularTree } from '@teamai/shared/regular-file';
 import {
   PackageLockSchema,
   PackageManifestSchema,
@@ -57,7 +58,7 @@ export async function packageLockDir(localConfig: LocalConfig, options: { readOn
       if (await pathExists(packageLockPath(dir))) return dir;
 
       try {
-        await fse.copy(legacy, packageLockPath(dir), { overwrite: false, errorOnExist: true });
+        await copyRegularTree(legacy, packageLockPath(dir), { existing: 'fail' });
 
         return dir;
       } catch (error) {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fse from 'fs-extra';
-import { copyRegularFile, openRegularFile, readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
+import { copyRegularFile, copyRegularTree, openRegularFile, readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 import { log } from '@teamai/shared/log';
 import { detachChild } from '@teamai/shared/exec';
@@ -2987,7 +2987,7 @@ async function installDownloadedResource(input: {
         : []);
 
       await remove(dest);
-      await fse.copy(skillRoot, dest, { overwrite: true });
+      await copyRegularTree(skillRoot, dest);
       const fm = await readFrontmatter(path.join(dest, 'SKILL.md'));
       displayName = fm.name ?? displayName;
       await handler.pullItem(item, teamConfig, localConfig);
