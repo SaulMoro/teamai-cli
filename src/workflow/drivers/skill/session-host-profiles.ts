@@ -1,6 +1,7 @@
 /**
  * The session host question the agent answers once per run with prompt steps, and what the skill driver declares on every
- * `next`. The session host is the coding session that drives a run on `--driver skill`; it is not the host command slot.
+ * `next`. The session host is the coding session that drives a run on `--driver skill`, with the app it runs in; it is
+ * not the host command slot.
  */
 import { confinedAccess, confinedToolLevel, isConfinedTool } from '../../../tool-launch/confined.js';
 import type { ConfinedLevel } from '@teamai/tool-core/launch';

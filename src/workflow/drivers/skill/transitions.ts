@@ -1260,7 +1260,7 @@ export function reportRow(state: SkillState, input: { attempt: AttemptId; modelU
   const unavailable = input.modelUnavailable && model.by !== 'definition';
 
   const failure = unavailable
-    ? { code: 'model_unavailable', message: `Step "${open.step}" needs model ${model.name}, which this coding session, its session host, cannot run.` }
+    ? { code: 'model_unavailable', message: `Step "${open.step}" needs model ${model.name}, which the session host of this coding session cannot run.` }
     : input.result.kind === 'failure' ? input.result.failure : undefined;
 
   const tool = open.dispatch.tool ?? state.orchestrator.tool ?? input.tool;
