@@ -196,6 +196,18 @@ describe('runConfinedStepOnRuntime', () => {
     expect(prompts()).toBe(0);
   });
 
+  // A benchmark reads a label whose judge names no alias as one its pinned judge did not give.
+  it('keeps the alias the step asked for beside the model it resolved to, as a judge here does', async () => {
+    await fs.writeFile(path.join(root, 'team', 'models', 'aliases.yaml'), 'aliases:\n  judge:\n    claude: sonnet\n');
+    const dir = await dirWith(root, 'evidence', { 'diff.txt': '+ a line\n' });
+    const { attemptRun } = judgeRun(() => undefined);
+    const lease = { ...leaseIn(dir, { model: 'judge' }), confined: { dir, level: 'best-effort' as const, tools: ['claude'] } };
+
+    const ended = await runConfinedStepOnRuntime({ config, run, secrets: {}, lease, signal: new AbortController().signal, runtime: 'toy', attemptRun, offers: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], credentials: {} });
+
+    expect(ended).toMatchObject({ kind: 'ran', report: { outcome: 'success', confined: { model: { alias: 'judge', requested: 'sonnet' } } } });
+  });
+
   const limited = 'claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): You\'ve hit your limit · resets 3pm (Europe/Madrid)';
 
   it.each([

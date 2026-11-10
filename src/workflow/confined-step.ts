@@ -215,7 +215,7 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
     return { kind: 'unresolved', reason: `Step "${lease.step}" runs confined on ${lease.confined.tools.join(', ')}, and none of them resolves its model on step runtime "${runtime}". ${found.reasons.join(' ')}` };
   }
 
-  const { tool, model } = found;
+  const { tool, model, alias } = found;
   const schema = lease.confined.schema === undefined ? undefined : await replySchema(lease.step, lease.confined.schema);
 
   if (schema && !schema.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: schema.failure.message, failure: schema.failure } };
@@ -256,12 +256,12 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
   clearTimeout(timer);
   signal?.removeEventListener('abort', stop);
 
-  return { kind: 'ran', report: runtimeConfinedReport({ runtime, tool, model, level: lease.confined.level, end, durationMs: Date.now() - startedAt, retry: { run, step: lease.step } }) };
+  return { kind: 'ran', report: runtimeConfinedReport({ runtime, tool, model, alias, level: lease.confined.level, end, durationMs: Date.now() - startedAt, retry: { run, step: lease.step } }) };
 }
 
 /** The report of a confined prompt a step runtime ended. */
-function runtimeConfinedReport(input: { runtime: string; tool: string; model: StepModel | undefined; level: ConfinedLevel; end: PromptEnd; durationMs: number; retry: { run: string; step: string } }): ConfinedStepReport {
-  const { runtime, tool, model, level, end, durationMs, retry } = input;
+function runtimeConfinedReport(input: { runtime: string; tool: string; model: StepModel | undefined; alias?: string; level: ConfinedLevel; end: PromptEnd; durationMs: number; retry: { run: string; step: string } }): ConfinedStepReport {
+  const { runtime, tool, model, alias, level, end, durationMs, retry } = input;
   const failed = (failure: WorkflowFailure): ConfinedStepReport => ({ outcome: 'failed', tool, durationMs, message: failure.message, failure });
   // The tool's or the runtime's failure: a usage limit stays one, naming the retry; any other fails the confined prompt.
   const failedWith = ({ code, message }: { code: string; message: string }): ConfinedStepReport => failed({ code: code === 'usage_limited' ? 'usage_limited' : 'confined_failed', message: withRetry({ code, message }, retry) });
@@ -282,7 +282,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
 
       if (!outputs.success) return failed({ code: 'confined_reply_invalid', message: `${tool} on step runtime "${runtime}" replied with no JSON value.` });
       const usage = end.usage && { inputTokens: end.usage.input, outputTokens: end.usage.output };
-      const ran: ConfinedRunReport = { tool, isolation: kept.level, access: kept.access, ...(usage && { usage }), ...(model && { model: { requested: model.name } }) };
+      const ran: ConfinedRunReport = { tool, isolation: kept.level, access: kept.access, ...(usage && { usage }), ...(model && { model: { requested: model.name, ...(alias !== undefined && { alias }) } }) };
 
       return { outcome: 'success', tool, outputs: outputs.data, durationMs, confined: ran, ...spentOf(usage), ...(model && { model: model.name }) };
     }
