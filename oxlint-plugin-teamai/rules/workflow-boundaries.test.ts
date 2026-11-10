@@ -1,4 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, it } from 'vitest';
+import { z } from 'zod';
 import { ruleHarness } from '../test/harness.ts';
+import { SKILL_IMPORTS } from './workflow-boundaries.js';
 const rule = ruleHarness('teamai/workflow-boundaries', { filename: 'src/workflow/drivers/skill/tick.ts' });
 rule.invalid('rejects a skill driver import of the engine', `import { startRun } from '../../engine.js';`);
 rule.invalid('rejects a transitive path to the local driver', `import { protocol } from '../../protocol.js';`, undefined, { files: {
@@ -23,6 +29,8 @@ rule.valid('allows the usage limits the skill driver keeps between calls', `impo
 rule.invalid('rejects a usage-limit name the skill driver does not keep', `import { UsageLimits, isUsageLimited } from '../../usage-limits.js';`);
 rule.valid('allows named protocol schemas and approved values', `import { LeaseWireSchema } from '../../lease-wire.js'; import { envAdvice } from '../../requirements.js';`);
 rule.valid('allows types in transitions', `import type { Tick } from './tick.js';`, { filename: 'src/workflow/drivers/skill/transitions.ts' });
+rule.valid('allows the skill driver the driver names teamai keeps', `import { RESERVED_DRIVERS } from '../../reserved-drivers.js';`);
+rule.valid('allows transitions the type of a driver name teamai keeps', `import type { HostDriverName } from '../../reserved-drivers.js';`, { filename: 'src/workflow/drivers/skill/transitions.ts' });
 rule.valid('allows the skill driver entry', `import { drive } from './workflow/drivers/skill/skill-driver.js';`, { filename: 'src/workflow-commands.ts' });
 rule.valid('allows the protocol place entry', `import { place } from './place/place.js';`, { filename: 'src/workflow/protocol.ts' });
 rule.invalid('rejects delivery imports of the engine', `import { startRun } from './engine.js';`, undefined, { filename: 'src/workflow/pr-delivery.ts' });
@@ -65,3 +73,18 @@ rule.valid('allows the command layer the fleet member', `import { takeFleetAttem
 rule.valid('allows publish the fleet records', `import { offeredPool } from './fleet/record.js';`, { filename: 'src/workflow/handoff.ts' });
 rule.invalid('rejects the fleet owner from the command layer', `import { fleetCommand } from './workflow/fleet/owner.js';`, undefined, { filename: 'src/workflow-commands.ts' });
 rule.invalid('rejects the fleet records from an engine module that does not read them', `import { readAttemptRecord } from './fleet/record.js';`, undefined, { filename: 'src/workflow/engine.ts' });
+
+it('lets the skill driver import only modules that exist, so a removed module keeps no entry', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  /** Whether `module` resolves: a source file, or a package entry its manifest exports. */
+  const resolves = (module: string): boolean => {
+    if (!module.startsWith('@teamai/')) return fs.existsSync(path.join(repo, module));
+    const [pkg = '', ...entry] = module.slice('@teamai/'.length).split('/');
+    const exported = z.object({ exports: z.record(z.string(), z.unknown()) }).safeParse(JSON.parse(fs.readFileSync(path.join(repo, 'packages', pkg, 'package.json'), 'utf8')));
+
+    return exported.success && Object.hasOwn(exported.data.exports, ['.', ...entry].join('/'));
+  };
+
+  for (const module of Object.keys(SKILL_IMPORTS)) expect(resolves(module), module).toBe(true);
+});

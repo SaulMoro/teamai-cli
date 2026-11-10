@@ -16,7 +16,7 @@ const FLAT = 'src/workflow/';
 
 /** Rule 1: what a module under `drivers/skill/` may import, besides its siblings, `zod` and `node:*`. */
 /** @type {Record<string, { typeOnly?: true; names?: string[]; values?: string[] }>} */
-const SKILL_IMPORTS = {
+export const SKILL_IMPORTS = {
   'src/workflow/protocol.ts': {},
   // Whether only a person answers a gate, the one rule the engine and the offers apply too.
   'src/workflow/types.ts': { typeOnly: true, values: ['onlyPersonAnswers'] },
@@ -30,6 +30,8 @@ const SKILL_IMPORTS = {
   'src/workflow/attempt-marker.ts': {},
   // The app a session runs in, which the command layer detects and checks the driver of before describe answers.
   'src/workflow/session-apps.ts': { typeOnly: true },
+  // The driver names teamai keeps, which the transitions read as types: describe sends a run to the built-in host.
+  'src/workflow/reserved-drivers.ts': {},
   // The wire shapes the engine answers with, which every driver parses with the same schema.
   'src/workflow/lease-wire.ts': { names: ['LeaseWireSchema', 'ConfinedLease'] },
   'src/workflow/step-state.ts': { names: ['FailureSchema', 'ConfinedRunReportSchema', 'TokenUsageSchema'] },

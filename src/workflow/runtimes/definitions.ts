@@ -10,6 +10,7 @@ import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types
 import { JsonValueSchema } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
 import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
+import { isReservedDriver } from '../reserved-drivers.js';
 import type { WorkflowFailure } from '../types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
@@ -29,27 +30,25 @@ const SHIPPED_PREFIX = 'teamai-';
 const RUNTIME_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
- * Name `name` as a definition takes it, or why it cannot: a name `parseDriver` reads as a driver outside teamai, but
- * `host`, which teamai builds in. Every other name is teamai's own driver, or none, so a driver teamai adds is refused
- * here until a case below takes it.
+ * Name `name` as a definition takes it, or why it cannot: any driver name but one in `RESERVED_DRIVERS`, `host`
+ * included, which teamai builds in.
  */
 function definitionName(name: string): { ok: true; name: DriverName } | { ok: false; reason: string } {
+  const kept = { ok: false, reason: `"${name}" is a name teamai keeps for its own driver` } as const;
+
+  if (isReservedDriver(name)) return kept;
   const parsed = parseDriver(name);
 
   if (!parsed.ok) return parsed;
 
   switch (parsed.driver) {
+    // parseDriver names a driver of teamai's own only for a name isReservedDriver keeps.
     case 'local':
     case 'skill':
     case 'none':
-      return { ok: false, reason: `"${name}" is a name teamai keeps for its own driver` };
-    default: {
-      const definition: { external: DriverName } = parsed.driver;
-
-      if (definition.external === HOST_DRIVER) return { ok: false, reason: `"${name}" is a name teamai keeps for its own driver` };
-
-      return { ok: true, name: definition.external };
-    }
+      return kept;
+    default:
+      return { ok: true, name: parsed.driver.external };
   }
 }
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDriverDefinition, resolveDriver } from '../workflow/runtimes/definitions.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
+import { RESERVED_DRIVERS } from '../workflow/reserved-drivers.js';
 import { shippedDriverFile } from '../default-drivers.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { log } from '@teamai/shared/log';
@@ -28,6 +29,11 @@ function teamWith(names: string[], scope: LocalConfig['scope'] = 'user'): LocalC
 }
 
 describe('driver definition names', () => {
+  it('keeps for its own drivers local, skill, none, fleet and host, which no definition file may take', () => {
+    expect(Object.values(RESERVED_DRIVERS).toSorted()).toEqual(['fleet', 'host', 'local', 'none', 'skill']);
+    for (const name of Object.values(RESERVED_DRIVERS)) expect(parseDriverDefinition(`drivers/${name}.yaml`, definition(name))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining(`"${name}" is a name teamai keeps for its own driver`) } });
+  });
+
   it('loads a definition with an ordinary name from the team repo, from ~/.teamai/drivers/, and from a project\'s own team repo', async () => {
     const team = teamWith(['acme-sandbox']);
     const project = teamWith(['payments.ci'], 'project');
@@ -50,7 +56,7 @@ describe('driver definition names', () => {
     } });
   });
 
-  it.each(['none', 'skill', 'fleet'])('refuses a definition named %s, a name teamai keeps for its own driver', async (name) => {
+  it.each(Object.values(RESERVED_DRIVERS).filter((name) => name !== 'local' && name !== 'host'))('refuses a definition named %s, a name teamai keeps for its own driver', async (name) => {
     const team = teamWith([name]);
 
     expect(parseDriverDefinition(`drivers/${name}.yaml`, definition(name))).toMatchObject({ ok: false, failure: { code: 'driver_invalid' } });

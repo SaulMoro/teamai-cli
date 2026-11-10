@@ -21,6 +21,7 @@ import type { AttemptState, Dispatch, Gate, PlaceAsk, ReportBody, SkillState, St
 import type { Waiting } from './turn.js';
 import type { WhenIdle } from '../../usage-limits.js';
 import type { SessionApp } from '../../session-apps.js';
+import type { HostDriverName } from '../../reserved-drivers.js';
 
 export interface TransitionRow {
   id: string;
@@ -272,7 +273,7 @@ export type Refusal =
 export interface BackgroundDriver { driver: string; steps: string }
 
 /** The built-in `host`, which runs a run that needs no AI tool on the host slot alone. */
-export const HOST_BACKGROUND: BackgroundDriver = { driver: 'host', steps: 'Each step runs on this machine in teamai, and no agent runs any of them.' };
+export const HOST_BACKGROUND: BackgroundDriver = { driver: 'host' satisfies HostDriverName, steps: 'Each step runs on this machine in teamai, and no agent runs any of them.' };
 
 /**
  * How describe says to start, and why, for the kinds that start no run here. `unattended`: start with the recommended
