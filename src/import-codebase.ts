@@ -12,6 +12,7 @@ import { log } from './utils/logger.js';
 import { remotesMatch } from './utils/git.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
 import { shellQuoteValue } from './utils/shell-profile.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** The caches an incremental extraction reuses, kept with each codebase's evidence. */
 const INCREMENTAL_CACHES = ['facts-cache.json', 'interfaces-cache.json'] as const;
@@ -41,7 +42,7 @@ async function publishRootManifest(stagingManifest: string, wikiRoot: string): P
     const tmp = `${target}.tmp-${process.pid}-${manifestPublishSeq++}`;
 
     try {
-      await fs.copyFile(stagingManifest, tmp);
+      await fs.writeFile(tmp, await readRegularFile(stagingManifest));
       await fs.rename(tmp, target);
     } catch (err) {
       await fs.remove(tmp).catch(() => {});
@@ -82,7 +83,7 @@ type EvidenceJson = z.infer<typeof EvidenceJsonSchema>;
 /** The evidence JSON object in `file`, or null when it is missing, unreadable, or not an object. */
 async function readJsonIfPresent(file: string): Promise<EvidenceJson | null> {
   try {
-    return EvidenceJsonSchema.safeParse(await fs.readJson(file)).data ?? null;
+    return EvidenceJsonSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8'))).data ?? null;
   } catch {
     return null;
   }
@@ -371,7 +372,7 @@ async function seedBaseline(wikiRoot: string, stagingWiki: string, slug: string)
   const ownIndices = path.join(evidenceDir, '.indices');
 
   const readManifest = async (file: string) =>
-    SourceManifestSchema.safeParse(await fs.readJson(file).catch(() => null)).data ?? null;
+    await readRegularFile(file, 'utf8').then((text) => SourceManifestSchema.safeParse(JSON.parse(text)).data ?? null).catch(() => null);
 
   let manifest: string | undefined;
   let indices: string | undefined;

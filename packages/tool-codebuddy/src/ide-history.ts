@@ -541,7 +541,7 @@ function writeIndex(historyDir: string, data: IdeIndex): void {
   // Back up before writing, matching the IDE's own .index_bak.json convention
   if (fs.existsSync(idxPath)) {
     try {
-      fs.copyFileSync(idxPath, path.join(historyDir, '.index_bak.json'));
+      fs.writeFileSync(path.join(historyDir, '.index_bak.json'), readRegularFileSync(idxPath));
     } catch {
       // A failed backup must not block the write
     }
@@ -767,7 +767,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
             if (path.relative(assetsDir, dest).startsWith('..')) throw new Error('unsafe asset name');
 
             if (asset.sourcePath && fs.existsSync(asset.sourcePath)) {
-              fs.copyFileSync(asset.sourcePath, dest);
+              fs.writeFileSync(dest, readRegularFileSync(asset.sourcePath));
               ok = true;
             } else if (asset.data) {
               fs.writeFileSync(dest, Buffer.from(asset.data, 'base64'));
@@ -820,7 +820,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
 
       if (fs.existsSync(convIdxPath)) {
         try {
-          fs.copyFileSync(convIdxPath, path.join(convDir, '.index_bak.json'));
+          fs.writeFileSync(path.join(convDir, '.index_bak.json'), readRegularFileSync(convIdxPath));
         } catch {
           // A failed backup must not block the write
         }

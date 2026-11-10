@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
 import { instanceToolHome, SettingsSchema } from './settings.js';
 import { runsCommand } from './tool-instances.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Adding a T3 provider instance to the member's T3 settings ───
 //
@@ -102,7 +103,7 @@ function isAlive(pid: number): boolean {
 /** A file's text, or none when there is no file. */
 function readText(file: string): string | undefined {
   try {
-    return fs.readFileSync(file, 'utf8');
+    return readRegularFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
@@ -124,7 +125,7 @@ function release(file: string, text: string): void {
   }
 
   try {
-    if (fs.readFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
+    if (readRegularFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
   } finally {
     fs.rmSync(aside, { force: true });
   }

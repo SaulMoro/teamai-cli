@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 
 import { z } from 'zod';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -12,6 +12,7 @@ import { pathExists } from './utils/fs.js';
 import type { CodeFact } from './wiki-engine/adapters/index.js';
 import type { InterfaceInventory } from './wiki-engine/interface-scanner.js';
 import type { CodebaseOutputManifestV2, ManifestComponentV2, ManifestEdgeV2, ManifestEdgeSource } from './wiki-engine/manifest-schema.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 export interface EnrichContext {
   project: string;
@@ -346,7 +347,7 @@ async function indicesDirOf(target: CodebaseEnrichTarget): Promise<string | unde
   if (await pathExists(path.join(own, 'facts-cache.json'))) return own;
 
   try {
-    const manifest = SourceManifestSchema.safeParse(JSON.parse(await readFile(path.join(target.wikiRoot, 'source-manifest.json'), 'utf-8')));
+    const manifest = SourceManifestSchema.safeParse(JSON.parse(await readRegularFile(path.join(target.wikiRoot, 'source-manifest.json'), 'utf-8')));
 
     return manifest.data?.project === target.project ? path.join(target.wikiRoot, '.indices') : undefined;
   } catch {

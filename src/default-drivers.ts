@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /**
  * teamai's own package directory. This file sits one level below it, in src/ and in the bundle in dist/ alike, as
@@ -35,7 +36,7 @@ export function shippedRuntimeFile(name: string, packageDir = teamaiPackageDir()
   let manifest: z.infer<typeof PackageBinSchema>;
 
   try {
-    manifest = PackageBinSchema.parse(JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8')));
+    manifest = PackageBinSchema.parse(JSON.parse(readRegularFileSync(path.join(packageDir, 'package.json'), 'utf8')));
   } catch {
     return undefined;
   }

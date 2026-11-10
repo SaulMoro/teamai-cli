@@ -3,6 +3,7 @@ import path from 'node:path';
 import { hold } from '@teamai/runtime-kit/journal';
 import { ConfinedKeptSchema, OpIdSchema, OpStateSchema, RUN_DIR_ENV, type OpId } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The journal ─────────────────────────────────────────
 //
@@ -151,7 +152,7 @@ function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
   let text: string;
 
   try {
-    text = fs.readFileSync(file, 'utf8');
+    text = readRegularFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;

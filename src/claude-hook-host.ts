@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { JsonValueSchema, type JsonValue, JsonObjectSchema } from './types.js';
 import { shellQuoteValue } from './utils/shell-profile.js';
 import { findGitBashWindows } from './bundled-runtime.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 const CURSOR_MARKER = '--tool cursor';
 const COPILOT_MARKER = '--tool copilot';
@@ -182,7 +183,7 @@ function homeDir(env: NodeJS.ProcessEnv): string | undefined {
 
 function fileHasMarker(file: string, marker: string): boolean {
   try {
-    return fs.readFileSync(file, 'utf8').includes(marker);
+    return readRegularFileSync(file, 'utf8').includes(marker);
   } catch {
     return false;
   }
@@ -206,7 +207,7 @@ function copilotHooksInstalled(dir: string): boolean {
       if (!name.endsWith('.json')) return false;
 
       try {
-        return copilotRunsEntries(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')))
+        return copilotRunsEntries(JSON.parse(readRegularFileSync(path.join(dir, name), 'utf8')))
           .some(([, , command]) => command.includes(COPILOT_MARKER));
       } catch {
         return false;

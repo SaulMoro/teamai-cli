@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── What a runtime keeps across its own processes ───────
 //
@@ -40,7 +41,7 @@ export function recordStore<TSchema extends z.ZodType>(dir: string, schema: TSch
     let text: string;
 
     try {
-      text = fs.readFileSync(at, 'utf8');
+      text = readRegularFileSync(at, 'utf8');
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { kind: 'missing' };
 
@@ -106,7 +107,7 @@ function holdAt(file: string): { text: string; pid: number | undefined; takenAt:
   let takenAt: number;
 
   try {
-    text = fs.readFileSync(file, 'utf8');
+    text = readRegularFileSync(file, 'utf8');
     takenAt = fs.statSync(file).mtimeMs;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
@@ -133,7 +134,7 @@ function releaseHold({ file, text }: { file: string; text: string }): void {
   }
 
   try {
-    if (fs.readFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
+    if (readRegularFileSync(aside, 'utf8') !== text) fs.linkSync(aside, file);
   } finally {
     fs.rmSync(aside, { force: true });
   }

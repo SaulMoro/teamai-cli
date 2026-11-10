@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { probeBinary } from './exec.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Reads the version of a tool installed here, or '' when it reads none. */
 export type VersionDetector = () => Promise<string>;
@@ -16,7 +16,7 @@ export async function readPlistVersion(appPath: string): Promise<string> {
   const plistPath = path.join(appPath, 'Contents', 'Info.plist');
 
   try {
-    const content = await readFile(plistPath, 'utf-8');
+    const content = await readRegularFile(plistPath, 'utf-8');
 
     const match = content.match(
       /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/,

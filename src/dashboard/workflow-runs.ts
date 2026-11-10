@@ -352,7 +352,7 @@ function recordsDir(config: LocalConfig): string {
 
 async function readRecord(file: string): Promise<ReadRecord | undefined> {
   try {
-    const parsed = RecordSchema.safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+    const parsed = RecordSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8')));
 
     return parsed.success ? parsed.data : undefined;
   } catch {
@@ -396,7 +396,7 @@ export async function listHandoffs(config: LocalConfig): Promise<HandoffRow[]> {
  */
 async function benchmarkOf(file: string): Promise<Pick<RunDetail, 'benchmark'>> {
   try {
-    const parsed = BenchmarkRunRecordSchema.safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+    const parsed = BenchmarkRunRecordSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8')));
 
     return parsed.success ? { benchmark: benchmarkCells(benchmarkTable({ benchmark: parsed.data })) } : {};
   } catch {

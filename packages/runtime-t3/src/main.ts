@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import type { RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/tool-core/home';
@@ -9,6 +8,7 @@ import { journal } from './journal.js';
 import { serve, type ServeOptions } from './runtime.js';
 import { connectT3 } from './t3.js';
 import { t3Command, t3HomeOf, t3UserHomeOf } from './t3-command.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // teamai-runtime-t3: teamai spawns it for a driver definition that uses runtime `t3` (`--driver t3`), and speaks
 // runtime protocol 1 to it over stdio. Its stdout carries only protocol lines, a line for the person as a `notice`;
@@ -35,7 +35,7 @@ const REACH_MS = 3_000;
 /** The MCP endpoint of the T3 Code server on this machine, from the file the server writes while it runs. */
 function localEndpoint(): URL | undefined {
   try {
-    const { origin } = z.object({ origin: z.string().url() }).parse(JSON.parse(fs.readFileSync(path.join(t3Home, 'userdata', 'server-runtime.json'), 'utf8')));
+    const { origin } = z.object({ origin: z.string().url() }).parse(JSON.parse(readRegularFileSync(path.join(t3Home, 'userdata', 'server-runtime.json'), 'utf8')));
 
     return new URL('/mcp', origin);
   } catch {

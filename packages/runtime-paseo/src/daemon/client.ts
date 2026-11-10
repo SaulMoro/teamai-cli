@@ -11,6 +11,7 @@ import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type WebSocket from 'ws';
 import { z } from 'zod';
 import { clientInApp } from './app-client.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The Paseo client ────────────────────────────────────
 //
@@ -55,7 +56,7 @@ const ManifestSchema = z.object({ name: z.string(), version: z.string().optional
 /** The package.json of the package in `dir`, or undefined when it holds none that parses. */
 function manifestOf(dir: string): z.infer<typeof ManifestSchema> | undefined {
   try {
-    return ManifestSchema.safeParse(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))).data;
+    return ManifestSchema.safeParse(JSON.parse(readRegularFileSync(path.join(dir, 'package.json'), 'utf8'))).data;
   } catch {
     return undefined;
   }

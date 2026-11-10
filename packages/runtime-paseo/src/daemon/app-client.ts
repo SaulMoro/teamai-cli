@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import { openRegularFileSync, readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The client inside the Paseo app ─────────────────────
 //
@@ -38,7 +39,7 @@ interface Archive {
 }
 
 function openArchive(file: string): Archive {
-  const fd = fs.openSync(file, 'r');
+  const fd = openRegularFileSync(file);
 
   try {
     const sizes = Buffer.alloc(16);
@@ -73,10 +74,10 @@ function readEntry(archive: Archive, name: string): Buffer {
   let bytes: Buffer;
 
   if (entry.unpacked) {
-    bytes = fs.readFileSync(path.join(`${archive.file}.unpacked`, ...name.split('/')));
+    bytes = readRegularFileSync(path.join(`${archive.file}.unpacked`, ...name.split('/')));
   } else {
     bytes = Buffer.alloc(entry.size);
-    const fd = fs.openSync(archive.file, 'r');
+    const fd = openRegularFileSync(archive.file);
 
     try {
       fs.readSync(fd, bytes, 0, entry.size, archive.base + Number(entry.offset ?? 0));
