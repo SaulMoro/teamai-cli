@@ -53,6 +53,14 @@ describe('driveByDefault', () => {
     expect(await driveByDefault(config)).toEqual({ kind: 'drive', driver: 'local' });
   });
 
+  it('drives here on a team teamai-local this machine cannot open, so the drive says why rather than the run waiting for local', async () => {
+    const config = await workspace('');
+    fs.mkdirSync(path.join(config.repo.localPath, 'drivers'));
+    fs.writeFileSync(path.join(config.repo.localPath, 'drivers', 'teamai-local.yaml'), 'schemaVersion: v1alpha1\nname: teamai-local\nruntimes:\n  - use: acme-missing\n');
+
+    expect(await driveByDefault(config)).toEqual({ kind: 'drive', driver: 'local' });
+  });
+
   it('awaits the driver the team sets, which this machine does not run', async () => {
     const config = await workspace('', 'workflows: { driver: acme-sandbox }\n');
 

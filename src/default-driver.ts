@@ -41,15 +41,17 @@ export async function resolveDefaultDriver(config: LocalConfig, team: Pick<Teama
 type DriverHere = 'drives' | 'unaccepted' | 'absent';
 
 async function driverHere(config: LocalConfig, name: DriverName): Promise<DriverHere> {
+  // This machine always drives local: a teamai-local it cannot open fails the drive, which names the file and why.
+  const absent: DriverHere = name === LOCAL_DRIVER ? 'drives' : 'absent';
   const resolved = await resolveDriver(config, name, { personal: true });
 
-  if (!resolved.ok) return 'absent';
+  if (!resolved.ok) return absent;
   let here: DriverHere = 'drives';
 
   for (const { use } of resolved.driver.definition.runtimes) {
     const located = await locateRuntime(resolved.driver, use);
 
-    if (!located.ok) return 'absent';
+    if (!located.ok) return absent;
 
     if (!(await acceptRuntime(located.source, { mode: 'unattended', canAsk: false })).ok) here = 'unaccepted';
   }
