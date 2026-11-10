@@ -288,14 +288,18 @@ steps:
     projectAiTool(config, 'claude');
     const resetsAt = Math.ceil((Date.now() + 3000) / 1000) * 1000;
     let launches = 0;
+    // The command before the answer step ends only once the driver read the prompt's limit and holds the tool.
+    const warn = log.warn.bind(log);
+    vi.spyOn(log, 'warn').mockImplementation((message: string) => {
+      if (message.includes('hit its usage limit')) fs.writeFileSync(hit, '');
+      warn(message);
+    });
     const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         launches += 1;
-        if (launches > 1) return { started: true as const, exitCode: 0 };
-        fs.writeFileSync(hit, '');
 
-        return claudeLimit(resetsAt);
+        return launches > 1 ? { started: true as const, exitCode: 0 } : claudeLimit(resetsAt);
       }),
     };
 
