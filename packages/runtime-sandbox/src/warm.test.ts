@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { planWarm } from './warm.js';
+import { planWarm, scratchOf } from './warm.js';
 
 const dirs: string[] = [];
 const releasers: ChildProcess[] = [];
@@ -27,5 +27,21 @@ describe.skipIf(process.platform === 'win32')('planWarm on a checkout where a st
 
     expect(Date.now() - start).toBeLessThan(1_000);
     expect(planned).toMatchObject({ ok: false, failure: { code: 'bad_option', key: 'warm.cache' } });
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('scratchOf', () => {
+  it('copies each cache file with its mode, so an executable stays executable in the build context', () => {
+    const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-warm-mode-'));
+    dirs.push(checkout);
+    const script = path.join(checkout, 'install.sh');
+    fs.writeFileSync(script, '#!/bin/sh\n');
+    fs.chmodSync(script, 0o755);
+
+    const scratch = scratchOf([{ file: 'tools/install.sh', from: script }]);
+    dirs.push(scratch.dir);
+
+    expect(fs.readFileSync(path.join(scratch.dir, 'tools/install.sh'), 'utf8')).toBe('#!/bin/sh\n');
+    expect(fs.statSync(path.join(scratch.dir, 'tools/install.sh')).mode & 0o777).toBe(0o755);
   });
 });
