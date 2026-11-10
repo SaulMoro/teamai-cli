@@ -861,7 +861,7 @@ describe('team env by directory (#1018)', () => {
       await zshenv(zshenvPath);
       const before = { zshrc: await state(zshrcPath), zshenv: await state(zshenvPath) };
 
-      await expect(handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a)).rejects.toThrow(/EACCES|EISDIR|EPERM/);
+      await expect(handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a)).rejects.toThrow(/EACCES|EISDIR|EPERM|is a directory, not a regular file/);
 
       expect({ zshrc: await state(zshrcPath), zshenv: await state(zshenvPath) }).toEqual(before);
     });
