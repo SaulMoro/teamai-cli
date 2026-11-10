@@ -474,8 +474,9 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   // CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
   const { limits } = lease;
   const endsAtTurns = limits?.maxTurns !== undefined && !lease.interactive && family === 'claude' ? limits.maxTurns : undefined;
-  // A runtime that launches agents its own way states usage only once the prompt ends, so the budget is checked then.
-  const budget = limits?.budget !== undefined && !onRuntime?.launchesAgents && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
+  // A runtime that launches agents its own way states usage only once the prompt ends, so the budget is checked then. One
+  // that runs the tool on the attempt's tool home launches it as teamai does, so it holds Claude and OpenCode to it.
+  const budget = limits?.budget !== undefined && !launchesOwnWay && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
   const launchedAt = Date.now();
 
   if (lease.interactive && !onRuntime) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);

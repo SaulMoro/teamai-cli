@@ -1146,6 +1146,41 @@ steps:
     expect(two).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
   }, 30_000);
 
+  it('holds a Claude prompt to its budget on a runtime that runs it in the attempt\'s tool home, and lists the budget as enforced', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: One budgeted step.
+steps:
+  - id: review
+    tool: claude
+    prompt: Review this project.
+    budget: { tokens: 1000 }
+    on_limit: end_turn
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, usage: { input: 300, output: 100 }, conversations: false }, prompt_tool_home: true, can: { end_turn: true } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    await runLocalDriver(config, runId, workspace, { runtimes });
+    const run = await readRun(config, runId);
+    if (typeof run === 'string') throw new Error(run);
+    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => z.object({ sent: z.object({ limits: z.unknown() }).partial().optional() }).parse(JSON.parse(line)).sent)
+      .filter((lease) => lease !== undefined);
+
+    expect(sent).toEqual([expect.objectContaining({ limits: expect.objectContaining({ budget: { tokens: 1000 } }) })]);
+    expect(run.steps[0]).toMatchObject({ id: 'review', status: 'succeeded' });
+    expect(run.steps[0]).not.toHaveProperty('unenforced');
+  }, 30_000);
+
   it('leases it no step on a tool whose sessions teamai does not read in a tool home, even one it lists', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build
