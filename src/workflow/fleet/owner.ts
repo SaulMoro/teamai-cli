@@ -119,7 +119,14 @@ export function shadowedFleetEntries(runtimes: ReadonlyArray<{ use: string; thro
     const can = labels ? { ...offered, labels } : offered;
     const earlier = seen.find((one) => coversCan(one.can, can));
 
-    if (earlier) warnings.push(`The fleet entry for pool "${pool}" never gets a step: the fleet entry for pool "${earlier.pool}" before it offers everything it does, and takes each step first. Put the more specific entry first.`);
+    if (earlier) {
+      const fix = coversCan(can, earlier.can)
+        ? 'The two offer the same, so the first takes every step: remove one, or make them offer different things.'
+        : `Put the fleet entry for pool "${pool}", which offers less, before the one for pool "${earlier.pool}".`;
+
+      warnings.push(`The fleet entry for pool "${pool}" never gets a step: the fleet entry for pool "${earlier.pool}" before it offers everything it does, and takes each step first. ${fix}`);
+    }
+
     seen.push({ pool, can });
   }
 
@@ -333,7 +340,8 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
 
       // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
       // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has. A
-      // member drives a whole workflow's steps itself, so the fleet takes a workflow step whole when its steps fit.
+      // member drives a whole workflow's steps itself, so the fleet takes a workflow step whole when its steps fit. The
+      // member launches each prompt's agent on its own tool, so prompt steps reach the fleet as `prompt` (`launchesAgents`).
       return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES], workflow: true, ...(labels && { labels }) }, launchesAgents: true };
     },
 
@@ -877,7 +885,7 @@ function wakeOnOffer({ config, run, attempt, root, waker }: { config: LocalConfi
       }
 
       // The command first and alone on its line, then where to run it and to end.
-      const message = `${takeCommand(pool)}\n\nRun that command once, in a checkout of ${repository}, then end, whether it ran a step or found nothing to claim.`;
+      const message = `${takeCommand(pool)}\n\nRun that command once, as written, in a checkout of ${repository}. It needs no skill or file read first: run it before anything else, then end, whether it ran a step or found nothing to claim.`;
       const end = waker.wake({ op, pool, repository, message, title: `teamai: step ${step} of run ${run}, fleet pool ${pool}` }, {});
 
       const current = { op, settled: Promise.resolve(), isSettled: false };

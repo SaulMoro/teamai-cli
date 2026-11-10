@@ -1145,15 +1145,23 @@ describe('fleet entries of one driver definition', () => {
       { use: 'local' },
       fleet({ pool: 'spare' }),
     ])).toEqual([
-      'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+      'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. The two offer the same, so the first takes every step: remove one, or make them offer different things.',
     ]);
   });
 
   it('names no labelled entry after one without its labels, and an entry an earlier one with every label of it covers', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'default' }), fleet({ pool: 'e2e', labels: ['computer-use'] })])).toEqual([]);
     expect(shadowedFleetEntries([fleet({ pool: 'e2e', labels: ['computer-use', 'gpu'] }), fleet({ pool: 'gpu', labels: ['gpu'] })])).toEqual([
-      'The fleet entry for pool "gpu" never gets a step: the fleet entry for pool "e2e" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+      'The fleet entry for pool "gpu" never gets a step: the fleet entry for pool "e2e" before it offers everything it does, and takes each step first. Put the fleet entry for pool "gpu", which offers less, before the one for pool "e2e".',
     ]);
+  });
+
+  it('advises the order that gives each entry steps: the entry that offers less goes first', () => {
+    const offersMore = fleet({ pool: 'e2e', labels: ['computer-use', 'gpu'] });
+    const offersLess = fleet({ pool: 'gpu', labels: ['gpu'] });
+
+    expect(shadowedFleetEntries([offersMore, offersLess])[0]).toContain('Put the fleet entry for pool "gpu", which offers less, before the one for pool "e2e".');
+    expect(shadowedFleetEntries([offersLess, offersMore])).toEqual([]);
   });
 
   it('declares the labels its entry lists, so a step that requires them goes to its pool', async () => {
@@ -1178,7 +1186,7 @@ describe('fleet entries of one driver definition', () => {
 
   it('names a specific fleet entry a general one before it covers', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'any', can: { network: true, isolation: 'sandbox' } }), fleet({ pool: 'box', can: { isolation: 'worktree' } })])).toEqual([
-      'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+      'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the fleet entry for pool "box", which offers less, before the one for pool "any".',
     ]);
   });
 
@@ -1188,7 +1196,7 @@ describe('fleet entries of one driver definition', () => {
 
   it('names a shadowed fleet entry that also sets the options teamai takes for itself', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'default' }), fleet({ pool: 'spare', max_parallel: 2, credentials: { GH_TOKEN: 'env:GH_TOKEN' } })])).toEqual([
-      'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. Put the more specific entry first.',
+      'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. The two offer the same, so the first takes every step: remove one, or make them offer different things.',
     ]);
   });
 });
@@ -1601,6 +1609,8 @@ describe('waking a fleet member for an offer no member claimed', () => {
     expect(String(sent?.message).split('\n')[0]).toBe(`${WAKE_COMMAND} --next --pool gpu`);
     expect(String(sent?.message)).toContain(repository);
     expect(String(sent?.message)).toContain('then end');
+    // A woken agent that reads a skill first spends its start on it: the command needs none.
+    expect(String(sent?.message)).toContain('It needs no skill or file read first');
     // A title the person recognises on the machine woken: the step, the run and the pool.
     expect(String(sent?.title)).toContain('work');
     expect(String(sent?.title)).toContain(run);
