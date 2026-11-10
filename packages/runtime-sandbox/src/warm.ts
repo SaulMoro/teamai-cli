@@ -148,6 +148,8 @@ export function scratchOf(cache: WarmPlan['cache']) {
     const to = path.join(dir, file);
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.writeFileSync(to, readRegularFileSync(from));
+    // As a copy would: a script the recipe runs stays executable.
+    fs.chmodSync(to, fs.statSync(from).mode & 0o7777);
   }
 
   return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
