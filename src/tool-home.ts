@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HomeMove } from '@teamai/tool-core/definition';
 import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
@@ -60,7 +61,8 @@ export function realHost(overrides: Partial<Pick<Host, 'env' | 'home'>> = {}): H
     existsNow: (file) => fs.existsSync(file),
     readTextNow: (file) => {
       try {
-        return fs.readFileSync(file, 'utf8');
+        // A tool home is where a step's tool writes, so a FIFO may be left there.
+        return readRegularFileSync(file, 'utf8');
       } catch {
         return null;
       }
