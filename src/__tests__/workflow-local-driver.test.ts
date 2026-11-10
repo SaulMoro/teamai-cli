@@ -1275,6 +1275,22 @@ steps:
   }, 30_000);
 });
 
+describe('the runtime a step on the local driver records', () => {
+  it('names the host for a command step when the loop is given no definition, as on teamai-local', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Build the project.
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+`);
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'build', status: 'succeeded', runtime: 'host' }] });
+  });
+});
+
 describe('a fleet wake option that names an in-process runtime', () => {
   it.each(['local', 'tools'])('refuses %s as it refuses every runtime in teamai\'s own process, whatever its name', async (use) => {
     const { config, workspace } = await workflowFixture(`schemaVersion: v1alpha1

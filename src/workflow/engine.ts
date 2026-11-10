@@ -2652,7 +2652,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
           // The runtime of a driver definition the step goes to, the host command slot included, is kept with its pass;
           // in teamai's process, the runtime that runs it: `host` for a command or an answer, `tools` for a prompt.
-          if (options.alone?.offering !== undefined && options.alone.driver !== 'local') {
+          if (options.alone?.offering !== undefined) {
             const inProcess = options.alone.offers.some((offer) => offer.runtime === options.alone?.offering && offer.inProcess === true);
             granted.runtime = !inProcess ? options.alone.offering : definition.prompt !== undefined && definition.answer === undefined ? 'tools' : 'host';
           }
