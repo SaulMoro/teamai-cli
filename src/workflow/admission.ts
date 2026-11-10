@@ -9,6 +9,7 @@ import { secretKey } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
 import { redactJson } from '@teamai/shared/redact';
 import { workflowsRunBy } from './cache.js';
+import { BundleSchema } from './output.js';
 import { formatDiagnostic, parseWorkflow } from './parse.js';
 import type { WorkflowFiles } from './parse-context.js';
 import { mergeRequirements, type InEffect } from './requirements.js';
@@ -28,12 +29,6 @@ export interface Admitted {
 export type Candidate =
   | { kind: 'cached'; definition: WorkflowDefinition; workflows: Record<string, WorkflowDefinition> }
   | { kind: 'output'; step: string; field: string; output: AdmittedWorkflow['output']; runsUnder: readonly InEffect[] };
-
-/** A workflow bundle as a step prints it: the definition, and the workflows it runs by name under the keys it names them by. */
-const BundleSchema = z.object({
-  definition: z.record(z.string(), z.unknown()),
-  workflows: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-}).strict();
 
 type Bundle = z.infer<typeof BundleSchema>;
 
@@ -182,7 +177,7 @@ function parseBundle(
   return { definition: top.definition, workflows: parsed };
 }
 
-/** Why a step of a bundle cannot run, inline workflows included: it runs a `from` step, or reads a prompt file. */
+/** Why a step of a bundle cannot run, inline workflows included: it runs a `from` step, or reads a prompt or answer file. */
 function unrunnableStep(steps: readonly WorkflowStep[], prefix = ''): string | undefined {
   for (const step of steps) {
     const child = stepWorkflow(step);
@@ -190,6 +185,8 @@ function unrunnableStep(steps: readonly WorkflowStep[], prefix = ''): string | u
     if (child?.kind === 'from') return `step "${prefix}${step.id}" runs workflow: { from }, which a workflow output may not`;
 
     if (step.promptFile !== undefined) return `step "${prefix}${step.id}" has prompt_file, which a workflow output may not; print the prompt as prompt`;
+
+    if (step.answerFile !== undefined) return `step "${prefix}${step.id}" has answer_file, which a workflow output may not; print the answer as answer`;
     const inner = child?.kind === 'inline' ? unrunnableStep(child.workflow.steps, `${prefix}${step.id}.`) : undefined;
 
     if (inner) return inner;

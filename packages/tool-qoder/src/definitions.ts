@@ -25,7 +25,7 @@ export const tools = {
       project: { judgedTeamaiOnly: false, format: 'claude', syntax: 'json-comments', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['qoder-folder-trust', 'qoder-mcp-approval'] },
     },
     // qodercli 1.1.81 loads project, then project-local (settings.local.json), then user hooks; both project files wait on folder trust.
-    hooks: { user: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'home', path: '.qoder/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'source' }], readGates: ['qoder-folder-trust'] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'home', path: '.qoder/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'source' }], readGates: ['qoder-folder-trust'] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Qoder CLI 1.1.78: <id>.jsonl under <QODER_CONFIG_DIR or QODER_CLI_HOME/.qoder or ~/.qoder>/projects/<cwd>.
     sessions: ['qoder'],
     launch: 'qoder',
@@ -68,7 +68,7 @@ export const tools = {
       user: { format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] },
       project: { judgedTeamaiOnly: false, format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'workspaceUnder', evidence: 'assumed' }] },
     },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'assumed' }] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'assumed' }] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Qoder CN: the same layout under ~/.qoder-cn, moved by QODERCN_CONFIG_DIR.
     sessions: ['qoder-cn'],
     launch: 'none',

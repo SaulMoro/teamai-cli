@@ -40,6 +40,11 @@ export interface Scope {
   setup?: Setup;
   /** The workflow steps under `on_limit: end_turn` this workflow runs inside, outermost first: allowances its prompt turns spend. */
   allowances: GrantedAllowance[];
+  /**
+   * The sourceHash of the workflow folder whose file defines this workflow's steps: the file's own for the top-level and
+   * a named workflow, the enclosing one for an inline workflow and one a `from` step admitted. Absent for a single file.
+   */
+  folder?: string;
 }
 
 /** What a workflow step under `on_limit: end_turn` grants the prompt turns inside it: its `timeout` and `budget`. */
@@ -65,8 +70,12 @@ export function topScope(run: RunState): Scope {
   return {
     runId: run.nestedIn ?? run.id, prefix: '', definition: run.definition, workflow: run.definition.name, inputs: run.inputs, loops: stepLoops(run.definition.steps), defaultModel: run.definition.defaults?.model,
     requires: mergeRequirements(run.definition.defaults?.requires),
-    ...budgetOf(false, run.definition.budget), ...setupOf(run.definition.setup), allowances: [],
+    ...budgetOf(false, run.definition.budget), ...setupOf(run.definition.setup), allowances: [], ...folderOf(run.folder),
   };
+}
+
+function folderOf(folder: string | undefined): Pick<Scope, 'folder'> {
+  return folder === undefined ? {} : { folder };
 }
 
 /**
@@ -79,7 +88,7 @@ export function finallyScope(run: RunState): Scope {
 
   return {
     runId: run.nestedIn ?? run.id, prefix: '', definition: { steps }, workflow: top.workflow, inputs: run.inputs, outer: expressionSteps(top, statesIn(run, top)), loops: stepLoops(steps),
-    requires: top.requires, budgeted: false, allowances: [],
+    requires: top.requires, budgeted: false, allowances: [], ...folderOf(top.folder),
   };
 }
 
@@ -114,6 +123,7 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
       loops: stepLoops(runs.workflow.steps), runner: state, ...itemOf(scope, state), defaultModel: scope.defaultModel,
       requires: mergeRequirements(scope.requires, step.requires),
       ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step)), ...setupOf(scope.setup), ...allowancesOf(scope, state, step),
+      ...folderOf(scope.folder),
     };
   }
 
@@ -124,7 +134,7 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
     defaultModel: definition.defaults?.model ?? scope.defaultModel,
     requires: mergeRequirements(scope.requires, step.requires, definition.defaults?.requires),
     ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step), definition.budget), ...setupOf(definition.setup ?? scope.setup),
-    ...allowancesOf(scope, state, step),
+    ...allowancesOf(scope, state, step), ...folderOf(runs?.kind === 'named' ? run.folders?.[runs.name] : scope.folder),
   } : undefined;
 }
 

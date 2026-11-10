@@ -2,20 +2,20 @@ import { createHash, randomBytes } from 'node:crypto';
 import { LOCAL_DEFINITION, LOCAL_DRIVER } from './driver-name.js';
 import { retryCommand, stepArgument } from './runtimes/retry-command.js';
 import fs from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { CanSchema } from '@teamai/runtime-protocol';
 import { parseReportedAgent, parseReportedUsed, settleObservation, type ReportedAgent, type Used } from '../agent-observation.js';
 import { loadTeamConfig } from '../config.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { DriverSchema, sameDriver } from '../driver-identity.js';
-import { resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
+import { resolveRunMode, RunModeSchema, WORKFLOW_DIR_ENV, type RunMode } from '../launch-context.js';
 import { log } from '../utils/logger.js';
 import { execCommand } from '../utils/exec.js';
 import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
 import { getDataHome, JsonObjectSchema, SYNC_LOCK_FILENAME, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias } from './cache.js';
+import { folderOf, loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias, type PinnedFolder } from './cache.js';
 import { claimRun, leaseRefusal, publishRunEnd, reconcileTakenCopies, takeoverFor, type HandoffError } from './handoff.js';
 import {
   evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, pathValue, resolvePath,
@@ -79,6 +79,7 @@ import { hasAction, onlyPersonAnswers, stepWorkflow, workflowRunBy } from './typ
 import { wholeFit } from './whole-workflow.js';
 import { Writes } from './writes.js';
 import { describeWorkflow } from './describe.js';
+import { WorkflowFolder } from './folder.js';
 import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import { CostSchema } from '../tool-launch/confined-level.js';
 import { toolOf } from '../tool-registry.js';
@@ -231,6 +232,8 @@ interface RenderedLease {
   defaultModel?: string;
   /** The directory of a step with `workspace: { confined }`, as its template rendered. */
   confined?: string;
+  /** The sourceHash of the workflow folder whose file defines the step, from its scope. */
+  folder?: string;
 }
 
 /** Whether a result that is a plain object or a message is the message. Not for arrays, which are not plain objects. */
@@ -373,6 +376,8 @@ function renderLease(scope: Scope, states: StepState[], state: StepState, defini
   if (definition.env) texts.env = Object.fromEntries(env);
 
   if (model !== undefined) texts.model = model;
+
+  if (scope.folder !== undefined) texts.folder = scope.folder;
 
   // A model that rendered empty asks for the tool's default, so the defaults' model does not stand in for it.
   if (definition.prompt !== undefined && scope.defaultModel !== undefined && model !== '') texts.defaultModel = scope.defaultModel;
@@ -550,7 +555,7 @@ type LeaseData = Omit<LeaseWire, 'attempt'> & {
 type LeaseAnswer = { lease: LeaseData };
 
 function leaseData(
-  run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease,
+  config: LocalConfig, run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease,
   { requires, envScope, maxTurns, setup, role }: Omit<GrantedTerms, 'unenforced' | 'limits'>, plan?: WorkspacePlan, confined?: ConfinedLease,
 ): LeaseAnswer {
   const expiresAt = leaseDeadline(run, state);
@@ -567,7 +572,13 @@ function leaseData(
 
   if (definition.workflow !== undefined) wire.workflow = true;
 
+  const folder = rendered.folder === undefined ? undefined : WorkflowFolder.dir(config, rendered.folder);
+
+  // Every process of the step gets the folder, as it gets $TEAMAI_RUN_DIR, which no env the step names replaces. Its
+  // path uses forward slashes on Windows too, which Git Bash, node and PowerShell all read.
   if (rendered.env) wire.env = rendered.env;
+
+  if (folder !== undefined) wire.env = { ...wire.env, [WORKFLOW_DIR_ENV]: folder.split(sep).join('/') };
 
   if (rendered.prompt !== undefined) wire.prompt = rendered.prompt;
 
@@ -1520,7 +1531,7 @@ function secretMismatch(inputs: RunState['inputs'], secrets: Record<string, stri
 }
 
 /** What a start admitted: the run's workflow, as `createRun` takes it. */
-type AdmittedStart = Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'definition' | 'workflows'> & Required<Pick<RunState, 'origin'>>;
+type AdmittedStart = Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'folder' | 'folders' | 'teamRevision' | 'definition' | 'workflows'> & Required<Pick<RunState, 'origin'>>;
 
 /**
  * Admits workflow `name` for a start with `inputs` from `base`: every check a start makes before it needs the run's
@@ -1532,7 +1543,7 @@ export async function admitStart(
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the parse boundary: start's inputs as the CLI or a driver sent them, checked here first
   inputs: unknown,
   { secrets, base }: { secrets: Record<string, string>; base?: RunState['base'] },
-): Promise<{ ok: true; admitted: AdmittedStart } | { ok: false; refused: WorkflowEnvelope }> {
+): Promise<{ ok: true; admitted: AdmittedStart; folders: PinnedFolder[] } | { ok: false; refused: WorkflowEnvelope }> {
   const cached = await loadCachedWorkflow(config, name);
 
   if (!cached) {
@@ -1540,7 +1551,7 @@ export async function admitStart(
 
     if (conflict) return { ok: false, refused: error('workflow_namespace_conflict', conflict) };
 
-    return { ok: false, refused: error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`) };
+    return { ok: false, refused: error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml, or workflows/${name}/WORKFLOW.yaml for a folder, and pull again.`) };
   }
 
   const given = withInputDefaults(cached.definition, inputs);
@@ -1556,6 +1567,8 @@ export async function admitStart(
   // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
   if ('failure' in admission) return { ok: false, refused: error(admission.failure.code, admission.failure.message) };
 
+  const folder = folderOf(cached);
+
   // A run reads an undefined inputs or teamRevision as not given.
   return {
     ok: true,
@@ -1563,10 +1576,13 @@ export async function admitStart(
       name: cached.definition.name,
       inputs: cached.definition.inputs ? given : undefined,
       sourceHash: tree.sourceHash,
+      folder: folder?.sourceHash,
+      folders: Object.keys(tree.folders).length > 0 ? Object.fromEntries(Object.entries(tree.folders).map(([runs, pinned]) => [runs, pinned.sourceHash])) : undefined,
       teamRevision: tree.teamRevision || undefined,
       origin: DefaultWorkflows.originOf(cached),
       ...admission.admitted,
     },
+    folders: [...(folder ? [folder] : []), ...Object.values(tree.folders)],
   };
 }
 
@@ -1584,6 +1600,8 @@ export async function startRun(
   const admission = await admitStart(config, name, inputs, { secrets, base: options.base });
 
   if (!admission.ok) return admission.refused;
+
+  await Promise.all(admission.folders.map((pinned) => WorkflowFolder.pin(config, pinned)));
 
   return createRun(config, { ...admission.admitted, secrets, ...options });
 }
@@ -1617,7 +1635,7 @@ async function gitPrefix(dir: string): Promise<string> {
  */
 export async function createRun(
   config: LocalConfig,
-  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'startedBy' | 'awaits' | 'definition' | 'workflows' | 'base' | 'checkout' | 'timeout' | 'nestedIn'>
+  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'startedBy' | 'awaits' | 'definition' | 'workflows' | 'folder' | 'folders' | 'base' | 'checkout' | 'timeout' | 'nestedIn'>
     & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
@@ -1655,6 +1673,8 @@ export async function createRun(
     driver,
     definition: input.definition,
     workflows: Object.keys(workflows).length > 0 ? workflows : undefined,
+    folder: input.folder,
+    folders: input.folders,
     steps: input.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
     settledAttempts: [],
     base: input.base,
@@ -1781,7 +1801,7 @@ function offerTerms(
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
-    pinned: isPinnedToHost({ step, executor, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, requires }),
+    pinned: isPinnedToHost({ step, executor, inShippedWorkflow: DefaultWorkflows.isShipped(scope.workflow), requires }),
     answer: step.answer !== undefined,
     ...role,
   }, context.can, context.allow, context.facts);
@@ -2659,7 +2679,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           delete run.awaits;
           rememberCopy(run, plan, driver);
 
-          return answer(leaseData(run, step, definition, rendered, terms.terms, plan, confined?.lease));
+          return answer(leaseData(config, run, step, definition, rendered, terms.terms, plan, confined?.lease));
         }
 
         if (settledOne) continue;
@@ -2733,7 +2753,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
         if (offered) rememberCopy(run, offered, driver);
 
-        return answer(leaseData(run, leased, located.step, rendered, terms.terms, offered, confined?.lease));
+        return answer(leaseData(config, run, leased, located.step, rendered, terms.terms, offered, confined?.lease));
       }
 
       failStep(leased, rendered, leased.lease.revision);

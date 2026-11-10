@@ -81,6 +81,12 @@ export function resolveRunMode(env: NodeJS.ProcessEnv): RunMode {
 export const ATTEMPT_ENV = 'TEAMAI_WORKFLOW_ATTEMPT';
 
 /**
+ * The variable every process of a step of a workflow written as a folder gets: the run's copy of the folder that defines
+ * the step, under the data home. Unset for a step of a workflow written as a single file.
+ */
+export const WORKFLOW_DIR_ENV = 'TEAMAI_WORKFLOW_DIR';
+
+/**
  * The variable every process of a run with no `teamai init` gets: the config file the run built for itself, which
  * config detection reads in place of any config the process's directory has (`readEphemeralConfig` in `config.ts`).
  */
@@ -186,7 +192,7 @@ export async function workflowLaunch(config: LocalConfig, tool: string): Promise
  * launched in, and its record holds one complete team delivery for that tool. That holds for any tool the launched one
  * starts there, so its pull cannot move the step's files; one the checkout was not delivered to gets its first delivery
  * at its next session outside the step. Anything else pulls, root seeding included, so a new worktree or a newly
- * enabled tool still gets the team's assets.
+ * enabled tool still gets the team's resources.
  */
 export async function launchHoldsCheckout(config: LocalConfig, launch: Launch): Promise<boolean> {
   const { teamDelivery } = await import('./pull.js');

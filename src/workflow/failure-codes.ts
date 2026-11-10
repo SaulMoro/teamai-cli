@@ -18,7 +18,7 @@ export const FAILURE_CODES = [
   // A step's workflow output whose definition cannot deliver what it declares, as admission refuses it.
   'bad_delivery',
   'trial_prepare_failed', 'clone_prepare_failed', 'role_unavailable',
-  'confined_invalid', 'confined_tool_unavailable', 'confined_failed', 'confined_reply_invalid', 'confined_report_mismatch',
+  'confined_invalid', 'confined_tool_unavailable', 'confined_failed', 'confined_reply_invalid', 'confined_report_mismatch', 'confined_unoffered',
   'runtime_failed', 'runtime_interrupted', 'runtime_lost', 'requirement_unmet', 'login_missing', 'login_held', 'login_not_written_back',
   'fleet_member_gone', 'fleet_unpublishable', 'fleet_record_unreadable', 'fleet_record_newer', 'fetch_failed',
   // Refusals of a driver's call or a member's command about a run.
@@ -60,6 +60,7 @@ export const FAILURE_CODES = [
   // Refusals of teamai benchmark run and plan, before any run exists.
   'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable', 'check_files_unwritable',
   'arm_model_missing', 'arm_unpublishable', 'arm_team_unresolved', 'arm_team_unreadable', 'arm_team_unclean', 'arm_workflow_unrunnable',
+  'judge_unpublishable',
   // Refusals of teamai benchmark run and plan where a task's covers cannot be compared (#1605).
   'task_covers_ambiguous',
   // Refusals of teamai benchmark try, which tries one task file and creates no run.

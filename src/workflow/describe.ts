@@ -189,7 +189,7 @@ export function describeWorkflow(input: {
     if (executor === 'prompt' && step.tool !== undefined) run.tool = step.tool;
 
     if (step.answer !== undefined) run.answer = true;
-    const pinned = isPinnedToHost({ step, executor, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, requires });
+    const pinned = isPinnedToHost({ step, executor, inShippedWorkflow: DefaultWorkflows.isShipped(scope.workflow), requires });
 
     if (pinned) run.host = true;
     facts.runs.push(run);

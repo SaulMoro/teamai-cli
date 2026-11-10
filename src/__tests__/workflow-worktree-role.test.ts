@@ -89,7 +89,7 @@ async function roleWorkspace(yaml: string, options: { tools: readonly string[]; 
   git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base'], workspace);
   const anchors = await resolveAnchors(workspace);
   if (!anchors) throw new Error('the workspace has no git anchors');
-  const partition = await resolvePartitionDir(anchors.projectAnchor);
+  const partition = await resolvePartitionDir(anchors.repoAnchor);
   fs.mkdirSync(partition, { recursive: true });
   fs.writeFileSync(path.join(partition, 'config.yaml'), [
     'repo:',
@@ -264,7 +264,8 @@ steps:
 
     const done = await runLocalDriver(config, runId, workspace, {
       adapter: fakeTool(async (input) => {
-        context = await teamRules?.execute({ hook_event_name: 'SessionStart', source: 'startup', cwd: input.cwd }, 'codex', await resolveConfigForDir(input.cwd));
+        const reply = await teamRules?.execute({ hook_event_name: 'SessionStart', source: 'startup', cwd: input.cwd }, 'codex', await resolveConfigForDir(input.cwd));
+        context = typeof reply === 'string' ? reply : null;
       }),
     });
 

@@ -1,6 +1,6 @@
 /**
  * The clone place a step opens with `workspace: { clone: … }`: a fresh clone of the place's commit with its own `.git`,
- * no remotes and its hooks off, fetched offline from the run's checkout or the commit cache, and the team assets the
+ * no remotes and its hooks off, fetched offline from the run's checkout or the commit cache, and the team resources the
  * place names installed by a `teamai pull` whose HOME is the clone's own. Every step that continues it runs there, and
  * its commits stay there: nothing is pushed.
  *
@@ -50,7 +50,7 @@ import { cloneRoleProblem, copyKnowledgePaths, launchedTools, roleCopyRefusal, r
 import { commitWithout } from './team-without.js';
 import { teamClonesOf } from './team.js';
 import { dataCheckoutsOf, removeDataCheckout } from './data.js';
-import { AGENT_PATHS, boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type UntrustedGit } from '../worktree.js';
+import { AGENT_PATHS, boundedGit, commitWork, git as memberGit, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type UntrustedGit } from '../worktree.js';
 
 /**
  * The commit a clone's install pulled for a treatment without some paths, which teamai made of `revision` without them.
@@ -124,11 +124,31 @@ async function readReceipt(file: string): Promise<CloneReceipt | undefined> {
 
 /**
  * Where a clone fetches commits it starts from, which the run's checkout may lack, such as a shallow CI checkout's,
- * and commits no repo holds, such as those a benchmark makes of its suite files. `repo` keys it and is never fetched.
- * Safe to delete only while no run of `repo` is open.
+ * and commits no repo holds, such as those a benchmark makes of its suite files. `repo` keys it; a clone never fetches
+ * from it, and only {@link firstUnreachable} does. Safe to delete only while no run of `repo` is open.
  */
 export function commitCacheOf(config: LocalConfig, repo: string): string {
   return path.join(getDataHome(config), 'benchmarks', 'objects', `${createHash('sha256').update(repo).digest('hex').slice(0, 16)}.git`);
+}
+
+/**
+ * The first of `commits` neither `checkout`, when given, nor the bare repo `cache` has, after a fetch by SHA from
+ * `repo` into the cache, with the member's own credentials.
+ */
+export async function firstUnreachable(input: { cache: string; repo: string; commits: readonly string[]; checkout?: string }): Promise<string | undefined> {
+  const { cache, repo, commits, checkout } = input;
+  const has = async (dir: string, commit: string): Promise<boolean> => (await memberGit(dir, ['cat-file', '-e', `${commit}^{commit}`])).code === 0;
+
+  for (const commit of commits) {
+    if ((checkout !== undefined && await has(checkout, commit)) || await has(cache, commit)) continue;
+    await fs.mkdir(cache, { recursive: true });
+    const made = await memberGit(cache, ['init', '-q', '--bare']);
+    const fetched = made.code === 0 && (await memberGit(cache, ['fetch', '-q', '--no-tags', repo, `${commit}:refs/benchmark/${commit}`])).code === 0;
+
+    if (!fetched || !await has(cache, commit)) return commit;
+  }
+
+  return undefined;
 }
 
 /** What opening a clone place reads of its lease. */
@@ -209,7 +229,7 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
 }
 
 /**
- * Puts back, for a later step in the clone, the team assets its install delivered, which the last step's commit took
+ * Puts back, for a later step in the clone, the team resources its install delivered, which the last step's commit took
  * out with the clone's other agent files, and records them as the overlay again, so they are not that step's edits.
  * A clone that installs no team kept no copy of them; one whose overlay is still on has its `saved`.
  */
@@ -326,7 +346,7 @@ export async function commitClone(input: { dir: string; branch: string; step: st
   const unrestored = await isDirectory(saved) ? await restoreUneditedConfig(dir, start, saved, git) : undefined;
 
   if (unrestored !== undefined) {
-    return { code: 'workspace_base', message: `Step "${step}" ran, but the team assets delivered into its clone could not be told apart from its edits, so nothing was committed: ${unrestored}` };
+    return { code: 'workspace_base', message: `Step "${step}" ran, but the team resources delivered into its clone could not be told apart from its edits, so nothing was committed: ${unrestored}` };
   }
 
   const committed = await commitWork(dir, `teamai: ${step}`, start, git);
@@ -569,7 +589,7 @@ async function installTeam(input: {
 
   if (!anchors) return failed(`The clone ${clone} is not a git repository teamai can install into.`);
   const home = path.join(root, 'h');
-  const partition = path.join(home, '.teamai', 'projects', projectSlug(anchors.projectAnchor));
+  const partition = path.join(home, '.teamai', 'projects', projectSlug(anchors.repoAnchor));
   const source = member.repo.localPath;
   const bare = path.join(root, 'team.git');
   const teamClone = path.join(partition, 'team-repo');

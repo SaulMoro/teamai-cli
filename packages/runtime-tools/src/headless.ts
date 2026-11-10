@@ -11,7 +11,8 @@ import { recordGroup, stopProcess } from '@teamai/shared/process-group';
 export function spawnHeadless(input: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; detached: boolean; group?: string }): HeadlessStarter {
   return ({ stdin, onOutput }) => {
     const detached = input.detached && process.platform !== 'win32';
-    const options: SpawnOptions = { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true };
+    // A shell sets PWD to the directory it starts in; OpenCode works in PWD, not in its cwd.
+    const options: SpawnOptions = { cwd: input.cwd, env: { ...input.env, PWD: input.cwd }, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true };
     let child: ChildProcess;
 
     try {

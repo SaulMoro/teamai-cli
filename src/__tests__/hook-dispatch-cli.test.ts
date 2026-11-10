@@ -22,11 +22,14 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawn: mockSpawn,
 }));
 
-const { parseStdin, readStdin, trySpawnDetachedViaWmi, deriveDispatchSessionId, hookDispatchCli, claudeHookRunsInAnotherHost } =
+const { runHookFastPath } = await import('../hook-fast-path.js');
+const { readStdin } = await import('../utils/hook-stdin.js');
+const { parseStdin, trySpawnDetachedViaWmi, deriveDispatchSessionId, hookDispatchCli, claudeHookRunsInAnotherHost, sweepStalePayloads } =
   await import('../hook-dispatch-cli.js');
 const { claudeHookOtherHostSkip } = await import('../claude-hook-host.js');
 const { reconcileHooks } = await import('../hooks.js');
-const { log } = await import('../utils/logger.js');
+const { log, setSilent } = await import('../utils/logger.js');
+const { _resetState, _setLogFilePath } = await import('@teamai/tool-core/debug-log');
 const { commitFile, initRepo, recordDelivery } = await import('./helpers/delivered-checkout.js');
 
 describe('readStdin', () => {
@@ -71,6 +74,56 @@ describe('hookDispatchCli', () => {
     } finally { resolveScope.mockRestore(); readFile.mockRestore(); vi.unstubAllEnvs(); }
   });
 
+  // The payload file is a child's to remove, and an early return used to skip
+  // that: every dispatch became another full hook payload left in %TEMP% (#1812).
+  it('removes the payload file on a path that returns before reading it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-exit-'));
+    const file = path.join(dir, 'payload.json');
+    fs.writeFileSync(file, '{"session_id":"abc"}');
+    vi.stubEnv('TEAMAI_LAUNCHED_BY', 'judge');
+    try {
+      await hookDispatchCli('post-tool-use', 'claude', '*', { bgOnly: true, stdinFile: file });
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A pass runs its handlers for seconds; the payload holds tool input and
+  // output, so it goes the moment it is read, not when the pass ends (#1813).
+  it('removes the payload file as soon as it has read it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-read-'));
+    const file = path.join(dir, 'payload.json');
+    fs.writeFileSync(file, JSON.stringify({ session_id: 's', cwd: dir, tool_name: 'Read' }));
+    let presentWhileDispatching: boolean | null = null;
+    mockDispatcher.dispatch.mockImplementationOnce(async () => {
+      presentWhileDispatching = fs.existsSync(file);
+
+      return { errors: [], output: null };
+    });
+    try {
+      await hookDispatchCli('post-tool-use', 'claude', '*', { stdinFile: file });
+      expect(presentWhileDispatching).toBe(false);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The fast path read stdin before it found the payload had no session id, so the pipe is drained (#1788).
+  it('dispatches the payload the fast path read before it fell through to the full dispatch', async () => {
+    const stdin = new PassThrough();
+    stdin.end(JSON.stringify({ tool_name: 'Read', cwd: os.tmpdir() }));
+    const fastPath = await runHookFastPath(['hook-dispatch', 'post-tool-use', '--tool', 'claude'], { env: {}, platform: 'darwin', stdin: () => stdin, entry: 'unused' });
+    mockDispatcher.dispatch.mockClear();
+
+    await hookDispatchCli('post-tool-use', 'claude', '*');
+
+    expect(fastPath).toBe('full');
+    expect(mockDispatcher.dispatch).toHaveBeenCalledWith('post-tool-use', '*', expect.objectContaining({ tool_name: 'Read' }), 'claude', 'foreground');
+  });
+
   it('records why a Git hook cannot sync an unreadable project config, without dispatching', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'git-hook-broken-config-'));
     const previousCwd = process.cwd();
@@ -88,6 +141,64 @@ describe('hookDispatchCli', () => {
       process.chdir(previousCwd);
       fs.rmSync(root, { recursive: true, force: true });
       persist.mockRestore();
+    }
+  });
+
+  // Outside any scope, the only handler a tool call or prompt has left is the HTTP local agent's (#1788).
+  describe('a background pass outside any teamai scope', () => {
+    let root: string;
+    let previousCwd: string;
+    let stdinFile: string;
+
+    beforeEach(() => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hook-no-scope-')));
+      previousCwd = process.cwd();
+      stdinFile = path.join(root, 'payload.json');
+      fs.mkdirSync(path.join(root, 'home'));
+      fs.mkdirSync(path.join(root, 'elsewhere'));
+      vi.stubEnv('HOME', path.join(root, 'home'));
+      for (const name of ['TEAMAI_HTTP_ENDPOINT', 'TEAMAI_ENDPOINT', 'TEAMAI_API_BASE_URL']) vi.stubEnv(name, '');
+      mockDispatcher.dispatch.mockClear();
+    });
+
+    afterEach(() => {
+      process.chdir(previousCwd);
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    const dispatchInBackground = async (event: string) => {
+      fs.writeFileSync(stdinFile, JSON.stringify({ session_id: 's', cwd: path.join(root, 'elsewhere'), tool_name: 'Read' }));
+      await hookDispatchCli(event, 'claude', '*', { stdinFile, bgOnly: true });
+    };
+
+    it.each(['post-tool-use', 'prompt-submit'])('runs no handler for %s on a machine that does not sync over HTTP', async (event) => {
+      await dispatchInBackground(event);
+
+      expect(mockDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(log.debug).toHaveBeenCalledWith(`[hook-dispatch] ${event}/claude no scope`);
+      // The payload file is this child's to remove, read or not (#1812).
+      expect(fs.existsSync(stdinFile)).toBe(false);
+    });
+  });
+
+  it('records an unexpected dispatch failure in debug.log while a silent hook prints nothing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-dispatch-failure-'));
+    const logFile = path.join(root, 'debug.log');
+    const resolveScope = vi.spyOn(await import('../dashboard-collector.js'), 'resolveHookScopeFor')
+      .mockRejectedValue(new Error('scope lookup failed'));
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    _setLogFilePath(logFile);
+    try {
+      await expect(hookDispatchCli('post-merge', 'git', '*')).resolves.toBeUndefined();
+      expect(fs.readFileSync(logFile, 'utf8')).toContain('hook-dispatch: unexpected error: scope lookup failed');
+      expect(printed).not.toHaveBeenCalled();
+    } finally {
+      _resetState();
+      setSilent(false);
+      printed.mockRestore();
+      resolveScope.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
   it('skips claude hooks only when the other host has its own teamai hooks', async () => {
@@ -313,7 +424,8 @@ describe('hookDispatchCli', () => {
 
     try {
       await hookDispatchCli('session-start', 'codex', '*', { stdinFile });
-      expect(JSON.parse(detachedPayload).teamai_launch).toEqual('TEAMAI_LAUNCHED_BY' in env ? env : undefined);
+      // null: this process carries no launch, so the child must not read one from its own environment either.
+      expect(JSON.parse(detachedPayload).teamai_launch).toEqual('TEAMAI_LAUNCHED_BY' in env ? env : null);
     } finally {
       for (const key of Object.keys(env)) {
         if (saved[key] === undefined) delete process.env[key];
@@ -343,6 +455,27 @@ describe('hookDispatchCli', () => {
     try {
       await hookDispatchCli('stop', 'claude', '*', { stdinFile });
       expect(JSON.parse(detachedPayload).teamai_run).toEqual(forwarded);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(stdinFile, { force: true });
+    }
+  });
+
+  // The fast path forwards the host's payload as it came (#1788); the POSIX child inherits the session's environment.
+  it('reads the run and the launch from its own environment in a background pass whose payload forwards neither', async () => {
+    const stdinFile = path.join(os.tmpdir(), `fast-hook-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(stdinFile, JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 's', cwd: process.cwd(), tool_name: 'Read' }));
+    const launch = { TEAMAI_LAUNCHED_BY: 'workflow', TEAMAI_LAUNCHED_TOOL: 'claude', TEAMAI_LAUNCHED_CHECKOUT: 'checkout-1' };
+    // An HTTP enrolment keeps the pass running where its cwd has no teamai scope; the dispatcher here contacts nothing.
+    for (const [key, value] of Object.entries({ CI: 'true', TEAMAI_HTTP_ENDPOINT: 'http://127.0.0.1:9', ...launch })) vi.stubEnv(key, value);
+    mockDispatcher.dispatch.mockClear();
+
+    try {
+      await hookDispatchCli('post-tool-use', 'claude', '*', { stdinFile, bgOnly: true });
+      expect(mockDispatcher.dispatch).toHaveBeenCalledWith('post-tool-use', '*', expect.objectContaining({
+        teamai_run: { runMode: 'unattended', launchedBy: 'workflow' },
+        teamai_launch: launch,
+      }), 'claude', 'background');
     } finally {
       vi.unstubAllEnvs();
       fs.rmSync(stdinFile, { force: true });
@@ -567,6 +700,39 @@ const createdPayloads: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
   for (const f of createdPayloads.splice(0)) fs.rmSync(f, { force: true });
+});
+
+describe('sweepStalePayloads', () => {
+  let dir: string;
+  let stale: string;
+  let fresh: string;
+  let other: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-sweep-'));
+    stale = path.join(dir, 'teamai-hook-123-1700000000000.json');
+    fresh = path.join(dir, 'teamai-hook-456-1700000000001.json');
+    other = path.join(dir, 'settings.json');
+    for (const file of [stale, fresh, other]) fs.writeFileSync(file, '{}');
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(stale, anHourAgo, anHourAgo);
+    fs.utimesSync(other, anHourAgo, anHourAgo);
+  });
+
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('removes payload files no live child can still be reading, and nothing else', () => {
+    expect(sweepStalePayloads(dir, Date.now(), 'win32')).toBe(1);
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(other)).toBe(true);
+  });
+
+  it('leaves the temp directory alone on a platform whose spawn paths pipe the payload', () => {
+    expect(sweepStalePayloads(dir, Date.now(), 'darwin')).toBe(0);
+    expect(fs.existsSync(stale)).toBe(true);
+  });
 });
 
 describe('trySpawnDetachedViaWmi', () => {

@@ -15,6 +15,7 @@ import { ATTEMPT_ENV } from './launch-context.js';
 import { useInstallHome } from './utils/home.js';
 import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';
 import { dryRunRefusal } from './dry-run-guard.js';
+import { parseIntOption } from './cli-int.js';
 import { registerPackagesCommand } from './pkg/register-command.js';
 import { shouldRegisterSessionFlowCommands } from './session-flow/register-gate.js';
 
@@ -201,11 +202,11 @@ program
 program
   .command('init')
   .description('Initialize teamai (configure Git provider, clone repo, register member)')
-  .argument('[repo]', 'Team repo (owner/repo or full URL). Pass "." for single-repo mode (the current git repo is the team repo).')
+  .argument('[repo]', 'Team repo (owner/repo or full URL). Pass "." for self mode (the current git repo is the team repo).')
   .option('--repo <repo>', 'Team repo (alias of the positional argument)')
   .option('--http <url>', 'Git-free HTTP team repo (read-only consumer; only needs an API key)')
   .option('--provider <name>', 'Git provider for the team repo on this machine: tgit, github, cnb, gitlab, gitcode, or git. Skips auto-detection. `git` uses your existing Git auth and needs no platform token, but opens no PR/MR.')
-  .option('--self', 'Single-repo mode: the current git repo is the team repo (equivalent to `teamai init .`). Knowledge lives on main under .teamai/; reports go to the teamai-reports orphan branch.')
+  .option('--self', 'Self mode: the current git repo is the team repo (equivalent to `teamai init .`). Knowledge lives on main under .teamai/; reports go to the teamai-reports orphan branch.')
   .option('--token <key>', 'API key for HTTP team repo / status reporting (stored 0600, never committed). Also reads TEAMAI_API_TOKEN. With --http and a single --agent, an agent access token (sk-) is kept for that agent only, next to the other agents\' tokens (--force keeps them too); while that agent\'s current token still works it is kept and the new one is not used. Without --agent on a machine where one agent already holds a token, that agent takes it, or — keeping its working one — the new token serves the tools without a token of their own.')
   .option('--scope <scope>', 'Install scope: workspace (default, <cwd>/.teamai + <cwd>/.claude) or user (~/.teamai + ~/.claude); project is the older name for workspace')
   .option('--inherit-user-scope', 'In workspace scope, also sync safe user-scope resources, load its env variables (not its secrets) in the workspace, and search its knowledge')
@@ -216,7 +217,7 @@ program
   // comma-separated (`--agent a,b`, split later by normalizeAgentList) both work,
   // WITHOUT the greedy `<name...>` variadic that would swallow the `[repo]`
   // positional (e.g. `init --agent claude .` must keep `.` as the repo arg).
-  .option('--agent <name>', 'AI tools to set up (e.g. claude, codex, cursor, codebuddy, workbuddy, dsh). Repeatable or comma-separated. In single-repo mode, selects which tool dirs to create; a custom agent defined only in teamai.yaml\'s toolPaths also gets its root created here (git-backed init only — an HTTP init has no local teamai.yaml to read custom paths from). Omit for an interactive picker. Additive on repeated runs.', (val: string, acc: string[]) => acc.concat(val), [])
+  .option('--agent <name>', 'AI tools to set up (e.g. claude, codex, cursor, codebuddy, workbuddy, dsh). Repeatable or comma-separated. In self mode, selects which tool dirs to create; a custom agent defined only in teamai.yaml\'s toolPaths also gets its root created here (git-backed init only — an HTTP init has no local teamai.yaml to read custom paths from). Omit for an interactive picker. Additive on repeated runs.', (val: string, acc: string[]) => acc.concat(val), [])
   .option('--force', 'Rewrite the existing config without confirmation, keeping the settings init does not set')
   .action(async (repoArg, cmdOpts) => {
     const globalOpts = program.opts<GlobalOptions>();
@@ -402,7 +403,7 @@ program
   .command('remove <type> <names...>')
   .description('Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)')
   .option('--force', 'Skip confirmation prompt')
-  .option('--role <ns>', 'mcp: remove the server from mcp/<ns>/mcp.yaml instead of the root mcp/mcp.yaml')
+  .option('--role <ns>', 'mcp: remove the server from namespace <ns> (mcp/<ns>/mcp.yaml or the folder mcp/<ns>/<name>/) instead of the root')
   .option('--project <id>', "mcp: remove the server from the project's mcp namespace instead of the root mcp/mcp.yaml")
   .action(async (type, names, cmdOpts) => {
     const globalOpts = program.opts<GlobalOptions>();
@@ -416,7 +417,7 @@ program
   .command('doctor')
   .description('Diagnose configuration issues, and print the run mode (attended or unattended) and what set it: TEAMAI_MODE, CI, or the default')
   .option('--json', 'Output the report as JSON (suitable for CI)')
-  .option('--fix', 'Remove lock files left behind by dead processes, delete again the run branches a succeeded workflow run could not delete, and remove what runs settled longer ago than workflows.retention left behind (branches but those a pull request uses, worktrees, kept refs, base pins on origin)')
+  .option('--fix', 'Remove lock files left behind by dead processes, delete again the run branches a succeeded workflow run could not delete, remove what runs settled longer ago than workflows.retention left behind (branches but those a pull request uses, worktrees, kept refs, base pins on origin), remove the stored workflow folders no run and no pulled workflow uses, and remove the team hook entries a removed worktree of the repository left in HOME')
   .action(async (cmdOpts) => {
     const globalOpts = program.opts<GlobalOptions>();
     const { doctor } = await import('./doctor.js');
@@ -843,7 +844,7 @@ envCmd
 
 const workflowCmd = program
   .command('workflow')
-  .description('Run a validated workflow from workflows/<name>.yaml. Writable steps may set deliver: pr to open review requests; TeamAI never merges them.');
+  .description('Run a validated workflow from workflows/<name>.yaml or the folder workflows/<name>/WORKFLOW.yaml. Writable steps may set deliver: pr to open review requests; TeamAI never merges them.');
 
 workflowCmd
   .command('start <name>')
@@ -867,7 +868,7 @@ workflowCmd
 workflowCmd
   .command('next <run>')
   .description('Get a lease, hitl, wait, or done JSON envelope. Show hitl.message and hitl.respond to a person, who replaces <option> with a choice.')
-  .option('--prepare', 'Prepare the leased workspace in its original checkout; report commits and pushes it automatically. A step in a clone workspace, such as a benchmark trial, is leased only with --prepare: teamai makes the clone on this machine, installs its team assets and runs setup, and answers the lease with cwd, where the driver runs the step. So is a step that runs with a team role (role on its lease): teamai delivers the role into its copy. A step that requires strict sandbox isolation goes only to a driver that declares driver.can.isolation sandbox and driver.can.env true.')
+  .option('--prepare', 'Prepare the leased workspace in its original checkout; report commits and pushes it automatically. A step in a clone workspace, such as a benchmark trial, is leased only with --prepare: teamai makes the clone on this machine, installs its team resources and runs setup, and answers the lease with cwd, where the driver runs the step. So is a step that runs with a team role (role on its lease): teamai delivers the role into its copy. A step that requires strict sandbox isolation goes only to a driver that declares driver.can.isolation sandbox and driver.can.env true.')
   .option('--attempt <attempt>', 'With --prepare: prepare this attempt, which an earlier next leased this driver, instead of taking a new lease. wrong_attempt when the run no longer leases it to the driver. With --driver skill: the attempt of a place action, with --adopt')
   .option('--adopt <dir>', 'With --prepare --attempt: prepare the attempt in <dir>, a place the session host made: a clean worktree of this repository on the lease\'s workspace branch, or detached at its start. A place that does not fit answers adopt_mismatch and leaves the attempt leased. TeamAI never removes an adopted place. With --driver skill --attempt: adopt <dir> as the place action of that attempt asked, as its adopt prints it')
   .option('--json <payload>', 'Driver identity, for example {"driver":{"kind":"local","machine":"host","workspace":"/work"}}. Optional: running, the attempt ids of its open leases the driver still runs (an open lease left out is handed back), queued, those of them it has not started, whose own timeout then counts from this call (the answer gives their deadlines in deadlines), canTakeLease, false to poll while a tool runs without taking a new lease, and driver.can, what the driver can do on this request: hitl (a person can answer HITL requests and work interactively), workspace, env (true, or "commands" when the driver scopes team env for command steps and setup only), setup, tokens, max_turns, network, isolation, tools (the tools it launches a prompt step that names its tool on), end_turn (it ends a prompt\'s turn at the lease limits), role (it runs a step whose lease has role, the team role its copy runs with, on what teamai delivered there, with --prepare), exec (false when it runs no command: command steps and setup go elsewhere; omitted means it runs them). Any other omitted key is not offered, so a step that needs it waits, and wait.held names what it lacks. Send driver.can on every next request, including busy polls. claim, true to take a run another install published from teamai-reports before leasing; a run this install owns stays as it is. Every answer lists in cancelled the running attempts whose tools the driver must stop.')
@@ -954,7 +955,7 @@ workflowCmd
 
 const selfImprovementCmd = program
   .command('self-improvement')
-  .description('Improve the team\'s harness from a scorer\'s repeated failures: change the assets teamai delivers so that work like the failing one passes, with one regression task per failure, proposed as one pull request on the team repo that the next run updates. run starts the workflow teamai-self-improvement, teamai\'s default or the team\'s file of that name.');
+  .description('Improve the team\'s harness from a scorer\'s repeated failures: change the resources teamai delivers so that work like the failing one passes, with one regression task per failure, proposed as one pull request on the team repo that the next run updates. run starts the workflow teamai-self-improvement, teamai\'s default or the team\'s file of that name.');
 
 selfImprovementCmd
   .command('run <scorer>')
@@ -980,7 +981,7 @@ benchmarkCmd
   .option('--member-aliases', 'Resolve each arm\'s model alias with your own ~/.teamai/models/aliases.yaml over the team\'s models/aliases.yaml, which alone resolves them otherwise: starts the workflow with input aliases member instead of team. The results table and the record show member as the source of a model your file decided.')
   .option('--task <id>', 'Run only this task of the suite: one baseline and its trials. Repeatable. Starts the workflow with input tasks, [] without it; a team file that takes no input tasks is refused.', (value: string, previous: string[]) => previous.concat(value), [])
   .option('--arm <name>', 'Run only this arm of the suite. Repeatable. Starts the workflow with input arms, [] without it; a team file that takes no input arms is refused.', (value: string, previous: string[]) => previous.concat(value), [])
-  .option('--fail-on-regression', 'Also exit 1 when an arm\'s pass rate dropped by more than chance against the newest earlier succeeded run of the suite published on teamai-reports with the same tasks and arms, trials paired by task and repetition as the dashboard\'s Compare pairs them: starts the workflow with input fail_on_regression true, false without it, and its regression step fails. With no such run, print a notice and leave the exit code alone. A team file that takes no input fail_on_regression is refused.')
+  .option('--fail-on-regression', 'Also exit 1 when an arm\'s pass rate dropped by more than chance against the newest earlier succeeded run of the suite published on teamai-reports with the same arms, trials paired by task and repetition as the dashboard\'s Compare pairs them, a pair left out when its task changed or two different judges decided it: starts the workflow with input fail_on_regression true, false without it, and its regression step fails. With no such run, print a notice and leave the exit code alone. A team file that takes no input fail_on_regression is refused.')
   .action(async (suite: string, cmdOpts: { driver?: string; sandbox?: boolean; memberAliases?: boolean; task: string[]; arm: string[]; failOnRegression?: boolean }) => {
     const { benchmarkRun } = await import('./workflow-commands.js');
     await benchmarkRun(suite, cmdOpts);
@@ -988,7 +989,7 @@ benchmarkCmd
 
 benchmarkCmd
   .command('try <task-file>')
-  .description('Try one task file before it joins a suite, in a checkout of the suite\'s repo: setup and the check run at startingCommit, where the check must fail, and at solutionCommit, if set, with the protected paths as startingCommit has them, where it must pass. Reads the task file, the suite.yaml two directories up from it and the files its check.add entries name in that suite directory, needs no teamai init, and creates no run. Exits non-zero naming the commit and the cause when either goes the wrong way.')
+  .description('Try one task file before it joins a suite, in a checkout of the suite\'s repo: setup and the check run at startingCommit, where the check must fail, and at solutionCommit, if set, with the protected paths as startingCommit has them, where it must pass. Reads the task file, the SUITE.yaml (or suite.yaml) two directories up from it and the files its check.add entries name in that suite directory, needs no teamai init, and creates no run. Exits non-zero naming the commit and the cause when either goes the wrong way.')
   .action(async (file: string) => {
     const { benchmarkTry } = await import('./workflow-commands.js');
     await benchmarkTry(file);
@@ -1007,7 +1008,7 @@ benchmarkCmd
 
 benchmarkCmd
   .command('report')
-  .description('The finally step of a benchmark run: classify the trials of the plan the run measured, write the run\'s benchmark record into its run directory and, when usage reporting allows, publish it to teamai-reports, and print {"text","table","regression"}. The text says record: pending while the record waits for publication. With COMPARE=true in its environment, it compares the record with the newest earlier succeeded one of the suite on teamai-reports with the same tasks and arms, adds what it found to the text, and sets regression to dropped, held or no_comparable; otherwise regression is off. Refuses a run whose plan this teamai cannot read.')
+  .description('The finally step of a benchmark run: classify the trials of the plan the run measured, write the run\'s benchmark record into its run directory and, when usage reporting allows, publish it to teamai-reports, and print {"text","table","regression"}. The text says record: pending while the record waits for publication. With COMPARE=true in its environment, it compares the record with the newest earlier succeeded one of the suite on teamai-reports with the same arms, adds what it found to the text, each arm\'s compared and excluded pairs first, and sets regression to dropped, held or no_comparable; otherwise regression is off. Refuses a run whose plan this teamai cannot read.')
   .action(async () => {
     const { benchmarkReport } = await import('./workflow-commands.js');
     await benchmarkReport();
@@ -1015,7 +1016,7 @@ benchmarkCmd
 
 benchmarkCmd
   .command('check')
-  .description('Run the check of the benchmark step this process runs as, in its clone: the files check.add names, then the task\'s check. Prints {"result":"passed"|"failed"|"could_not_run"} and exits 0 once the check ran; exits 1 when it could not set the check up. Refuses a run whose plan this teamai cannot read.')
+  .description('Run the check of the benchmark step this process runs as, in its clone: the files check.add names, then the task\'s check. A trial\'s check stores the trial\'s correctness label, decided by the check: the highest-scoring label when it passes, the lowest when it fails. On a task with successCriteria too, a passing check stores none, and the judge decides. Prints {"result":"passed"|"failed"|"could_not_run","cause","label"}: cause, when it could not run, is not_found, not_executable, signal, timeout, spawn_failed or prepare_failed (putting back the protected paths or writing check.add failed); label is the version of the label it stored; each is \'\' when it has none. Exits 0 once it decided; exits 1 when it could not check at all. Refuses a run whose plan this teamai cannot read.')
   .option('--baseline', 'The check of a task\'s baseline, on its starting commit')
   .option('--trial', 'The check of a trial, after its prompt, with the protected paths put back as the starting commit has them first')
   .action(async (cmdOpts: { baseline?: boolean; trial?: boolean }) => {
@@ -1036,7 +1037,7 @@ const scoreCmd = program
   .option('--label <value>', 'Label the session by hand with this value of the one --scorer: the teamai-score run skips the stages and the judge, score and passed come from the scorer, and no reasoning is kept. A value the scorer does not list fails before any run starts and lists the ones it does. Honoured only in a run a person started. A hand label and a model label of a session are kept side by side, so rescoring with the model never replaces yours; the dashboard Scorers page shows how often the model judge agrees with hand labels. Not with a scorer file or --batch')
   .option('--scorer <name>', 'With --run: a scorer a step of the run lists, read at the team revision the run started from. With --session or --team-session: a scorer teamai pull cached, or a scorer file to try before pushing it: a path with / or ending in .md, tried by a teamai-try-scorer run. A file\'s label is never stored, so it takes no --push; the output adds the labels stored for its scorer (stored) and its verdict on the session\'s first prompt alone (control). Files and scorer names go in separate commands. Repeatable.', (value: string, previous: string[]) => previous.concat(value), [])
   .option('--driver <driver>', 'With --run, --session or --team-session: the driver of the teamai-score run, or of the teamai-try-scorer run a scorer file starts, local or none, which only starts the run and leaves it to any driver\'s workflow next. Without it, workflows.driver decides, else local')
-  .option('--batch', 'With --run or --session: the scorers share one judge launch when they take the same model, stages and preferred tool; a scorer with a check never does')
+  .option('--batch', 'With --run or --session: the scorers share one judge launch when they take the same model, stages, and preferred or required tool; a scorer with a check, or a correctness scorer of a benchmark, never does')
   .option('--push', 'Publish every pending label of this machine to scores/<member>/<YYYY-MM>.jsonl on teamai-reports, alone or after the labels of --run or --session. Labels only: never the session, the prompt or the judge\'s reasoning. With usage reporting off, or when the push fails, they stay pending for the next --push. Also pushes what a workflow step with deliver: publish left on this machine while origin could not take it.')
   .option('--drain', 'What every unattended job runs before it ends, alone, in every scope this directory reaches: in unattended mode, finish each session captured unattended here; start the default workflow teamai-finished-sessions on the driver workflows.driver names, else local (a run for a driver this machine does not run waits for it), which archives, scrubbed, and judges the finished sessions as sessions.publish and scoring.sessions say, and starts teamai-score again for each pass and session whose judging lapsed (a failed judgment final and never retried); publish pending labels and workflow run records; where sessions.publish is auto for this run mode, archive the step sessions of its ended runs on teamai-reports; report usage to stats/<member>.yaml. Prints a line per kind of work and what it left for other drivers; exits 1 only when a judgment, a publish or that run failed, and what stayed pending goes on the next --drain.')
   .action(async (cmdOpts: ScoreOptions) => {
@@ -1060,7 +1061,7 @@ scoreCmd
 
 scoreCmd
   .command('evidence')
-  .description('A step of a teamai-score run: write the evidence of one group into $TEAMAI_RUN_DIR/<attempt>/: the redacted transcript and diff, evidence.json, the rubric prompt, the answer schema, and confined.json with the isolation level the team, the scorers and this machine require and the tool that ran the work. Prints {"dir","rubric","schema","delivers"}. A hand label only resolves the subject. Fails evidence_missing when a commit or session the pass recorded is gone, evidence_empty when nothing of it was kept.')
+  .description('A step of a teamai-score run: write the evidence of one group into $TEAMAI_RUN_DIR/<attempt>/: the redacted transcript and diff, evidence.json, the rubric prompt, the answer schema, and confined.json with the isolation level the team, the scorers and this machine require, and the judge tool a benchmark plan requires, else the tools to prefer. Prints {"dir","rubric","schema","delivers"}. A hand label only resolves the subject. Fails evidence_missing when a commit or session the pass recorded is gone, evidence_empty when nothing of it was kept.')
   .option('--subject <subject>', 'The group\'s subject, as plan printed it')
   .option('--scorers <names>', 'The group\'s scorers, joined by , as plan printed them')
   .action(async (_cmdOpts, command: Command) => {
@@ -1129,9 +1130,10 @@ scoreCmd
 
 scoreCmd
   .command('subjects')
-  .description('List subjects to start teamai-score on. --run <id> [--step <path>]: the judge-work passes of the run, settled on this machine, whose step says scorers.start: workflow, as {"list":["run:<runId>:<step path>:<pass>",…]}; --step is relative to the workflow of the step that runs this, and takes that step and every step inside it. --lapsed: what teamai-finished-sessions scores again on this machine, as {"list":[{"subject":"<subject>","scorers":["<name>",…]},…]}: the passes and sessions whose mark lapsed (until the fourth lapse), those that waited for CI that has since finished, each with the scorers of those marks, named ones included, and the passes of a run inside its 14 days that no teamai-score run planned, with the unmarked scorers that sample them: one whose teamai-score run was started and never driven, and, once the run ended, one of a scorers.start: workflow step no step of its workflow scored.')
+  .description('List subjects to start teamai-score on. --run <id> [--step <path>]: the judge-work passes of the run, settled on this machine, whose step says scorers.start: workflow, as {"list":["run:<runId>:<step path>:<pass>",…]}; --step is relative to the workflow of the step that runs this, and takes that step and every step inside it. --run <id> --calibration [--step <path>]: the trials of a benchmark run to calibrate its correctness judges on, as {"list":[{"subject":"run:<runId>:<step path>:<pass>","scorer":"teamai:correctness:<task>"},…]}: each trial of a task with a check and success criteria whose check failed, that the suite\'s calibration.rate samples by a hash of the run id and the trial\'s step. --lapsed: what teamai-finished-sessions scores again on this machine, as {"list":[{"subject":"<subject>","scorers":["<name>",…]},…]}: the passes and sessions whose mark lapsed (until the fourth lapse), those that waited for CI that has since finished, each with the scorers of those marks, named ones included, and the passes of a run inside its 14 days that no teamai-score run planned, with the unmarked scorers that sample them: one whose teamai-score run was started and never driven, and, once the run ended, one of a scorers.start: workflow step no step of its workflow scored.')
   .option('--run <id>', 'The run whose passes to list')
   .option('--step <path>', 'With --run: only that step and the steps inside it')
+  .option('--calibration', 'With --run: the benchmark trials to calibrate the correctness judges on, each with its scorer')
   .option('--lapsed', 'This machine\'s subjects that automatic judging starts again')
   .action(async (_cmdOpts, command: Command) => {
     const { ScoreVerbs, scoreVerbCommand } = await import('./score-verbs.js');
@@ -1429,7 +1431,7 @@ program
   .option('-p, --port <port>', 'Port number', String(3721))
   .action(async (cmdOpts) => {
     const { startDashboard } = await import('./dashboard.js');
-    await startDashboard(Number(cmdOpts.port));
+    await startDashboard(parseIntOption('--port', String(cmdOpts.port), 0, 65535));
   });
 
 program
@@ -1476,7 +1478,7 @@ program
           code = await runCodexDispatcher(event);
         } else if (bridged.isBridgedTeamHookTool(tool)) {
           const { runBridgedTeamHooks } = bridged;
-          const { readStdin } = await import('./hook-dispatch-cli.js');
+          const { readStdin } = await import('./utils/hook-stdin.js');
           const reply = await runBridgedTeamHooks(tool, event, await readStdin());
 
           if (reply.stderr) process.stderr.write(reply.stderr);
@@ -1515,6 +1517,8 @@ program
     // the 4.5s foreground handler budget, so it never truncates legitimate work.
     // The detached `--bg-only` child is unref'd and not awaited by the host, so
     // it is exempt and keeps its full budget to finish real syncs/downloads.
+    // A hook the fast path fell through from read its STDIN before this timer
+    // started, bounded by the same 1s EOF deadline (utils/hook-stdin.ts).
     const HOOK_HARD_EXIT_MS = 7_000;
     // Git (`--tool git`) has no hook timeout to stay under, and a cut here
     // would stop the inline delivery mid-write; its handler bounds itself.
@@ -1549,7 +1553,7 @@ program
   .action(async (cmdOpts) => {
     const { bindCurrentProject } = await import('./local-agent.js');
     await bindCurrentProject({
-      projectId: cmdOpts.projectId ? Number.parseInt(cmdOpts.projectId, 10) : undefined,
+      projectId: cmdOpts.projectId !== undefined ? parseIntOption('--project-id', String(cmdOpts.projectId), 1) : undefined,
       skip: !!cmdOpts.skip,
     });
   });
@@ -1923,7 +1927,7 @@ const codebaseCommand = program
   .description('Inspect and maintain the teamwiki that `teamai import` writes')
   .addOption(new Option('--project <name>', 'Codebase slug under teamwiki/evidence/code/, required for --deep-enrich').hideHelp())
   .addOption(new Option('--upgrade-wiki', 'Migrate docs/team-codebase/ to teamwiki/ graph format').hideHelp())
-  .option('--lint', 'Run global consistency lint over the teamwiki knowledge graph, and count the member\'s asset relations (assets, relations, without a relation, unresolved)')
+  .option('--lint', 'Run global consistency lint over the teamwiki knowledge graph, and count the member\'s resource relations (resources, relations, without a relation, unresolved)')
   .option('--reconcile', 'Reconcile product and code knowledge in teamwiki')
   .option('--deep-enrich', 'Generate deep knowledge docs from extracted evidence. In the team repo it starts the default workflow teamai-codebase-deep-enrich on the driver workflows.driver names, else local, which publishes the docs; an --output teamwiki is written by this process')
   .addOption(new Option('--fix', 'Deprecated: teamwiki lint has no autofix; runs lint in report-only mode').hideHelp())
@@ -2255,7 +2259,13 @@ const maintenanceCmd = recallCmd
   .command('maintenance')
   .description('Automatic maintenance of team knowledge base')
   .option('--prune', 'Remove low-confidence learnings')
-  .option('--threshold <n>', 'Confidence threshold for pruning (default 0.15)', parseFloat)
+  .option('--threshold <n>', 'Confidence threshold for pruning (default 0.15)', (value) => {
+    const threshold = value.trim() === '' ? NaN : Number(value);
+
+    if (!Number.isFinite(threshold)) throw new Error('--threshold must be a finite number');
+
+    return threshold;
+  })
   .option('--archive', 'Move to archive/ instead of deleting')
   .option('--confidence-writeback', 'Update frontmatter confidence scores')
   .option('--update-quality', 'Find stale docs/rules/skills and write a .draft.md update beside each: starts the default workflow teamai-draft-learning-updates on the driver workflows.driver names, else local, prints what it drafted, and exits 1 when an entry could not be drafted. --dry-run only lists the entries')

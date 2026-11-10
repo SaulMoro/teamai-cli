@@ -35,7 +35,7 @@ export const tools = {
       project: { judgedTeamaiOnly: true, format: 'cursor', syntax: 'jsonc', reads: [{ base: 'project', path: '.cursor/mcp.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['cursor-mcp-approval'] },
     },
     // cursor-agent 2026.10.21 parses hooks.json with `parseJSONC`: comments stripped, then JSON.parse, so no trailing commas.
-    hooks: { user: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'home', path: '.cursor/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'project', path: '.cursor/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'home', path: '.cursor/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'project', path: '.cursor/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['cursor'],
     launch: 'cursor',
     autoCompact: 'none',

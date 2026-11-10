@@ -23,6 +23,7 @@ export const SESSION_PLATFORM_FACTS = {
   omp: BUILT_IN_TOOLS.pi.platforms.omp,
   muse: BUILT_IN_TOOLS.muse.platforms.muse,
   hermes: BUILT_IN_TOOLS.hermes.platforms.hermes,
+  copilot: BUILT_IN_TOOLS.copilot.platforms.copilot,
 } satisfies Record<string, SessionPlatformFacts<ToolId>>;
 
 /** A platform teamai has a session adapter for. */

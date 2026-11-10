@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DefaultWorkflows } from '../default-workflows.js';
+import { RESOURCE_LAYOUTS, Resources } from '../resources/resolver.js';
 import { parseWorkflow } from '../workflow/parse.js';
 import { envAdvice, isPinnedToHost, mergeRequirements, negotiate, type DriverCan, type InEffect, type Offer } from '../workflow/requirements.js';
 import { stepWorkflow, type WorkflowStep } from '../workflow/types.js';
@@ -77,8 +78,9 @@ describe('the workflows teamai ships', () => {
     return step.command === undefined ? inner : [{ path: `${prefix}${step.id}`, requires }, ...inner];
   });
 
-  it('declare requires.host on every command step, so a team copy under another name keeps the pin teamai derives by name', () => {
-    const shipped = DefaultWorkflows.all();
+  it('declare requires.host on every command step, so a team copy under another name keeps the pin teamai derives by name', async () => {
+    const shipped = (await Resources.list(RESOURCE_LAYOUTS.workflows, { teamai: DefaultWorkflows.layer }))
+      .flatMap((found) => (found.kind === 'resolved' && found.item.layer === 'teamai' ? [found.item.shipped] : []));
     const steps = shipped.flatMap(({ definition }) => [...definition.steps, ...definition.finally ?? []].flatMap((step) => commandSteps([step], mergeRequirements(definition.defaults?.requires), `${definition.name}:`)));
 
     expect(shipped.length).toBeGreaterThan(0);

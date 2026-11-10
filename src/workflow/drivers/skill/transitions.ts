@@ -235,8 +235,8 @@ export type Effect =
    * report commits an adopted writer's tree as it stands.
    */
   | { kind: 'send'; attempt: AttemptId; body: ReportBody; changed?: readonly string[] }
-  /** Gives up `steps`, held steps this driver can never take, so the run goes on without them. */
-  | { kind: 'give-up'; steps: string[] }
+  /** Gives up `held`, steps this driver can never take, with what each misses, so the run goes on without them. */
+  | { kind: 'give-up'; held: NonNullable<Waiting['held']> }
   /** Keeps in `usage` that a child on `tool` stopped on its usage limit, saying `said`. */
   | { kind: 'usage-hit'; tool: string; said: string }
   /** Keeps in `usage` that a child on `tool`, spawned at `spawnedAt`, ended without its limit, which ends one hit before. */
@@ -943,7 +943,7 @@ export function giveUpRow(state: SkillState, reply: EngineReply): MovedWithEffec
 
   if (!reply.held.every((held) => held.missing.length > 0 && held.missing.every((missing) => FIXED_FOR_RUN.has(missing)))) return undefined;
 
-  return { row: 'D29', state, effects: [{ kind: 'give-up', steps: reply.held.map((held) => held.step) }] };
+  return { row: 'D29', state, effects: [{ kind: 'give-up', held: reply.held }] };
 }
 
 /** D27: a wait that holds a step says nothing of a gate, which only a `next` that takes no lease answers. */

@@ -29,7 +29,8 @@ const mockGit = {
 const simpleGitCalls: unknown[][] = [];
 const mockExecCommand = vi.hoisted(() => vi.fn());
 vi.mock('@teamai/tool-core/exec', () => ({ execCommand: mockExecCommand }));
-vi.mock('simple-git', () => ({
+vi.mock('simple-git', async (importOriginal) => ({
+  ...await importOriginal<typeof import('simple-git')>(),
   simpleGit: (...args: unknown[]) => {
     simpleGitCalls.push(args);
     return mockGit;
@@ -277,7 +278,7 @@ describe('pushRepoBranch', () => {
     expect(mockGit.checkoutLocalBranch).toHaveBeenCalledWith('teamai/push/test/123');
     expect(mockGit.add).toHaveBeenCalledWith(['file.txt']);
     expect(mockGit.commit).toHaveBeenCalledWith('commit msg', { '--no-verify': null });
-    expect(mockGit.push).toHaveBeenCalledWith(['-u', 'origin', 'teamai/push/test/123']);
+    expect(mockGit.push).toHaveBeenCalledWith(['--progress', '-u', 'origin', 'teamai/push/test/123']);
     // Should NOT switch back to master — caller does that after gfMrCreate
     expect(mockGit.checkout).not.toHaveBeenCalled();
   });
@@ -294,7 +295,7 @@ describe('pushRepoBranch', () => {
 
     expect(result).toBe(true);
     expect(mockGit.commit).toHaveBeenCalledWith('commit msg', { '--no-verify': null });
-    expect(mockGit.push).toHaveBeenCalledWith(['-u', 'origin', 'teamai/push/test/empty']);
+    expect(mockGit.push).toHaveBeenCalledWith(['--progress', '-u', 'origin', 'teamai/push/test/empty']);
   });
 
   it('should return false and clean up branch when no changes to commit', async () => {
@@ -388,7 +389,7 @@ describe('checkoutMaster', () => {
     expect(mockGit.checkout).toHaveBeenCalledWith('main');
   });
 
-  it('tolerates the "already used by worktree" conflict (single-repo knowledge worktree)', async () => {
+  it('tolerates the "already used by worktree" conflict (self-mode knowledge worktree)', async () => {
     // In self mode the knowledge worktree shares `main` with the user's active
     // tree; git refuses `checkout main` there. checkoutMaster must swallow it
     // rather than throw, so the knowledge-PR flow completes.
@@ -434,7 +435,7 @@ describe('pushRepoDirectly', () => {
     expect(mockGit.commit).toHaveBeenCalledWith('direct commit', ['file.txt']);
     expect(mockGit.commit.mock.calls[0]).toHaveLength(2);
     expect(mockGit.revparse).toHaveBeenCalledWith(['--abbrev-ref', 'HEAD']);
-    expect(mockGit.push).toHaveBeenCalledWith(['-u', 'origin', 'main']);
+    expect(mockGit.push).toHaveBeenCalledWith(['--progress', '-u', 'origin', 'main']);
   });
 
   it('should skip commit and push when the files hold nothing new and nothing is unpushed', async () => {
@@ -454,7 +455,7 @@ describe('pushRepoDirectly', () => {
     await expect(pushRepoDirectly('/repo', 'msg', ['file.txt'])).resolves.toBe(true);
 
     expect(mockGit.commit).not.toHaveBeenCalled();
-    expect(mockGit.push).toHaveBeenCalledWith(['-u', 'origin', 'main']);
+    expect(mockGit.push).toHaveBeenCalledWith(['--progress', '-u', 'origin', 'main']);
   });
 });
 
@@ -815,7 +816,7 @@ describe('pullRepo', () => {
     mockGit.pull.mockResolvedValue({ summary: { changes: 0, insertions: 0, deletions: 0 } });
     const result = await pullRepo('/tmp/x');
     expect(result).toBe('already up to date');
-    expect(mockGit.pull).toHaveBeenCalledWith(['--ff-only']);
+    expect(mockGit.pull).toHaveBeenCalledWith(['--ff-only', '--progress']);
     expect(mockGit.reset).not.toHaveBeenCalledWith(expect.arrayContaining(['--hard']));
   });
 
@@ -829,7 +830,7 @@ describe('pullRepo', () => {
     mockGit.pull.mockRejectedValue(new Error('Not possible to fast-forward, aborting.'));
     const result = await pullRepo('/tmp/x');
     expect(result).toBe('reset to origin (diverged)');
-    expect(mockGit.fetch).toHaveBeenCalledWith(['origin', 'main']);
+    expect(mockGit.fetch).toHaveBeenCalledWith(['--progress', 'origin', 'main']);
     expect(mockGit.reset).toHaveBeenCalledWith(['--hard', 'origin/main']);
   });
 
@@ -894,7 +895,7 @@ describe('pullRepoFastForward', () => {
   it('returns already up to date on empty ff-only pull', async () => {
     mockGit.pull.mockResolvedValue({ summary: { changes: 0, insertions: 0, deletions: 0 } });
     await expect(pullRepoFastForward('/tmp/x')).resolves.toBe('already up to date');
-    expect(mockGit.pull).toHaveBeenCalledWith(['--ff-only']);
+    expect(mockGit.pull).toHaveBeenCalledWith(['--ff-only', '--progress']);
     expect(mockGit.reset).not.toHaveBeenCalled();
     expect(mockGit.fetch).not.toHaveBeenCalled();
   });

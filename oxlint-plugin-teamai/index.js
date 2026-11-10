@@ -30,6 +30,7 @@ import spawnCommand from './rules/spawn-command.js';
 import regularFileReads from './rules/regular-file-reads.js';
 import stepPathWrites from './rules/step-path-writes.js';
 import toolFamily from './rules/tool-family-shape.js';
+import uncachedEntry from './rules/uncached-entry.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -70,6 +71,7 @@ export default definePlugin({
     'regular-file-reads': regularFileReads,
     'step-path-writes': stepPathWrites,
     'tool-family-shape': toolFamily,
+    'uncached-entry': uncachedEntry,
     ...antiSlopRules,
   },
 });

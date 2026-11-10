@@ -21,8 +21,10 @@
     "!**/*.pyc",
     "agents",
     "workflows",
+    "rules",
     "scorers",
     "drivers",
+    "hooks",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -35,6 +37,8 @@
   },
   "scripts": {
     "build": "tsup",
+    "verify": "node scripts/verify.mjs",
+    "verify:world": "node scripts/verify.mjs world",
     "dev": "tsup --watch",
     "test": "vitest run",
     "pretest:e2e": "npm run build",

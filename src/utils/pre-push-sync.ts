@@ -91,7 +91,9 @@ async function syncRulesToLocal(
   const teamRulesDir = path.join(repoPath, 'rules');
 
   if (!await pathExists(teamRulesDir)) return;
-  const { RulesHandler } = await import('../resources/rules.js');
+  const { RulesHandler, readTeamRules } = await import('../resources/rules.js');
+  // A rule folder's copy is rendered from its files, and a file in it is no rule (#1787): only file rules sync here.
+  const fileRules = new Set((await readTeamRules(repoPath)).rules.flatMap((rule) => (rule.folder ? [] : [rule.relativePath])));
   const rulesHandler = new RulesHandler();
 
   const install = installOf(teamConfig, localConfig);
@@ -162,8 +164,8 @@ async function syncRulesToLocal(
         return added === null ? [] : [added];
       };
 
-      // Only process files that exist in both places but differ
-      if (!await pathExists(teamFilePath)) continue;
+      // Only process files that exist in both places but differ.
+      if (!fileRules.has(teamRelPath) || !await pathExists(teamFilePath)) continue;
 
       if (format) {
         const { bodyEquals, render } = format;

@@ -294,9 +294,9 @@ describe('a step in the team workspace, run through the real CLI', () => {
       'notes.txt: not in a directory teamai pulls, such as skills/, rules/, scorers/ or benchmarks/',
       'rules/link.md: a symlink, which teamai pull does not place',
       'rules/vendored: a submodule, which teamai pull does not place',
-      'benchmarks/nowhere/tasks/orphan.yaml: in no suite teamai pull reads: a suite is benchmarks/<suite>/ or benchmarks/<namespace>/<suite>/ with a suite.yaml',
-      'benchmarks/web/regressions/suite.yaml: in no suite teamai pull reads: a suite is benchmarks/<suite>/ or benchmarks/<namespace>/<suite>/ with a suite.yaml',
-      'benchmarks/web/regressions/tasks/hidden.yaml: in no suite teamai pull reads: a suite is benchmarks/<suite>/ or benchmarks/<namespace>/<suite>/ with a suite.yaml',
+      'benchmarks/nowhere/tasks/orphan.yaml: in no suite teamai pull reads: a suite is benchmarks/<suite>/ or benchmarks/<namespace>/<suite>/ with a SUITE.yaml',
+      'benchmarks/web/regressions/suite.yaml: in no suite teamai pull reads: a suite is benchmarks/<suite>/ or benchmarks/<namespace>/<suite>/ with a SUITE.yaml',
+      'benchmarks/web/regressions/tasks/hidden.yaml: in no suite teamai pull reads: a suite is benchmarks/<suite>/ or benchmarks/<namespace>/<suite>/ with a SUITE.yaml',
       expect.stringMatching(/^benchmarks\/broken\/suite\.yaml:\d+: /),
       expect.stringMatching(/^scorers\/broken\.md\b/),
     ]));
@@ -503,7 +503,7 @@ describe('a step in the team workspace of a team that assigns roles, one of whic
   }, 120_000);
 });
 
-describe('a step in the team workspace in single-repo mode, where the team files are .teamai/ of the project repo', () => {
+describe('a step in the team workspace in self mode, where the team files are .teamai/ of the project repo', () => {
   let fixture: BenchmarkFixture;
   let gh: FakeGh;
   let edit: string;

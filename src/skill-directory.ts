@@ -52,7 +52,7 @@ export async function findSkillDirectoryBlock(
     const [from, to] = await Promise.all([resolveAnchors(base), resolveAnchors(resolved)]);
 
     // Outside Git (a user-scope home), staying under the base is enough.
-    if (from && from.projectAnchor !== to?.projectAnchor) return { kind: 'link-to-other-repository', link: walked, resolved };
+    if (from && from.repoAnchor !== to?.repoAnchor) return { kind: 'link-to-other-repository', link: walked, resolved };
   }
 
   return null;

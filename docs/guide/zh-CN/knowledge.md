@@ -75,6 +75,8 @@ Choice, followed by an optional note: edit Weekday deploys
 
 接受的条目按类型写入团队仓库的 `rules/`、`docs/` 或 `learnings/`，frontmatter 带上该 `type:`，随后导入会提交并推送。AI 工具无法分类某个文件时，导入失败，什么也不写。逐条确认需要终端：在 workflow 步骤里，或输入不是终端时，请加 `--all`。`--from-claude` 是 `--from-tools` 的旧名。它们背后的 workflow 是 [`teamai-import-rules` 和 `teamai-import-from-iwiki`](workflow.md#默认工作流)；中断的导入用 `teamai workflow resume <run>` 继续，它取代了 `--resume`。
 
+章节写入排入 `.teamai/pending-review.jsonl` 时，`teamai review --apply` 和 `--reject` 会保留其他导入同时追加的条目。队列写入共用一把锁；如果锁持续占用，命令会报错且不修改队列。等另一个写入操作结束后重试。
+
 ### 搜索知识
 
 ```bash
@@ -84,9 +86,9 @@ teamai recall --check "API 超时"
 
 `--check` 只回答 `RELEVANT` 或 `NOT_RELEVANT`。代码库结果可能多一行 `Source freshness:`，状态含义见下面的[代码知识图谱](#代码知识图谱)。
 
-### 资产之间的关系
+### 资源之间的关系
 
-规则、文档或 learning 可以在 frontmatter 的 `related:` 块中声明与其他团队资产的关系；指向另一个资产的本地 Markdown 链接会自动成为指向它的 `REFERENCES` 关系：
+规则、文档或 learning 可以在 frontmatter 的 `related:` 块中声明与其他团队资源的关系；指向另一个资源的本地 Markdown 链接会自动成为指向它的 `REFERENCES` 关系：
 
 ```markdown
 ---
@@ -96,9 +98,9 @@ related:
 ---
 ```
 
-可声明的关系有四种：`MAPS_TO`（本文件描述了那个 teamwiki 代码页面）、`REFERENCES`（任意资产）、`SUPERSEDES` 和 `CONFLICTS_WITH`（规则、文档或 learning——learning 与规则意见相左时用 `CONFLICTS_WITH`，因为 `teamai contribute` 发布 learning 不经评审）。skill 和 teamwiki 页面只能作为被指向的目标，不能主动声明。代码图的另外三种关系（`DEPENDS_ON`、`CONTAINS`、`IMPLEMENTS`）是代码与代码之间的关系，不能在资产上声明。
+可声明的关系有四种：`MAPS_TO`（本文件描述了那个 teamwiki 代码页面）、`REFERENCES`（任意资源）、`SUPERSEDES` 和 `CONFLICTS_WITH`（规则、文档或 learning——learning 与规则意见相左时用 `CONFLICTS_WITH`，因为 `teamai contribute` 发布 learning 不经评审）。skill 和 teamwiki 页面只能作为被指向的目标，不能主动声明。代码图的另外三种关系（`DEPENDS_ON`、`CONTAINS`、`IMPLEMENTS`）是代码与代码之间的关系，不能在资源上声明。
 
-`teamai recall` 会把每条关系作为 `Related:` 行打印在命中结果的 `File:` 行之后——`→` 表示来自该命中的关系，`←` 表示对端资产声明的关系，每条命中最多 5 行。`→ MAPS_TO` / `← MAPS_TO` 对也能由规则的 `paths:` glob 派生（见下文），不一定是手写声明。对端在本次 recall 中不可见时（其他 scope 的资产、被 withheld 的代码库页面、不存在的目标）不打印任何内容。命中结果、顺序和分数不变。`teamai review --branch` 会判定 frontmatter 的 `related:` 块声明了表格外内容的规则或文档为失败；`teamai contribute` 把同样的问题打印为警告，仍会照常发布。
+`teamai recall` 会把每条关系作为 `Related:` 行打印在命中结果的 `File:` 行之后——`→` 表示来自该命中的关系，`←` 表示对端资源声明的关系，每条命中最多 5 行。`→ MAPS_TO` / `← MAPS_TO` 对也能由规则的 `paths:` glob 派生（见下文），不一定是手写声明。对端在本次 recall 中不可见时（其他 scope 的资源、被 withheld 的代码库页面、不存在的目标）不打印任何内容。命中结果、顺序和分数不变。`teamai review --branch` 会判定 frontmatter 的 `related:` 块声明了表格外内容的规则或文档为失败；`teamai contribute` 把同样的问题打印为警告，仍会照常发布。
 
 ### Recall 采纳与 upvote
 
@@ -141,7 +143,7 @@ teamai recall disable
 teamai recall status
 ```
 
-本机覆盖写在 `~/.teamai/config.yaml` 的 `recallEnabled`。`TEAMAI_RECALL_DISABLED=1` 强制关掉，此时 `teamai recall status` 会指出是这个变量关掉的。关掉之后 pull 不再安装 recall，并会删掉之前 pull 装下的 recall agent 和规则；直接运行 `teamai recall` 仍然可以搜。这个变量改的是同一作用域内所有 shell 共用的文件：在设了它的 shell 里 pull，会把整个作用域的 recall 文件和 CLAUDE.md 里的 recall 段删掉；在没设它的 shell 里再 pull，又会装回来。
+本机覆盖写在 `~/.teamai/config.yaml` 的 `recallEnabled`。`TEAMAI_RECALL_DISABLED=1` 强制关掉，此时 `teamai recall status` 会指出是这个变量关掉的。关掉之后 pull 不再安装 recall，并会删掉之前 pull 装下的 recall agent 和规则；hook 也不再记录采纳、不投票、不推送投票，也不再给 `TodoWrite` 提醒。直接运行 `teamai recall` 仍然可以搜。`recall enable` 和 `recall disable` 从下一个 hook 事件起生效，不需要安装或删除任何东西。这个变量改的是同一作用域内所有 shell 共用的文件：在设了它的 shell 里 pull，会把整个作用域的 recall 文件和 CLAUDE.md 里的 recall 段删掉；在没设它的 shell 里再 pull，又会装回来。
 
 团队可以用自己的 recall agent，见[替换 recall agent](sharing.md#替换-recall-agent)。
 
@@ -167,7 +169,7 @@ sharing:
 
 单机可在 `~/.teamai/config.yaml` 里设置 `mrHintEnabled: false`，或设置 `TEAMAI_MR_HINT_DISABLED=1`。
 
-`teamai.yaml` 的 `language` 可以是 `en` 或 `zh`。`en` 时，内置 recall 规则、TodoWrite 提示和已合入 MR 提示只用英文。不写或写 `zh`，保持中英双语。下一次 `teamai pull` 按这个重写。
+`teamai.yaml` 的 `language` 可以是 `en` 或 `zh`。`en` 时，内置 recall 规则、TodoWrite 提示和已合入 MR 提示只用英文。不写或写 `zh`，保持中英双语。`zh` 时，摩擦提醒用中文。下一次 `teamai pull` 按这个重写。
 
 ### 知识库维护
 
@@ -182,6 +184,8 @@ teamai recall maintenance --update-quality
 知识摘要与维护命令（`teamai digest`、`teamai recall maintenance` 及 `teamai recall promote`）均涵盖当前作用域内活跃的项目命名空间经验以及共享根目录经验。
 
 置信度是 0 到 1 的活动评分，不是知识正确或任务成功的概率。正反馈计数与召回计数的比值最高按 1 计算，因此重复正反馈不会超出这一项 30% 的权重。近期度取最近一次召回与最近一次正反馈中较晚的时间，因此新的正反馈也会刷新近期度。
+
+维护和晋升读取 learning 前置信息的 `date`，带引号（`date: "2026-03-28"`）和不带引号（`date: 2026-03-28`）均可。判断存在天数时，时间戳会保留时分秒。
 
 ### 晋升 Learnings
 
@@ -295,13 +299,13 @@ Reconciliation complete: mappings=3, gaps=1, conflicts=0
 ✔ Pushed to team knowledge repo (https://git.example.com/acme/team-ai.git)
 ```
 
-`--dry-run` 不写任何文件，还会额外打印关系候选：把团队的规则和文档与代码页面按共享的关键词做匹配，提议写成资产 frontmatter 里的 `related:` 声明——你把自己接受的候选复制进资产，走普通 PR 合入（`review --branch` 会检查）。候选在被合入资产之前不会在 recall 中出现：
+`--dry-run` 不写任何文件，还会额外打印关系候选：把团队的规则和文档与代码页面按共享的关键词做匹配，提议写成资源 frontmatter 里的 `related:` 声明——你把自己接受的候选复制进资源，走普通 PR 合入（`review --branch` 会检查）。候选在被合入资源之前不会在 recall 中出现：
 
 ```text
 $ teamai codebase --reconcile --dry-run
 Reconciliation complete: mappings=0, gaps=1, conflicts=0
 
-Relation candidates (copy the ones you accept into the asset's related:)
+Relation candidates (copy the ones you accept into the resource's related:)
   docs/payments-overview.md  MAPS_TO  teamwiki/evidence/code/pay/modules/ledger-receipts.md   term "LedgerReceipts", confidence 0.9
 ```
 

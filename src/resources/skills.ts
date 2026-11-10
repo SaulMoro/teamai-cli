@@ -1232,7 +1232,7 @@ export class SkillsHandler extends ResourceHandler {
             const equal = await dirTeamSubsetEqual(localDirPath, teamDirPath, [CONTRIBUTORS_FILE]);
 
             if (equal) continue; // This tool dir's copy is identical, skip
-            // Single-repo mode: like `.teamai/rules` (see the rules scan), the
+            // Self mode: like `.teamai/rules` (see the rules scan), the
             // active tree's `.teamai/skills` is never refreshed, and a branch
             // behind the default branch holds older copies nobody edited (#823).
             const teamRelDir = path.relative(localConfig.repo.localPath, teamDirPath).split(path.sep).join('/');

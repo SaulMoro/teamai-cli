@@ -26,7 +26,7 @@ export const tools = {
       user: 'none',
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.trae/mcp.json', when: 'workspaceUnder', evidence: 'docs' }] },
     },
-    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Trae docs: chat history in the IDE's ModularData database, which no variable moves.
     sessions: 'none',
     launch: 'none',
@@ -70,7 +70,7 @@ export const tools = {
       user: 'none',
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.trae/mcp.json', when: 'workspaceUnder', evidence: 'docs' }] },
     },
-    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Trae CN docs: the same database under Trae CN's application data.
     sessions: 'none',
     launch: 'none',

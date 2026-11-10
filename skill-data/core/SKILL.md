@@ -16,7 +16,8 @@ do not skip, reorder, or invent commands.
 Look at what the user typed after `/teamai`.
 
 **If they gave NO scenario right after a TeamAI friction reminder** (the
-`[teamai]` line that offers the `teamai-share-learnings` workflow, or suggests
+`[teamai]` line, or the team's own wording of it, that offers the
+`teamai-share-learnings` workflow, or suggests
 `/teamai share what this session taught me`), that reminder is the scenario:
 do what it says.
 
@@ -152,7 +153,7 @@ the command returns, from the team clone as last fetched when that was within
 (Claude Code's `EnterWorktree`, Codex CLI) is prepared the same way, in the background, on the first
 session start or tool use there. A branch switch does nothing.
 After `git pull` (merge or a completed rebase) it fetches the team repo (5 s cap, then the background pull) and
-delivers; in single-repo mode it delivers what `git pull` brought, offline. It prints nothing and always
+delivers; in self mode it delivers what `git pull` brought, offline. It prints nothing and always
 exits 0; a failure inside it is recorded, and `teamai doctor` names it (`Last git
 hook run failed: ...`) with its fix, as does the next interactive `teamai pull`, once.
 `teamai doctor` also reports whether the hooks are installed and enabled, with a

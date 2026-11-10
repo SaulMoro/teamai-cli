@@ -44,6 +44,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   omp: (storeDir) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(storeDir),
   muse: (storeDir) => BUILT_IN_TOOLS.muse.platforms.muse.adapter(storeDir),
   hermes: (storeDir) => BUILT_IN_TOOLS.hermes.platforms.hermes.adapter(storeDir),
+  copilot: (storeDir) => BUILT_IN_TOOLS.copilot.platforms.copilot.adapter(storeDir),
   // TeamAI variants (different path prefixes, identical format)
   'claude-internal': (storeDir) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(storeDir),
   tclaude: (storeDir) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(storeDir),

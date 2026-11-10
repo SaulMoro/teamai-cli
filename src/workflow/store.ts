@@ -300,6 +300,9 @@ const RunProgressSchema = z.object({
   /** The owner's run a fleet member runs this one for, whose id its steps read as `run.id`. */
   nestedIn: RunIdSchema.optional(),
   timeout: z.number().int().positive().optional(),
+  /** A workflow folder's sourceHash names its copy under the data home, so the run reads only one of those. */
+  folder: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  folders: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)).optional(),
   driveOptions: (z.object({
     tools: z.record(z.string(), z.string()).optional(), autoApprove: z.boolean().optional(), sandbox: z.literal(true).optional(), driver: z.string().min(1).optional(),
   }) satisfies z.ZodType<DriveOptions>).optional(),

@@ -15,7 +15,7 @@ teamai remove skills <name>
 teamai remove rules <name> --force
 ```
 
-`doctor` 有一项没过就以状态码 1 退出。`doctor --fix` 还会在超过 `workflows.retention` 后移除工作流运行留下的内容，并再次删除成功的运行没能删除的分支（见[运行留下的分支](./workflow.md#运行留下的分支)）。`stats` 在有 recall 记录时会多一节，见 [Recall 采纳与 upvote](./knowledge.md#recall-采纳与-upvote)。
+`doctor` 有一项没过就以状态码 1 退出。`doctor --fix` 还会在超过 `workflows.retention` 后移除工作流运行留下的内容，并再次删除成功的运行没能删除的分支（见[运行留下的分支](./workflow.md#运行留下的分支)）。它还会删掉仓库里已删除的 worktree 留在 HOME 里的团队 hook 条目。`stats` 在有 recall 记录时会多一节，见 [Recall 采纳与 upvote](./knowledge.md#recall-采纳与-upvote)。
 
 对于已知 agent 搜索路径的工具，`doctor` 还会检查配置的 agents 目录是否在工具的读取范围内。仅成功写入自定义目录并不能通过此项检查；请修正团队仓库中的 `toolPaths.<tool>.agents`，然后重新 pull。
 
@@ -23,7 +23,7 @@ teamai remove rules <name> --force
 
 如果工具的 skills 目录被普通文件占用，`pull` 会保留该文件、指出阻塞路径，并继续向其他工具分发。`doctor` 会将该目录检查标为失败，避免把跳过的投递误报为成功。移开该文件后，再运行 `teamai pull` 即可补齐缺失的技能。`uninstall` 会保留该文件，并继续清理该工具的其他托管资源。
 
-即使在单仓库模式，ZCode CLI 也从 `~/.zcode/cli/config.json` 读取 hooks。`hooks inject` 会迁移旧项目文件中属于 teamai 的条目，保留个人设置，并限制团队 hooks 只在所属项目运行。`hooks list` 和 `doctor` 检查同一个 HOME 文件。
+即使在 self 模式下，ZCode CLI 也从 `~/.zcode/cli/config.json` 读取 hooks。`hooks inject` 会迁移旧项目文件中属于 teamai 的条目，保留个人设置，并限制团队 hooks 只在所属项目运行。`hooks list` 和 `doctor` 检查同一个 HOME 文件。
 
 手动执行 `teamai update`、`teamai update --check` 或 `teamai update --dry-run` 时，总会查询 npm registry。如果无法访问 registry，会报告过去 12 小时内的上次检查结果，没有时则说明更新状态未知。自动检查会复用最长 12 小时的 registry 版本，并分别与每份安装的版本比较。旧格式的缓存 null 无法说明 registry 版本，因此会重新检查。`--dry-run` 不保存检查结果，也不安装更新。
 
@@ -38,6 +38,8 @@ autoUpdate: false
 # ~/.teamai/config.yaml，否则 ~/.teamai/projects/<slug>/config.yaml
 updatePolicy: skip    # auto / prompt / skip，优先于团队设置
 ```
+
+更新处理器会将完成更新记为 `ok`，无需或不允许安装记为 `skipped`，检查、安装或 Hook 刷新失败记为 `failed`。自动 Hook 对不支持的安装方式只写 debug 记录。手动运行 `teamai update` 可查看对应的升级指引。
 
 对于 OpenClaw 的默认工作区，`doctor` 会根据实际 `openclaw.json` 的 `agents.defaults.bootstrapMaxChars` 和 `bootstrapTotalMaxChars` 检查整个 `AGENTS.md`，包括个人内容。两项默认分别为 20,000 和 60,000 字符。如果会截断或跳过，请缩短文件或检查上限；`pull` 不会截断你的指令。单独智能体的覆盖配置需要另行检查。
 

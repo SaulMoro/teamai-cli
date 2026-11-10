@@ -334,7 +334,7 @@ export const ConfinedOfferSchema = z.object({
  * - `unattended`: the driver launches a prompt leased with `permissions: 'unattended'` in its tool's own mode for
  *   editing and running commands without asking, and fails the step rather than launch a tool that has none.
  * - `role`: the driver runs a step leased with `role` with what teamai delivered into its prepared copy for that role,
- *   and starts nothing that delivers the member's own assets there instead.
+ *   and starts nothing that delivers the member's own resources there instead.
  * - `confined`: the tools the driver runs a prompt on with one directory as its only readable root, each offer at the
  *   level it reaches, with what those tools can do there. An offer without `access` counts as `full`.
  */

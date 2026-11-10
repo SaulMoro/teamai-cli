@@ -524,7 +524,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.unattended && !runsUnattended(offer.tool, can) ? ['unattended' as const] : []),
     ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
     ...(floor.network === false && !can.network ? ['network' as const] : []),
-    // Only teamai delivers a role into a copy: one a driver makes itself gets the member's assets.
+    // Only teamai delivers a role into a copy: one a driver makes itself gets the member's resources.
     ...((offer.clone || offer.role !== undefined) && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
     ...personGap(offer.interactive, can),

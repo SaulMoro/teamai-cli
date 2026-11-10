@@ -22,6 +22,8 @@ teamai dashboard --port 8080
 - **摩擦信号**：团队的纠正、中断和拒绝工具调用次数，以及占会话的比例。
 - **知识维护**：归档、需更新、可晋升的候选，各附对应命令。页面本身不执行任何操作。
 
+一个技能在一轮对话里只计一次。Claude Code、Codex、Cursor、CodeBuddy 和 Muse 的每个 hook 都带轮次 id。其他工具由输入提示的 hook 开启新一轮，在 macOS 和 Linux 上这一步在后台做，agent 这时已经拿到了提示。如果这一轮的第一个工具调用就用了某个技能，它可能记到上一轮里；上一轮已经记过这个技能时，这次不再计数。
+
 ## 会话共享（Session sharing）
 
 总览页的**会话共享**面板针对当前工作区，说明在每种[运行模式](workflow.md#有人值守与无人值守的运行)下会话是否发布到 `teamai-reports`、是否评分，以及原因：
@@ -121,7 +123,7 @@ review-change  review #1  style      已失败 · judge_answer_invalid   teamai 
 - 每周趋势。没有标签的一周显示为空缺，而不是 0%。
 - **按值统计的标签**：此度量中保存每个值的标签有多少，以及该值对应的分数，分数高的在前。这些计数加起来等于标签数，因此有两个以上取值的评分器不会丢掉区分各种未通过的信息，也可以从中读出精确率或召回率。值按标签保存的原样显示。
 - 通过与否以每个标签保存的结果为准。修改评分器的 `passingScore` 不会改变过去的结果。
-- **分组依据**：工具、模型、团队修订、智能体定义、团队资产交付时针对的角色、项目或标签、指纹、工作使用的团队技能，或判定工作流标签的阶段。列出两个技能的标签会同时计入两组。模型分组会把工具报告的模型和仅请求的模型分开。没有记录该项的标签记为“未记录”。标签按它[记录的 `agent`](scorers.md#标签评判的-harness) 分组。轮次以步骤自己的角色运行时，角色为该步骤角色，否则为成员角色。在标签记录 `agent` 之前写入的工作流标签，按它评审的那一轮的智能体分组，从运行记录中读取。在记录智能体之前的运行只提供定义。
+- **分组依据**：工具、模型、团队修订、智能体定义、团队资源交付时针对的角色、项目或标签、指纹、工作使用的团队技能，或判定工作流标签的阶段。列出两个技能的标签会同时计入两组。模型分组会把工具报告的模型和仅请求的模型分开。没有记录该项的标签记为“未记录”。标签按它[记录的 `agent`](scorers.md#标签评判的-harness) 分组。轮次以步骤自己的角色运行时，角色为该步骤角色，否则为成员角色。在标签记录 `agent` 之前写入的工作流标签，按它评审的那一轮的智能体分组，从运行记录中读取。在记录智能体之前的运行只提供定义。
 - **按团队提交拆分。** 给出团队仓库的一个提交。标签的团队修订包含该提交时算作“之后”，由本机团队克隆中的 `git merge-base --is-ancestor` 检查。没有团队修订、或修订不在本机克隆中的标签记为“未记录”。拆分也作用于每个分组，因此可以比较加载某个技能的会话在修改该技能的提交前后的表现。
 - **未通过的标签**，最新优先：作者、评分时间、它评判的 Harness（工具、模型、effort、角色和团队修订短哈希，或`未记录 Harness`）、平台、使用的技能、**回归**（指向这个失败的回归任务，或能否从它开始一个任务）和**经验**（指向这个会话的 learnings）；工作流度量还显示判定每个标签的阶段。页面每次列出 25 条，最多 1,000 条，点击 **显示更多** 列出后面的标签。选择一个分组即可只列出它的未通过标签。已推送到团队归档的会话显示 `teamai session resume <name> --platform <platform>`。工作流标签可以打开它的运行。
 - **按 Harness 汇总的失败**，选中一个分组时显示：按 Harness 统计它的未通过标签，最多的在前，用来判断失败是否来自同一个 Harness。按工具分组并选中 `claude` 时，两个未通过标签显示为 `1 个未通过 claude · claude-sonnet-5-5 · spec 步骤角色 · 3bb7751` 和 `1 个未通过 claude · claude-sonnet-5-5 · frontend 成员角色 · 3bb7751`。点击团队修订短哈希即可按该提交拆分。
@@ -168,7 +170,7 @@ partial 未通过     alice   good 通过  codex / gpt-5.1-codex            10/2
 
 基准测试运行的标签不计入。页面只读取标签和记录的配置，从不读取或显示评审的推理、提示词、对话记录、diff 或会话自身的 id。
 
-来自会话和工作流运行的标签反映的是工具在实际遇到的工作上的表现。要在相同任务上比较工具、模型或团队资产，请运行基准测试。
+来自会话和工作流运行的标签反映的是工具在实际遇到的工作上的表现。要在相同任务上比较工具、模型或团队资源，请运行基准测试。
 
 ## 自我改进（Self-improvement）
 
@@ -184,7 +186,7 @@ Pass rate after them     1 closed without merging · 1 open    4 can become a ta
 +14 pts on average
 
 Changes  All 4 | Proposed 1 | Landed 2 | Closed 1
-CHANGE                                             SCORER          ASSETS                           PROOF ON THE REGRESSION SUITE   PASS RATE BEFORE → AFTER   WHEN                       OPEN
+CHANGE                                             SCORER          RESOURCES                        PROOF ON THE REGRESSION SUITE   PASS RATE BEFORE → AFTER   WHEN                       OPEN
 Proposed  [teamai] Add skills/code-review/SKILL.md review-quality  prompts/review skills/code-review claude 3/5 → 5/5 +40 pts        Measured once it lands     11/2/2026 · Opened         Pull request
           and 3 more files · 2 regression tasks                                                     codex  2/5 → 4/5 +40 pts
 Landed    Reviewer agent: read tests before the code   review-quality  agents/reviewer                  claude 2/3 → 3/3 +33 pts        53% → 62% +8 pts           10/24/2026                 a16e6e2
@@ -201,7 +203,7 @@ Landed    Review skill: check every early return       review-quality  skills/co
 | 已合并（Landed） | 最近 180 天默认分支上的一个提交，它新增的回归任务来源于一个未通过的标签。 |
 | 已关闭（Closed） | 来自 `teamai/self-improvement/<scorer>` 分支、被托管平台未合并就关闭的 pull request：团队拒绝的修改。 |
 | 已合并的 PR（Pull requests merged） | 所有评分器分支上已结束的请求中，托管平台合并了多少。本机能登录 GitHub、GitLab、TGit 和 GitCode 时它们会回答。其他托管平台或没有回应的平台改为显示**打开的提议（Open proposals）**。 |
-| 资产（Assets） | 修改新增或改动的文件，按顶层目录和名字显示。回归任务只计数，不列出。 |
+| 资源（Resources） | 修改新增或改动的文件，按顶层目录和名字显示。回归任务只计数，不列出。 |
 | 证明（Proof） | `pulled` 臂运行了这个修改及其回归任务的最新一次基准测试：每个工具先在 `main` 上、再在修改上的通过率。以 squash 或 rebase 方式合并的 PR 保留托管平台所合并 head 的那次运行，GitHub 和 GitLab 会给出这个 head。点下面的日期打开这次运行。 |
 | 前 → 后通过率 | 评分器的默认度量在修改的提交处拆分，和评分器页面的**按团队提交拆分**一样，统计 180 天。 |
 
@@ -224,35 +226,43 @@ test-quality    80% · 5 labels      1 can become a task · 0 covered           
 | 问题 | 面板 | 显示的内容 |
 |---|---|---|
 | 团队的 auth 修复要不要改用 claude？ | **领先的 arm** | `claude 67% · 95% 57%–75% · 未能区分于 codex`。codex 是 56%（47%–65%）。两个区间重叠，所以这 7 次运行区分不了两者。改用之前先增加重复次数或任务。 |
-| 我们 10 月 7 日合入的 auth 技能有用吗？ | **每次运行的通过率** | 一条点线 `团队资产已改动 · 62432de` 标出第一次带这个技能的运行。比较每个 arm 在线两侧的点。**运行** 表把这次运行的团队修订标为 `已改动`。 |
+| 我们 10 月 7 日合入的 auth 技能有用吗？ | **每次运行的通过率** | 一条点线 `团队资源已改动 · 62432de` 标出第一次带这个技能的运行。比较每个 arm 在线两侧的点。**运行** 表把这次运行的团队修订标为 `已改动`。 |
 | `migrate-db` 上哪个模型值得花钱？ | **通过率与成本**，选 **成本** | sonnet 以每个 trial 0.31 USD 通过 73%，opus 以 0.89 USD 通过 78%，两者区间重叠。虚线连接通过率和成本都无人胜过的 arm：haiku、sonnet、opus。 |
+| `migrate-db` 上 sonnet 省下的钱值得吗？ | **各 arm 的通过率**，sonnet 下方 | `每个通过 trial 的成本 0.4247 USD · 对照 opus (第一个 arm): 互不占优, 通过率更低, 63% 每个通过 trial 更便宜 · −5 pp · 95% −16 pp 至 +6 pp · 无法区分`。两个 arm 都没有在通过率和成本上同时胜出，这些运行也区分不了它们的通过率。每个通过 trial 的成本更低、通过率至少一样高的 arm 标为 `占优`。**最近一次运行** 用同样的方式解读最新一次运行。 |
+| 更便宜的正确性评审可信吗？ | **评审校准** | `claude claude-haiku-4-5 10 3 30% 11% 至 60%`：在 10 个检查失败的 trial 中，它把 3 个标为通过。它的区间高于 0，所以这个面板移到 arm 上方。`claude claude-opus-5-5 high` 的 10 个一个也没放过（0% 至 28%）。没有评审做过校准时，面板会直接说明，并给出要加到 `suite.yaml` 的设置：`calibration: { rate: 10 }`。 |
+| 每次运行用的是它固定的评审吗？ | **评审** | 每个评分器一行：运行固定的评审、检查判定了多少标签、每个评审给了多少标签，另一个评审给出的标签在 **偏差** 下计为 `1`。`评审模型 claude 同时也是以下 arm 的工具： claude` 提醒某个 arm 的工具在评审它自己的工作。 |
 | 哪个任务需要修，是代码还是套件？ | **任务 × arm** | `refresh-race` 的 **不稳定的运行** 是 7/7：每次运行中都有 arm 对它既通过又失败，所以单个 trial 说明不了什么。`session-fixation` 在每个 arm 上都是 0% 到 19%：先读它的检查，再怪工具。 |
+| 安全评审让哪个 arm 失败？ | **评分器 × arm** | `security-review` 在 claude 上是 67% 2/3，单元格的提示显示 `95% 21% 至 94%`。 |
+| 最近一次运行的花费和估算一致吗？ | **运行**，**费用** | `62.1 USD 估算 41–58 USD 高于估算`。 |
 | 9 月 23 日那次运行为什么降到 27%？ | **每次运行的任务** 和 **运行** | `login-copy` 在那次运行一列中是斜线格，**运行** 在它的通过率下显示 `1 未测量`：那次这个任务的检查不改代码就通过了，所以它的[基线](benchmarks.md#基线)无效，它的 trial 计为计划但未通过。**任务 × arm** 把它标为 `未测量 1/7`。从 **运行** 打开这次运行，查看它的 trial。 |
 
 **最近一次运行** 显示最新一次运行中每个 arm 按结果统计的 trial，以及用量、偏差和它没有测量的任务。**打开这次运行** 会在工作流运行页面打开它的详情。
 
-以上面板属于 **Arm** 标签页。另外两个标签页回答 arm 之间、以及团队修订之间变了什么。下面是 `onboarding-docs`（claude 和 codex 分别带 pull 到的团队资产和不带资产的 [matrix](benchmarks.md#用-matrix-交叉工具和团队资产)），以及前面的 `fix-auth`：
+以上面板属于 **Arm** 标签页。另外两个标签页回答 arm 之间、以及团队修订之间变了什么。下面是 `onboarding-docs`（claude 和 codex 分别带 pull 到的团队资源和不带资源的 [matrix](benchmarks.md#用-matrix-交叉工具和团队资源)），以及前面的 `fix-auth`：
 
 | 问题 | 标签页和面板 | 显示了什么 |
 |---|---|---|
-| 团队资产对 onboarding 文档帮助有多大？ | **对比**，按 **团队资产** | claude 上 `无团队资产 → 已拉取的团队版本 +41 pp · 95% +16 pp 至 +59 pp`，共 27 个配对 trial，每个通过 trial 的成本 `−60%`。 |
+| 团队资源对 onboarding 文档帮助有多大？ | **对比**，按 **团队资源** | claude 上 `无团队资源 → 已拉取的团队版本 +41 pp · 95% +16 pp 至 +59 pp`，共 27 个配对 trial，每个通过 trial 的成本 `−60%`。 |
 | 对 codex 帮助一样大吗？ | **每对 arm 的差异** | codex 提升 +15 pp，但区间跨过零：这些运行区分不了它的两个 arm。 |
-| 资产修好了哪个任务？ | **每个任务** | `oncall-runbook` 带资产后从 1/9 到 7/9；`first-pr-guide` 几乎没变。 |
+| 资源修好了哪个任务？ | **每个任务** | `oncall-runbook` 带资源后从 1/9 到 7/9；`first-pr-guide` 几乎没变。 |
 | auth-tokens skill 对 `fix-auth` 上的 claude 有帮助吗？ | **团队变更**，选 `claude · claude-opus-5-5` | 按提交顺序的三个团队版本上是 67%、62%、70%，没有一个与前一个可区分。点击 `67ee2ce · Add the auth-tokens skill and a security reviewer`：它改了三个文件，`session-fixation` 从 1/12 到 3/12。 |
 | 工具更新影响数字了吗？ | **Arm**，**每次运行的通过率** | 一条虚线 `工具已更新 · claude 2.4.0` 标出新版本上的第一次运行。 |
 
-**对比** 列出套件当前版本中只在团队资产、工具、模型、工作流或角色上不同的每两个 arm，并按运行、任务和重复次数配对它们的 trial。**团队变更** 跟踪同一工具、模型和工作流在它用 pull 到的资产或某个 ref 运行过的各团队版本上的表现，用本机的团队仓库克隆为每个版本命名，并列出它相对前一个版本改动的 `benchmarks/` 之外的文件。
+**对比** 列出套件当前版本中只在团队资源、工具、模型、工作流或角色上不同的每两个 arm，并按运行、任务和重复次数配对它们的 trial。只有两边由同一方判定时，一对才计入，与[回归时失败](benchmarks.md#回归时失败)的计法相同：**通过率** 下的 `1 配对 trial · 1 已排除: 评判器已改变 (claude claude-sonnet-5-5 → claude claude-opus-5-5)` 表示评判器对其中一对报告了另一个模型，这一对不计入差异。每一对都被排除的两个 arm 没有差异：**没有可比较配对的 arm** 列出它们，并写明 `2 已排除: 评判器已改变 (…)`。资源效果表在它们的行下面也会这样说明。**团队变更** 跟踪同一工具、模型和工作流在它用 pull 到的资源或某个 ref 运行过的各团队版本上的表现，用本机的团队仓库克隆为每个版本命名，并列出它相对前一个版本改动的 `benchmarks/` 之外的文件。
 
 数字的计算方式：
 
 - 通过率是通过的 trial 数除以计划的 trial 数，与运行自己的表一致。
-- 合并统计的数字、任务表和领先者只统计套件当前版本的运行：即最新一次运行了全部任务和 arm 的运行的套件文件，所以 `--task` 或 `--arm` 的运行不会取代它。**每次运行的通过率** 也会画出更早的运行，位于一条 `套件已改动` 虚线之后。
-- 一个 arm 由它的名称、工具、模型、effort、团队资产、工作流和角色确定。带角色的 arm 在名字下方显示角色，例如 `review 角色`。其中一项改变时，更早的运行是另一条线，标为 `较早的配置`。
+- 合并统计的数字、任务表和领先者只统计套件当前版本的运行：即最新一次运行了全部任务和 arm 的运行的套件文件和记录版本，**运行** 把这些运行标为 `当前`，所以 `--task` 或 `--arm` 的运行不会取代它。**每次运行的通过率** 也会画出更早的运行，位于一条 `套件已改动` 虚线之后。
+- 一个 arm 由它的名称、工具、模型、effort、团队资源、工作流和角色确定。带角色的 arm 在名字下方显示角色，例如 `review 角色`。其中一项改变时，更早的运行是另一条线，标为 `较早的配置`。
 - 带角色的 arm 还会显示该角色在生产中的通过率：角色相同的评分器标签，按评分器页面当前的时间窗口和度量统计，附带 95% 区间，并像按角色分组一样标明该角色是作为工作流步骤自己的角色（`步骤`）、成员的角色（`成员`）还是`两者`运行。`review` 为 2/2 时，旁边显示 `生产中: 100% 1/1 · 95% 21%–100% · 无法区分 · 步骤 · review-quality · 30 天 评分器 ↗`。显示`无法区分`、通过率不加粗时，表示该区间与 arm 的区间重叠：这些标签无法区分生产与基准测试。点击 **评分器 ↗** 会打开按角色分组、选中 `review` 的评分器页面。没有标签的角色显示 `该角色没有标签`。
 - **各 arm 的通过率** 还会按每次运行自己的表的算法，统计这些运行中该 arm 的偏差和未验证的 trial。偏差是指 prompt 运行时用的工具、模型、团队修订或角色与它的 arm 不同的 trial。
 - 区间是 95% Wilson score 区间。两个 arm 的区间重叠时，这些运行区分不了它们。
 - **对比** 中的差异基于配对 trial，区间是配对比例的 95% 区间（Newcombe）。区间跨过零时标为 `无法区分`。
 - 用量是工具报告了用量的 trial 的中位数。成本按每个 trial 计。
+- 每个通过 trial 的成本是 arm 的成本除以它通过的 trial 数。每个 arm 都对照最新一次运行了全部任务和 arm 的运行中的默认 arm，没有时对照它的第一个 arm，配对差异与 **对比** 的计法相同。正确性平均分只统计正确性评分标准有两个以上标签的运行。
+- **运行** 中的 **费用** 是一次运行的 agent 和评审声明的花费，旁边是根据更早一次运行做出的估算（套件有更早的运行时）。只有估算完整时才显示 `高于估算` 和 `低于估算`，并且只有每一部分都声明了花费时才显示 `低于估算`。
+- teamai 开始记录评审和判定之前的运行记录，在 **评审**、**评审校准** 和 **评分器 × arm** 中不显示任何内容。
 - 本机上的运行若也已发布，只显示一次，取本机的副本。
 
 页面只显示运行记录发布的内容，从不显示 prompt、diff 或对话记录。
@@ -271,6 +281,60 @@ oncall   sre   未交付
 ```
 
 宽度小于 1100 px 时，每个技能显示为一张卡片。
+
+当前版本的 teamai 还无法读取的目录（见[保留的目录标记文件名](sharing.md#保留的目录标记文件名)）显示在页面最上方，带有类型、标记文件，以及获取它们的命令。总览页在卡片上方显示数量，并链接到这里：
+
+```text
+⚠ 已跳过的目录  2                         当前版本的 teamai 还无法读取这些目录类型
+目录                  类型          标记文件
+rules/api-style/     规则目录       RULE.md
+workflows/release/   工作流目录     WORKFLOW.yaml
+更新 teamai 后重新 pull 即可获得它们：  teamai update && teamai pull   复制
+```
+
+没有被跳过的目录时，两处都不显示。
+
+### 资源分层
+
+资源分层按类型列出每个工作流、Hook、MCP 服务器、基准测试套件和规则目录的所有定义，以及 `pull` 在当前工作区用的是哪一个：teamai 默认定义、团队仓库根级别，或活跃的命名空间，后一层替换前一层的同名定义。生效的 teamai 默认定义合并成一行。`pull` 用不了的定义会显示 `pull` 打印的原话和修复方法：
+
+```text
+工作流  4  WORKFLOW.yaml
+名称      层                  形式  状态                                         替换
+release   命名空间 payments   文件  生效                                         团队仓库根级别  workflows/release.yaml
+release   团队仓库根级别      文件  已被替换 替换者 workflows/payments/release.yaml  —
+deploy    团队仓库根级别      文件  重复定义                                     —
+                                    workflows/deploy.yaml:1: field "(root)": Workflow "deploy" is defined twice ...
+                                    在团队仓库中只保留其中一个，然后 push。
+21 个 teamai 默认定义生效                                                        展开
+```
+
+状态有：生效、已被替换、此处未启用、未订阅（被标签排除的规则）、已关闭（召回关闭时的召回规则）、无效（同时写明由什么代替运行）、已拒绝，以及本次 pull 暂缓：它本身没有问题，但同类型的另一个定义让这一类型本次不生效，`pull` 保留已安装的版本。
+
+目录所在行的「文件」列出它的文件、大小和可执行标记，合计大小（工作流目录对照 1 MB 上限），`pull` 把它交付到哪里，以及填入目录路径后它运行的命令。MCP 服务器的环境变量只显示名称。规则目录会写明按团队的 `language` 取自哪个文件，以及每个工具从哪里读取 `${TEAMAI_RULE_DIR}`。teamai 的召回规则和团队的 `rules/teamai-recall/` 列在一起：
+
+```text
+api-style      rules/api-style/      团队仓库根级别  目录  生效    —   收起
+  RULE.md 108 B   RULE.zh.md 55 B   checklist.md 62 B   合计 225 B
+  规则正文取自 RULE.zh.md
+  pull 将它交付到 ~/work/shop/.teamai/delivered/rules/api-style  已交付
+  各工具读取的位置 ${TEAMAI_RULE_DIR}
+  claude  ~/work/shop/.teamai/delivered/rules/api-style  从工作树读取
+  codex   .teamai/delivered/rules/api-style              从工作树读取
+teamai-recall  rules/teamai-recall/  团队仓库根级别  目录  已拒绝
+  rules/teamai-recall/ is not used, so teamai's recall rule stays in force: rules/teamai-recall/RULE.md does not contain "Nothing was searched:". Fix the folder in the team repo.
+```
+
+规则文件仍在上面的规则列表里。默认 Hook 列出 teamai 的五个提示：各自来自哪里，团队目录改了几个 `with:` 参数和几段文本；展开后逐个对照参数的 teamai 值和团队值并标出改动，以及每段文本按团队语言取自哪个文件。
+
+总览页显示问题数量，并链接到这里：
+
+```text
+⚠ 6 个资源问题 · 2 个冲突 · 2 个无效 · 2 个被拒绝。pull 会以已安装的版本、上一个有效版本或 teamai 默认版本代替它们。
+查看资源分层 →
+```
+
+宽度小于 1100 px 时，每行显示为一张卡片。页面从不显示文件内容、规则或提示词正文，也不显示环境变量的值。
 
 ## 人工干预指标（Human Intervention）
 
@@ -364,7 +428,9 @@ teamai session save --push --force
 
 `teamai session` 在工具之间迁移完整会话，或归档到团队仓库。`session save` 仍是脱敏摘要。
 
-平台：`claude-code`、`codex`、`qoder`、`qoder-cn`、`codebuddy`、`codebuddy-ide`、`cursor`、`workbuddy`、`opencode`（通过 2.0 及以上版本的 `opencode` CLI；作为目标时，目标工作区必须已存在）、`pi`、`omp`（只读的 Pi 系 v3 JSONL）和 `agy`（Antigravity CLI 和 Antigravity 2.0，分别从 `~/.gemini/antigravity-cli` 和 `~/.gemini/antigravity` 读取对话；Antigravity IDE 不记录对话的工作区，所以不列出它的会话；只能作为来源，因为 agy 只从 teamai 无法写入的存储恢复对话；读取需要 `sqlite3` CLI）。`teamai session platforms` 查看本机已安装的。 CodeBuddy CLI 和 WorkBuddy 的项目目录名超过 255 个 UTF-8 字节时，使用工具原生的 180 字节前缀和 hash，长工作区路径也能列出、读取和迁移会话。在 Windows 上，`cursor` 和 `workbuddy` 不能作为 migrate 或 resume 的目标：它们要等 `sqlite3` CLI 登记后才会列出会话，所以 TeamAI 直接拒绝，而不是写一份它们永远不显示的副本。
+Pi 和 Oh My Pi 会话支持通过工作区的真实路径或指向它的符号链接查找，也支持 Windows 目录联接。
+
+平台：`claude-code`、`codex`、`qoder`、`qoder-cn`、`codebuddy`、`codebuddy-ide`、`cursor`、`workbuddy`、`opencode`（通过 2.0 及以上版本的 `opencode` CLI；作为目标时，目标工作区必须已存在）、`pi`、`omp`（只读的 Pi 系 v3 JSONL）、`copilot`（只读：`~/.copilot` 下 Copilot CLI 的 `session-state` 事件日志，只能作为来源，因为 Copilot 只从它自己的日志恢复会话）和 `agy`（Antigravity CLI 和 Antigravity 2.0，分别从 `~/.gemini/antigravity-cli` 和 `~/.gemini/antigravity` 读取对话；Antigravity IDE 不记录对话的工作区，所以不列出它的会话；只能作为来源，因为 agy 只从 teamai 无法写入的存储恢复对话；读取需要 `sqlite3` CLI）。`teamai session platforms` 查看本机已安装的。 CodeBuddy CLI 和 WorkBuddy 的项目目录名超过 255 个 UTF-8 字节时，使用工具原生的 180 字节前缀和 hash，长工作区路径也能列出、读取和迁移会话。在 Windows 上，`cursor` 和 `workbuddy` 不能作为 migrate 或 resume 的目标：它们要等 `sqlite3` CLI 登记后才会列出会话，所以 TeamAI 直接拒绝，而不是写一份它们永远不显示的副本。
 
 ```bash
 teamai session migrate <sessionId> -s codebuddy-ide -t claude-code
@@ -377,6 +443,7 @@ teamai session pull
 teamai session list                                        # --all：全部项目
 teamai session list --finished --all                       # 可分享经验的会话；--within 3d
 teamai session show <id> --source hermes                   # 其中一个，已脱敏
+teamai session show <id> --team-session <name> --author <member>   # 队友推送的会话，已脱敏
 teamai session search <query>
 teamai session resume <name> --platform claude-code
 ```
@@ -406,6 +473,14 @@ The readiness probe fires before the cache warms up; raise initialDelaySeconds t
 ```
 
 加 `--json` 时，`list --finished --all` 输出 `{"list":[{"session","source","ended","prompt"}]}`，`show` 输出 `{"session","source","transcript"}`。`show` 找不到的会话以 1 退出，输出 `{"error":{"code":"session_not_found","message":…}}`。默认工作流 [`teamai-share-learnings-from-sessions`](workflow.md#teamai-share-learnings-from-sessions) 逐个询问是否分享这些会话。
+
+`show --team-session <name> --author <member>` 改为打印队友推送的会话：按 `session list` 打印的名称和推送者，从 `teamai-reports` 中读取本目录仓库的会话，脱敏方式相同；只有两位成员推送了同名会话时才需要 `--author`。先运行 `session pull` 拿到最新的：
+
+```console
+$ teamai session show 7c1e2b9a --team-session claude-code_refresh-tokens-past-expiry_20261105 --author ana
+```
+
+位置参数必须是推送会话自己的 id，即 `session list --all --suite <dir>` 打印的那个；其他 id 以 1 退出，错误码为 `session_not_found`。`--suite` 从本机已结束的会话（`--finished --all --suite`）或团队推送的会话（`--all --suite`）中，列出 benchmark 套件可以[从中取任务](benchmarks.md#从过去的会话构建套件)的会话。
 
 ### 脱敏后的会话保留什么
 

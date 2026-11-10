@@ -5,6 +5,7 @@
   "description": "The tool contract and registry every tool family implements; bundled into teamai-cli.",
   "exports": {
     "./cli-path": "./src/cli-path.ts",
+    "./debug-log": "./src/debug-log.ts",
     "./definition": "./src/definition.ts",
     "./detect": "./src/detect.ts",
     "./exec": "./src/exec.ts",
@@ -21,6 +22,7 @@
     "./sessions/*": "./src/sessions/*.ts",
     "./stdout": "./src/stdout.ts",
     "./tokens": "./src/tokens.ts",
-    "./usage-limit": "./src/usage-limit.ts"
+    "./usage-limit": "./src/usage-limit.ts",
+    "./yaml": "./src/yaml.ts"
   }
 }

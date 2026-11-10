@@ -676,7 +676,7 @@ export async function startDashboard(port?: number): Promise<void> {
           return;
         }
 
-        const [{ loadTeamConfig }, { buildRolePullContext }, { collectRulesInventory }, { readWorkspaceChildren }] = await Promise.all([
+        const [{ loadTeamConfig }, { buildRolePullContext }, { collectRulesInventory, collectSkippedFolders }, { readWorkspaceChildren }] = await Promise.all([
           import('./config.js'), import('./resources/desired.js'), import('./dashboard/resources.js'), import('./workspace-children.js'),
         ]);
 
@@ -690,12 +690,44 @@ export async function startDashboard(port?: number): Promise<void> {
           ? await collectRulesInventory(teamConfig, config, await buildRolePullContext(config))
           : [];
 
+        // The folders of every type pull leaves out (#1791): the Resources page
+        // lists them and the Overview counts them, from this one read.
+        const skippedFolders = teamConfig ? await collectSkippedFolders(config.repo.localPath) : [];
+
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        res.end(JSON.stringify({ configured: true, rules }));
+        res.end(JSON.stringify({ configured: true, rules, skippedFolders }));
       } catch (e) {
         log.debug(`dashboard: /api/resources/rules failed: ${e instanceof Error ? e.message : String(e)}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Failed to load rules.' }));
+      }
+
+      return;
+    }
+
+    if (url.pathname === '/api/resources/layered') {
+      // Which definition of each workflow, hook, MCP server and suite applies
+      // here, and teamai's default hooks against the team's (#1787). Names,
+      // paths, sizes and rendered commands only: never a file's content, a
+      // prompt, or an environment value. Read apart from rules, which it
+      // must not hold up: it runs pull's definition sync, dry.
+      try {
+        const ownConfig = workspace?.config ?? null;
+
+        const [{ loadTeamConfig }, { collectLayeredResources }, { readWorkspaceChildren }] = await Promise.all([
+          import('./config.js'), import('./dashboard/layered-resources.js'), import('./workspace-children.js'),
+        ]);
+
+        // What pull delivers to a workspace includes its children's selections (#913).
+        const config = ownConfig ? await readWorkspaceChildren(ownConfig) : null;
+        const teamConfig = config ? await loadTeamConfig(config.repo.localPath) : null;
+
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(config && teamConfig ? { configured: true, ...await collectLayeredResources(config, teamConfig) } : { configured: false }));
+      } catch (e) {
+        log.debug(`dashboard: /api/resources/layered failed: ${e instanceof Error ? e.message : String(e)}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to load resource layers.' }));
       }
 
       return;

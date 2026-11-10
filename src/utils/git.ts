@@ -1,9 +1,11 @@
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawnSync, type ChildProcess } from 'node:child_process';
+import diagnostics from 'node:diagnostics_channel';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import fse from 'fs-extra';
-import { simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
+import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
 import { execCommand } from './exec.js';
 import { errnoCode } from './fs.js';
@@ -161,17 +163,19 @@ export function disableGitTerminalPrompt(): void {
 }
 
 /**
- * Block timeout for git subprocesses spawned by `teamai init` pushes and by
- * every write or refresh of a side branch (reports, learnings), which holds
- * that branch's lock while git runs. simple-git's `timeout.block` kills the
- * spawned process when it produces no output for this long (unlike
- * `withTimeout`, a Promise.race that only stops awaiting while the child keeps
- * running and holds the Node event loop open).
+ * Block timeout for git subprocesses spawned by `teamai init` pushes, by the
+ * team repo's pull, fetch and push, and by every write or refresh of a side
+ * branch (reports, learnings), which holds that branch's lock while git runs.
+ * simple-git's `timeout.block` kills the spawned process when it produces no
+ * output for this long (unlike `withTimeout`, a Promise.race that only stops
+ * awaiting while the child keeps running and holds the Node event loop open).
  *
- * Not global: a ceiling here would also kill legitimate slow clones/fetches/
- * rebases of the team repo in unrelated commands. The env var lets a slow link
- * or a very large team repo raise the ceiling without a new release. Read at
- * call time (not module load) so tests can override it.
+ * Not global: local commands (checkout, reset, rebase) of the team repo stay
+ * on {@link createGit}, since they print nothing while they work. The remote
+ * calls run with `--progress`, so a slow transfer that is still moving keeps
+ * resetting the timeout and only a silent one is ended. The env var lets a
+ * slow link or a very large team repo raise the ceiling without a new release.
+ * Read at call time (not module load) so tests can override it.
  *
  * Validates the env var: a non-numeric, negative, or non-finite value falls
  * back to the default rather than reaching simple-git (which would either
@@ -276,15 +280,21 @@ export async function readBlobs(repoPath: string, specs: readonly string[]): Pro
 /**
  * Like {@link createGit}, but additionally kills any git subprocess that
  * produces no output for {@link gitBlockTimeoutMs}, so a stalled remote cannot
- * hold a branch lock or the CLI forever.
+ * hold a branch lock or the CLI forever. The timeout, and `abort` when it
+ * fires, end git with every process under it ({@link endProcessTree}):
+ * simple-git signals git alone, and a `git fetch` a pull started, or the ssh
+ * client under it, would survive and keep the CLI waiting on their output.
+ * A stalled command fails with a {@link GitStalledError} that names it.
  */
-export function createGitWithBlockTimeout(basePath?: string): SimpleGit {
+export function createGitWithBlockTimeout(basePath?: string, abort?: AbortSignal): SimpleGit {
   const block = gitBlockTimeoutMs();
+  // simple-git runs one command at a time per instance, so the one the timeout ended is the one failing.
+  let stalled: string | undefined;
 
-  // The kill reaches git alone: its HTTP helper would keep the stalled
-  // connection, and the CLI with it, until the server dropped it. curl's own
-  // stall limit ends the helper, a second after the kill so the kill still
-  // decides how the command fails.
+  // The kill reaches git's HTTP helper too, unless the process tree cannot be
+  // listed: then the helper would keep the stalled connection, and the CLI
+  // with it, until the server dropped it. curl's own stall limit ends the
+  // helper, a second after the kill so the kill still decides how the command fails.
   const config = [
     ...(process.platform === 'win32' ? ['core.longpaths=true'] : []),
     'http.lowSpeedLimit=1', `http.lowSpeedTime=${Math.ceil(block / 1000) + 1}`,
@@ -292,15 +302,117 @@ export function createGitWithBlockTimeout(basePath?: string): SimpleGit {
 
   const options: Partial<SimpleGitOptions> = {
     binary: gitBinary(),
+    abort,
     timeout: { block },
     config,
     allowEnvironment: [...GIT_ENVIRONMENT, ...Object.keys(process.env)],
+    errors: (error) => {
+      if (stalled === undefined || error === undefined) return error;
+      const command = stalled;
+      stalled = undefined;
+
+      return new GitStalledError(command, block);
+    },
   };
 
   if (basePath) options.baseDir = basePath;
   const git = simpleGit(options);
+  watchChildProcesses();
 
-  return git.outputHandler(markOutputSeen);
+  return git.outputHandler((command, stdout, stderr, args) => {
+    markOutputSeen(command, stdout, stderr, args);
+    const child = lastChildProcess;
+    lastChildProcess = undefined;
+
+    if (child?.stdout !== stdout) return;
+    const kill = child.kill.bind(child);
+
+    // simple-git ends git through this kill on both the timeout and the abort.
+    child.kill = (signal) => {
+      if (!abort?.aborted) stalled = gitCommandLine(args);
+
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) endProcessTree(child.pid);
+
+      return kill(signal);
+    };
+  });
+}
+
+/**
+ * A git command that printed nothing for the block timeout, ended with the processes it started. A GitError, which
+ * simple-git rejects with as it is; it would wrap any other error in a GitError holding only its text.
+ */
+export class GitStalledError extends GitError {
+  constructor(readonly command: string, blockMs: number) {
+    super(undefined, `${command} stalled: no output for ${blockMs / 1000}s, so teamai ended it and the processes it started. Set TEAMAI_INIT_PUSH_TIMEOUT_MS (milliseconds) to wait longer.`);
+    this.name = 'GitStalledError';
+  }
+}
+
+/** The git command line simple-git spawned, without the `-c key=value` pairs the factory puts first. */
+function gitCommandLine(args: readonly string[]): string {
+  let at = 0;
+
+  while (args[at] === '-c') at += 2;
+
+  return ['git', ...args.slice(at)].join(' ');
+}
+
+/**
+ * The child process Node created last. simple-git hands a spawned git's stdout
+ * to the output handler in the same tick as the spawn, so the block-timeout
+ * factory finds its git here, by that stdout: simple-git gives the handler no
+ * other way to the process.
+ */
+let lastChildProcess: ChildProcess | undefined;
+let watchingChildProcesses = false;
+
+// The output handler matches the process by its stdout, which is what proves it is the git spawned.
+const ChildProcessCreated = z.object({ process: z.custom<ChildProcess>((value) => value instanceof EventEmitter) });
+
+function watchChildProcesses(): void {
+  if (watchingChildProcesses) return;
+  watchingChildProcesses = true;
+  diagnostics.subscribe('child_process', (message) => {
+    const created = ChildProcessCreated.safeParse(message);
+    lastChildProcess = created.success ? created.data.process : undefined;
+  });
+}
+
+/**
+ * End `pid` and every process under it. On Windows `taskkill /T /F`. Elsewhere
+ * SIGTERM to each, which git handles by removing its lock files and ssh by
+ * exiting; the tree is listed before any is signalled, because a killed
+ * parent's children move to init and can no longer be found from `pid`.
+ * When `ps` cannot list the tree, only `pid` is signalled.
+ */
+export function endProcessTree(pid: number): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+
+    return;
+  }
+
+  const listed = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
+  const children = new Map<number, number[]>();
+
+  for (const line of (listed.stdout ?? '').split('\n')) {
+    const [child, parent] = line.trim().split(/\s+/).map(Number);
+
+    if (child > 0 && parent > 0) children.set(parent, [...(children.get(parent) ?? []), child]);
+  }
+
+  const tree = [pid];
+
+  for (let at = 0; at < tree.length; at++) tree.push(...(children.get(tree[at]) ?? []));
+
+  for (const member of tree) {
+    try {
+      process.kill(member, 'SIGTERM');
+    } catch {
+      // Already exited.
+    }
+  }
 }
 
 /**
@@ -433,7 +545,7 @@ export async function getHeadRev(localPath: string): Promise<string> {
 /**
  * Read the `origin` remote URL of the repo at localPath (or its enclosing repo).
  * Returns null when there is no origin remote or the path is not a git repo.
- * Used by single-repo mode to derive the provider/remote from the business repo.
+ * Used by self mode to derive the provider/remote from the business repo.
  */
 export async function getRemoteUrl(localPath: string, remoteName = 'origin'): Promise<string | null> {
   const git = createGit(localPath);
@@ -573,7 +685,7 @@ export function repoIdentity(url: string): string {
 /**
  * Whether the repo at localPath has at least one commit reachable from HEAD.
  * A freshly `git init`'d repo (HEAD points at an unborn branch) returns false.
- * Used by single-repo mode: knowledge worktrees/PRs need a base commit to exist.
+ * Used by self mode: knowledge worktrees/PRs need a base commit to exist.
  */
 export async function hasCommits(localPath: string): Promise<boolean> {
   const git = createGit(localPath);
@@ -594,7 +706,7 @@ export async function hasCommits(localPath: string): Promise<boolean> {
 /**
  * Stage and commit the given literal paths instead of the user's entire index.
  * Git hooks still run and may change the commit contents.
- * Best-effort helper for single-repo init: it seeds the business repo
+ * Best-effort helper for self-mode init: it seeds the business repo
  * with a base commit carrying the committed .teamai/ knowledge skeleton so later
  * knowledge PRs (which branch off HEAD) have something to branch from.
  *
@@ -667,19 +779,22 @@ export async function assertAttachedTeamRepo(git: SimpleGit, localPath: string):
  *     uncommitted files.
  *   Layer 2: if ff-only fails (diverged / ahead / no tracking) AND the repo is a
  *     dedicated clone root, realign to origin/<branch> via fetch + hard reset.
- *     On a non-dedicated path (e.g. a business-repo subdir in single-repo mode)
+ *     On a non-dedicated path (e.g. a business-repo subdir in self mode)
  *     a hard reset would wipe the user's working tree, so we re-throw the
  *     original error instead of resetting.
  * Before any hard reset we log.warn if it would discard local commits or
  * uncommitted changes, so the loss is never silent. A failed fetch is re-thrown
- * so the caller surfaces the real network/auth cause.
+ * so the caller surfaces the real network/auth cause. The pull and the fetch
+ * run under the block timeout; a pull that stalled is re-thrown as it is,
+ * since a fetch from the same remote would stall again.
  */
 export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<string> {
   const git = createGit(localPath, abort);
+  const remote = createGitWithBlockTimeout(localPath, abort);
   await assertAttachedTeamRepo(git, localPath);
 
   try {
-    const result = await git.pull(['--ff-only']);
+    const result = await remote.pull(['--ff-only', '--progress']);
 
     if (result.summary.changes === 0 && result.summary.insertions === 0 && result.summary.deletions === 0) {
       return 'already up to date';
@@ -690,6 +805,7 @@ export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<
     // ff-only failed. A hard reset to origin is the only recovery, but it is
     // destructive — only safe on a dedicated team-repo clone. On a business-repo
     // subdir it would bubble up to the user's repo, so bail and surface the cause.
+    if (err instanceof GitStalledError) throw err;
     const dedicated = await isDedicatedRepoRoot(localPath);
 
     if (!dedicated) {
@@ -700,7 +816,7 @@ export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<
     const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
     const reason = err instanceof Error ? err.message : String(err);
     log.debug(`ff-only pull failed (${branch}), attempting fetch + hard reset: ${reason}`);
-    await git.fetch(['origin', branch]);
+    await remote.fetch(['--progress', 'origin', branch]);
 
     let ahead = 0;
 
@@ -752,9 +868,8 @@ const defaultBranchCache = new Map<string, string>();
  * matching-origin clone is always reused, so `--force` does not replace it.
  */
 export async function pullRepoFastForward(localPath: string): Promise<string> {
-  const git = createGit(localPath);
-  await assertAttachedTeamRepo(git, localPath);
-  const result = await git.pull(['--ff-only']);
+  await assertAttachedTeamRepo(createGit(localPath), localPath);
+  const result = await createGitWithBlockTimeout(localPath).pull(['--ff-only', '--progress']);
 
   if (result.summary.changes === 0 && result.summary.insertions === 0 && result.summary.deletions === 0) {
     return 'already up to date';
@@ -804,8 +919,8 @@ export async function getDefaultBranch(localPath: string): Promise<string> {
  * Push directly to whatever branch is checked out, whether that is `main`,
  * `master` or anything else. Used during init for first-time setup, and by CI.
  *
- * `opts.initPush` selects the spawn-level block timeout factory used by init
- * (see {@link createGitWithBlockTimeout}); other callers get the plain factory.
+ * The push runs under the block timeout (see {@link createGitWithBlockTimeout});
+ * `opts.initPush`, used by init, puts the add and commit under it too.
  *
  * Only `files` are committed: anything else already staged stays staged. Commits
  * an earlier push left behind are pushed even when `files` hold nothing new.
@@ -847,7 +962,7 @@ export async function pushRepoDirectly(
 
   // Use --set-upstream for first push on repos initialized from empty remotes
   const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
-  await git.push(['-u', 'origin', branch]);
+  await createGitWithBlockTimeout(localPath).push(['--progress', '-u', 'origin', branch]);
 
   return true;
 }
@@ -1023,7 +1138,9 @@ export async function remoteBranchExists(
   branchName: string,
 ): Promise<boolean | null> {
   try {
-    const out = await createGit(localPath).listRemote(['--heads', 'origin', `refs/heads/${branchName}`]);
+    // `listRemote` is a network call: bound it like the fetches (#1749), so a
+    // stalled remote returns "unknown" (null) instead of holding the caller.
+    const out = await createGitWithBlockTimeout(localPath).listRemote(['--heads', 'origin', `refs/heads/${branchName}`]);
 
     return out.trim().length > 0;
   } catch (e) {
@@ -1047,8 +1164,9 @@ export async function remoteBranchExists(
  * If the rebuilt tree matches what the remote branch already holds, nothing is
  * pushed and the function returns false.
  *
- * `opts.initPush` selects the spawn-level block timeout factory used by init
- * (see {@link createGitWithBlockTimeout}); other callers get the plain factory.
+ * The fetch and the push run under the block timeout (see
+ * {@link createGitWithBlockTimeout}); `opts.initPush`, used by init, puts the
+ * local steps under it too.
  */
 export async function pushRepoBranch(
   localPath: string,
@@ -1058,12 +1176,13 @@ export async function pushRepoBranch(
   opts: { reuseBranch?: boolean; initPush?: boolean } = {},
 ): Promise<boolean> {
   const git = opts.initPush ? createGitWithBlockTimeout(localPath) : createGit(localPath);
+  const remote = createGitWithBlockTimeout(localPath);
   await assertAttachedTeamRepo(git, localPath);
 
   if (opts.reuseBranch) {
     // Fetch so the tree comparison below can see the remote branch's content.
     try {
-      await git.fetch(['origin', branchName]);
+      await remote.fetch(['--progress', 'origin', branchName]);
     } catch (e) {
       log.debug(`Could not fetch ${branchName}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -1119,12 +1238,12 @@ export async function pushRepoBranch(
       return false;
     }
 
-    await git.push(['--force-with-lease', '-u', 'origin', branchName]);
+    await remote.push(['--progress', '--force-with-lease', '-u', 'origin', branchName]);
 
     return true;
   }
 
-  await git.push(['-u', 'origin', branchName]);
+  await remote.push(['--progress', '-u', 'origin', branchName]);
 
   return true;
 }
@@ -1148,7 +1267,7 @@ async function treeMatchesRemoteBranch(git: SimpleGit, branchName: string): Prom
  * Switch a repo/worktree back to its default branch, tolerating the case where
  * that branch is already checked out in another worktree.
  *
- * In single-repo mode, teamai stages knowledge PRs in a disposable worktree while
+ * In self mode, teamai stages knowledge PRs in a disposable worktree while
  * the user's active tree holds the same default branch (e.g. `main`). Git refuses
  * `checkout main` in a second worktree ("'main' is already used by worktree ...").
  * That's harmless here: the worktree is about to be destroyed, and in a normal
@@ -1295,26 +1414,26 @@ export async function isDedicatedRepoRoot(repoPath: string): Promise<boolean> {
  * Checkout paths and the stable identity used for project partitions.
  * `workspaceRoot` receives this checkout's resources; `mainCheckout` receives
  * shared tool files, or is null when each checkout needs its own files.
- * `projectAnchor` remains Git's first worktree entry, including Git-directory
+ * `repoAnchor` remains Git's first worktree entry, including Git-directory
  * identities, except initialized submodule clones in superproject worktrees
  * inherit the original submodule's identity.
  */
-export interface ProjectAnchors {
+export interface RepoAnchors {
   workspaceRoot: string;
-  projectAnchor: string;
+  repoAnchor: string;
   /** Checkout whose shared project files tools read; null when Git cannot locate one. */
   mainCheckout: string | null;
 }
 
 /**
- * Resolve the {@link ProjectAnchors} for `cwd` (defaults to the process cwd).
+ * Resolve the {@link RepoAnchors} for `cwd` (defaults to the process cwd).
  *
  * Returns `null` when `cwd` is not inside a git repository, or when git cannot
  * resolve the anchors — callers fall back to their existing cwd-based behavior.
  *
  * Implementation notes:
  *  - `workspaceRoot` is `--show-toplevel` (the current checkout).
- *  - `projectAnchor` is the stable identity, taken from the FIRST entry of
+ *  - `repoAnchor` is the stable identity, taken from the FIRST entry of
  *    `git worktree list --porcelain` (git always lists the main worktree first).
  *    Every linked worktree reports the same first entry, so all worktrees of a
  *    repo share one anchor. This is deliberately NOT `dirname(--git-common-dir)`:
@@ -1333,9 +1452,9 @@ export interface ProjectAnchors {
  *    removed after it was first asked, which is what attribution wants. `null`
  *    is not remembered: a directory can become a repository later.
  */
-const anchorsByDir = new Map<string, ProjectAnchors>();
+const anchorsByDir = new Map<string, RepoAnchors>();
 
-export async function resolveAnchors(cwd?: string): Promise<ProjectAnchors | null> {
+export async function resolveAnchors(cwd?: string): Promise<RepoAnchors | null> {
   const dir = path.resolve(cwd ?? process.cwd());
   const known = anchorsByDir.get(dir);
 
@@ -1347,7 +1466,7 @@ export async function resolveAnchors(cwd?: string): Promise<ProjectAnchors | nul
   return anchors;
 }
 
-async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
+async function readAnchors(cwd?: string): Promise<RepoAnchors | null> {
   if (await gitFindsNoRepository(cwd ?? process.cwd())) return null;
 
   try {
@@ -1359,11 +1478,11 @@ async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
 
     if (!toplevel || !first) return null;
     const workspaceRoot = await realpath(toplevel);
-    let projectAnchor = first.path;
+    let repoAnchor = first.path;
     const commonDir = await gitCommonDir(workspaceRoot);
-    let mainCheckout: string | null = first.bare ? null : projectAnchor;
+    let mainCheckout: string | null = first.bare ? null : repoAnchor;
 
-    if (!first.bare && projectAnchor === commonDir) {
+    if (!first.bare && repoAnchor === commonDir) {
       const worktree = await execCommand('git', ['--git-dir', commonDir, 'config', '--get', 'core.worktree'], { cwd: workspaceRoot, timeoutMs: 10_000 })
         .then(({ code, stdout }) => code === 0 ? stdout : '').catch(() => '');
 
@@ -1377,17 +1496,17 @@ async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
 
     // Superproject worktrees clone submodules into their own modules directory.
     // Only an existing original submodule can supply their shared identity.
-    if (commonDir && projectAnchor === commonDir) {
+    if (commonDir && repoAnchor === commonDir) {
       const clone = commonDir.match(/^(.*)[\\/]worktrees[\\/][^\\/]+[\\/]modules[\\/](.+)$/);
 
       if (clone) {
         const original = path.join(clone[1], 'modules', clone[2]);
 
-        if (await fse.pathExists(original)) projectAnchor = await realpath(original);
+        if (await fse.pathExists(original)) repoAnchor = await realpath(original);
       }
     }
 
-    return { workspaceRoot, projectAnchor, mainCheckout };
+    return { workspaceRoot, repoAnchor, mainCheckout };
   } catch {
     return null;
   }
@@ -1538,14 +1657,14 @@ export async function isLiveCheckout(root: string, commonDir: string): Promise<b
 }
 
 /** A live checkout sharing a TeamAI identity, including inherited submodule clones. */
-export async function isLiveProjectCheckout(root: string, projectAnchor: string): Promise<boolean> {
+export async function isLiveProjectCheckout(root: string, repoAnchor: string): Promise<boolean> {
   if (!await fse.pathExists(path.join(root, '.git'))) return false;
 
-  return (await resolveAnchors(root))?.projectAnchor === projectAnchor;
+  return (await resolveAnchors(root))?.repoAnchor === repoAnchor;
 }
 
 /** Recover a checkout from a persisted identity without treating a Git directory as one. */
-export async function checkoutForProjectAnchor(anchor: string, recordedRoot?: string): Promise<string | null> {
+export async function checkoutForRepoAnchor(anchor: string, recordedRoot?: string): Promise<string | null> {
   if (!await fse.pathExists(anchor)) return null;
   const worktree = await createGit(anchor).raw(['config', '--get', 'core.worktree']).catch(() => '');
 
@@ -1556,7 +1675,7 @@ export async function checkoutForProjectAnchor(anchor: string, recordedRoot?: st
     if (!await fse.pathExists(path.join(candidate, '.git'))) continue;
     const anchors = await resolveAnchors(candidate);
 
-    if (anchors?.projectAnchor === anchor) return anchors.mainCheckout ?? anchors.workspaceRoot;
+    if (anchors?.repoAnchor === anchor) return anchors.mainCheckout ?? anchors.workspaceRoot;
   }
 
   return null;
@@ -1809,6 +1928,15 @@ export async function getHeadCommit(localPath: string, rev = 'HEAD', abort?: Abo
   }
 }
 
+/** The commit `left` and `right` fork from, or null when they share none, either names no commit, or git fails. */
+export async function getMergeBase(localPath: string, left: string, right: string): Promise<string | null> {
+  try {
+    return (await createGit(localPath).raw(['merge-base', left, right])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** The branch checked out, or null on a detached HEAD, or when git fails or is aborted. */
 export async function getCurrentBranch(localPath: string, abort?: AbortSignal): Promise<string | null> {
   try {
@@ -1915,9 +2043,30 @@ export async function getFileContentAtRev(
   }
 }
 
+/**
+ * The text of `filePath` at `rev`, or `{ absent: true }` when that commit has no
+ * such path. Throws when git fails for any other reason, so a caller that
+ * remembers the answer never remembers a failure as an absence.
+ */
+export async function readFileAtRev(repoPath: string, rev: string, filePath: string): Promise<{ text: string } | { absent: true }> {
+  const git = createGit(repoPath);
+
+  try {
+    return { text: await git.show([`${rev}:${filePath}`]) };
+  } catch (error) {
+    // `show` fails the same way for a missing path and a broken repository; `ls-tree` tells them apart.
+    if ((await git.raw(['ls-tree', '--name-only', rev, '--', filePath])).trim() === '') return { absent: true };
+    throw error;
+  }
+}
+
 export async function getRepoStatus(localPath: string): Promise<{ ahead: number; behind: number; modified: string[] }> {
   const git = createGit(localPath);
-  await git.fetch();
+  // The fetch talks to origin, so it runs under the block timeout like every
+  // other team-repo remote call (#1749): a stalled ssh makes `teamai status`
+  // hang forever otherwise. The local `status` below stays on the plain
+  // instance, which prints nothing while it works.
+  await createGitWithBlockTimeout(localPath).fetch(['--progress']);
   const status = await git.status();
 
   return {

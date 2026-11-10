@@ -51,7 +51,8 @@ export function hostProcess(spawnTool: ToolSpawn = spawnCommand): ToolLauncher {
       try {
         child = spawnTool(executable, args, {
           cwd,
-          env,
+          // A shell sets PWD to the directory it starts in; OpenCode works in PWD, not in its cwd.
+          env: { ...env, PWD: cwd },
           // OpenCode waits for the end of a piped stdin before it starts.
           stdio: interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
           detached: !interactive && process.platform !== 'win32',

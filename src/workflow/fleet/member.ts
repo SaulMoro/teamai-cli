@@ -805,7 +805,7 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
       isStopped = true;
 
       // Its local loop, still live, stops what it runs once it reads the cancel.
-      if (nested !== undefined) await cancelRun(config, nested, await knownSecrets(config), undefined, STOPPED_NESTED);
+      if (nested !== undefined) await cancelRun(config, nested, await knownSecrets(config), undefined, { code: 'cancelled', message: STOPPED_NESTED });
       await exit;
     },
   };
@@ -824,7 +824,7 @@ function nestedRunPath(config: LocalConfig, run: RunId, attempt: AttemptId): str
  */
 async function endNestedRun(config: LocalConfig, nested: RunId, message: string): Promise<string | undefined> {
   const taken = await takeRunLock(config, nested, async (lock) => {
-    const cancelled = await cancelRun(config, nested, await knownSecrets(config), undefined, message);
+    const cancelled = await cancelRun(config, nested, await knownSecrets(config), undefined, { code: 'cancelled', message });
 
     // A run that already ended may still have left what a cancelled attempt of it started.
     if ('error' in cancelled && cancelled.error.code !== 'run_settled') return cancelled.error.message;

@@ -43,7 +43,7 @@ export function wholeFit(
 
   // A step pinned to this machine (`isPinnedToHost`) runs on no member. An inline workflow's steps are steps of the file
   // it is written in.
-  const inShippedWorkflow = DefaultWorkflows.named(isWorkflowFile(child) ? child.name : around) !== undefined;
+  const inShippedWorkflow = DefaultWorkflows.isShipped(isWorkflowFile(child) ? child.name : around);
   const pinned = runs.find((run) => isPinnedToHost({ step: run.step, executor: run.executor, inShippedWorkflow, requires: run.requires }));
 
   if (pinned !== undefined) return { unfit: `step "${pinned.step.id}" runs only on this machine` };

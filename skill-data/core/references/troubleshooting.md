@@ -59,13 +59,13 @@ This is the #1 onboarding issue. In order:
    With `sharing.gitExclude` on, Codex's team hooks run from `~/.codex/hooks.json`
    instead (one `hook-dispatch <Event> --tool codex --team-hooks` entry per event)
    while the project's `.codex/hooks.json` is tracked or holds entries of its own,
-   and always in single-repo mode.
+   and always in self mode.
    Existing Claude/Codex main-checkout hook files count as installed targets
    even when HOME and current worktree tool roots are missing. Injection and
    pull update team hooks and restore HOME built-ins; removal clears managed
    main-checkout hooks without recreating HOME roots.
    If Git-hook installation fails after writing agent hooks, `hooks inject`,
-   `init` and self-repo bootstrap still attempt Codex trust. Injection preserves
+   `init` and self-mode bootstrap still attempt Codex trust. Injection preserves
    the installation error without reporting overall success. Init reports the
    error and retains exit code 1 while completing local setup, including HTTP
    initialization. Bootstrap records the error in the debug log and continues
@@ -218,11 +218,46 @@ held, or a git error, relay the fix the line gives.
 
 For new HTTP local-agent MCP installs, a failed initial ownership-manifest write leaves the MCP config and Git exclusions unchanged. Retry the install after fixing the manifest write error. A bare Copilot entry beside `mcpServers` is removed only with a matching ownership record proving a completed bare write. Older records without that evidence preserve the bare entry. A bare ownership record cannot claim a same-named member entry under `mcpServers`: updates skip the collision, and removal leaves that keyed entry alone. An unmarked Copilot record needs a matching keyed hash that does not also match the bare entry. Completed writes record `bare: true` or `bare: false`; missing placement remains unproven, including after a failed placement-record write. Existing JSON MCP updates keep the old ownership until the config write completes; a later manifest failure restores the config. `uninstall_mcp` keeps ownership if reading or writing the config fails, and restores the entry if removing its manifest record fails. MCP reconcile also restores all configs written before an ownership-save failure. If restoration fails too, repair the named configs and ownership records before retrying; the error reports both failures, and configs still carrying credentials stay excluded from Git.
 
+## "<dir>/ is a <type> folder, which this teamai cannot read yet; it was skipped"
+
+`pull`, `status`, `doctor` and `review --branch` print one such line per
+directory that holds a folder marker of a type this release cannot read:
+`SCORER.md` under `scorers/` or `AGENT.md` under `agents/`. Workflow, hook,
+rule, MCP server and suite folders are read. Nothing in the directory is
+delivered, run or pushed; the rest of the team repo is. A hook-started pull writes it to
+`~/.teamai/debug.log`.
+
+```console
+$ teamai pull
+⚠ scorers/strict/ is a scorer folder, which this teamai cannot read yet; it was skipped. Run teamai update.
+```
+
+- The team means it as a folder: tell the user to run `teamai update`, then
+  `teamai pull`. Until a release reads that type, the folder stays skipped.
+- The file is an old resource that only happens to carry the name: the team
+  renames it with `git mv`. Do not rename it for them.
+- Only the exact name counts: `rule.md` or `workflow.yaml` is read as before.
+
+## "rules/<dir>/ holds RULE.md, so it is one folder, and <file> in it is one of its files, no longer read on its own"
+
+`pull` prints this once, when `rules/<dir>/` gains a `RULE.md` and pull removes
+the copy of `<file>` it delivered before as a rule of its own. The
+file is now part of the rule `<dir>`, delivered with the folder. A folder that
+was always a folder pulls without it, and its language variants (`RULE.zh.md`)
+are never named. `review --branch` names every such file.
+
+- The team meant it as part of the folder, such as a `checklist.md` the rule
+  names through `${TEAMAI_RULE_DIR}`: nothing to do.
+- A file used to be a rule of its own, such as `rules/onboarding/db.md` beside
+  an old `rules/onboarding/RULE.md` that arrived as `onboarding/RULE`: the team
+  renames `RULE.md` (`git mv rules/onboarding/RULE.md rules/onboarding/overview.md`)
+  or moves the file out of the folder. Do not do it for them.
+
 ## "Workspace child <path> is left out" / "<item> differs between ..."
 
 `pull` in a workspace prints these; `teamai doctor` repeats the first.
 
-- **Left out**: that repo uses another team repo, is in single-repo mode, or
+- **Left out**: that repo uses another team repo, is in self mode, or
   its config cannot be read. The line gives the reason. To include it, run
   `teamai init <this workspace's team repo>` in it; otherwise it keeps working
   on its own and nothing needs doing.
@@ -384,6 +419,11 @@ there is no auto-sync. Tell the user to run `teamai pull` manually at the start 
 each session.
 
 ## "A recalled doc got no upvote"
+
+First run `teamai recall status`: while recall is off for the scope, the hooks
+record no adoption and cast no vote. Recall is off until the team sets
+`sharing.recall.enabled: true`, and a member's `recallEnabled` or
+`TEAMAI_RECALL_DISABLED=1` overrides it.
 
 A recalled doc is upvoted once per session when the session that ran the recall
 opens it within 24 hours: a file read, a reader command (`cat`, `sed -n`, …), or
