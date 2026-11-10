@@ -55,4 +55,17 @@ describe.skipIf(!HAS_SQLITE3)('snapshotSqlite', () => {
 
     expect(count(target)).toBe('3');
   });
+
+  it('refuses at once a FIFO left where a closed database was, rather than waiting for a writer', async () => {
+    const dir = workdir();
+    const db = path.join(dir, 'state.db');
+    expect(spawnSync('mkfifo', [db]).status).toBe(0);
+    // A copy that waits on the FIFO ends only once another process opens it, from three seconds on.
+    const releaser = spawn('sh', ['-c', 'sleep 3; while :; do exec 3<>"$1"; exec 3>&-; sleep 0.1; done', 'sh', db]);
+    writers.push(releaser);
+    const start = Date.now();
+
+    await expect(snapshotSqlite('sqlite3', db, path.join(workdir(), 'copy.db'))).rejects.toThrow(`${db} is a pipe, not a regular file`);
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
 });
