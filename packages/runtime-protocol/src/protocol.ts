@@ -280,9 +280,9 @@ export const PromptLeaseSchema = z.object({
    */
   answer: z.literal(true).optional(),
   /**
-   * The limits the runtime stops the tool at, when it runs the tool on a process it starts and offers `can.end_turn`:
-   * the step's budget lowered to what the run's budget leaves, its timeout, and the idle limit. A runtime that cannot keep
-   * them ignores them, and teamai checks the budget once the prompt ends.
+   * The limits the runtime stops the tool at, when it runs the tool on a process it starts: the step's budget lowered to
+   * what the run's budget leaves, its timeout, and the idle limit. teamai sends them to every runtime that launches
+   * agents. One that cannot keep them ignores them, and teamai checks the budget once the prompt ends.
    */
   limits: z.object({
     budget: z.object({ tokens: z.number().int().positive() }).strict().optional(),
