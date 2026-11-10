@@ -7,7 +7,7 @@ description: Drive a team workflow from this coding session. Use when a generate
 
 ## Your role
 
-You orchestrate. You run the literal commands the CLI prints, and you keep the person told while the run goes on. Detached runners do each command step; a child agent you start does each prompt step from its brief. Step work belongs to them, and yours is the literals and the person. On `h4`, where your host starts no child, you work each prompt step yourself, as the Dispatch section says. The run's state lives in the CLI: every reply says what is running and what to run next, so you carry nothing between calls. Never run git in a workflow place; the CLI prepares and checks each place a step runs in.
+You orchestrate. You run the literal commands the CLI prints, and you keep the person told while the run goes on. Detached runners do each command step; a child agent you start does each prompt step from its brief. Step work belongs to them, and yours is the literals and the person. On `h4`, where your session host starts no child, you work each prompt step yourself, as the Dispatch section says. The run's state lives in the CLI: every reply says what is running and what to run next, so you carry nothing between calls. Never run git in a workflow place; the CLI prepares and checks each place a step runs in.
 
 ## Start
 
@@ -43,7 +43,7 @@ A turn lists the `actions` that wait for you, the `running` attempts, the `event
 1. Act on each action by its `kind`: `choose`, `person`, `stop`, `dispatch`, `place` or `done`, as their sections say.
 2. Tell the person in one line what the events say: a step `started`, `restarted`, `settled` with its outcome, or `stopped` with its `why`, a gate was `answered`, or this session took the run over (`takeover`). Tell them `waiting.reason` when it changes. For `judging`, `judged` and `judging-off`, follow `references/judging.md`.
 3. Run `then.run` of the newest turn you have:
-   - `poll`: in the background when your host can, so you stay free to talk with the person; otherwise in the foreground. It exits with the next turn once something changes, or after a bounded wait. Keep one poll of the run going at a time.
+   - `poll`: in the background when your session host can, so you stay free to talk with the person; otherwise in the foreground. It exits with the next turn once something changes, or after a bounded wait. Keep one poll of the run going at a time.
    - `wake`: in the foreground. Work waits for you, and the turn it returns carries it.
 4. Repeat with that turn.
 
@@ -62,7 +62,7 @@ A `report` you run answers with `data.runner`, not a turn. After one, go on with
 
 A `choose` action asks for one answer, and `about` says what it is for:
 
-- `host`: comes once per run that has prompt steps, or that you judge. Follow `reference`: it says which option fits your host and how to run it.
+- `host`, the session host question: comes once per run that has prompt steps, or that you judge. Follow `reference`: it says which option fits your session host and how to run it.
 - `gate`: an optional approval or choice at `step`. `decide` says whose answer it is, as the person picked when the run started:
   - `person`: put `question` and the `choice` of each option to the person, naming `default` when there is one, and run the `run` of the option they pick.
   - `agent`: run the `run` of the option you recommend from what the run has done so far, and tell the person in one line what you chose and why.
@@ -108,13 +108,13 @@ A `dispatch` action is one prompt step for one child agent. For each one:
 1. Start a child agent named `title`, with `agent` as its team agent when the action names one, and `model.name` as its model (at `model.effort`) when `model` has a name. Give it this prompt, filled from the action: "Read `<brief>` and do what it says. Work only in `<dir>`." Start it in the background when `needs.parallel` is true.
 2. Run `ack`. The action stays in every turn until you do.
 
-When your host cannot run `model.name`, run `unavailable` in place of both steps.
+When your session host cannot run `model.name`, run `unavailable` in place of both steps.
 
-A dispatch that carries `continue` goes on in the conversation of an earlier child: the child of the step it continues (`session.from`), or of this step's earlier pass (`session: continue`). Send the brief's prompt to the child named `continue.title` (Claude Code `SendMessage`, T3 `t3_thread_send`) in place of starting one in step 1. When your host cannot reach that child, start a new one as step 1 says, and tell the person that the step starts a new session, since that child could not be reached. Then run `ack`.
+A dispatch that carries `continue` goes on in the conversation of an earlier child: the child of the step it continues (`session.from`), or of this step's earlier pass (`session: continue`). Send the brief's prompt to the child named `continue.title` (Claude Code `SendMessage`, T3 `t3_thread_send`) in place of starting one in step 1. When your session host cannot reach that child, start a new one as step 1 says, and tell the person that the step starts a new session, since that child could not be reached. Then run `ack`.
 
 A dispatch whose `needs.person` is true is an interactive step: the person works in it with you, here, in place of a child. Run `ack`, then work the step yourself with the person, in `dir`, as `brief` says, and finish as it says.
 
-On `h4` you are the child, so no child starts for a dispatch you are given, and none runs it in the background. Run `ack`, do what `brief` says yourself, working only in `dir`, and run `report` at its end. The next dispatch comes after this one is reported. A `model.name` that is not your own model is one your host cannot run.
+On `h4` you are the child, so no child starts for a dispatch you are given, and none runs it in the background. Run `ack`, do what `brief` says yourself, working only in `dir`, and run `report` at its end. The next dispatch comes after this one is reported. A `model.name` that is not your own model is one your session host cannot run.
 
 A dispatch whose `needs.isolation` is `sandbox` is a step its workflow wants sandboxed: read `references/sandbox.md` before step 1.
 
@@ -128,7 +128,7 @@ Done when every `dispatch` in the turn is acked.
 
 ## Place
 
-A `place` action comes when your host makes the worktrees children work in (`h3`): it asks your host for the place of one step, before its dispatch. Follow `reference`. Its `adopt` takes the directory in `{dir}`, inside single quotes as `{inputs}` is, so write each `'` in it as `'\''`. The action stays in every turn until a place is adopted.
+A `place` action comes when your session host makes the worktrees children work in (`h3`): it asks your session host for the place of one step, before its dispatch. Follow `reference`. Its `adopt` takes the directory in `{dir}`, inside single quotes as `{inputs}` is, so write each `'` in it as `'\''`. The action stays in every turn until a place is adopted.
 
 Done when the turn carries a `dispatch` for its `attempt`.
 

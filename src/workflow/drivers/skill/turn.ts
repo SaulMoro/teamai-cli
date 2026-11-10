@@ -161,7 +161,7 @@ export interface OfferedAction {
 }
 
 export type Action =
-  /** The agent's own answer, once per run with prompt steps: how its session host runs a child. */
+  /** The agent's own answer, once per run with prompt steps: how its session host runs a child. `about: 'host'` names the session host; the turn JSON keeps that spelling. */
   | { kind: 'choose'; about: 'host'; decide: 'agent'; question: string; options: Array<{ id: SessionHostChoice; label: string; run: Literal }>; reference: string }
   | StopAction
   | DispatchAction
@@ -353,7 +353,7 @@ export type SkillAnswer =
   | { error: SkillError };
 
 /** The skill-data reference `name` of the workflow guide. */
-function reference(name: 'hosts.md' | 'places.md'): string {
+function reference(name: 'session-hosts.md' | 'places.md'): string {
   return path.join(packagedSkillRoots().dataRoot, 'workflow', 'references', name);
 }
 
@@ -434,7 +434,7 @@ function actionsOf(state: SkillState, scoring: readonly SkillState[]): Action[] 
   if (state.host.kind === 'pending') {
     const options = SESSION_HOST_CHOICES.map((id) => ({ id, label: SESSION_HOST_PROFILES[id].label, run: chooseSessionHostLiteral(state.invocation, state.run, id) }));
 
-    return [{ kind: 'choose', about: 'host', decide: 'agent', question: SESSION_HOST_QUESTION, options, reference: reference('hosts.md') }];
+    return [{ kind: 'choose', about: 'host', decide: 'agent', question: SESSION_HOST_QUESTION, options, reference: reference('session-hosts.md') }];
   }
 
   const stops = stopsOf(state);
