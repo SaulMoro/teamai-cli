@@ -10,6 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { DefaultScorers } from '../default-scorers.js';
 import { adoptionCandidates, creditAdoptionVerdicts, recalledDocsForSession } from '../recall-adoption.js';
@@ -57,7 +58,7 @@ function excerptOf(filePath: string, roots: readonly string[]): { path: string; 
     const real = fs.realpathSync(filePath);
 
     if (!/\.md$/i.test(real) || !fs.statSync(real).isFile() || !isUnderRoot(real, roots)) return undefined;
-    const raw = fs.readFileSync(real, 'utf8');
+    const raw = readRegularFileSync(real, 'utf8');
     const text = raw.length > MAX_DOC_CHARS ? `${raw.slice(0, MAX_DOC_CHARS)}\n…[truncated]` : raw;
 
     return text.trim() === '' ? undefined : { path: real, text };

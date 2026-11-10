@@ -12,6 +12,7 @@ import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import { isProcessAlive, resolveMonitorPid } from './pid-monitor.js';
 import { normalizeToolName } from './utils/tool-names.js';
 import { redactWithEnv } from '@teamai/shared/redact';
+import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 import { acquireLock, releaseLock } from './update.js';
 import { DASHBOARD_COMPACTION_THRESHOLD, DASHBOARD_IDLE_TIMEOUT_MS, DASHBOARD_STALE_TIMEOUT_MS, DASHBOARD_STOPPED_DISPLAY_MS, CORRECTION_WINDOW_MS, CORRECTION_KEYWORDS, TRANSCRIPT_INTERRUPT_PREFIX, TRANSCRIPT_SYSTEM_PREFIXES, stripInjectedPrompt, TRANSCRIPT_REJECT_MARKERS, COPILOT_TOOL_ID, getDataHome, type DashboardEvent, type DashboardEventType, type DashboardSession, type SessionMetrics, type RequestCostMetrics, type LocalConfig, type JsonValue } from './types.js';
 import { INTERVENTION_SCAN_MAX_BYTES, emptyTokenUsage, addTokenUsage, totalTokens, type TokenUsage } from '@teamai/tool-core/tokens';
@@ -387,7 +388,7 @@ async function scanJsonlTranscriptOnce(transcriptPath: string): Promise<Transcri
     }
 
     const rl = readline.createInterface({
-      input: fs.createReadStream(transcriptPath, { encoding: 'utf-8' }),
+      input: (await openRegularFile(transcriptPath)).createReadStream({ encoding: 'utf-8' }),
       crlfDelay: Infinity,
     });
 
@@ -671,7 +672,7 @@ async function readCopilotUsageForRun(
     // totals are safer than rereading an unbounded log on every retry.
     if (stat.size - marker.offset > COPILOT_RUN_SCAN_BYTES) return latest;
 
-    const stream = fs.createReadStream(transcriptPath, {
+    const stream = (await openRegularFile(transcriptPath)).createReadStream({
       start: marker.offset, encoding: 'utf-8',
     });
 
@@ -764,7 +765,7 @@ async function readCodebuddyIndexPrompts(transcriptPath: string): Promise<number
     const stat = await fs.promises.stat(transcriptPath);
 
     if (stat.size === 0 || stat.size > INTERVENTION_SCAN_MAX_BYTES) return null;
-    const index = CodebuddyIndex.safeParse(JSON.parse(await fs.promises.readFile(transcriptPath, 'utf-8')));
+    const index = CodebuddyIndex.safeParse(JSON.parse(await readRegularFile(transcriptPath, 'utf-8')));
 
     return index.success ? index.data.messages.filter((m) => m.role === 'user').length : null;
   } catch (e) {
@@ -862,7 +863,7 @@ async function scanCodebuddyBlobs(
 
       if (stat.size === 0 || stat.size > INTERVENTION_SCAN_MAX_BYTES) continue;
 
-      const raw = await fs.promises.readFile(blobPath, 'utf-8');
+      const raw = await readRegularFile(blobPath, 'utf-8');
 
       const blob = CodebuddyBlobSchema.safeParse(JSON.parse(raw));
 
