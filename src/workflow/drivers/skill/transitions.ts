@@ -17,7 +17,7 @@ import type { OutputSchema, WorkflowFailure } from '../../types.js';
 import type { ChildResult } from './child-brief.js';
 import type { ConfinedJudge, SessionHostChoice, SessionHostProfile } from './session-host-profiles.js';
 import type { HitlMode, StartAnswer, StartCheck } from './preflight.js';
-import type { AttemptState, Dispatch, Gate, PlaceAsk, ReportBody, SkillState, StopReason, TurnEvent, UnansweredHost } from './skill-state.js';
+import type { AttemptState, Dispatch, Gate, PlaceAsk, ReportBody, SkillState, StopReason, TurnEvent, UnansweredSessionHost } from './skill-state.js';
 import type { Waiting } from './turn.js';
 import type { WhenIdle } from '../../usage-limits.js';
 import type { SessionApp } from '../../session-apps.js';
@@ -279,7 +279,7 @@ export type DescribeVerdict =
 export const APP_START_ANSWERS: ReadonlySet<StartAnswer> = new Set(['confirmed', 'inputs', 'hitl']);
 
 /** The run R10 starts: its options, whether it asks the host question first, and who judges it on this machine. */
-export interface StartRun { parallel: number; hitl: HitlMode; host: UnansweredHost; judge?: JudgedBy }
+export interface StartRun { parallel: number; hitl: HitlMode; sessionHost: UnansweredSessionHost; judge?: JudgedBy }
 
 /** A refusal of the skill driver; its code decides the literal it names to run instead. */
 type Refused = { kind: 'error'; refusal: Refusal };
@@ -452,7 +452,7 @@ export function startRow(input: StartInput): { row: 'R8' | 'R9'; refusal: Refusa
 
   const { parallel, hitl } = input.check;
 
-  const start: StartRun = { parallel, hitl, host: hostOf(input.prompts, input.judge) };
+  const start: StartRun = { parallel, hitl, sessionHost: sessionHostOf(input.prompts, input.judge) };
 
   if (input.judge !== undefined) start.judge = input.judge;
 
@@ -460,10 +460,10 @@ export function startRow(input: StartInput): { row: 'R8' | 'R9'; refusal: Refusa
 }
 
 /**
- * Whether a run asks the host question: it has a prompt step, which a child agent works, or its session judges it in a
- * subagent, which a host that starts no child (`h4`) cannot.
+ * Whether a run asks the session host question: it has a prompt step, which a child agent works, or its session judges
+ * it in a subagent, which a session host that starts no child (`h4`) cannot.
  */
-function hostOf(hasPromptStep: boolean, judge: JudgedBy | undefined): UnansweredHost {
+function sessionHostOf(hasPromptStep: boolean, judge: JudgedBy | undefined): UnansweredSessionHost {
   return hasPromptStep || judge?.kind === 'session' ? { kind: 'pending', hasPromptStep } : { kind: 'none' };
 }
 
@@ -507,7 +507,7 @@ export function readiedRow(input: { run: RunId; readied: RunReadied; kept: boole
       const judge = answers.judge !== false ? judgedBy(judging) : undefined;
 
       const start: StartRun = {
-        parallel: answers.parallel ?? 1, hitl: answers.hitl ?? (unattended ? 'auto-approve' : 'person'), host: hostOf(description.facts.prompts.length > 0, judge),
+        parallel: answers.parallel ?? 1, hitl: answers.hitl ?? (unattended ? 'auto-approve' : 'person'), sessionHost: sessionHostOf(description.facts.prompts.length > 0, judge),
       };
 
       if (judge !== undefined) start.judge = judge;
@@ -829,19 +829,19 @@ export function replyRow(state: SkillState, input: { reply: EngineReply; at: str
     case 'lease': {
       const { lease } = engine;
       const { attempt, step: id, revision, expiresAt } = lease;
-      const hosted = lease.executor === 'prompt' && lease.writes && !lease.team && state.host.kind === 'chosen' && state.host.places === 'host';
+      const isSessionHosted = lease.executor === 'prompt' && lease.writes && !lease.team && state.host.kind === 'chosen' && state.host.places === 'host';
       const runsHere = lease.executor === 'prompt' && lease.confined !== undefined && state.judging !== undefined;
 
       const attemptState: AttemptState = { attempt, step: id, revision, spawnedAt: at, phase: 'preparing' };
 
       if (expiresAt !== undefined) attemptState.expiresAt = expiresAt;
 
-      if (hosted) attemptState.request = { kind: 'host' };
+      if (isSessionHosted) attemptState.request = { kind: 'host' };
 
       if (runsHere) attemptState.runs = 'here';
       const preparing = withAttempt(state, attemptState);
 
-      return { row: lease.executor === 'command' ? 'D6' : runsHere ? 'D28' : hosted ? 'D8' : 'D7', state: withEvent(preparing, { kind: 'started', step: id, attempt }), effects: [{ kind: 'spawn', attempt, job: { lease: engine.raw } }] };
+      return { row: lease.executor === 'command' ? 'D6' : runsHere ? 'D28' : isSessionHosted ? 'D8' : 'D7', state: withEvent(preparing, { kind: 'started', step: id, attempt }), effects: [{ kind: 'spawn', attempt, job: { lease: engine.raw } }] };
     }
 
     case 'wait': {

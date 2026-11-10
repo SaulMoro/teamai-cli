@@ -80,18 +80,18 @@ export interface WorkflowClient {
   describe: (name: string, options: { ceiling: number; can: DriverCan; checkout?: string; tool?: string }) => Promise<DescribedWorkflow | { error: WorkflowFailure }>;
   /**
    * Prepares the place of `lease`, the lease `next` answered with, in the checkout the run started from, or in the place
-   * the host made for its branch, while that passes the adopt checks. `busy` when another attempt the run leased holds
+   * the session host made for its branch, while that passes the adopt checks. `busy` when another attempt the run leased holds
    * that place.
    */
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the skill driver passes the lease of an envelope it has not parsed; LeaseWireSchema parses it here
   prepare(lock: RunLock, lease: unknown): Promise<PlacePrepared | PlaceBusy>;
   /**
-   * Prepares the place of `lease` in a place its host made, when the lease commits to a branch, and as `prepare` does
+   * Prepares the place of `lease` in a place its session host made, when the lease commits to a branch, and as `prepare` does
    * when it does not. `host` asks for the place the last attempt to finish on the branch was prepared in, while it
    * passes the adopt checks, and is `busy` while another open attempt holds it. `adopt` asks for the place at `dir`.
    */
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the skill driver passes the lease of an envelope it has not parsed; LeaseWireSchema parses it here
-  prepareHostPlace(lock: RunLock, lease: unknown, request: HostPlaceRequest): Promise<HostPlacePrepared>;
+  prepareSessionHostPlace(lock: RunLock, lease: unknown, request: SessionHostPlaceRequest): Promise<SessionHostPlacePrepared>;
   /**
    * Runs the setup of the place `prepare` made for `attempt`, outside the run lock, in the run's `mode`, until it ends
    * or `signal` stops it. Nothing for a place without setup.
@@ -456,17 +456,20 @@ export function verifiedLeftOpen(scorers: readonly string[]): string {
   return `${named} ${many ? 'need' : 'needs'} a verified judge, which this session's driver does not offer; ${many ? 'their' : 'its'} runs stay open for a driver that does.`;
 }
 
-/** Where the host made the place of a lease: `host`, the place an earlier attempt adopted for its branch; `adopt`, `dir`. */
-export type HostPlaceRequest = { kind: 'host' } | { kind: 'adopt'; dir: string };
+/**
+ * Where the session host made the place of a lease: `host`, the place an earlier attempt adopted for its branch; `adopt`,
+ * `dir`. The kind `host` names the session host; a stored skill state keeps that spelling.
+ */
+export type SessionHostPlaceRequest = { kind: 'host' } | { kind: 'adopt'; dir: string };
 
 /** Another open attempt of the run holds the place a lease would get: `behind` is that attempt, and `dir` the place. */
 type PlaceBusy = { kind: 'busy'; behind: AttemptId; dir: string };
 
 /**
- * `needs-place` when the host must make the place: a worktree of the checkout's repository named `name`, on `branch`
+ * `needs-place` when the session host must make the place: a worktree of the checkout's repository named `name`, on `branch`
  * from commit `start`. `refused` says why the place the request named was not prepared.
  */
-export type HostPlacePrepared =
+export type SessionHostPlacePrepared =
   | Exclude<PlacePrepared, { kind: 'refused' }>
   | PlaceBusy
   | { kind: 'needs-place'; name: string; branch: string; start: string; refused?: string };
@@ -577,7 +580,7 @@ async function leasedPlace(config: LocalConfig, lock: RunLock, raw: unknown): Pr
 }
 
 /**
- * Prepares the place of `leased`, in the place the host made at `adopt` when given, unless another open attempt of the
+ * Prepares the place of `leased`, in the place the session host made at `adopt` when given, unless another open attempt of the
  * run holds it (`placeHeldBy`). Every prepare of a lease goes through here.
  */
 async function placeLeased(config: LocalConfig, lock: RunLock, leased: Leased, adopt?: string): Promise<PlacePrepared | PlaceBusy> {
@@ -613,7 +616,7 @@ function heldPlaceRefusal(input: { dir: string; behind: AttemptId; run: RunId; a
 
 /**
  * What `next` prepares: with `true`, the lease it answers with; else `attempt`, which the run already leased to the
- * caller, in a place TeamAI creates, or in the one the host made at `adopt`.
+ * caller, in a place TeamAI creates, or in the one the session host made at `adopt`.
  */
 export type NextPrepare = true | { attempt: AttemptId; adopt?: string };
 
@@ -649,14 +652,14 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
 
       return leased.kind === 'leased' ? placeLeased(config, lock, leased) : leased;
     },
-    prepareHostPlace: async (lock, raw, request) => {
+    prepareSessionHostPlace: async (lock, raw, request) => {
       const leased = await leasedPlace(config, lock, raw);
 
       if (leased.kind === 'failed') return leased;
       const { lease, root } = leased;
       const { workspace } = lease;
 
-      // A clone is teamai's to make, never the host's.
+      // A clone is teamai's to make, never the session host's.
       if ((workspace?.mode !== 'new' && workspace?.mode !== 'continue') || workspace.clone !== undefined) {
         const placed = await placeLeased(config, lock, leased);
 
@@ -673,7 +676,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
 
       if (placed.kind !== 'refused') return placed;
 
-      // The place an earlier attempt adopted no longer passes the checks, so the host makes another.
+      // The place an earlier attempt adopted no longer passes the checks, so the session host makes another.
       return request.kind === 'adopt' ? { ...ask, refused: placed.failure.message } : ask;
     },
     setup: (run, attempt, mode, signal) => runPlaceSetup({ config, run, attempt, mode, env, signal }),
@@ -860,7 +863,7 @@ function noCheckout(run: string, attempt: string): WorkflowFailure {
 
 /**
  * Prepares `attempt`, which the run already leased to `driver`, holding the run's lock, as `prepareLeased` prepares a
- * new lease, in the place the host made at `adopt` when given. Every other lease of the run is listed as running, so
+ * new lease, in the place the session host made at `adopt` when given. Every other lease of the run is listed as running, so
  * the engine hands this one back and leases nothing new. `wrong_attempt` when the run no longer leases it to `driver`,
  * or released it just now for a `can` that no longer covers its step.
  */
@@ -894,7 +897,7 @@ async function prepareAttempt(input: {
 
 /**
  * Prepares the place of the lease `answer` carries, holding the run's lock, and runs its setup: a lease with a
- * workspace contract gets its worktree set up, or adopts the place the host made at `adopt`. A prepare that fails
+ * workspace contract gets its worktree set up, or adopts the place the session host made at `adopt`. A prepare that fails
  * reports the attempt `failed` with its own code, and answers with that failure; an adopt the place does not pass, or
  * another open attempt holds, answers `adopt_mismatch`, and any other place that one holds answers `busy`, and the
  * attempt stays leased.

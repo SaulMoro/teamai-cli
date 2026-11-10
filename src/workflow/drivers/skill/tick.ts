@@ -223,7 +223,7 @@ async function attemptCheckRow(context: SkillContext, state: SkillState, open: A
 export function plannedState(context: SkillContext, run: RunId, planned: StartRun): SkillState {
   return newSkillState({
     run, driver: driverIdentity('skill', context.cwd), invocation: context.invocation, options: { parallel: planned.parallel, hitl: planned.hitl, mode: context.mode },
-    host: planned.host, session: context.session, tool: context.tool, at: context.now().toISOString(), judge: planned.judge,
+    sessionHost: planned.sessionHost, session: context.session, tool: context.tool, at: context.now().toISOString(), judge: planned.judge,
   });
 }
 
