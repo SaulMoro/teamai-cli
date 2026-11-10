@@ -680,7 +680,7 @@ describe('skill driver', () => {
     expect(JSON.stringify(answers)).not.toContain('journal');
   });
 
-  it('answers a call on a run whose journal a step replaced with a FIFO, without waiting for a reader of it', async () => {
+  it('refuses a call on a run whose journal a step replaced with a FIFO, naming it, without waiting for a reader of it', async () => {
     const harness = await skillHarness({ note: NOTE });
     roots.push(harness.root);
     const started = await harness.call({ kind: 'start', name: 'note', answers: { confirmed: false }, inputs: { topic: 'a-topic' } });
@@ -694,9 +694,9 @@ describe('skill driver', () => {
     onTestFinished(() => {
       if (fs.existsSync(journal)) fs.closeSync(fs.openSync(journal, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK));
     });
-    const settled = harness.call({ kind: 'choose', run, choice: 'h1' }).then(() => 'settled', () => 'settled');
+    const settled = harness.call({ kind: 'choose', run, choice: 'h1' }).then(() => 'answered', (error: unknown) => (error instanceof Error ? error.message : String(error)));
 
-    expect(await Promise.race([settled, new Promise((resolve) => setTimeout(() => resolve('blocked'), 5_000))])).toBe('settled');
+    expect(await Promise.race([settled, new Promise((resolve) => setTimeout(() => resolve('blocked'), 5_000))])).toBe(`${journal} is a pipe, not a regular file, so teamai does not write it`);
     expect(fs.statSync(journal).isFIFO()).toBe(true);
   });
 
