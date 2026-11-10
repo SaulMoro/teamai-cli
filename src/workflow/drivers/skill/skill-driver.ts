@@ -23,6 +23,7 @@ import { canFor, SESSION_HOST_CHOICES, sessionOffers, type SessionHostChoice } f
 import { journalCall } from './journal.js';
 import { describeLiteral, invocationOf, type Invocation } from './literals.js';
 import { askFor, attendedReason, ceilingOf, checkStartAnswers, localPromptTool, localReason, neededAnswers, needsTool, type HitlMode } from './preflight.js';
+import { needsAiTool } from '../../describe.js';
 import { drivesRun, readSkillState, writeSkillState } from './skill-state.js';
 import { detachedRunners, runRunner } from './skill-runner.js';
 import { agentReport, foreground, plannedState, poll, WAIT_GRACE_MS } from './tick.js';
@@ -511,12 +512,14 @@ async function start(call: Extract<SkillCall, { kind: 'describe' | 'start' }>, c
 
     const input: DescribeInput = {
       needed: neededAnswers(description), ...denied, undeliverable: undeliverable?.message, ...why, judged: judgedBy(judging) !== undefined,
-      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }), ...(app && { app: { session: app.session, readiness: 'unchecked' } }),
+      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }), isAiFree: !needsAiTool(description.facts),
+      ...(app && { app: { session: app.session, readiness: 'unchecked' } }),
     };
 
     const unchecked = describeRow(input);
-    // Whether a run could start on the app's driver is asked only where the answer would change.
-    const isChecked = app !== undefined && context.mode === 'attended' && APP_CHECKED_ROWS.has(unchecked.row);
+    // Whether a run could start on the app's driver is asked only where the answer would change: never for a run that
+    // already goes to the built-in host in the background.
+    const isChecked = app !== undefined && context.mode === 'attended' && unchecked.verdict.ask !== 'background' && APP_CHECKED_ROWS.has(unchecked.row);
     const { row, verdict } = isChecked ? describeRow({ ...input, app: { session: app.session, readiness: await app.canStart() ? 'ready' : 'not-ready' } }) : unchecked;
 
     context.trace?.(row);

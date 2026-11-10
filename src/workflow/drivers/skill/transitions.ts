@@ -36,13 +36,14 @@ export const TRANSITIONS = [
   { id: 'R1', state: 'none', input: 'describe', guard: 'run mode `attended`, `invoke: deny` and the caller has agent evidence', effects: 'none', next: 'none', action: 'describe `ask.kind: local` with the reason and the start the person runs: in an app\'s session (`SESSION_APPS`) the `--driver <app driver>` start, from the place the app names, else R2\'s `--driver local` start' },
   { id: 'R31', state: 'none', input: 'describe', guard: 'run mode `unattended`, `invoke: deny` and the caller has agent evidence', effects: 'none', next: 'none', action: 'describe `ask.kind: denied` with the reason, no literal: nobody is there to run it' },
   { id: 'R2', state: 'none', input: 'describe', guard: 'run mode `attended`, and the definition has a local route: a step this driver takes and a later one it is held from for env or tokens work in one workspace copy', effects: 'none', next: 'none', action: 'describe `ask.kind: local` with the reason and the `--driver local` start literal, with `--tools default=<session tool>` when `localPromptTool` names one' },
-  { id: 'R3', state: 'none', input: 'describe', guard: 'R27 does not apply, and something to ask: `invoke: ask`, a required input, width above 1, an optional gate, or judging here or by the session; or R30 applies with `invoke: ask`, a required input or an optional gate', effects: 'none', next: 'none', action: 'describe `ask.kind: ask`: one question stating every fact, and at most five start literals, the recommended first; under R30, `background` and each start on the app\'s driver, with `--auto-approve` as the other option when it has an optional gate' },
+  { id: 'R3', state: 'none', input: 'describe', guard: 'R27 does not apply, and something to ask: `invoke: ask`, a required input, width above 1, an optional gate, or judging here or by the session; or R32 or R30 applies with `invoke: ask`, a required input or an optional gate', effects: 'none', next: 'none', action: 'describe `ask.kind: ask`: one question stating every fact, and at most five start literals, the recommended first; under R32 or R30, `background` and each start on that row\'s driver, with `--auto-approve` as the other option when it has an optional gate' },
   { id: 'R4', state: 'none', input: 'describe', guard: 'R27 does not apply, and nothing to ask', effects: 'none', next: 'none', action: 'describe `ask.kind: start` with the one start literal, and the facts to tell the person' },
   { id: 'R16', state: 'none', input: 'describe', guard: '`deliveryProblem` answers for the checkout: a `deliver: pr` step the definition cannot deliver (`bad_delivery`), or a detached HEAD (`no_base_branch`)', effects: 'none', next: 'none', action: 'describe `ask.kind: denied` with its message, no literal' },
   { id: 'R23', state: 'none', input: 'describe', guard: 'run mode `unattended`, R1 and R16 do not apply, and the definition has a local route, as R2\'s', effects: 'none', next: 'none', action: 'describe `ask.kind: denied` with the local route\'s reason, no literal: nobody is there to run the local driver' },
   { id: 'R17', state: 'none', input: 'describe', guard: 'run mode `unattended`, R1, R16 and R23 do not apply, and `attendedReason` names what needs a person before the run starts: `invoke: ask`. A step only a person can take needs none: D30 hands the run to one when it reaches it', effects: 'none', next: 'none', action: 'describe `ask.kind: denied` with that reason, no literal' },
   { id: 'R18', state: 'none', input: 'describe', guard: 'run mode `unattended`, and R1, R16, R23, R17 and R27 do not apply', effects: 'none', next: 'none', action: 'describe `ask.kind: start` with the start of R3\'s recommended option under `--auto-approve`; `{inputs}` kept and `inputs` listed when the workflow has inputs' },
-  { id: 'R30', state: 'none', input: 'describe', guard: 'run mode `attended`, R1, R16, R2 and R17 do not apply, the caller runs in an app\'s session (`SESSION_APPS`), and a run could start on the app\'s driver now: each of its runtimes answers an `init` in `check` mode, with no credential, so none signs in, writes or starts anything, and one that refuses the mode fails the check. Asked only where R3, R4 or R27 would answer', effects: 'none', next: 'none', action: 'describe `ask.kind: background` with the start on the app\'s driver, for the agent to run in the background, when nothing is left to ask: no `invoke: ask`, required input or optional gate; else R3 with each start on the app\'s driver' },
+  { id: 'R32', state: 'none', input: 'describe', guard: 'run mode `attended`, R1, R16, R2 and R17 do not apply, and the run needs no AI tool (`needsAiTool`): no prompt, interactive, answer or scored step, and no `workflow: { from }` step, whose workflow a step produces, through the workflows its steps run by name', effects: 'none', next: 'none', action: 'describe `ask.kind: background` with the start on the built-in `--driver host`, for the agent to run in the background, when nothing is left to ask: no `invoke: ask`, required input or optional gate; else R3 with each start on `--driver host`. The app check is not asked' },
+  { id: 'R30', state: 'none', input: 'describe', guard: 'run mode `attended`, R1, R16, R2, R17 and R32 do not apply, the caller runs in an app\'s session (`SESSION_APPS`), and a run could start on the app\'s driver now: each of its runtimes answers an `init` in `check` mode, with no credential, so none signs in, writes or starts anything, and one that refuses the mode fails the check. Asked only where R3, R4 or R27 would answer', effects: 'none', next: 'none', action: 'describe `ask.kind: background` with the start on the app\'s driver, for the agent to run in the background, when nothing is left to ask: no `invoke: ask`, required input or optional gate; else R3 with each start on the app\'s driver' },
   { id: 'R27', state: 'none', input: 'describe', guard: 'the session names no tool, the definition has a step whose model or judging needs one (`needsTool`), and R1, R16, R2, R23 and R17 do not apply', effects: 'none', next: 'none', action: 'describe `ask.kind: tool` with the reason, the describe literal with `--tools default=\'{tool}\'` for the agent to fill, and the ids of the tools teamai knows' },
   { id: 'R29', state: 'none', input: 'start `--driver skill`', guard: '`invoke: deny` and the caller has agent evidence, as R1\'s', effects: 'none', next: 'none', action: 'error `invoke_denied` with the reason, next null: no run is created' },
   { id: 'R8', state: 'any', input: 'start `--driver skill`, or R19\'s input', guard: 'R29 does not apply, and the definition has a local route or a benchmark trial; for R19\'s input, the run\'s own definition, once R20 and R21 do not apply, or, in run mode `unattended`, as the run stands before the claim', effects: 'none', next: 'none', action: 'error `needs_local_driver` with the reason, next null; for R19\'s input it names the person\'s `teamai workflow resume <run>` literal, and the run stays readied here, or, unattended, as it was: nothing is claimed' },
@@ -191,12 +192,16 @@ export type ReportReply = { kind: 'reported'; outcome: Extract<TurnEvent, { kind
  * tool's confined judge or by the session itself, so the person may turn judging off. `undeliverable`: why a start from
  * the checkout would be refused for its delivery. `mode`: the run mode of the caller. `attended`: why a run of the
  * workflow needs a person. `needsTool`: the session names no tool, and the workflow has a step whose model or judging
- * needs one. `app`: the app whose session the caller runs in, and whether a run could start on its driver now, once asked.
+ * needs one. `isAiFree`: a run of it needs no AI tool, so the host slot alone runs it. `app`: the app whose session the
+ * caller runs in, and whether a run could start on its driver now, once asked.
  */
 /** Whether a run could start on the driver of the app the session runs in: not asked yet, or asked with this answer. */
 export type AppReadiness = 'unchecked' | 'ready' | 'not-ready';
 
-export interface DescribeInput { needed: StartAnswer[]; denied?: string; undeliverable?: string; local?: string; judged: boolean; mode: RunMode; attended?: string; needsTool: boolean; app?: { session: SessionApp; readiness: AppReadiness } }
+export interface DescribeInput {
+  needed: StartAnswer[]; denied?: string; undeliverable?: string; local?: string; judged: boolean; mode: RunMode; attended?: string; needsTool: boolean; isAiFree: boolean;
+  app?: { session: SessionApp; readiness: AppReadiness };
+}
 
 /** Who judges a run's scored steps on this machine: the confined judge of `tool` here, or the session itself with `tool`. */
 export type JudgedBy = { kind: 'here'; tool: string } | { kind: 'session'; tool: string };
@@ -263,14 +268,20 @@ export type Refusal =
   | { code: 'not_dispatched'; run: RunId; attempt: AttemptId; phase: AttemptState['phase'] }
   | { code: 'driver_running'; run: RunId };
 
+/** A driver describe sends a run to in the background: its name, and where the person sees the run's steps. */
+export interface BackgroundDriver { driver: string; steps: string }
+
+/** The built-in `host`, which runs a run that needs no AI tool on the host slot alone. */
+export const HOST_BACKGROUND: BackgroundDriver = { driver: 'host', steps: 'Each step runs on this machine in teamai, and no agent runs any of them.' };
+
 /**
  * How describe says to start, and why, for the kinds that start no run here. `unattended`: start with the recommended
- * answers and optional gates auto-approved, since nobody answers a question. `background`: start on the driver of the
- * app the session runs in, in the background, after asking the person first when `hasQuestion`.
+ * answers and optional gates auto-approved, since nobody answers a question. `background`: start on `on`, the built-in
+ * `host` or the driver of the app the session runs in, in the background, after asking the person first when `hasQuestion`.
  */
 export type DescribeVerdict =
   | { ask: 'start' | 'ask' | 'unattended' | 'tool' }
-  | { ask: 'background'; hasQuestion: boolean; app: SessionApp }
+  | { ask: 'background'; hasQuestion: boolean; on: BackgroundDriver }
   /** `app`: the app whose driver the person starts it on, from the place it names; the local driver when absent. */
   | { ask: 'local'; reason: string; app?: SessionApp }
   | { ask: 'denied'; reason: string };
@@ -400,7 +411,7 @@ export function unseenEvents(state: SkillState, session: string | undefined): Tu
 }
 
 /** A describe row, with how describe says to start. */
-type DescribeRow = { row: 'R1' | 'R31' | 'R16' | 'R2' | 'R23' | 'R17' | 'R30' | 'R27' | 'R18' | 'R3' | 'R4'; verdict: DescribeVerdict };
+type DescribeRow = { row: 'R1' | 'R31' | 'R16' | 'R2' | 'R23' | 'R17' | 'R32' | 'R30' | 'R27' | 'R18' | 'R3' | 'R4'; verdict: DescribeVerdict };
 
 /** The rows that ask whether a run could start on the driver of the app the session runs in, when it runs in one. */
 export const APP_CHECKED_ROWS: ReadonlySet<DescribeRow['row']> = new Set(['R3', 'R4', 'R27']);
@@ -417,10 +428,16 @@ export function describeRow(input: DescribeInput): DescribeRow {
 
   if (input.mode === 'unattended' && input.attended !== undefined) return { row: 'R17', verdict: { ask: 'denied', reason: input.attended } };
 
+  if (input.isAiFree && input.mode === 'attended') {
+    const hasQuestion = input.needed.some((answer) => APP_START_ANSWERS.has(answer));
+
+    return { row: hasQuestion ? 'R3' : 'R32', verdict: { ask: 'background', hasQuestion, on: HOST_BACKGROUND } };
+  }
+
   if (input.app?.readiness === 'ready' && input.mode === 'attended') {
     const hasQuestion = input.needed.some((answer) => APP_START_ANSWERS.has(answer));
 
-    return { row: hasQuestion ? 'R3' : 'R30', verdict: { ask: 'background', hasQuestion, app: input.app.session } };
+    return { row: hasQuestion ? 'R3' : 'R30', verdict: { ask: 'background', hasQuestion, on: input.app.session } };
   }
 
   if (input.needsTool) return { row: 'R27', verdict: { ask: 'tool' } };

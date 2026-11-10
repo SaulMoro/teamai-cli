@@ -410,6 +410,9 @@ steps:
     command: node -e "process.exit(0)"
 `;
 
+/** `workflow` with a prompt step after its step `last`, so a run of it needs an AI tool and describe keeps it off the host driver. */
+const withPrompt = (workflow: string, last: string): string => `${workflow}  - id: review\n    needs: [${last}]\n    prompt: Review it.\n`;
+
 // An approval beside a step this driver is held from: the engine answers the held step first.
 const SHIP_BESIDE = SHIP_AFTER.replace('needs: [go]', 'needs: []');
 
@@ -673,12 +676,12 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     rows: ['R3', 'R9', 'D12', 'H2'],
     run: async () => {
       const made = await harness({ release: RELEASE });
+      // A run of commands and gates goes to the host driver; a required gate there still needs the person's terminal.
       expect(await made.call({ kind: 'describe', name: 'release' })).toMatchObject({ data: { describe: { ask: { kind: 'ask', question: {
-        text: '- Only you can answer the approval at go-live, from your own terminal or teamai dashboard.\n- Optional approval at plan-review: before `node -e "process.exit(0)"`.\n- The recommended start lets this session\'s agent answer optional approvals and say why; "answer optional approvals automatically" answers each approval yes.\nHow should it run?',
+        text: '- Only you can answer the approval at go-live, from your own terminal or teamai dashboard.\n- Optional approval at plan-review: before `node -e "process.exit(0)"`.\n- This session\'s agent asks you at optional approvals as the run reaches them; "answer optional approvals automatically" answers each approval yes.\nHow should it run?',
         options: [
-          { label: 'Recommended: you decide optional approvals', start: 'teamai workflow start release --driver skill --hitl recommend' },
-          { label: 'Same, but ask me at optional approvals', start: 'teamai workflow start release --driver skill --hitl person' },
-          { label: 'Same, but answer optional approvals automatically', start: 'teamai workflow start release --driver skill --auto-approve' },
+          { label: 'Start it, and ask me at optional approvals', start: 'teamai workflow start release --driver host' },
+          { label: 'Same, but answer optional approvals automatically', start: 'teamai workflow start release --driver host --auto-approve' },
         ],
       } } } } });
       expect(await made.call({ kind: 'start', name: 'release', answers: { confirmed: false }, inputs: undefined }))
@@ -870,11 +873,11 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
-    name: 'a command-only run, from describe to done and a next after it',
-    rows: ['R4', 'R10', 'S1', 'S5', 'D1', 'D6', 'D15', 'D16', 'D18', 'D20', 'D21', 'D23', 'C1', 'C8', 'P7', 'X2'],
+    name: 'a command-only run, which describe sends to the host driver, started on the skill driver all the same, to done and a next after it',
+    rows: ['R32', 'R10', 'S1', 'S5', 'D1', 'D6', 'D15', 'D16', 'D18', 'D20', 'D21', 'D23', 'C1', 'C8', 'P7', 'X2'],
     run: async () => {
       const made = await harness({ check: CHECK });
-      expect(await made.call({ kind: 'describe', name: 'check' })).toMatchObject({ data: { describe: { ask: { kind: 'start' } } } });
+      expect(await made.call({ kind: 'describe', name: 'check' })).toMatchObject({ data: { describe: { ask: { kind: 'background', start: 'teamai workflow start check --driver host' } } } });
       const { run } = await started(made);
       await polledToDone(made, run);
       const after = await made.call({ kind: 'next', run, wait: false });
@@ -1068,10 +1071,36 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
+    name: 'describe sends a run whose steps need no AI tool to the built-in host driver in the background, in an app\'s session too, asking the person first when something is left to ask',
+    rows: ['R32', 'R3'],
+    run: async () => {
+      const made = await harness({ check: CHECK, gated: GATED, approved: APPROVED });
+      const app = { session: T3_APP, canStart: () => Promise.reject(new Error('describe asked the app\'s driver about a run that needs no AI tool')) };
+      const onHost = 'Each step runs on this machine in teamai, and no agent runs any of them.';
+      for (const context of [{}, { app }]) {
+        expect(await made.call({ kind: 'describe', name: 'check' }, context)).toMatchObject({ data: { describe: { ask: { kind: 'background', start: 'teamai workflow start check --driver host', background: onHost } } } });
+      }
+      expect(await made.call({ kind: 'describe', name: 'gated' })).toMatchObject({ data: { describe: { ask: {
+        kind: 'ask', background: onHost, question: { options: [{ label: 'Yes, start it', start: 'teamai workflow start gated --driver host --confirmed' }] },
+      } } } });
+      expect(await made.call({ kind: 'describe', name: 'approved' }, { app })).toMatchObject({ data: { describe: { ask: {
+        kind: 'ask',
+        question: {
+          text: expect.stringContaining('This session\'s agent asks you at optional approvals as the run reaches them; "answer optional approvals automatically" answers each approval yes.'),
+          options: [
+            { label: 'Start it, and ask me at optional approvals', start: 'teamai workflow start approved --driver host' },
+            { label: 'Same, but answer optional approvals automatically', start: 'teamai workflow start approved --driver host --auto-approve' },
+          ],
+        },
+      } } } });
+      return made.rows;
+    },
+  },
+  {
     name: 'in an app\'s session whose driver a run could start on now, describe answers a start on that driver in the background, asking the person first when something is left to ask',
     rows: ['R30', 'R3'],
     run: async () => {
-      const made = await harness({ check: CHECK, gated: GATED, approved: APPROVED });
+      const made = await harness({ check: withPrompt(CHECK, 'test'), gated: withPrompt(GATED, 'lint'), approved: withPrompt(APPROVED, 'lint') });
       const ready = { session: T3_APP, canStart: () => Promise.resolve(true) };
       expect(await made.call({ kind: 'describe', name: 'check' }, { app: ready })).toMatchObject({ data: { describe: { ask: {
         kind: 'background', start: 'teamai workflow start check --driver t3', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
@@ -1097,7 +1126,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     name: 'in an app\'s session whose driver no run could start on now, or in an unattended run, describe answers as outside the app',
     rows: ['R4', 'R18'],
     run: async () => {
-      const made = await harness({ check: CHECK });
+      const made = await harness({ check: withPrompt(CHECK, 'test') });
       const asked: string[] = [];
       const unready = { session: T3_APP, canStart: () => { asked.push('canStart'); return Promise.resolve(false); } };
       expect(await made.call({ kind: 'describe', name: 'check' }, { app: unready })).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start check --driver skill' } } } });
@@ -1194,7 +1223,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     run: async () => {
       const made = await harness({ gated: GATED });
       expect(await made.call({ kind: 'describe', name: 'gated' })).toMatchObject({ data: { describe: { ask: {
-        kind: 'ask', question: { text: '- The team asks that you agree before it starts.\nStart it?', options: [{ label: 'Yes, start it', start: 'teamai workflow start gated --driver skill --confirmed' }] },
+        kind: 'ask', question: { text: '- The team asks that you agree before it starts.\nStart it?', options: [{ label: 'Yes, start it', start: 'teamai workflow start gated --driver host --confirmed' }] },
       } } } });
       expect(await made.call({ kind: 'start', name: 'gated', answers: { confirmed: false }, inputs: undefined }))
         .toMatchObject({ error: { code: 'confirm_needed', next: 'teamai workflow start --describe gated --driver skill' } });
@@ -2397,8 +2426,8 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       } } } } });
       // A model the workflow's defaults pin needs the tool too.
       expect(await made.call({ kind: 'describe', name: 'defaulted' })).toMatchObject({ data: { describe: { ask: { kind: 'tool' } } } });
-      // A run of commands alone needs no tool, and neither does a prompt step that pins no model and is not judged.
-      expect(await made.call({ kind: 'describe', name: 'check' })).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start check --driver skill' } } } });
+      // A run of commands alone needs no tool, and goes to the host driver; neither does a prompt step that pins no model and is not judged.
+      expect(await made.call({ kind: 'describe', name: 'check' })).toMatchObject({ data: { describe: { ask: { kind: 'background', start: 'teamai workflow start check --driver host' } } } });
       expect(await made.call({ kind: 'describe', name: 'plain' })).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start plain --driver skill' } } } });
       return made.rows;
     },

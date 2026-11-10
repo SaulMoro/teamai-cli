@@ -433,11 +433,11 @@ export function askFor(verdict: DescribeVerdict, description: WorkflowDescriptio
     case 'denied':
       return { kind: 'denied', reason: verdict.reason };
     case 'background': {
-      const { app } = verdict;
+      const { on } = verdict;
       const flags = startFlags(description);
 
       if (!verdict.hasQuestion) {
-        const ask: DescribeAsk = { kind: 'background', start: appStartLiteral(invocation, name, app.driver), background: app.steps };
+        const ask: DescribeAsk = { kind: 'background', start: appStartLiteral(invocation, name, on.driver), background: on.steps };
 
         if (facts.length > 0) ask.say = facts.join('\n');
 
@@ -446,13 +446,13 @@ export function askFor(verdict: DescribeVerdict, description: WorkflowDescriptio
 
       const inputs = inputsOf(description, proposed);
       const optional = description.facts.gates.filter((gate) => !gate.required);
-      const first = { label: flags.confirmed ? 'Yes, start it' : 'Start it', start: appStartLiteral(invocation, name, app.driver, flags) };
+      const first = { label: flags.confirmed ? 'Yes, start it' : 'Start it', start: appStartLiteral(invocation, name, on.driver, flags) };
 
       const options = optional.length > 0
-        ? [{ ...first, label: `${first.label}, and ask me at optional ${gatesNoun(optional, true)}` }, { label: `Same, but ${autoAnswered(gatesNoun(optional, true))}`, start: appStartLiteral(invocation, name, app.driver, { ...flags, autoApprove: true }) }]
+        ? [{ ...first, label: `${first.label}, and ask me at optional ${gatesNoun(optional, true)}` }, { label: `Same, but ${autoAnswered(gatesNoun(optional, true))}`, start: appStartLiteral(invocation, name, on.driver, { ...flags, autoApprove: true }) }]
         : [first];
 
-      return { kind: 'ask', question: { text: [...facts, closingOf(options.length, flags.confirmed, inputs)].join('\n'), inputs, options }, background: app.steps };
+      return { kind: 'ask', question: { text: [...facts, closingOf(options.length, flags.confirmed, inputs)].join('\n'), inputs, options }, background: on.steps };
     }
 
     case 'ask': {

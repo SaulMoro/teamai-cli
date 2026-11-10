@@ -368,7 +368,8 @@ describe('skill driver', () => {
     const described = await harness.call({ kind: 'describe', name: 'check' });
     expect(described).toMatchObject({ data: { describe: {
       workflow: { name: 'check', description: 'Lint and test', invoke: 'allow', inputs: {} },
-      ask: { kind: 'start', start: 'teamai workflow start check --driver skill' },
+      // It needs no AI tool, so describe sends it to the host driver; a start on this driver still runs it.
+      ask: { kind: 'background', start: 'teamai workflow start check --driver host' },
     } } });
 
     const started = await harness.call({ kind: 'start', name: 'check', answers: { confirmed: false }, inputs: undefined });
@@ -1502,7 +1503,8 @@ steps:
     unverifiedClaude(harness);
     expect(await harness.call({ kind: 'describe', name: 'check', tool: 'claude' }, { mode: 'unattended' }))
       .toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start check --driver skill --tools default=claude --auto-approve' } } } });
-    expect(await harness.call({ kind: 'describe', name: 'check', tool: 'claude' })).toMatchObject({ data: { describe: { ask: { kind: 'start', start: 'teamai workflow start check --driver skill --tools default=claude' } } } });
+    // The host driver, which a run of commands alone goes to, launches no tool, so its start names none.
+    expect(await harness.call({ kind: 'describe', name: 'check', tool: 'claude' })).toMatchObject({ data: { describe: { ask: { kind: 'background', start: 'teamai workflow start check --driver host' } } } });
     const starts = JSON.stringify(await harness.call({ kind: 'describe', name: 'review', tool: 'claude' })).match(/teamai workflow start review --driver skill[^"]*/g) ?? [];
     expect(starts).not.toHaveLength(0);
     for (const start of starts) expect(start).toMatch(/^teamai workflow start review --driver skill --tools default=claude /);
