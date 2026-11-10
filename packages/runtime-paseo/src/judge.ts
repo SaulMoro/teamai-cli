@@ -1,7 +1,7 @@
-import type { ConfinedKept, ConfinedPrompt, RuntimeRequest } from '@teamai/runtime-protocol';
+import type { ConfinedPrompt, RuntimeRequest } from '@teamai/runtime-protocol';
 import type { Daemon } from './daemon/connect.js';
 import type { Conversations } from './conversation.js';
-import { notOffered } from './offer.js';
+import { CONFINED_KEPT, notOffered } from './offer.js';
 import type { ProcessState } from './process-state.js';
 import { CONFINED_MODES, CONFINED_OPTIONS, isPaseoTool, type PaseoTool } from './providers.js';
 import type { ConfinedPlace, workspaces } from './workspace.js';
@@ -11,9 +11,6 @@ import type { ConfinedPlace, workspaces } from './workspace.js';
 //  A fresh agent whose cwd is the prompt's directory, briefed to read only it, in a mode that asks before it edits or
 //  runs anything; any request for permission ends it. Its answer is its last message, kept best-effort.
 //
-
-/** What this runtime keeps of a confined prompt: its agent is briefed to read only the directory, and cannot write without asking. */
-export const CONFINED_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
 /** The prompt a confined prompt's agent gets: the brief that confines it, the step's prompt, and the shape of its answer. */
 function confinedBrief(tool: PaseoTool, confined: ConfinedPrompt, prompt: string): string {
