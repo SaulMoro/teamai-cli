@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
-import { CLAUDE_SESSIONS, CLI, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { attemptOf, CLAUDE_SESSIONS, CLI, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
 // `--driver local`, the member's default driver, as a member runs it: what its runs record and how they end, which the
 // split of the host command slot from the runtime that launches tools keeps as it was.
@@ -80,6 +80,28 @@ describe('the local driver, end to end', () => {
     requires: { isolation: sandbox, strict: true }
     output:
       ok: boolean`);
+    const folder = path.join(repo, '.teamai', 'workflows', 'foldered');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'WORKFLOW.yaml'), `schemaVersion: v1alpha1
+name: foldered
+description: Reads a file of its folder, asks about it, then reviews.
+steps:
+  - id: read
+    command: node "$TEAMAI_WORKFLOW_DIR/read.js"
+    output: { note: string }
+  - id: ask
+    needs: [read]
+    answer_file: ask.md
+    output: { text: string }
+  - id: review
+    needs: [ask]
+    prompt_file: review.md
+    output: { ok: boolean }
+`);
+    fs.writeFileSync(path.join(folder, 'read.js'), "const fs = require('node:fs');\nconst path = require('node:path');\nprocess.stdout.write(JSON.stringify({ note: fs.readFileSync(path.join(process.env.TEAMAI_WORKFLOW_DIR, 'note.txt'), 'utf8').trim() }));\n");
+    fs.writeFileSync(path.join(folder, 'note.txt'), 'carried by the folder\n');
+    fs.writeFileSync(path.join(folder, 'ask.md'), 'Name one risk in this repository.\n');
+    fs.writeFileSync(path.join(folder, 'review.md'), 'Review the repository without changing it.\n');
     writeFlow(bare, 'oneprompt', `  - id: review
     prompt: Review the repository without changing it.
     output:
@@ -143,6 +165,26 @@ describe('the local driver, end to end', () => {
     const attempts = path.join(runsOf(repo), runId, 'attempts');
     const records = fs.readdirSync(attempts).map((attempt): unknown => JSON.parse(fs.readFileSync(path.join(attempts, attempt, 'runtime.json'), 'utf8')));
     expect(records).toEqual([{ runtime: 'tools', driver: 'teamai-local', inProcess: true }, { runtime: 'tools', driver: 'teamai-local', inProcess: true }]);
+  });
+
+  it('runs a workflow folder\'s command, answer and prompt steps from its own files, on the host slot, the host slot and tools', async () => {
+    const before = runIds();
+
+    const ran = await runCLI(['workflow', 'start', 'foldered', '--driver', 'local', '--tools', 'default=claude'], repo, env({ FAKE_TOOL_REPLY: 'Unpinned dependencies.' }));
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran, before);
+    expect(readRunState(runId).steps).toMatchObject([
+      { id: 'read', status: 'succeeded', outputs: { note: 'carried by the folder' } },
+      { id: 'ask', status: 'succeeded', outputs: { text: 'Unpinned dependencies.' } },
+      { id: 'review', status: 'succeeded', tool: 'claude', outputs: { ok: true } },
+    ]);
+    const records = readRunState(runId).steps.map((step): unknown => JSON.parse(fs.readFileSync(path.join(runsOf(repo), runId, 'attempts', attemptOf(step), 'runtime.json'), 'utf8')));
+    expect(records).toEqual([
+      { runtime: 'host', driver: 'teamai-local', inProcess: true },
+      { runtime: 'host', driver: 'teamai-local', inProcess: true },
+      { runtime: 'tools', driver: 'teamai-local', inProcess: true },
+    ]);
   });
 
   it('refuses a strict sandbox step with the text the local driver always gave', async () => {
