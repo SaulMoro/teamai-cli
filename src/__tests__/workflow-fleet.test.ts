@@ -1301,6 +1301,31 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     expect(await recordIn(alice, run, attempt, 'claimed')).toMatchObject({ member: { user: 'bob' } });
   }, 60_000);
 
+  it('names the held teamai-reports, not the member\'s progress, when a publish holds it past the deadline while the member beats', async () => {
+    const { alice, bob, run, attempt, open } = await ownerOffering(opened, undefined, { staleAfter: '30m' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    const offered = await recordIn(bob, run, attempt, 'offered');
+    if (offered.state !== 'offered') throw new Error(`no offer: ${offered.state}`);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    await recordIn(alice, run, attempt, 'claimed');
+    await holdReportsLock(alice);
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+    // The member's progress lands while the owner waits for its lock.
+    const beat = await recordProgress(bob.config, claimed.value, claimed.value.pushed);
+    if (!beat.ok) throw new Error(beat.error.message);
+
+    expect(await within(ended, 3_000)).toBe('waiting');
+    passTheDeadline();
+    const failed = await within(ended, 15_000);
+    expect(failed).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('another write held teamai-reports') } });
+    expect(failed).not.toMatchObject({ failure: { message: expect.stringContaining('progress') } });
+    await cancelled;
+  }, 60_000);
+
   it('writes the cancel of workflow cancel with no live driver once the publish holding teamai-reports lets it go', async () => {
     const acme = team();
     const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
