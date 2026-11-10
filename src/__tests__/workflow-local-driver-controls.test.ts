@@ -21,7 +21,6 @@ import type { ExecEnd, StepRuntime } from '@teamai/runtime-protocol/step-runtime
 import type { DriverCan } from '../workflow/requirements.js';
 import { driverIdentity } from '../driver-identity.js';
 import { driverLockPath, readRun } from '../workflow/store.js';
-// oxlint-disable-next-line teamai/workflow-boundaries -- fails the snapshot taken by a reader in the checkout
 import * as worktreeSnapshot from '../workflow/place/worktree-snapshot.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { git } from './helpers/delivered-checkout.js';

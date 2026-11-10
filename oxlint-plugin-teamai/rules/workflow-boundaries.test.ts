@@ -12,6 +12,7 @@ rule.invalid('rejects a transitive dynamic import of the local driver', `import 
 } });
 rule.invalid('rejects private entries from consumers', `export { tick } from './workflow/drivers/skill/tick.js';`, undefined, { filename: 'src/pull.ts' });
 rule.invalid('rejects private entries in test mocks', `vi.mock('../workflow/place/setup.js');`, undefined, { filename: 'src/__tests__/sample.test.ts' });
+rule.valid('allows a test of the worktree snapshot', `import { snapshotWorktree } from '../workflow/place/worktree-snapshot.js';`, { filename: 'src/__tests__/sample.test.ts' });
 rule.invalid('rejects runtime imports in transitions', `import { tick } from './tick.js';`, undefined, { filename: 'src/workflow/drivers/skill/transitions.ts' });
 rule.invalid('rejects dynamic imports of drivers from flat workflow modules', `const later = import('./drivers/local/local-driver.js');`, undefined, { filename: 'src/workflow/engine.ts' });
 rule.invalid('rejects restricted store symbols', `import { readRun as read } from '../../store.js';`);
