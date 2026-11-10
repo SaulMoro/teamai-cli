@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** What the prompt or the options ask a fake agent to do beyond answering. */
 export const FAKE_AGENT_MARKERS = {
@@ -95,14 +96,14 @@ export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptio
   return {
     executable,
     stopLeft: () => {
-      const listed = fs.existsSync(pids) ? fs.readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) : [];
+      const listed = fs.existsSync(pids) ? readRegularFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) : [];
       const alive = listed.filter(isAlive);
 
       for (const pid of alive) process.kill(pid, 'SIGKILL');
 
       return alive;
     },
-    calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => Call.parse(JSON.parse(line))) : []),
+    calls: () => (fs.existsSync(log) ? readRegularFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => Call.parse(JSON.parse(line))) : []),
   };
 }
 

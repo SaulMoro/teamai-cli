@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { JsonObjectSchema, JsonValueSchema } from '@teamai/tool-core/json';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /**
  * A stand-in `opencode` (V2) for the session commands teamai runs: `--version`,
@@ -142,7 +143,7 @@ export type OpencodeExport = z.infer<typeof OpencodeExportSchema>;
 export function opencodeExportFixture(): OpencodeExport {
   const file = fileURLToPath(new URL('./fixtures/opencode/export-tool-calls.json', import.meta.url));
 
-  return OpencodeExportSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+  return OpencodeExportSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8')));
 }
 
 /** Plant a session the fake lists and exports. `raw` replaces the export file's content. */
