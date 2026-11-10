@@ -299,3 +299,34 @@ async function copyEntry(from: string, to: string, options: CopyTreeOptions): Pr
   if (stats.isSymbolicLink()) await fs.promises.symlink(await fs.promises.readlink(from), to);
   else await copyRegularFile(from, to);
 }
+
+/**
+ * Moves `from`, a file or a folder, to `to`, where nothing is yet, as fs-extra's `move` does: a rename, or across
+ * filesystems a copy through `copyRegularTree` and then a removal of `from`. The copy goes into a folder beside `to`,
+ * renamed into place once whole, so a copy that refuses an entry leaves `from` as it was and nothing at `to`.
+ */
+export async function moveRegularTree(from: string, to: string): Promise<void> {
+  if (await isAtOrInside(from, to)) throw new Error(`${to} is ${from} or a folder inside it, so teamai does not move ${from} there`);
+
+  if (await lstatOrMissing(to) !== undefined) throw Object.assign(new Error(`${to} already exists, so teamai does not move ${from} over it`), { code: 'EEXIST' });
+  await fs.promises.mkdir(path.dirname(to), { recursive: true });
+
+  try {
+    await fs.promises.rename(from, to);
+
+    return;
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EXDEV')) throw error;
+  }
+
+  const staging = `${to}.${process.pid}.${Date.now()}.moving`;
+
+  try {
+    await copyRegularTree(from, staging, { existing: 'fail' });
+    await fs.promises.rename(staging, to);
+  } finally {
+    await fs.promises.rm(staging, { recursive: true, force: true });
+  }
+
+  await fs.promises.rm(from, { recursive: true, force: true });
+}

@@ -10,7 +10,7 @@ import { getDataHome, getTeamaiHome, isSelfMode, type LocalConfig } from '../typ
 import { type JsonValue, isJsonObject } from '@teamai/shared/json';
 import { pathExists, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';
-import { copyRegularTree } from '@teamai/shared/regular-file';
+import { copyRegularTree, moveRegularTree } from '@teamai/shared/regular-file';
 import {
   PackageLockSchema,
   PackageManifestSchema,
@@ -70,7 +70,7 @@ export async function packageLockDir(localConfig: LocalConfig, options: { readOn
     }
 
     try {
-      await fse.move(legacy, packageLockPath(dir), { overwrite: false });
+      await moveRegularTree(legacy, packageLockPath(dir));
     } catch (error) {
       // A lock already in the data home is the newer one.
       if (await pathExists(packageLockPath(dir))) {

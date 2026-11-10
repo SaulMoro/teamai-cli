@@ -52,6 +52,16 @@ export const copy = async (from: string, to: string) => [await fse.copy(from, to
   expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(5);
 });
 
+invalid('rejects fs-extra moving a path, which copies every file under it when the destination is on another filesystem', `import fse from 'fs-extra';
+import { moveSync } from 'fs-extra';
+export const move = async (from: string, to: string) => [await fse.move(from, to, { overwrite: false }), fse.moveSync(from, to), moveSync(from, to)];`, (output) => {
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(3);
+});
+
+valid('allows the move of the helper, and a rename, which never copies', `import { moveRegularTree } from '@teamai/shared/regular-file';
+import fs from 'node:fs';
+export const move = async (from: string, to: string) => [await moveRegularTree(from, to), await fs.promises.rename(from, to)];`);
+
 valid('allows the recursive copy of the helper', `import { copyRegularTree } from '@teamai/shared/regular-file';
 export const copy = (from: string, to: string) => copyRegularTree(from, to, { existing: 'fail' });`);
 

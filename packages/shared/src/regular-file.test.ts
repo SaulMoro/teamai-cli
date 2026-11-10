@@ -2,13 +2,14 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { appendRegularFile, copyRegularFile, copyRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { appendRegularFile, copyRegularFile, copyRegularTree, moveRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const reader of readers.splice(0)) reader.kill();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -258,5 +259,49 @@ describe.skipIf(process.platform === 'win32')('copying a folder a step may have 
     await expect(copyRegularTree(path.join(dir, 'Docs'), path.join(dir, 'docs', 'sub'))).rejects.toThrow('inside');
     expect(fs.readdirSync(path.join(dir, 'Docs'))).toEqual(['a.md']);
     expect(fs.readFileSync(path.join(dir, 'Docs', 'a.md'), 'utf8')).toBe('a\n');
+  });
+});
+
+describe('moving a folder teamai staged', () => {
+  it('renames a folder into a parent it creates, and fails on one already at the destination, leaving both as they were', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    fs.mkdirSync(path.join(dir, 'taken'));
+
+    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside', 'queue'));
+
+    expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'queue', 'a.md'), 'utf8')).toBe('a\n');
+    await expect(moveRegularTree(path.join(dir, 'aside', 'queue'), path.join(dir, 'taken'))).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(fs.readdirSync(path.join(dir, 'taken'))).toEqual([]);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'queue', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it('copies through the regular-file copy across filesystems, then removes the source', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }));
+
+    await moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside'));
+
+    expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a FIFO across filesystems, leaving the source whole and nothing at the destination', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'queue'));
+    fs.writeFileSync(path.join(dir, 'queue', 'a.md'), 'a\n');
+    const at = path.join(dir, 'queue', 'z.md');
+    execFileSync('mkfifo', [at]);
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }));
+
+    const settled = await settledSoon(at, () => moveRegularTree(path.join(dir, 'queue'), path.join(dir, 'aside')));
+
+    expect(settled).toMatchObject({ rejected: { kind: 'a pipe' } });
+    expect(fs.readdirSync(path.join(dir, 'queue')).sort()).toEqual(['a.md', 'z.md']);
+    expect(fs.readdirSync(dir)).toEqual(['queue']);
   });
 });

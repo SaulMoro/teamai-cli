@@ -12,7 +12,7 @@ import { log } from '@teamai/shared/log';
 import { remotesMatch } from './utils/git.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
 import { shellQuoteValue } from './utils/shell-profile.js';
-import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, moveRegularTree, readRegularFile } from '@teamai/shared/regular-file';
 
 /** The caches an incremental extraction reuses, kept with each codebase's evidence. */
 const INCREMENTAL_CACHES = ['facts-cache.json', 'interfaces-cache.json'] as const;
@@ -477,7 +477,7 @@ export async function publishStaging(opts: StagedCodebase & { legacySlug?: strin
           log.warn(`teamwiki/evidence/code/${legacySlug}/ is an older copy of teamwiki/evidence/code/${slug}/. `
             + 'Move any curated docs you want to keep from it, then remove it.');
         } else {
-          await fs.move(legacyDest, evidenceDest);
+          await moveRegularTree(legacyDest, evidenceDest);
           log.info(`Moved teamwiki/evidence/code/${legacySlug}/ to teamwiki/evidence/code/${slug}/`);
         }
 
