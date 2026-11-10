@@ -9,9 +9,9 @@ const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 /**
  * teamai-runtime-sandbox built as it ships, on a fake `docker` and a fake `sbx` (packages/runtime-sandbox/src/testing/
  * fake-engine.mjs) whose sandboxes run on the host. `command` and `args` start it with its journal under `state`;
- * `options` choose the fake docker's one image, or the fake sbx's one agent.
+ * `options` choose the fake docker's one image, or the fake sbx's one agent, whose tools are the executables in `bin`.
  */
-export async function sandboxOnFake(provider: 'docker' | 'sbx'): Promise<{ command: string; args: (state: string) => string[]; options: { provider: 'docker'; image: string } | { provider: 'sbx'; agent: string } }> {
+export async function sandboxOnFake(provider: 'docker' | 'sbx'): Promise<{ command: string; bin: string; args: (state: string) => string[]; options: { provider: 'docker'; image: string } | { provider: 'sbx'; agent: string } }> {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sandbox-runtime-')));
   const executable = await bundleRuntime({ entry: path.join(PACKAGE, 'main.ts'), outfile: path.join(dir, 'teamai-runtime-sandbox.mjs') });
 
@@ -23,6 +23,7 @@ export async function sandboxOnFake(provider: 'docker' | 'sbx'): Promise<{ comma
 
   return {
     command: '/usr/bin/env',
+    bin,
     args: (state) => [
       `PATH=${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, `HOME=${path.join(state, 'home')}`, `FAKE_ENGINE_STATE=${path.join(state, 'engine')}`,
       `FAKE_ENGINE_IMAGES=${JSON.stringify({ [template]: bin })}`, process.execPath, executable,
