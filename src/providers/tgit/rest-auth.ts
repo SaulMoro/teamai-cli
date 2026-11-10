@@ -1,4 +1,4 @@
-import { gfGetOAuthToken } from './gf-cli.js';
+import { gfGetOAuthToken } from './oauth-token.js';
 import { log } from '../../utils/logger.js';
 
 /** Authentication scheme accepted by the git.woa.com REST API. */

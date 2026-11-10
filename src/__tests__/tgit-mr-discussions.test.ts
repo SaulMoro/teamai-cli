@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../providers/tgit/gf-cli.js', () => ({ gfGetOAuthToken: vi.fn(() => null) }));
+vi.mock('../providers/tgit/oauth-token.js', () => ({ gfGetOAuthToken: vi.fn(() => null) }));
 vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
 }));
