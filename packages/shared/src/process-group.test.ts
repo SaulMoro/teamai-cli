@@ -261,7 +261,7 @@ function slowPs(seconds: number): { directory: string; bin: string; records: str
 }
 
 it.skipIf(process.platform === 'win32')('records a group without holding the event loop while ps answers', async () => {
-  const { directory, bin, records } = slowPs(0.6);
+  const { directory, bin, records } = slowPs(1.5);
   const group = await detachedGroup();
   try {
     vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
@@ -270,7 +270,7 @@ it.skipIf(process.platform === 'win32')('records a group without holding the eve
     recordGroup(group.shell, records);
     vi.unstubAllEnvs();
 
-    expect(await fired).toBeLessThan(400);
+    expect(await fired).toBeLessThan(1000);
     const file = path.join(records, `group-${group.pid}.json`);
     await vi.waitFor(() => { expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ pid: group.pid, start: group.start }); }, { timeout: 5000 });
     expect(JSON.parse(fs.readFileSync(path.join(records, 'group.json'), 'utf8'))).toEqual({ pid: group.pid, start: group.start });
@@ -285,12 +285,13 @@ it.skipIf(process.platform === 'win32')('stops a group recorded while ps has not
   const group = await detachedGroup();
   try {
     vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
-    recordGroup(group.shell, records, { isAttached: false });
+    recordGroup(group.shell, records);
     vi.unstubAllEnvs();
 
     await stopRecordedGroup(records);
 
     expect(group.alive()).toBe(false);
+    // Past the time ps takes to answer, so a write it made after the stop would show.
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(fs.readdirSync(records)).toEqual([]);
   } finally {

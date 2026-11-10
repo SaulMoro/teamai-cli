@@ -98,13 +98,16 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   // until then the spawn time stands for the start. A teamai that reads only `start` stops nothing from it, as when
   // nothing was recorded. ps then runs off the event loop, so a step's command and its output are not held while it does.
   writeGroup(file, JSON.stringify({ pid, spawnedAt: Date.now(), ...(isAttached && { tree: true }) }));
-  const key = path.resolve(dir);
+  const recordsDir = path.resolve(dir);
 
-  const read = readProcessStarts().then((starts) => {
+  // ps runs at once; its answer is written after the records begun before it in `dir`, so `group.json` stays the latest.
+  const settled: Promise<void> = Promise.all([readProcessStarts(), pendingStarts.get(recordsDir)]).then(([starts]) => {
+    if (pendingStarts.get(recordsDir) === settled) pendingStarts.delete(recordsDir);
     const start = starts?.get(pid);
 
-    // A stop in another process may have removed the record meanwhile: it is not written again.
-    if (start === undefined || !fs.existsSync(file)) return;
+    // Once this process reaped the child, its pid may name another process. A stop in another process may have removed
+    // the record meanwhile: it is not written again.
+    if (start === undefined || child.exitCode !== null || child.signalCode !== null || !fs.existsSync(file)) return;
     // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
     const body = JSON.stringify({ pid, start, ...(isAttached && { tree: true }) });
     writeGroup(file, body);
@@ -114,11 +117,7 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
     writeGroup(path.join(dir, LEGACY_GROUP_FILE), body);
   });
 
-  const settled: Promise<void> = Promise.all([pendingStarts.get(key), read]).then(() => {
-    if (pendingStarts.get(key) === settled) pendingStarts.delete(key);
-  });
-
-  pendingStarts.set(key, settled);
+  pendingStarts.set(recordsDir, settled);
 }
 
 /** Writes the record of one process group, so a reader never sees half of it. */
