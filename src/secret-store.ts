@@ -22,7 +22,7 @@ import { isRepoReference } from './models/profile.js';
 import { getTeamaiHomeDir, type LocalConfig } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
 import { writeJsonAtomic } from './utils/fs.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
 
 const StoredEntryKindSchema = z.enum(['secret', 'variable']);
 
@@ -161,10 +161,11 @@ export async function readSecretStore(filePath: string): Promise<SecretStoreRead
     const code = error instanceof Error && 'code' in error ? z.string().optional().catch(undefined).parse(error.code) : undefined;
 
     if (code === 'ENOENT') return { ok: true, values: {} };
+    const why = error instanceof NotRegularFileError ? `${error.kind}, not a regular file` : code ?? 'unknown error';
 
     return {
       ok: false,
-      reason: `Cannot read your secret values at ${filePath} (${code ?? 'unknown error'}). Check that the file is yours and `
+      reason: `Cannot read your secret values at ${filePath} (${why}). Check that the file is yours and `
         + `readable (\`ls -l ${filePath}\`), or delete it and set the values again with \`teamai env set\`.`,
     };
   }
