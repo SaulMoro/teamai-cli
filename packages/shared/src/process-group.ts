@@ -321,11 +321,50 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
   return (initial = 'SIGTERM') => (stopping ??= stop(initial));
 }
 
-/** When the process `pid` started, as `ps -o lstart=` prints it; undefined when no process has it or ps cannot run. */
-export function processStart(pid: number): Promise<string | undefined> {
+/**
+ * When the process `pid` started, in clock ticks since the machine booted (field 22 of `/proc/<pid>/stat`): a value no
+ * change of the wall clock moves. Only Linux has it; undefined elsewhere, or when no process has the pid.
+ */
+export async function processStartTicks(pid: number): Promise<number | undefined> {
+  if (process.platform !== 'linux') return undefined;
+
+  try {
+    const stat = await readRegularFile(`/proc/${pid}/stat`, 'utf8');
+    // The command name, field 2, is in parentheses and may hold spaces or parentheses itself: fields count after its last `)`.
+    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+
+    return Number.isInteger(ticks) ? ticks : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The clock ticks per second `/proc` counts in (USER_HZ), 100 on every architecture Linux exposes to Node. */
+const USER_HZ = 100;
+
+/**
+ * When the process `pid` started, in milliseconds since the epoch: on Linux from `/proc`, which a container without a
+ * full `ps` still has, elsewhere as `ps -o lstart=` prints it, to the second. Undefined when no process has the pid or
+ * neither can tell.
+ */
+export async function processStartedAt(pid: number): Promise<number | undefined> {
+  const ticks = await processStartTicks(pid);
+
+  if (ticks !== undefined) {
+    try {
+      const boot = Number(/^btime (\d+)$/m.exec(await readRegularFile('/proc/stat', 'utf8'))?.[1]);
+
+      if (Number.isInteger(boot)) return boot * 1000 + (ticks * 1000) / USER_HZ;
+    } catch {
+      // No /proc/stat: ps may still tell.
+    }
+  }
+
   return new Promise((resolve) => {
-    execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout) => {
-      resolve(error ? undefined : stdout.trim() || undefined);
+    execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 5_000 }, (error, stdout) => {
+      const started = Date.parse(stdout.trim());
+
+      resolve(error || Number.isNaN(started) ? undefined : started);
     });
   });
 }

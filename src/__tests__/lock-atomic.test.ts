@@ -105,6 +105,23 @@ describe('acquireLock (real fs)', () => {
     await releaseLock(lockPath);
   });
 
+  it.runIf(process.platform === 'linux')('reclaims a lock whose recorded holder start is not that of the live process with its pid, which /proc tells where ps cannot', async () => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: unrelatedProcess(), owner: 'dead', startedAt: 'x', startTicks: 1 }));
+
+    expect(await acquireLock(lockPath)).toBe(true);
+    await releaseLock(lockPath);
+  });
+
+  it.runIf(process.platform === 'linux')('keeps a lock whose recorded holder start is that of the live process with its pid, however long ago the lock says it was written', async () => {
+    const pid = unrelatedProcess();
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const startTicks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+    fs.writeFileSync(lockPath, JSON.stringify({ pid, owner: 'live', startedAt: AN_HOUR_AGO(), startTicks }));
+
+    expect(await acquireLock(lockPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
+  });
+
   it('keeps a lock whose live holder was already running when it wrote the lock', async () => {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'live', startedAt: new Date().toISOString() }));
 
