@@ -720,7 +720,7 @@ steps:
 
 | 输出类型 | 包含 |
 | --- | --- |
-| `workflow` | 一个 bundle：`definition`，即要运行的工作流；以及可选的 `workflows`，它运行的具名工作流；`scorers`，生成的评分器固定版本；`teamRevision`，它使用其评分器的团队提交。 |
+| `workflow` | 一个 bundle：`definition`，即要运行的工作流；以及可选的 `workflows`，它运行的具名工作流。 |
 | `json` | 任意 JSON 值。表达式无法读取其内部；顶层 `outputs` 可以整个传递它。 |
 
 `workflow: { from: <step> }` 运行它 `needs` 的某个步骤的 bundle。该步骤报告时，teamai 像 `workflow start` 检查文件一样检查这个 bundle，固定它，并在运行期间保留它。无法接受的 bundle，例如包含秘密值、`from` 步骤、`prompt_file` 步骤或 `finally` 步骤的 bundle，会让产生它的步骤以 `invalid_output` 失败并给出原因。产生 bundle 的步骤只运行一次，不在任何循环或 `for_each` 中。带 `from` 步骤的运行是[隔离的](#隔离运行)。
@@ -748,6 +748,7 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 ```
 
 - 必须写 `output`。`{ text: string }` 把回答当作文字。其他 output 说明回答中的 JSON，本地驱动会向工具要这个 JSON。
+- `answer_file: <file>` 从文件读取提示词，代替 `answer`：[工作流文件夹](workflow.md#工作流文件夹)里的文件，在文件夹之外则是 `prompts/` 下的文件，和 `prompt_file` 一样。它的文本和 `answer` 一样是模板。[`from` 步骤](#运行步骤打印的工作流)打印的工作流不能使用它。
 - 这个步骤不指定工具，由运行它的 driver 回答。skill driver 把它交给会话的子 agent，你自己的 driver 用它自己的模型回答。local driver 启动的工具和 teamai 自己的 AI 调用相同：先看 `TEAMAI_AI_TOOL`，再看项目的 `ai.tool`，再看本机的，最后是 teamai 能启动的第一个已安装工具。pull 拒绝这个步骤上的 `tool`、`agent`、`model` 和 `session`，以及 `new` 以外的 `workspace`。
 - 这次启动标记为 teamai 自己的，成员的 hooks 不会捕获它。
 - 它占用检出目录直到回答结束，因此使用该目录的回答和命令依次运行，包括 `for_each` 的不同项目。修改检出目录会让回答以 `read_only_dirty` 失败。
@@ -757,6 +758,17 @@ $ teamai workflow start classify-learning --driver local --inputs '{"learning":"
 - 没有安装工具时它以 `tool_unavailable` 失败，成员指定的工具无法运行时以 `tool_unconfigured` 失败，调用失败时以 `tool_failed` 失败，回答里没有 JSON 时以 `invalid_output` 失败。
 
 其他驱动把 answer 步骤当作带 `answer: true`、没有独立工作区的提示词租约；带 `workspace: new` 时，租约带有一个只读的 `workspace` 合约，指向它自己的分支。驱动准备租约，在 `cwd` 中回答提示词并报告 outputs；准备过程像其他只读步骤一样占用检出目录或那个 worktree，并记录快照。
+
+## 运行中的工作流文件夹
+
+运行会为它用到的每个[工作流文件夹](workflow.md#工作流文件夹)保留一份自己的副本：
+
+- `workflow start` 按内容把文件夹的文件存一次，放在 TeamAI 数据目录下的 `workflows/folders/<sourceHash>/`，`$TEAMAI_WORKFLOW_DIR` 在整个运行期间都指向这份副本，之后的 pull 修改或删除什么都不影响它。哈希覆盖每个文件的路径、git 记录的可执行位，以及换行转为 LF 后的文本，因此 Windows、macOS 和 Linux 上的检出结果一致。
+- `workflow publish` 不携带这些文件。另一台机器上的 `workflow resume --claim` 像重建定义一样重建文件夹：取自运行所在的团队提交；teamai 的默认工作流则取自本机 teamai 的安装包，不一致时以 `definition_mismatch` 拒绝。
+- `teamai doctor --fix` 会删除本机没有任何运行、也没有任何已拉取工作流使用的已存文件夹，前提是它已存放满一小时。`doctor --fix` 已按 `workflows.retention` 清理过遗留内容的运行不再占用它的文件夹：重试不会再打开这个运行。
+- 文件夹含有符号链接、不是 UTF-8 文本的文件，或总大小（包括 `README.md`）超过 1 MB 时，pull 以 `workflow_folder_invalid` 拒绝它。消息会指出那个文件；文件夹过大时列出最大的五个文件。和所有带代码的诊断一样，它也会丢弃上一个有效版本，因此修好文件夹之前该工作流没有可运行的内容。
+- [受限步骤](workflow.md#限定在一个目录里的提示步骤)只能读取自己的目录，所以它的提示词提到该文件夹时 pull 会警告：`step <id> is confined and may not be able to read $TEAMAI_WORKFLOW_DIR`。
+- [基准测试](benchmarks.md)的 arm 暂时不能运行工作流文件夹，也不能运行会运行文件夹的工作流，因为试验运行的是工作流的副本，不带任何文件。plan 会拒绝这样的 arm：`benchmark arms cannot run workflow folders yet`。
 
 ## 让命令在检出中写入
 
@@ -806,7 +818,7 @@ steps:
     prompt: Fix the failing test.
 ```
 
-带 `workspace: { clone: { commit, repo?, team } }` 的步骤在检出目录之外、`commit` 的全新克隆中运行：有自己的 git 数据，没有远程仓库，hook 关闭。`team` 指明为它安装的团队资产，安装在它自己的 home 下：`{ treatment: none }`，或 `{ revision, selection, treatment }`，其中 `treatment` 为 `pulled`、一个 ref 或 `{ without: [<path>, ...] }`，另可写 `recall: true` 来部署团队的 recall——克隆默认不部署它；这个键由 [benchmark 的 arm](benchmarks.md#开启-recall-的-arm) 设置，测量 recall 的 workflow 步骤也可以设置。`selection` 包含与你的配置同名的 `primaryRole`、`additionalRoles`、`projects`、`subscribedTags` 和 `excludedSkills`，以及 `enabledAgents`，即资产安装到的工具：默认为打开克隆的步骤的工具，否则为你启用的 agent。只要 `revision` 中存在 `manifest/members.yaml`，它就像在你的检出目录中一样决定你在克隆中的角色：`primaryRole` 或 `additionalRoles` 与它分配给你的不同时，克隆以 `clone_prepare_failed` 失败。请省略它们；要以某个角色的知识运行步骤，还需在步骤上设置 `role`。teamai 离线创建克隆，来源是运行的检出目录或提交缓存；`repo` 只指明缓存，从不是 URL。打开克隆的 workflow 步骤拥有它，供其下每个 `continue` 步骤使用。克隆中的任何内容都不会被推送或交付。[Benchmark](benchmarks.md) 会为你写出这些步骤。
+带 `workspace: { clone: { commit, repo?, team } }` 的步骤在检出目录之外、`commit` 的全新克隆中运行：有自己的 git 数据，没有远程仓库，hook 关闭。`team` 指明为它安装的团队资源，安装在它自己的 home 下：`{ treatment: none }`，或 `{ revision, selection, treatment }`，其中 `treatment` 为 `pulled`、一个 ref 或 `{ without: [<path>, ...] }`，另可写 `recall: true` 来部署团队的 recall——克隆默认不部署它；这个键由 [benchmark 的 arm](benchmarks.md#开启-recall-的-arm) 设置，测量 recall 的 workflow 步骤也可以设置。`selection` 包含与你的配置同名的 `primaryRole`、`additionalRoles`、`projects`、`subscribedTags` 和 `excludedSkills`，以及 `enabledAgents`，即资源安装到的工具：默认为打开克隆的步骤的工具，否则为你启用的 agent。只要 `revision` 中存在 `manifest/members.yaml`，它就像在你的检出目录中一样决定你在克隆中的角色：`primaryRole` 或 `additionalRoles` 与它分配给你的不同时，克隆以 `clone_prepare_failed` 失败。请省略它们；要以某个角色的知识运行步骤，还需在步骤上设置 `role`。teamai 离线创建克隆，来源是运行的检出目录或提交缓存；`repo` 只指明缓存，从不是 URL。打开克隆的 workflow 步骤拥有它，供其下每个 `continue` 步骤使用。克隆中的任何内容都不会被推送或交付。[Benchmark](benchmarks.md) 会为你写出这些步骤。
 
 ### 以团队角色运行步骤
 
@@ -1571,11 +1583,11 @@ TeamAI 为准备 attempt 记录的内容只保存在本机：路径和文件指�
 teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}},"running":[]}'
 ```
 
-带上 `--prepare` 时，teamai 在本机为[克隆步骤](#克隆工作区)创建克隆、安装其团队资产并运行 setup，然后返回带 `cwd`（即该克隆）的租约。一次调用可能要等 setup 运行完。驱动未在 `workspace` 中列出 `clone`，或没有用 `--prepare` 请求时，克隆步骤会被暂缓，`wait.held[].missing` 列出 `workspace.clone` 或 `prepare`。以团队角色运行的克隆还需要 `can.role`。[限定在一个目录里](#在自己的驱动里运行受限步骤)的步骤不需要位置：`--prepare` 返回带 `cwd`（即它的 `confined.dir`）的租约，不为它在 checkout 中创建、设置或快照任何东西。
+带上 `--prepare` 时，teamai 在本机为[克隆步骤](#克隆工作区)创建克隆、安装其团队资源并运行 setup，然后返回带 `cwd`（即该克隆）的租约。一次调用可能要等 setup 运行完。驱动未在 `workspace` 中列出 `clone`，或没有用 `--prepare` 请求时，克隆步骤会被暂缓，`wait.held[].missing` 列出 `workspace.clone` 或 `prepare`。以团队角色运行的克隆还需要 `can.role`。[限定在一个目录里](#在自己的驱动里运行受限步骤)的步骤不需要位置：`--prepare` 返回带 `cwd`（即它的 `confined.dir`）的租约，不为它在 checkout 中创建、设置或快照任何东西。
 
 对每个租约，驱动：
 
-1. 运行每个进程时带上 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，这样从中发出的 `teamai` 调用不会改变任何运行，并去掉 `lease.envScope.withhold` 里的名字。命令租约的 `env` 已经带有 `TEAMAI_WORKFLOW_ATTEMPT`、`TEAMAI_RUN_DIR` 和 `TEAMAI_MODE`，所以 [`teamai-score`](scorers.md) 的 `teamai score` 步骤在任何驱动下都能运行。它在 `cwd` 中运行命令租约（例如 `teamai benchmark check`），没有 `cwd` 的租约则在它自己的工作区中运行，并把命令打印的 JSON 作为 `outputs` 报告。
+1. 运行每个进程时带上 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，这样从中发出的 `teamai` 调用不会改变任何运行，并去掉 `lease.envScope.withhold` 里的名字。命令租约的 `env` 已经带有 `TEAMAI_WORKFLOW_ATTEMPT`、`TEAMAI_RUN_DIR` 和 `TEAMAI_MODE`，所以 [`teamai-score`](scorers.md) 的 `teamai score` 步骤在任何驱动下都能运行。工作流文件夹中步骤的每个租约，其 `env` 也带有 `TEAMAI_WORKFLOW_DIR`。它在 `cwd` 中运行命令租约（例如 `teamai benchmark check`），没有 `cwd` 的租约则在它自己的工作区中运行，并把命令打印的 JSON 作为 `outputs` 报告。
 2. 在 `cwd` 中以 `lease.prompt` 启动 prompt 租约的 `lease.tool`，按原样使用 `lease.model`，并从工具启动起让它遵守 `lease.limits`。
 3. 报告 prompt 时带上 `tool`、工具报告的 `model`、`session` 和 `tokens`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`（`{"amount":0.12,"unit":"USD"}`）。某个限制停止了工具时，报告带 `outcome: "success"` 和 `limit`：`timeout`、`budget` 或 `max_turns`；驱动无法让工具遵守的 `budget` 或 `max_turns` 列在 `unenforced` 中。`limit` 是租约没有设置的限制时，报告返回 `invalid_report`；带有 `changes` 或 `read`（由 teamai 从克隆中填写）的报告也一样。
 
@@ -1592,7 +1604,7 @@ $ teamai workflow report r245b… --json '{"attempt":"afd63…","revision":2,"ou
 {"data":{"accepted":true,"revision":3,"step":{"id":"judge","status":"succeeded","outcome":"success"}}}
 ```
 
-[限定在一个目录里](workflow.md#限定在一个目录里的提示步骤)的步骤只租给 `can.confined` 中有不低于其级别的提供的驱动。它的租约带 `confined`：`dir`、`level`、`tools`（达到该级别的各提供中的工具，按顺序排列，`prefer` 列出的工具按其顺序在最前），以及 `confined.json` 指定了 schema 时的 `schema`。这些工具在本机都解析不了该步骤的模型时，步骤等待，`wait.held[].missing` 列出 `model`；没有提供达到其级别时列出 `confined`。
+[限定在一个目录里](workflow.md#限定在一个目录里的提示步骤)的步骤只租给 `can.confined` 中有不低于其级别的提供的驱动。它的租约带 `confined`：`dir`、`level`、`tools`（达到该级别的各提供中的工具，按顺序排列，`prefer` 列出的工具按其顺序在最前；有 `require` 时只有它指定的那个工具），以及 `confined.json` 指定了 schema 时的 `schema`。这些工具在本机都解析不了该步骤的模型时，步骤等待，`wait.held[].missing` 列出 `model`；没有提供达到其级别，或达到其级别的提供中没有所要求的工具时，列出 `confined`。
 
 驱动在 `tools` 中第一个能解析 `lease.model` 的工具上运行 `lease.prompt`，以 `dir` 作为工具的工作目录和唯一可读的根目录，不带任何团队 env，也不保留会话。它把回答作为 `outputs` 报告，TeamAI 按步骤的 `output` 检查它，并按这次运行的测量报告 `confined`：`tool`、`isolation`、`access`，以及工具报告了时的 `model`、`effort` 和 `usage`。找不到工具运行的驱动报告 `outcome: "released"`。`src/workflow/conformance/confined.ts` 中的 `confinedConformanceScenarios` 检查这些租用规则。
 

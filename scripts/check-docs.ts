@@ -6,24 +6,34 @@ import { TOOL_SUPPORT_PAGES, renderToolSupportPage } from './tool-support.js';
 import { COMMANDS_REFERENCE_PATH, renderCommandsReference } from './commands-reference.js';
 
 const root = process.cwd();
-const args = process.argv.slice(2);
+const CHECKS = ['readme-matrix', 'skill-commands-exist', 'team-wiki-codebase-skill', 'skill-content', 'workflow-docs-examples', 'glossary-terms'] as const;
+const USAGE = `Usage: node scripts/check-docs.mjs [--write] [--only=<check>]\n<check> is one of: ${CHECKS.join(', ')}`;
 
-if (args.some((arg) => arg !== '--write')) throw new Error('Usage: node scripts/check-docs.mjs [--write]');
+let write = false;
+let only: (typeof CHECKS)[number] | undefined;
 
-const write = args.includes('--write');
+for (const arg of process.argv.slice(2)) {
+  const name = CHECKS.find((check) => arg === `--only=${check}`);
+
+  if (arg === '--write') write = true;
+  else if (name && !only) only = name;
+  else throw new Error(USAGE);
+}
+
 const program = await loadCommandTable();
 
 const generated = [
-  { file: COMMANDS_REFERENCE_PATH, content: renderCommandsReference(program) },
-  { file: TOOL_SUPPORT_PAGES.en, content: renderToolSupportPage('en') },
-  { file: TOOL_SUPPORT_PAGES['zh-CN'], content: renderToolSupportPage('zh-CN') },
+  { file: COMMANDS_REFERENCE_PATH, content: () => renderCommandsReference(program) },
+  { file: TOOL_SUPPORT_PAGES.en, content: () => renderToolSupportPage('en') },
+  { file: TOOL_SUPPORT_PAGES['zh-CN'], content: () => renderToolSupportPage('zh-CN') },
 ];
 
 for (const output of generated) {
   const file = path.join(root, output.file);
+  const content = output.content();
 
-  if (write) fs.writeFileSync(file, output.content);
-  else if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== output.content) {
+  if (write) fs.writeFileSync(file, content);
+  else if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== content) {
     console.error(`Generated documentation is stale: ${output.file}. Run node scripts/check-docs.mjs --write.`);
     process.exitCode = 1;
   }
@@ -31,14 +41,7 @@ for (const output of generated) {
 
 setSilent(true);
 
-await import('./doc-checks/readme-matrix.js');
-
-await import('./doc-checks/skill-commands-exist.js');
-
-await import('./doc-checks/team-wiki-codebase-skill.js');
-
-await import('./doc-checks/skill-content.js');
-
-await import('./doc-checks/workflow-docs-examples.js');
+// --only narrows these checks; the generated files above are always compared.
+for (const name of only ? [only] : CHECKS) await import(`./doc-checks/${name}.js`);
 
 if (!process.exitCode) console.log('Documentation checks passed.');

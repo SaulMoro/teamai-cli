@@ -49,7 +49,8 @@ describe('session platform facts (#1140)', () => {
   });
 
   it('reads no session platform for a tool whose sessions are none or unknown', () => {
-    for (const tool of ['copilot', 'kiro', 'openclaw']) expect(AgentSession.platformForTool(tool)).toBeUndefined();
+    for (const tool of ['kiro', 'openclaw']) expect(AgentSession.platformForTool(tool)).toBeUndefined();
+    expect(AgentSession.platformForTool('copilot')).toBe('copilot');
     expect(AgentSession.platformForTool('muse')).toBe('muse');
     expect(AgentSession.platformForTool('pi')).toBe('pi');
     expect(AgentSession.platformForTool('omp')).toBe('omp');
@@ -65,6 +66,7 @@ describe('session platform facts (#1140)', () => {
     expect(resumeCommand('qoder', 'id1')).toBe('qodercli --resume id1');
     expect(resumeCommand('qoder-cn', 'id1')).toBe('qoderclicn --resume id1');
     expect(resumeCommand('joycode', 'id1')).toBe('joycode --resume id1');
+    expect(resumeCommand('cursor', 'id1')).toBe('cursor-agent --resume id1');
   });
 
   it('rejects inherited object keys as platform names', () => {

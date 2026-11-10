@@ -5,7 +5,7 @@
  * hundreds of records re-reads nothing it read before. A run this machine has a record for is read from it, not from
  * its published copy.
  *
- * Each team revision the selected suite's runs installed is named from this machine's team clone, with the asset files
+ * Each team revision the selected suite's runs installed is named from this machine's team clone, with the resource files
  * each tool and model's revision changed since the one it ran on before: a commit never changes, so each is read once.
  */
 import fs from 'node:fs/promises';
@@ -54,7 +54,7 @@ async function readRecord(file: string, source: BenchmarkRunInput['source']): Pr
     if (!parsed.success || !isRunId(parsed.data.run)) return undefined;
     const record = parsed.data;
 
-    return definedFields<BenchmarkRunInput>({ run: record.run, source, startedAt: record.startedAt, outcome: record.outcome, username: record.username || undefined, benchmark: record });
+    return definedFields<BenchmarkRunInput>({ run: record.run, source, startedAt: record.startedAt, outcome: record.outcome, schemaVersion: record.schemaVersion, username: record.username || undefined, benchmark: record });
   } catch {
     return undefined;
   }

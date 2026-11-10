@@ -38,7 +38,7 @@ const RecordSchema = z.object({ trials: z.array(z.unknown()) }).passthrough();
 const EndRecordSchema = z.object({ workflow: z.string(), status: z.string(), isolated: z.boolean().optional() }).passthrough();
 const CAPTION = 'These results hold for these tasks, this run and this machine.';
 const NO_SANDBOX = 'Step "trials" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.';
-const USER_SCOPE = 'A benchmark gives each trial the team revision it plans, but this team also reaches this checkout through user scope, where every workspace shares one copy, so a trial could read team assets that revision does not have. Remove the user-scope install, or turn off inheritUserScope in this workspace, and run the benchmark again.';
+const USER_SCOPE = 'A benchmark gives each trial the team revision it plans, but this team also reaches this checkout through user scope, where every workspace shares one copy, so a trial could read team resources that revision does not have. Remove the user-scope install, or turn off inheritUserScope in this workspace, and run the benchmark again.';
 
 const TWO_BY_TWO = `schemaVersion: v1alpha1
 name: fix
@@ -91,7 +91,7 @@ describe('benchmark on the local driver', () => {
       baselineTeamRevision: teamHead,
       selection: { additionalRoles: [], projects: [], excludedSkills: [] },
       repetitions: 1,
-      tasks: [{ id: 'fix', startingCommit: fixture.startingCommit, judge: { kind: 'check', run: 'node test.js', protect: ['test.js'] } }],
+      tasks: [{ id: 'fix', startingCommit: fixture.startingCommit, judge: { kind: 'check', check: { run: 'node test.js', protect: ['test.js'] } } }],
       arms: [{ name: 'claude', tool: 'claude', team: { kind: 'pulled', revision: teamHead } }],
       trials: [{ order: 1, repetition: 1, task: 'fix', arm: 'claude', step: 'r1.fix.claude.prompt' }],
     });
@@ -164,6 +164,24 @@ describe('benchmark on the local driver', () => {
     expect(done.outputs.text).toContain('| codex | codex | tool default (team) | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (4/4) |');
     expect(fixture.trialRootEntries()).toEqual([]);
     expect(fixture.status()).toBe(before);
+  }, 120_000);
+
+  it('estimates a second run from the first before it starts, and shows the estimate beside the cost at the end', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
+    fixtures.push(fixture);
+
+    const first = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const earlier = DoneSchema.parse(envelope(first).data?.done);
+    const second = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(second).data?.done);
+
+    expect(first.code, said(first)).toBe(0);
+    expect(first.stderr).toContain('Suite fix: 1 trial (1 arm × 1 task × 1 repetition), 0 judge calls.');
+    expect(first.stderr).toContain('No earlier run of fix to estimate from.');
+    expect(second.code, said(second)).toBe(0);
+    expect(second.stderr).toContain(`Estimated 0.25–0.25 USD (agents 0.25–0.25), from run ${earlier.run}.\n  claude 0.25 USD per trial`);
+    expect(done.outputs.text).toContain('| Cost | Estimated | Cost per passed trial |');
+    expect(done.outputs.text).toContain('| 0.25 USD (1) | 0.25–0.25 USD | 0.25 USD |');
   }, 120_000);
 
   it('--sandbox declares a sandbox for this process only', async () => {

@@ -45,7 +45,7 @@ vi.mock('../dashboard-collector.js', () => ({
   compactEvents: vi.fn().mockResolvedValue(undefined),
   dashboardReport: mockDashboardReport,
   dataHomeKey: vi.fn().mockResolvedValue('key'),
-  eventProjectAnchor: vi.fn().mockResolvedValue(undefined),
+  eventRepoAnchor: vi.fn().mockResolvedValue(undefined),
   addGitStateAtStart: vi.fn().mockResolvedValue(undefined),
   addGitHeadAtStop: vi.fn().mockResolvedValue(undefined),
   gitStateIn: vi.fn().mockReturnValue(undefined),
@@ -201,7 +201,8 @@ import type { JsonValue, LocalConfig } from '../types.js';
 import { log } from '../utils/logger.js';
 
 /** The scope hook-dispatch resolved for the hook's cwd, handed to every handler. */
-const scope: LocalConfig = { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user', additionalRoles: [] };
+// Recall on through the member's switch: `/tmp` holds no teamai.yaml to turn it on for the team, and the recall handlers do nothing while it is off.
+const scope: LocalConfig = { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user', additionalRoles: [], recallEnabled: true };
 
 // ── Tests ────────────────────────────────────────────────
 
@@ -246,6 +247,35 @@ describe('hook-handlers registry', () => {
     expect(events).toContain('session-end');
   });
 
+  it('records an automatic update skipped by its policy or install layout as skipped', async () => {
+    mockDoUpdate.mockResolvedValueOnce('skipped');
+    const handlers = buildHandlerRegistry().filter((r) => r.handler.name === 'update');
+    const dispatcher = createDispatcher({ handlers, localConfig: null });
+    const result = await dispatcher.dispatch('stop', '*', {}, 'claude', 'background');
+    expect(mockDoUpdate).toHaveBeenLastCalledWith(null, { automatic: true });
+    expect(result).toEqual({ output: null, errors: [] });
+    expect(log.debug).toHaveBeenCalledWith(expect.stringMatching(/update=\d+ms\(skipped\)/));
+  });
+
+  it('records an automatic update failure as failed rather than ok', async () => {
+    mockDoUpdate.mockResolvedValueOnce('failed');
+    const handlers = buildHandlerRegistry().filter((r) => r.handler.name === 'update');
+    const dispatcher = createDispatcher({ handlers, localConfig: null });
+    const result = await dispatcher.dispatch('stop', '*', {}, 'claude', 'background');
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].handlerName).toBe('update');
+    expect(log.debug).toHaveBeenCalledWith(expect.stringMatching(/update=\d+ms\(failed\)/));
+  });
+
+  it('records an automatic update that could not reach the registry as failed', async () => {
+    mockDoUpdate.mockResolvedValueOnce('unreachable');
+    const handlers = buildHandlerRegistry().filter((r) => r.handler.name === 'update');
+    const dispatcher = createDispatcher({ handlers, localConfig: null });
+    const result = await dispatcher.dispatch('stop', '*', {}, 'claude', 'background');
+    expect(result.errors).toHaveLength(1);
+    expect(log.debug).toHaveBeenCalledWith(expect.stringMatching(/update=\d+ms\(failed\)/));
+  });
+
   it('post-tool-use runs every non-output handler detached, leaving the inline pass empty (#1216)', () => {
     // dashboard-report and recall-attribution always return null — pure side
     // effects, the exact criterion `background` documents — and the same
@@ -261,16 +291,33 @@ describe('hook-handlers registry', () => {
       expect(reg, name).toBeDefined();
       expect(reg!.background, `${name} must run detached`).toBe(true);
     }
-    // What remains inline for a plain tool call: nothing.
+    // What remains inline: the TodoWrite hint alone, which answers nothing but a
+    // TodoWrite call (#1788). The fast path hands every other call to the child.
     const inline = handlers.filter((r) => !r.background);
-    expect(inline).toEqual([]);
+    expect(inline.map((r) => r.handler.name)).toEqual(['todowrite-hint']);
   });
 
-  it('session-end records the final dashboard snapshot and dispatches the webhook in the background, and syncs votes in the foreground', () => {
+  // What a prompt's foreground runs is what hook-fast-path.ts `promptAnswersInForeground` predicts
+  // the output of: a package hint, a contribute hint, the HTTP local agent's notices (#1788).
+  it.each([
+    ['darwin', ['pending-hint', 'package-pending-hint', 'local-agent-sync']],
+    ['linux', ['pending-hint', 'package-pending-hint', 'local-agent-sync']],
+    // No detached child is added on Windows, where one is a WMI spawn.
+    ['win32', ['pending-hint', 'package-pending-hint', 'skill-mention', 'dashboard-report', 'local-agent-sync']],
+  ])('prompt-submit on %s answers in the foreground with only %j', (platform, foreground) => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue(platform as NodeJS.Platform);
+    const handlers = buildHandlerRegistry().filter((r) => r.event === 'prompt-submit');
+    platformSpy.mockRestore();
+
+    expect(handlers.filter((r) => !r.background).map((r) => r.handler.name)).toEqual(foreground);
+    expect(handlers.map((r) => r.handler.name)).toEqual(['pending-hint', 'package-pending-hint', 'skill-mention', 'dashboard-report', 'local-agent-sync']);
+  });
+
+  it('session-end records the final dashboard snapshot, dispatches the webhook and pushes votes in the background, and credits votes in the foreground', () => {
     const handlers = buildHandlerRegistry().filter((r) => r.event === 'session-end');
     // Copilot fires SessionEnd (not Stop), so the webhook handler must run here
     // too — otherwise those sessions emit no session-stop notification (#702).
-    // votes-sync credits and pushes the last turn's reads (#884).
+    // votes-sync credits the last turn's reads, votes-push pushes them (#884).
     expect(handlers).toEqual([
       expect.objectContaining({
         matcher: '*',
@@ -287,6 +334,13 @@ describe('hook-handlers registry', () => {
         gitOnly: true,
         requiresConfig: true,
         handler: expect.objectContaining({ name: 'votes-sync' }),
+      }),
+      expect.objectContaining({
+        matcher: '*',
+        background: true,
+        gitOnly: true,
+        requiresConfig: true,
+        handler: expect.objectContaining({ name: 'votes-push' }),
       }),
     ]);
     expect(handlers[2].background).toBeUndefined();
@@ -725,7 +779,7 @@ describe('hook-handlers registry', () => {
 
     await handler.execute({ session_id: 'sid-abc', cwd: '/x' }, 'claude', null);
     // transcriptPath is the third arg; absent from this stdin so it is undefined.
-    expect(mockContributeCheckForSession).toHaveBeenCalledWith('sid-abc', '/x', undefined, false, undefined);
+    expect(mockContributeCheckForSession).toHaveBeenCalledWith('sid-abc', '/x', undefined, false, undefined, null);
   });
 
   it('contribute-check handler forwards transcript_path so friction is read live', async () => {
@@ -740,7 +794,7 @@ describe('hook-handlers registry', () => {
       { session_id: 'sid-abc', cwd: '/x', transcript_path: '/t/transcript.jsonl' },
       'claude', null,
     );
-    expect(mockContributeCheckForSession).toHaveBeenCalledWith('sid-abc', '/x', '/t/transcript.jsonl', false, undefined);
+    expect(mockContributeCheckForSession).toHaveBeenCalledWith('sid-abc', '/x', '/t/transcript.jsonl', false, undefined, null);
   });
 
   it('contribute-check handler routes hint through formatStopHookOutput for cursor', async () => {
@@ -753,7 +807,7 @@ describe('hook-handlers registry', () => {
 
     const result = await handler.execute({ session_id: 's', cwd: '/x' }, 'cursor', null);
     expect(result).not.toBeNull();
-    const parsed = JSON.parse(result!);
+    const parsed = JSON.parse(String(result));
     expect(parsed.followup_message).toContain('[teamai] hello');
     // Cursor hides the payload, so the model is asked to pass it on.
     expect(parsed.followup_message).toContain('verbatim');
@@ -768,7 +822,7 @@ describe('hook-handlers registry', () => {
     mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] hello' });
 
     const result = await handler.execute({ session_id: 's', cwd: '/x' }, 'claude', null);
-    const parsed = JSON.parse(result!);
+    const parsed = JSON.parse(String(result));
     expect(parsed.hookSpecificOutput.additionalContext).toBe('[teamai] hello');
   });
 
@@ -784,7 +838,7 @@ describe('hook-handlers registry', () => {
 
     const result = await handler.execute({ session_id: 's1', cwd: '/x' }, tool, null);
     expect(result).toBeNull();
-    expect(mockContributeCheckForSession).toHaveBeenCalledWith('s1', '/x', undefined, true, undefined);
+    expect(mockContributeCheckForSession).toHaveBeenCalledWith('s1', '/x', undefined, true, undefined, null);
   });
 
   it('contribute-check handler returns stdout hint for claude (unchanged)', async () => {
@@ -799,7 +853,7 @@ describe('hook-handlers registry', () => {
     expect(result).not.toBeNull();
     expect(result).toContain('do share');
     // claude is not a stash tool: called with stash=false.
-    expect(mockContributeCheckForSession).toHaveBeenCalledWith('s2', '/x', undefined, false, undefined);
+    expect(mockContributeCheckForSession).toHaveBeenCalledWith('s2', '/x', undefined, false, undefined, null);
   });
 
   it('contribute-check handler stays silent when the team turned the hint off', async () => {
@@ -1011,7 +1065,7 @@ describe('hook-handlers registry', () => {
 
     const result = await handler.execute({ session_id: 's3', cwd: '/x' }, tool, scope);
     expect(result).not.toBeNull();
-    const parsed = JSON.parse(result!);
+    const parsed = JSON.parse(String(result));
     expect(parsed.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
     expect(parsed.hookSpecificOutput.additionalContext).toBe('[teamai] stashed');
   });
@@ -1048,7 +1102,7 @@ describe('hook-handlers registry', () => {
 
     const output = await handler.execute({ session_id: 's6', cwd: '/x' }, 'claude', null);
 
-    expect(JSON.parse(output!).hookSpecificOutput.additionalContext)
+    expect(JSON.parse(String(output)).hookSpecificOutput.additionalContext)
       .toBe('Run `teamai packages`');
   });
 
@@ -1173,20 +1227,22 @@ describe('hook-handlers registry', () => {
     }
   });
 
-  it('TodoWrite hint stays under its 3s PostToolUse host cap', () => {
+  it('TodoWrite hint keeps the budget of the 3s entry it had before it joined the wildcard pass (#1788)', () => {
     const registry = buildHandlerRegistry();
     const todo = registry.find(
-      (r) => r.event === 'post-tool-use' && r.matcher === 'TodoWrite',
+      (r) => r.event === 'post-tool-use' && r.handler.name === 'todowrite-hint',
     );
-    expect(todo!.timeoutMs).toBeLessThan(3_000);
+    expect(todo?.matcher).toBe('*');
+    expect(todo?.timeoutMs).toBeLessThan(3_000);
   });
 
-  it('marks contribute-check, mr-hint, and votes-sync as gitOnly', () => {
+  it('marks contribute-check, mr-hint, votes-sync and votes-push as gitOnly', () => {
     const registry = buildHandlerRegistry();
     const gitOnly = registry.filter((r) => r.gitOnly === true).map((r) => r.handler.name);
     expect(gitOnly).toContain('contribute-check');
     expect(gitOnly).toContain('mr-hint');
     expect(gitOnly).toContain('votes-sync');
+    expect(gitOnly).toContain('votes-push');
   });
 
   it('filterHandlersForConfig drops gitOnly handlers for http source', () => {
@@ -1210,6 +1266,14 @@ describe('hook-handlers registry', () => {
     expect(filterHandlersForConfig(registry, { repo: {} } as never).length).toBe(full);
   });
 
+  // The background pass of a tool call or a prompt outside any scope exits before running handlers unless the machine
+  // syncs over HTTP (#1788), which is only behaviour-preserving while the local agent is all that is left to run there.
+  it.each(['post-tool-use', 'prompt-submit'])('leaves %s no background handler but the HTTP local agent\'s where teamai is not set up', (event) => {
+    const background = filterHandlersForConfig(buildHandlerRegistry(), null).filter((reg) => reg.event === event && reg.background === true);
+
+    expect(background.map((reg) => reg.handler.name).filter((name) => name !== 'local-agent-sync')).toEqual([]);
+  });
+
   it('filterHandlersForConfig drops the share nudge where teamai is not set up (#748)', () => {
     const names = filterHandlersForConfig(buildHandlerRegistry(), null).map((r) => r.handler.name);
     expect(names).not.toContain('contribute-check');
@@ -1229,11 +1293,11 @@ describe('hook-handlers registry', () => {
 
   it('TodoWrite gets no recall nudge where teamai is not set up (#748)', async () => {
     const registry = buildHandlerRegistry();
-    expect(registry.some((r) => r.matcher === 'TodoWrite' && r.handler.name === 'todowrite-hint')).toBe(true);
+    expect(registry.some((r) => r.matcher === '*' && r.handler.name === 'todowrite-hint')).toBe(true);
     const dispatcher = createDispatcher({ handlers: filterHandlersForConfig(registry, null), localConfig: null });
 
     const result = await dispatcher.dispatch(
-      'post-tool-use', 'TodoWrite', { session_id: 'td-748', tool_name: 'TodoWrite' }, 'claude', 'foreground',
+      'post-tool-use', '*', { session_id: 'td-748', tool_name: 'TodoWrite' }, 'claude', 'foreground',
     );
     expect(result.output).toBeNull();
   });
@@ -1298,10 +1362,10 @@ describe('hook-handlers registry', () => {
     expect(result).toContain('Adopted team knowledge this session');
   });
 
-  it('votes-sync skips updateReports when there are no pending vote deltas', async () => {
+  it('votes-push skips updateReports when there are no pending vote deltas', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
-      (r) => r.event === 'stop' && r.handler.name === 'votes-sync',
+      (r) => r.event === 'stop' && r.handler.name === 'votes-push',
     )!.handler;
 
     reportsBranchMocks.updateReports.mockClear();
@@ -1312,10 +1376,38 @@ describe('hook-handlers registry', () => {
     expect(reportsBranchMocks.updateReports).not.toHaveBeenCalled();
   });
 
-  it('votes-sync writes votes through updateReports when deltas are pending', async () => {
+  // A fetch and a push to a remote a few seconds away do not fit the 4.5 s
+  // foreground budget: the dispatcher's exit then cut the push and left the
+  // vote commit unpushed, on every Stop until a pull carried it.
+  it('votes-sync leaves pending votes to the detached pass instead of pushing inline', async () => {
+    const handler = buildHandlerRegistry().find(
+      (r) => r.event === 'stop' && r.handler.name === 'votes-sync',
+    )!.handler;
+    voteMocks.hasPendingVoteDeltas.mockResolvedValue(true);
+
+    try {
+      await handler.execute({ session_id: 'sid-inline-push', cwd: '/x' }, 'claude', scope);
+    } finally {
+      voteMocks.hasPendingVoteDeltas.mockResolvedValue(false);
+    }
+
+    expect(reportsBranchMocks.updateReports).not.toHaveBeenCalled();
+  });
+
+  it('votes-push runs detached at Stop and SessionEnd, with more time than the foreground cap', () => {
+    const registry = buildHandlerRegistry();
+
+    for (const event of ['stop', 'session-end']) {
+      const reg = registry.find((r) => r.event === event && r.handler.name === 'votes-push');
+      expect(reg).toMatchObject({ background: true, gitOnly: true, requiresConfig: true });
+      expect(reg!.timeoutMs).toBeGreaterThan(4_500);
+    }
+  });
+
+  it('votes-push writes votes through updateReports when deltas are pending', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
-      (r) => r.event === 'stop' && r.handler.name === 'votes-sync',
+      (r) => r.event === 'stop' && r.handler.name === 'votes-push',
     )!.handler;
 
     const syncedDeltas = { 'doc-a': { recalled_delta: 0, upvoted_delta: 1 } };
@@ -1353,10 +1445,10 @@ describe('hook-handlers registry', () => {
     expect(voteMocks.confirmVotesSynced).toHaveBeenCalledWith(expect.any(String), syncedDeltas);
   });
 
-  it('votes-sync keeps the deltas pending when the reports push is not delivered (#1027)', async () => {
+  it('votes-push keeps the deltas pending when the reports push is not delivered (#1027)', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
-      (r) => r.event === 'stop' && r.handler.name === 'votes-sync',
+      (r) => r.event === 'stop' && r.handler.name === 'votes-push',
     )!.handler;
 
     voteMocks.hasPendingVoteDeltas.mockResolvedValueOnce(true);

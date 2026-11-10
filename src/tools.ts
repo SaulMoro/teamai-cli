@@ -293,6 +293,21 @@ export type HooksChannels = {
    * which every linked worktree reads (#955), or in HOME behind a `$PWD` gate.
    */
   readonly teamHooks: 'main-checkout' | 'home';
+  /**
+   * The environment variable the tool sets to the project's root when it runs a hook from a project file, if it has
+   * one. A self-mode hook folder's command names the folder through it, so a project file the repository may
+   * commit holds the same command in every worktree (#1787, common rule 10). Without one, the absolute path is written.
+   */
+  readonly projectDirVariable?: string;
+  /**
+   * Whether hook-dispatch needs the CLI bundle in the foreground before the
+   * background child can take this tool's hook: it translates Antigravity CLI's
+   * payload there, and claims each Copilot CLI event among the copies installed.
+   * Every other tool's hook with nothing to print exits before the bundle loads
+   * (#1788). src/hook-fast-path.ts keeps a copy of this list, which
+   * hook-fast-path.test.ts checks against this field.
+   */
+  readonly needsBundle: boolean;
 };
 
 /**
@@ -343,6 +358,18 @@ export type ToolFeatures = {
   readonly agentHooks: Support;
 };
 
+/**
+ * How the tool reads the support files a user-scope rule folder names through `${TEAMAI_RULE_DIR}` (#1787), in the
+ * data home: `none`, without a prompt; `grant`, once teamai adds that directory to `setting` in the tool's user
+ * settings; `copy`, not without a prompt, so pull warns once. In a project every tool reads the folder in the worktree,
+ * `.teamai/delivered/rules/`, a `copy` tool by its path from the project root. A tool with no cell has no evidence,
+ * and gets `copy`.
+ */
+export type RuleFolderReach =
+  | { readonly reach: 'none'; readonly evidence: Evidence }
+  | { readonly reach: 'grant'; readonly setting: 'permissions.additionalDirectories'; readonly evidence: Evidence }
+  | { readonly reach: 'copy'; readonly evidence?: Evidence };
+
 export type ToolDescriptor = {
   readonly home: Home;
   readonly skillLoad: SkillLoad;
@@ -358,6 +385,8 @@ export type ToolDescriptor = {
    */
   readonly skillsFollowSession?: true;
   readonly rules: RulesChannels;
+  /** How the tool reads a user-scope rule folder's files; absent: `copy`, with no evidence. */
+  readonly ruleFolders?: RuleFolderReach;
   readonly blocks: BlocksChannels;
   readonly agents: AgentsChannels;
   readonly mcp: McpChannels;
@@ -460,6 +489,9 @@ export const TOOLS = {
       user: { channel: 'dir', format: 'verbatim', reads: [{ base: 'home', path: '.claude/rules', evidence: 'verified' }] },
       project: { channel: 'dir', format: 'verbatim', reads: [{ base: 'project', path: '.claude/rules', when: 'workspaceUnder', evidence: 'verified' }] },
     },
+    // Claude Code 2.1.319: `claude -p` reads a file outside the project with no permission denial once its directory
+    // is in `permissions.additionalDirectories` of ~/.claude/settings.json, and is denied the read without it.
+    ruleFolders: { reach: 'grant', setting: 'permissions.additionalDirectories', evidence: 'verified' },
     blocks: {
       user: { channel: 'file', file: { in: 'claudemd' }, reads: [{ base: 'home', path: '.claude/CLAUDE.md', evidence: 'verified' }] },
       // CLAUDE.local.md would stop Claude's native AGENTS.md load (#945).
@@ -492,6 +524,8 @@ export const TOOLS = {
       stopReply: true,
       shell: 'system',
       teamHooks: 'main-checkout',
+      projectDirVariable: 'CLAUDE_PROJECT_DIR',
+      needsBundle: false,
     },
     sessions: ['claude-code'],
     launch: 'claude',
@@ -538,7 +572,7 @@ export const TOOLS = {
       user: { format: 'codex', reads: [{ base: 'home', path: '.codex/config.toml', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'codex', reads: [{ base: 'project', path: '.codex/config.toml', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['codex-project-trust'] },
     },
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex/hooks.json', evidence: 'verified' }] }, self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.codex/hooks.json', when: 'workspaceUnder', evidence: 'verified' }] }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'main-checkout' },
+    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex/hooks.json', evidence: 'verified' }] }, self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.codex/hooks.json', when: 'workspaceUnder', evidence: 'verified' }] }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'main-checkout', needsBundle: false },
     sessions: ['codex'],
     launch: 'codex',
     autoCompact: 'codex',
@@ -571,7 +605,7 @@ export const TOOLS = {
     },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex-internal/hooks.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'codex', reads: 'unknown' }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex-internal/hooks.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'codex', reads: 'unknown' }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['codex-internal'],
     launch: 'codex',
     autoCompact: 'codex',
@@ -600,7 +634,7 @@ export const TOOLS = {
     blocks: { user: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' }, project: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' } },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['claude-internal'],
     launch: 'claude',
     autoCompact: 'claude',
@@ -632,7 +666,7 @@ export const TOOLS = {
       user: { format: 'claude', reads: 'unknown' },
       project: { judgedTeamaiOnly: false, format: 'claude', writtenBy: 'claude', reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'assumed' }] },
     },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['tclaude'],
     launch: 'claude',
     autoCompact: 'claude',
@@ -665,7 +699,7 @@ export const TOOLS = {
     },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.tcodex/hooks.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'codex', reads: 'unknown' }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.tcodex/hooks.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'codex', reads: 'unknown' }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['tcodex'],
     launch: 'codex',
     autoCompact: 'codex',
@@ -719,7 +753,7 @@ export const TOOLS = {
       project: { judgedTeamaiOnly: true, format: 'cursor', syntax: 'jsonc', reads: [{ base: 'project', path: '.cursor/mcp.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['cursor-mcp-approval'] },
     },
     // cursor-agent 2026.10.21 parses hooks.json with `parseJSONC`: comments stripped, then JSON.parse, so no trailing commas.
-    hooks: { user: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'home', path: '.cursor/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'project', path: '.cursor/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'home', path: '.cursor/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'cursor', syntax: 'json-comments', reads: [{ base: 'project', path: '.cursor/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['cursor'],
     launch: 'cursor',
     autoCompact: 'none',
@@ -780,8 +814,9 @@ export const TOOLS = {
       stopReply: true,
       shell: 'system',
       teamHooks: 'home',
+      needsBundle: true,
     },
-    sessions: 'none',
+    sessions: ['copilot'],
     launch: 'copilot',
     autoCompact: 'none',
     skillAllowedTools: false,
@@ -822,7 +857,7 @@ export const TOOLS = {
     },
     mcp: NONE,
     // ~/.joycode/hooks.json and <project>/.joycode/hooks.json take Claude-shaped hooks (command type, timeout in seconds).
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.joycode/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.joycode/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.joycode/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.joycode/hooks.json', when: 'workspaceUnder', evidence: 'source' }] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['joycode'],
     launch: 'none',
     autoCompact: 'none',
@@ -866,7 +901,7 @@ export const TOOLS = {
       project: { judgedTeamaiOnly: false, format: 'claude', syntax: 'json-comments', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['qoder-folder-trust', 'qoder-mcp-approval'] },
     },
     // qodercli 1.1.81 loads project, then project-local (settings.local.json), then user hooks; both project files wait on folder trust.
-    hooks: { user: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'home', path: '.qoder/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'source' }], readGates: ['qoder-folder-trust'] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'home', path: '.qoder/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', syntax: 'json-comments', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'source' }], readGates: ['qoder-folder-trust'] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Qoder CLI 1.1.78: <id>.jsonl under <QODER_CONFIG_DIR or QODER_CLI_HOME/.qoder or ~/.qoder>/projects/<cwd>.
     sessions: ['qoder'],
     launch: 'qoder',
@@ -909,7 +944,7 @@ export const TOOLS = {
       user: { format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] },
       project: { judgedTeamaiOnly: false, format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'workspaceUnder', evidence: 'assumed' }] },
     },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'assumed' }] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.qoder/settings.local.json', when: 'cwdOnly', evidence: 'assumed' }] }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Qoder CN: the same layout under ~/.qoder-cn, moved by QODERCN_CONFIG_DIR.
     sessions: ['qoder-cn'],
     launch: 'none',
@@ -952,7 +987,7 @@ export const TOOLS = {
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.kiro/settings/mcp.json', when: 'workspaceUnder', evidence: 'docs' }] },
     },
     // Kiro CLI V3 loads every hook file in ~/.kiro/hooks, whatever agent runs (#1341).
-    hooks: { user: { channel: 'adapter', adapter: 'kiro-hooks', evidence: 'docs' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'kiro-hooks', evidence: 'docs' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Kiro CLI docs: sessions under ~/.kiro, moved by KIRO_HOME.
     sessions: 'none',
     launch: 'kiro',
@@ -998,7 +1033,7 @@ export const TOOLS = {
       user: 'none',
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.trae/mcp.json', when: 'workspaceUnder', evidence: 'docs' }] },
     },
-    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Trae docs: chat history in the IDE's ModularData database, which no variable moves.
     sessions: 'none',
     launch: 'none',
@@ -1042,7 +1077,7 @@ export const TOOLS = {
       user: 'none',
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.trae/mcp.json', when: 'workspaceUnder', evidence: 'docs' }] },
     },
-    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: 'unknown', self: 'unknown', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Trae CN docs: the same database under Trae CN's application data.
     sessions: 'none',
     launch: 'none',
@@ -1087,7 +1122,7 @@ export const TOOLS = {
       project: { judgedTeamaiOnly: true, format: 'claude', key: ['mcp', 'servers'], reads: [{ base: 'project', path: '.zcode/config.json', when: 'workspaceUnder', evidence: 'source' }] },
       retired: { user: ['.agents/mcp.json'] },
     },
-    hooks: { user: { channel: 'settings', format: 'zcode', reads: [{ base: 'home', path: '.zcode/cli/config.json', evidence: 'source' }] }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'zcode', reads: [{ base: 'home', path: '.zcode/cli/config.json', evidence: 'source' }] }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: 'none',
     launch: 'none',
     autoCompact: 'none',
@@ -1136,7 +1171,7 @@ export const TOOLS = {
       user: { format: 'claude', reads: [{ base: 'home', path: '.omp/agent/mcp.json', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'claude', reads: [{ base: 'project', path: '.omp/mcp.json', when: 'cwdOnly', evidence: 'verified' }] },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'omp-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'omp-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Oh My Pi 18.12.6: Pi v3 JSONL with a leading title record under the resolved profile agent root.
     sessions: ['omp'],
     launch: 'omp',
@@ -1180,7 +1215,7 @@ export const TOOLS = {
       user: { format: 'pi', reads: [{ base: 'home', path: '.pi/agent/mcp.json', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'pi', reads: [{ base: 'project', path: '.pi/mcp.json', when: 'cwdOnly', evidence: 'verified' }], readGates: ['pi-project-trust'] },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'pi-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'pi-extension', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     // Pi 1.4.0: v3 JSONL under --session-dir > PI_CODING_AGENT_SESSION_DIR > the sessionDir setting > PI_CODING_AGENT_DIR/sessions.
     sessions: ['pi'],
     launch: 'pi',
@@ -1252,7 +1287,7 @@ export const TOOLS = {
       },
     },
     // CodeBuddy Code 2.179.1 (`-p`) runs the hooks of the project's settings.json and settings.local.json, merged.
-    hooks: { user: { channel: 'settings', format: 'claude', syntax: 'jsonc', reads: [{ base: 'home', path: '.codebuddy/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', syntax: 'jsonc', reads: [{ base: 'project', path: '.codebuddy/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.codebuddy/settings.local.json', when: 'cwdOnly', evidence: 'verified' }] }, subagentStop: true, stopReply: false, shell: 'bundled', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', syntax: 'jsonc', reads: [{ base: 'home', path: '.codebuddy/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', syntax: 'jsonc', reads: [{ base: 'project', path: '.codebuddy/settings.json', when: 'cwdOnly', evidence: 'source' }, { base: 'project', path: '.codebuddy/settings.local.json', when: 'cwdOnly', evidence: 'verified' }] }, subagentStop: true, stopReply: false, shell: 'bundled', teamHooks: 'home', needsBundle: false },
     sessions: ['codebuddy'],
     launch: 'codebuddy',
     autoCompact: 'buddy',
@@ -1293,7 +1328,7 @@ export const TOOLS = {
     },
     agents: NONE,
     mcp: NONE,
-    hooks: { user: { channel: 'adapter', adapter: 'openclaw-hook', evidence: 'verified', readGates: ['openclaw-hooks-enabled', 'openclaw-plugins-enabled'] }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'openclaw-hook', evidence: 'verified', readGates: ['openclaw-hooks-enabled', 'openclaw-plugins-enabled'] }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // OpenClaw 2026.10: rows in ~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite, moved by OPENCLAW_STATE_DIR.
     sessions: 'none',
     launch: 'openclaw',
@@ -1333,7 +1368,7 @@ export const TOOLS = {
     },
     agents: NONE,
     mcp: NONE,
-    hooks: { user: { channel: 'adapter', adapter: 'hermes-plugin', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'hermes-plugin', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['hermes'],
     launch: 'hermes',
     autoCompact: 'none',
@@ -1368,7 +1403,7 @@ export const TOOLS = {
     },
     agents: NONE,
     mcp: NONE,
-    hooks: { user: { channel: 'adapter', adapter: 'dsh-hooks', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'dsh-hooks', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: 'none',
     launch: 'none',
     autoCompact: 'dsh',
@@ -1390,26 +1425,36 @@ export const TOOLS = {
     },
   },
   // CodeBuddy engine 2.168.0; the WorkBuddy launcher's binding of ~/.workbuddy is not certified.
+  // WorkBuddy and WorkBuddy AI keep separate data roots — `.workbuddy/` and
+  // `.workbuddy-ai/` — as two products rather than two generations of one, and
+  // either can outlive the other. The one whose `last-launch.json` is newer is
+  // the live one, and every user-scope path below hangs off it (#1273).
   workbuddy: {
     home: { dir: '.workbuddy' },
     installedBy: 'own-root',
     skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }, { name: 'skill', evidence: 'assumed' }] },
     skills: UNKNOWN_READS,
+    // The engine resolves user rules as `<configDir>/rules` (`loadProjectRules`
+    // passes no explicit dir, so it falls to the app's config dir) and only
+    // reaches for `.codebuddy/rules` in a project.
     rules: {
-      user: { channel: 'dir', format: 'codebuddy', reads: [{ base: 'home', path: '.workbuddy/rules', evidence: 'assumed' }] },
+      user: { channel: 'dir', format: 'codebuddy', reads: [{ base: 'home', path: '.workbuddy/rules', evidence: 'source' }] },
       project: { channel: 'dir', format: 'codebuddy', reads: 'unknown' },
     },
     blocks: {
       user: {
         channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', owned: true, header: 'always-apply' },
-        reads: [{ base: 'home', path: '.workbuddy/rules', evidence: 'assumed' }],
+        reads: [{ base: 'home', path: '.workbuddy/rules', evidence: 'source' }],
       },
       // CodeBuddy's engine reads the project's .codebuddy/rules, so WorkBuddy shares CodeBuddy's copy there.
       project: { channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', dir: '.codebuddy/rules', owned: true, header: 'always-apply' }, reads: 'unknown' },
       retired: { user: ['AGENTS.md'], project: ['AGENTS.md'] },
     },
     agents: {
-      user: { reads: [{ base: 'home', path: '.workbuddy/agents', evidence: 'assumed' }] },
+      user: { reads: [{ base: 'home', path: '.workbuddy/agents', evidence: 'source' }] },
+      // The engine's project agents live under `<cwd>/.codebuddy/agents`, but
+      // that loader has no call site in the build, so `.workbuddy/agents` stays
+      // as reported rather than as guessed-at (#1273).
       project: { reads: [{ base: 'project', path: '.workbuddy/agents', when: 'cwdOnly', evidence: 'assumed' }] },
     },
     mcp: {
@@ -1425,7 +1470,7 @@ export const TOOLS = {
       },
       retired: { project: ['.workbuddy/mcp.json'] },
     },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.workbuddy/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: false, stopReply: false, shell: 'bundled', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.workbuddy/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: false, stopReply: false, shell: 'bundled', teamHooks: 'home', needsBundle: false },
     sessions: ['workbuddy'],
     launch: 'codebuddy',
     autoCompact: 'buddy',
@@ -1498,7 +1543,7 @@ export const TOOLS = {
         ],
       },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'opencode-plugin', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'opencode-plugin', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['opencode'],
     launch: 'opencode',
     autoCompact: 'none',
@@ -1550,7 +1595,7 @@ export const TOOLS = {
       project: { judgedTeamaiOnly: true, format: 'muse', writtenBy: 'claude', reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['muse-workspace-trust'] },
     },
     // Muse takes Codex's hook shape: it drops a group carrying any key but `matcher` and `hooks`, so Claude's described groups never reach it.
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.config/muse/settings.json', evidence: 'verified' }] }, self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.muse/hooks.json', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['muse-workspace-trust'] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.config/muse/settings.json', evidence: 'verified' }] }, self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.muse/hooks.json', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['muse-workspace-trust'] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // muse-bin 1.4.14: sessions under $XDG_DATA_HOME/muse/sessions, ~/.local/share when unset.
     sessions: ['muse'],
     launch: 'muse',
@@ -1598,7 +1643,7 @@ export const TOOLS = {
       user: { format: 'agy', reads: [{ base: 'home', path: '.gemini/config/mcp_config.json', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'agy', reads: [{ base: 'project', path: '.agents/plugins/teamai/mcp_config.json', when: 'workspaceUnder', evidence: 'verified' }] },
     },
-    hooks: { user: { channel: 'adapter', adapter: 'agy-hooks', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
+    hooks: { user: { channel: 'adapter', adapter: 'agy-hooks', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: true },
     sessions: ['agy'],
     launch: 'agy',
     autoCompact: 'none',
@@ -1722,8 +1767,16 @@ const CUSTOM_TOOL = {
     stopReply: false,
     shell: 'system',
     teamHooks: 'home',
+    needsBundle: false,
   },
 } as const satisfies Pick<ToolDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'>;
+
+/** How `tool` reads a rule folder's files (`RuleFolderReach`): a custom tool, or one with no cell, gets `copy`. */
+export function ruleFolderReachOf(tool: string): RuleFolderReach {
+  const descriptor: ToolDescriptor | undefined = isToolId(tool) ? TOOLS[tool] : undefined;
+
+  return descriptor?.ruleFolders ?? { reach: 'copy' };
+}
 
 /** The channels of `tool`: its descriptor's, or `CUSTOM_TOOL`'s for a custom tool id. */
 export function channelsOf(tool: string): Pick<ToolDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'> {

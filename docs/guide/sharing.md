@@ -71,7 +71,7 @@ Return typed errors from API handlers.
 
 A rule without `paths:` gets `trigger: always_on`.
 
-A rule can also declare relations to other team assets in a `related:`
+A rule can also declare relations to other team resources in a `related:`
 frontmatter block (a doc can too; a learning declares them the same way when
 it is contributed):
 
@@ -83,14 +83,55 @@ related:
 ---
 ```
 
-`MAPS_TO` points at a teamwiki code page, `REFERENCES` at any asset, and
+`MAPS_TO` points at a teamwiki code page, `REFERENCES` at any resource, and
 `SUPERSEDES` / `CONFLICTS_WITH` at a rule, doc or learning. `teamai recall`
 prints each declared relation as a `Related:` line on the hit, and each
 `paths:`-glob-derived one (knowledge guide), so a session that recalls one end
 of the relation starts with the other end too.
 `teamai review --branch` fails a rule or doc whose `related:` block uses a
-relation outside that table; a relation that points at an asset not on the
+relation outside that table; a relation that points at a resource not on the
 branch is a warning, not a failure.
+
+### Rules as folders: a deterministic skill
+
+A directory under `rules/` that holds `RULE.md` is a rule folder. `RULE.md` is the rule. The other files are support files the rule sends the agent to:
+
+```text
+rules/api-style/
+├─ RULE.md
+├─ RULE.zh.md
+├─ checklist.md
+└─ examples/good-endpoint.ts
+```
+
+```markdown
+<!-- rules/api-style/RULE.md -->
+---
+paths: ["src/api/**"]
+---
+Follow the team API style. Before adding an endpoint, read
+${TEAMAI_RULE_DIR}/checklist.md and ${TEAMAI_RULE_DIR}/examples/good-endpoint.ts.
+```
+
+| | Skill | Rule folder |
+|---|---|---|
+| Loaded by | The model, or `/skill` / `$skill` | teamai: always, or by `paths:` |
+| Manual invocation | Yes | No; the rule can point at a skill and make sure it is used |
+| Support files | Yes | Yes, read only when needed |
+| Context cost | The description until used | The body in every session; on tools without native rules, injected whole at SessionStart |
+
+Keep the body short and put the detail in the folder.
+
+- The name is the path, as for a rule file: `rules/api-style/` is `api-style`, and `rules/fe/api-style/` is `fe/api-style`. Each tool gets `api-style.md` in its rules directory.
+- `RULE.zh.md` or `RULE.en.md` holds the body for that `language`. The frontmatter of `RULE.md` applies to every language; pull warns about frontmatter in a variant and ignores it.
+- In a workspace, pull copies the folder to `.teamai/delivered/rules/api-style/` in each worktree, which git ignores, and puts its path, with forward slashes, in place of `${TEAMAI_RULE_DIR}`. Every tool reads the folder there: Claude Code gets the absolute path, and a tool that reads nothing outside the project gets `.teamai/delivered/rules/api-style`, from the project root. A pull in one worktree leaves the other worktrees' folders as they were.
+- A user-scope rule has no worktree, so pull copies it to `~/.teamai/rules/api-style/` and names that path. For Claude Code, pull adds the directory to `permissions.additionalDirectories` in `~/.claude/settings.json`, after your own entries, and uninstall takes it out. Pull warns once for each other tool that may ask before it reads there. The "Rule folder files" column of [Tool support](tool-support.md#user-scope) says which tool gets which.
+- Edit a rule folder in the team repo. Push proposes nothing from its delivered copies.
+- A file the team removes from the folder stays in the delivered copy until the rule goes, because a rule copy you edited may still name it. A path can't be both a file and a directory: when the team turns `details/` into a file `details`, or back, the new version takes the path and pull names the file that went.
+
+Before you commit a rule folder, have every member upgrade. An older teamai reads each file in `rules/api-style/` as its own always-on rule (`api-style/RULE`, `api-style/RULE.zh`, `api-style/checklist`), or skips the folder.
+
+teamai's recall rule is the folder [`rules/teamai-recall/`](https://github.com/Tencent/teamai-cli/tree/main/rules/teamai-recall). A team replaces it with its own `rules/teamai-recall/` at the root of the team repo. The folder's README lists the files and the lines each must keep. Pull refuses a replacement that drops one or holds a link, names the file, and keeps teamai's. `teamai review --branch` fails such a replacement before you merge it.
 
 ## Agents
 
@@ -153,7 +194,7 @@ Once the team file exists, edit the copy in a tool and run `teamai push`, as for
 
 Antigravity's copy keeps no team `model` (agy skips an agent whose model it does not know), only one an alias maps for agy, and lists agy's own names for the agent's tools: `tools: [Bash, Read]` becomes `run_command`, `view_file` and `read_file`. Without them an agy subagent has no shell. In a project, `.agents/agents` is agy's, so Muse Code gets no copy there while agy is installed. The CLI and Antigravity 2.0 run the agent as a subagent; Antigravity IDE has none, so its model can only hand the work to `agy --agent <name>` when the CLI is installed.
 
-In single-repo mode, your root copy of an agent placed in a namespace is pushed to the placed file. Changing it from `.md` to `.yaml` retires the original file, even while your checkout is behind its own merged PR. Either way, TeamAI compares the placed file with the blob your last merged push delivered there. If the team edited it since, the push stops and prints a `teamai push --carried <path>@<blob>` command. Carry that edit into your root copy, then run it. The option accepts only that version, so a plain retry or a later team edit stops the push again. An agent deleted by the team is not re-added from your root copy. An older placement record without a blob catches a team edit only while your checkout is behind it, until your first edit through it merges and records its blob.
+In self mode, your root copy of an agent placed in a namespace is pushed to the placed file. Changing it from `.md` to `.yaml` retires the original file, even while your checkout is behind its own merged PR. Either way, TeamAI compares the placed file with the blob your last merged push delivered there. If the team edited it since, the push stops and prints a `teamai push --carried <path>@<blob>` command. Carry that edit into your root copy, then run it. The option accepts only that version, so a plain retry or a later team edit stops the push again. An agent deleted by the team is not re-added from your root copy. An older placement record without a blob catches a team edit only while your checkout is behind it, until your first edit through it merges and records its blob.
 
 ### Model aliases
 
@@ -246,9 +287,20 @@ Limits:
 | Event | What it does |
 |-------|----------------|
 | `SessionStart` | Pull team resources and record the session start |
-| `PostToolUse` | Record skill use |
+| `PostToolUse` | Record skill use. After a `TodoWrite` call, remind the agent to use `teamai-recall` while recall is on |
 | `UserPromptSubmit` | Record the prompt |
 | `Stop` | Check for a CLI update and record the session end |
+
+On macOS and Linux, a tool call or a prompt waits for teamai only when it may have something to print: a `TodoWrite` call, which runs in full to find out whether the reminder applies (with recall off it does not, and nothing is printed), or a prompt with a hint left for it or on a machine that syncs over HTTP. Otherwise the hook starts a background process and returns, and that process records the event. `~/.teamai/debug.log` shows which happened:
+
+```text
+2026-11-09T09:14:02.118Z [DEBUG] [hook-dispatch] post-tool-use/claude fast path
+2026-11-09T09:14:02.161Z [DEBUG] [hook-dispatch] post-tool-use/claude background: 16ms total, 5 handlers, slowest dashboard-report=15ms | dashboard-report=15ms(ok) local-agent-sync=13ms(ok) recall-attribution=12ms(ok) skill-use=9ms(ok) new-checkout=8ms(ok)
+2026-11-09T09:14:09.530Z [DEBUG] [hook-dispatch] prompt-submit/claude fast path
+2026-11-09T09:14:09.571Z [DEBUG] [hook-dispatch] prompt-submit/claude background: 13ms total, 2 handlers, slowest dashboard-report=13ms | dashboard-report=13ms(ok) skill-mention=12ms(ok)
+```
+
+In a folder outside every teamai scope, the background process stops at `[hook-dispatch] post-tool-use/claude no scope`.
 
 ```bash
 teamai hooks list
@@ -259,7 +311,41 @@ teamai hooks remove
 
 Only tools that are already installed are touched.
 
-Commit the team's own hooks in `hooks/hooks.yaml`. `id` is lowercase letters, digits, and `-`. `builtin` belongs only in the root file. Use it to turn a built-in hook off, or to change its timeout.
+Commit a team hook as a folder: `HOOK.yaml` beside the script it runs. The directory name is the hook's id: lowercase letters, digits, and `-`.
+
+```text
+hooks/block-secrets/
+├─ HOOK.yaml
+└─ scan.sh
+```
+
+```yaml
+# hooks/block-secrets/HOOK.yaml
+description: Scan for secrets before a commit
+event: PreToolUse
+matcher: Bash
+command: bash "${TEAMAI_HOOK_DIR}/scan.sh"
+timeout: 15
+```
+
+Pull copies the folder and puts its path, with forward slashes, in place of `${TEAMAI_HOOK_DIR}`. teamai adds no quotes, so quote the variable as the command needs. The directory name is the hook's id and a version taken from the folder's files, `HOOK.yaml` included (`e246f037` below), so it changes whenever a file does, and the files of a version never change. Every checkout of one commit gives the same version: a file counts as git stores it, so line endings, encoding and the executable bit on disk make no difference, and a file git ignores (such as `__pycache__/`) is neither counted nor copied. A new or edited file counts as it is on disk. Pull refuses a folder that holds a git submodule or a repository of its own, whose files are not the team repo's: commit them to the team repo instead. A tool whose configuration pull could not rewrite, or one the member excluded, keeps running the files it was written with, and that directory goes once no entry runs it:
+
+| Where the team is | The folder lands in |
+|---|---|
+| User scope | `~/.teamai/hooks/block-secrets.e246f037/` |
+| Workspace with a team repo | `~/.teamai/projects/<slug>/hooks/block-secrets.e246f037/`, one for every worktree, as every worktree runs the same hook entries |
+| Self mode | `.teamai/delivered/hooks/block-secrets.e246f037/` in each worktree, which git ignores |
+
+In self mode, Claude Code's command reads `"$CLAUDE_PROJECT_DIR/.teamai/delivered/hooks/block-secrets.e246f037/scan.sh"`, so `.claude/settings.json` is the same in every worktree. Editing only a script gives the folder a new version too, so pull rewrites that path in `.claude/settings.json`: a team that commits the file commits that change with it. Other tools get the worktree's absolute path, so their project file differs from one worktree to the next. Cursor's `.cursor/hooks.json`, for example:
+
+```text
+~/work/shop/.cursor/hooks.json         bash "/Users/ana/work/shop/.teamai/delivered/hooks/block-secrets.e246f037/scan.sh"
+~/work/shop-hotfix/.cursor/hooks.json  bash "/Users/ana/work/shop-hotfix/.teamai/delivered/hooks/block-secrets.e246f037/scan.sh"
+```
+
+Once a worktree is removed, the next pull of another worktree, or `teamai doctor --fix`, removes the entries it left in HOME. `HOOK.yaml` takes the keys of a `hooks.yaml` entry except `id`, `roles` and `projects`. A hook for one namespace goes in `hooks/<ns>/<id>/`.
+
+Short hooks can stay in `hooks/hooks.yaml`, as a list of the same keys with an `id`. `${TEAMAI_HOOK_DIR}` works only in a folder: in `hooks.yaml` it stops team hooks for the run, as an id that is both a `hooks.yaml` entry and a folder does. `teamai review --branch` fails a branch with either, or with a `HOOK.yaml` that does not parse. `builtin` belongs only in the root file. Use it to turn a built-in hook off, or to change its timeout.
 
 ```yaml
 hooks:
@@ -270,7 +356,14 @@ hooks:
     command: bash ~/.teamai/team-scripts/scan-secret.sh
     timeout: 15
     tools: [claude, cursor]
+
+builtin:
+  disabled: [Hook dispatch post-tool-use TodoWrite]   # no TodoWrite reminder
+  overrides:
+    Hook dispatch stop: { timeout: 30 }
 ```
+
+Every tool call runs one `PostToolUse` entry, `Hook dispatch post-tool-use wildcard`, and the `TodoWrite` reminder runs in it. Listing `Hook dispatch post-tool-use TodoWrite` under `disabled` still turns the reminder off. A timeout for that key does nothing, and `teamai doctor` says so.
 
 A hook for one project goes in `hooks/<ns>/hooks.yaml`.
 
@@ -349,8 +442,10 @@ OpenCode, Oh My Pi, Pi, OpenClaw, Kiro, Hermes, and Antigravity have no Claude C
 sharing:
   hooks:
     autoApply: false          # pull only prints a hint; run teamai hooks inject
-    requireTeamScripts: true  # command must live under ~/.teamai/team-scripts/
+    requireTeamScripts: true  # command must run from its hook folder or ~/.teamai/team-scripts/
 ```
+
+`requireTeamScripts` keeps a folder hook whose `command`, as written, names `${TEAMAI_HOOK_DIR}`, and any command under `~/.teamai/team-scripts/`. It drops the rest, such as `curl … | sh`. It checks where a script comes from, the reviewed team repo. It is not a sandbox: the script runs with your permissions.
 
 Turn team hooks off on this machine with `TEAMAI_HOOKS_DISABLED=1`.
 
@@ -368,9 +463,106 @@ hooks:
 
 agy then refuses the command with `tool call denied by pre-tool hook: rm -rf is blocked; run git clean -n first.`
 
+### Default hooks
+
+teamai's own hints keep their thresholds and texts in hook folders. A folder of the same name at the root of the team repo replaces one. To remind only after longer sessions, in the team's words:
+
+```bash
+cp -r "$(npm root -g)/teamai-cli/hooks/teamai-friction-reminder" hooks/
+```
+
+```yaml
+# hooks/teamai-friction-reminder/HOOK.yaml
+description: Remind after longer sessions only
+with:
+  min_tools: 30
+```
+
+```markdown
+<!-- hooks/teamai-friction-reminder/problem.md -->
+[acme] This session hit a snag. If the fix is not in the runbook yet, write it down.
+```
+
+After `teamai pull`, the reminder waits for 30 tool calls and opens with that line.
+
+| Folder | What it holds |
+|---|---|
+| `teamai-friction-reminder` | The Stop reminder to share what a session taught: thresholds, score weights, texts |
+| `teamai-mr-hint` | The session-start offer to import recently merged MRs: how far back, how many, texts |
+| `teamai-todowrite-hint` | The suggestion to search team knowledge once a task is planned |
+| `teamai-env-hint` | The session-start note naming the scope's team env variables and secrets |
+| `teamai-package-hint` | The session-start note that the team's package declarations changed |
+
+- `HOOK.yaml` holds `description` and `with:`. A key left out of `with:` keeps teamai's value.
+- A text is `<text>.md`, with `{{ name }}` variables. With `language: en` or `zh`, `<text>.en.md` or `<text>.zh.md` is used when the folder has it.
+- Each folder's `README.md` lists its parameters with their ranges, the variables each text offers, and the settings that turn it off. Those settings stay where they were, such as `sharing.contributeHint.enabled`.
+
+Pull refuses a replacement that sets a value out of range or a key the default does not take, reads a variable a text does not offer, leaves a text out, or has a `command`, and keeps teamai's folder in force:
+
+```text
+hooks/teamai-friction-reminder/ is refused, and teamai's default stays in force until it is fixed: HOOK.yaml: with.min_tools must be a whole number from 1 to 1000
+```
+
+A replacement replaces for the whole team, so pull refuses one in a namespace, such as `hooks/payments/teamai-friction-reminder/`. `teamai review --branch` fails a replacement pull refuses before you merge it.
+
 ## MCP servers
 
-Muse may save stdio servers without `type`. Pull and removal compare that form without rewriting personal servers or unchanged managed entries when another server changes.
+Commit a server the team writes as a folder: `MCP.yaml` beside the files it runs. The directory name is the server's name: letters, digits, `-` and `_`.
+
+```text
+mcp/jira-lite/
+├─ MCP.yaml
+├─ server.py
+└─ queries.sql
+```
+
+```yaml
+# mcp/jira-lite/MCP.yaml
+description: Read-only Jira lookups for the team
+transport: stdio
+command: uv
+args: ["run", "--script", "${TEAMAI_MCP_DIR}/server.py"]
+requires: [uv]
+```
+
+```python
+# mcp/jira-lite/server.py
+# /// script
+# dependencies = ["mcp==1.2.0", "httpx==0.27.2"]
+# ///
+```
+
+Pull copies the folder and puts its path, with forward slashes, in place of `${TEAMAI_MCP_DIR}` in `command`, `args` and `env`. teamai adds no quotes. The directory name is the server's name and a version taken from the folder's files, `MCP.yaml` included (`1702782c` below), so it changes whenever a file does, and the files of a version never change. Every checkout of one commit gives the same version, as for hooks. A tool whose MCP file pull could not rewrite, or one the member excluded, keeps starting the files it was written with, even when a team value its `args` take changes, and that directory goes once no MCP file names it:
+
+| Where the team is | The folder lands in |
+|---|---|
+| User scope | `~/.teamai/mcp/jira-lite.1702782c/` |
+| Workspace, with a team repo or in self mode | `.teamai/delivered/mcp/jira-lite.1702782c/` in each worktree, which git ignores |
+
+Claude Code does not expand `$CLAUDE_PROJECT_DIR` in `.mcp.json`, so each tool's MCP file holds the worktree's absolute path and differs from one worktree to the next. A pull in one worktree leaves the servers of the others as they were.
+
+`MCP.yaml` takes the keys of an `mcp.yaml` server except `name`, `roles` and `projects`, with `transport: stdio` only: a URL server carries no files, so `http` and `sse` servers stay in `mcp.yaml`. A server for one namespace goes in `mcp/<ns>/<name>/`. `${TEAMAI_MCP_DIR}` works only in a folder. In `mcp.yaml` it stops team MCP for the run and keeps what is installed, as a name that is both an `mcp.yaml` server and a folder does. `teamai review --branch` fails a branch with either, or with an `MCP.yaml` pull cannot read.
+
+teamai installs no dependencies. A folder ships them one of three ways:
+
+| Pattern | `command` and `args` | The folder holds |
+|---|---|---|
+| PEP 723 script | `uv`, `["run", "--script", "${TEAMAI_MCP_DIR}/server.py"]` | `server.py`, its pinned dependencies in its header |
+| One bundled `.mjs` | `node`, `["${TEAMAI_MCP_DIR}/server.mjs"]` | `server.mjs`, built with its dependencies inside |
+| A pinned runner | `npx`, `["-y", "@acme/jira-mcp@1.4.0", "--config", "${TEAMAI_MCP_DIR}/config.json"]`, or `uvx` with `jira-mcp==1.4.0` | configuration and data files only |
+
+`requires` names the runners a member needs on PATH. A member who lacks one does not get the server, and `teamai mcp inject` names the missing runner. With `sharing.mcp.allowedCommands` set, list the runner there, since it is the server's `command`:
+
+```yaml
+# teamai.yaml
+sharing:
+  mcp:
+    allowedCommands: [uv, node, npx]
+```
+
+Upgrade every member before you commit a server folder. A teamai that cannot read MCP folders skips them, so its members do not get the server.
+
+Servers that run a published package or a URL can stay in `mcp/mcp.yaml`. Muse may save stdio servers without `type`. Pull and removal compare that form without rewriting personal servers or unchanged managed entries when another server changes.
 
 ```yaml
 # mcp/mcp.yaml
@@ -430,13 +622,13 @@ Antigravity takes user servers in `~/.gemini/config/mcp_config.json`. It reads a
 
 agy takes stdio and HTTP servers, with no `type`; pull skips an `sse` server for agy with a warning. `agy mcp list` shows only the user file's servers; a plugin's appear in a session.
 
-WorkBuddy uses the first existing user file in `~/.workbuddy/.mcp.json`, `~/.workbuddy/mcp.json`, and `~/.codebuddy.json`. `CODEBUDDY_CONFIG_DIR` moves the last file. A project uses `.mcp.json`, or `mcp.json` when only that exists. With `sharing.gitExclude` on, its servers use `projects[<project path>].mcpServers` in `.codebuddy.json`. These paths follow the CodeBuddy 2.168.0 engine; WorkBuddy's launcher binding is not certified. Pull removes only unchanged teamai entries from the former `.workbuddy/mcp.json` project file.
+WorkBuddy uses the first existing user file in `.mcp.json` and `mcp.json` under its live root (`.workbuddy/` or `.workbuddy-ai/`, see below), then `~/.codebuddy.json`. `CODEBUDDY_CONFIG_DIR` moves the last file. A project uses `.mcp.json`, or `mcp.json` when only that exists. With `sharing.gitExclude` on, its servers use `projects[<project path>].mcpServers` in `.codebuddy.json`. These paths follow the CodeBuddy 2.168.0 engine; WorkBuddy's launcher binding is not certified. Pull removes only unchanged teamai entries from the former `.workbuddy/mcp.json` project file.
 
-When `.workbuddy-ai/` exists in the home or project (WorkBuddy AI, the international edition), the default skills path moves to `.workbuddy-ai/skills`. Every other surface still waits for `.workbuddy/`, so a member with only `.workbuddy-ai/` gets no rules, team instructions, agents, MCP servers or hooks, and `teamai doctor` fails `workbuddy receives ...` with the ones held.
+WorkBuddy's user files go to the data root of whichever app launched last — `.workbuddy/`, or `.workbuddy-ai/` for WorkBuddy AI, the international edition — read from each root's `last-launch.json`: skills, rules, team instructions, agents and the MCP file. Presence decides nothing on its own, because uninstalling either app leaves its root behind; with no record on either side the old rule holds, where a present `.workbuddy-ai/` moves the paths. Project scope moves skills only, a team's `userScope` override keeps the destination it names, `settings.json` and hooks stay in `.workbuddy/`, and `teamai doctor` takes the live root as the install proof.
 
 When a tool's home or configured MCP path moves, pull leaves old copies in place and names them once. Remove them after no tool reads them. Doctor reports unread mappings, moved files, and project MCP that is read only from a session started at the project root. Internal builds with an unknown MCP channel get a note instead of a guessed config.
 
-In a workspace with repos set up inside it, Claude Code, CodeBuddy, and WorkBuddy get the servers through their local scope, not the project's MCP file, so a session in one of those repos does not load them. In single-repo mode, or while tclaude or Muse Code reads that file, Claude Code's servers stay in it, and such a session does load them.
+In a workspace with repos set up inside it, Claude Code, CodeBuddy, and WorkBuddy get the servers through their local scope, not the project's MCP file, so a session in one of those repos does not load them. In self mode, or while tclaude or Muse Code reads that file, Claude Code's servers stay in it, and such a session does load them.
 
 ```bash
 teamai mcp list
@@ -563,3 +755,63 @@ projects:
 In self mode, pushing an edited skill from a checkout behind the default branch stops with exit 2 if it would overwrite an upstream file. The check covers the whole skill directory, including references and deletions, even when your edit is in another file. Merge the default branch, reconcile the skill, and retry; a copy that already contains the upstream changes can be pushed.
 
 If the team recreates a retired agent at its old namespace, edit that namespace source directly; the old flattened copy remains a backup. Deleting the retired root copy does not make its remaining tool copies new agents. Editing or converting a placed agent also checks the last delivered blob after the checkout has caught up with the default branch.
+
+## Reserved folder names
+
+A directory that holds its type's marker, at any depth, is a folder: one resource, and every file in it is that resource's. A skill is the same, `skills/<name>/SKILL.md`.
+
+| Directory | Marker | This release |
+|---|---|---|
+| `workflows/` | `WORKFLOW.yaml` | Reads it: [workflow folders](workflow.md#workflow-folders) |
+| `hooks/` | `HOOK.yaml` | Reads it: [hooks](#hooks) |
+| `rules/` | `RULE.md` | Reads it: [rules as folders](#rules-as-folders-a-deterministic-skill) |
+| `mcp/` | `MCP.yaml` | Reads it: [MCP servers](#mcp-servers) |
+| `benchmarks/` | `SUITE.yaml` | Reads it: [suites](benchmarks.md#write-a-suite) |
+| `scorers/` | `SCORER.md` | Skips it |
+| `agents/` | `AGENT.md` | Skips it |
+
+A scorer or agent folder is skipped whole, and the rest of the team repo pulls as usual:
+
+```text
+agents/
+├── code-reviewer.yaml          delivered: agent "code-reviewer"
+└── reviewer/
+    ├── AGENT.md                skipped: agents/reviewer/ is an agent folder
+    └── checklist.md            skipped
+scorers/
+└── strict/
+    └── SCORER.md               skipped: scorers/strict/ is a scorer folder
+rules/
+├── style.md                    delivered: rule "style"
+└── api-style/
+    ├── RULE.md                 delivered: rule "api-style"
+    └── checklist.md            delivered with the folder
+```
+
+Pull says so once per folder. A pull a hook starts writes the same lines to `~/.teamai/debug.log`:
+
+```console
+$ teamai pull
+⚠ agents/reviewer/ is an agent folder, which this teamai cannot read yet; it was skipped. Run teamai update.
+⚠ scorers/strict/ is a scorer folder, which this teamai cannot read yet; it was skipped. Run teamai update.
+✔ [user] Synced 2 rule(s)
+```
+
+`teamai status`, `teamai doctor`, `teamai review --branch` and the dashboard list the same folders. Push leaves them alone, and the team declares nothing.
+
+The name must match exactly. `rules/lint/rule.md` is still the rule `lint/rule`, on macOS and Windows too.
+
+A repo that already has a marker name, such as `rules/onboarding/RULE.md`, got it as the rule `onboarding/RULE`. From this release `rules/onboarding/` is one rule folder, `onboarding`, and its other `.md` files are its files. Pull removes the copies it delivered of them and says so once:
+
+```console
+⚠ rules/onboarding/ holds RULE.md, so it is one folder, and db.md in it is one of its files, no longer read on its own.
+```
+
+To keep them separate rules, rename the marker:
+
+```bash
+git mv rules/onboarding/RULE.md rules/onboarding/overview.md
+git commit -m "rules: rename onboarding/RULE.md, a reserved folder marker"
+```
+
+Before a team commits a folder, every member should upgrade. A release that cannot read a type skips its folders, and one older than these names reads each file in `rules/api-style/` as its own always-on rule.

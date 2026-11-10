@@ -15,11 +15,12 @@ This repository's own lint rules. `npm run lint` loads them through `jsPlugins` 
 | `teamai/rules-locate` | MCP path lookups during rules activation. |
 | `teamai/workflow-failure-codes` | Unclassified failure producers and unexplained forwarded codes. |
 | `teamai/config-load-options` | Missing preview options at named `loadLocalConfig`, `loadLocalConfigForScope`, and `autoDetectInit` calls outside their owner. Forwarded options are accepted; wrapper behavior still needs tests. |
-| `teamai/remove-delivered` | A bare `remove(` of a delivered copy in pull's files, which leaves a stale entry on the delivery record (#1577). Use `removeDelivered(ledger, dest)`. It checks only the files in `PULL_SIDE_FILES`: a new file that deletes delivered copies must be added there. |
+| `teamai/remove-delivered` | A call of `remove` from `fs-extra` or `src/utils/fs` in `src/pull.ts` or any file under `src/resources/`, which leaves a stale entry on the delivery record when it deletes a delivered copy (#1577). Use `removeDelivered(ledger, dest)`. A new file under `src/resources/` is checked without being listed; a delivery written elsewhere is not. |
 | `teamai/attempt-result-writes` | A write to an attempt's result file outside `src/workflow/attempt-result.ts`, which would keep any credential its body repeats. Use `AttemptResult.write(file, body, secrets)`. It recognizes the file by `attemptResultPath(...)`, a name bound to one, or a `resultPath`: a path passed on under another name is not caught. |
 | `teamai/tool-facts` | A list of tool ids, or a table keyed by tool that leaves some out, outside `src/tools.ts`. Put the fact in `TOOLS`, or key the table by every tool (`Record<ToolId, ...>`), so a new tool fails the type check until it is decided. An ordered registry, an alias map or a frozen history table carries an explained disable. |
 | `teamai/yaml-parse` | `YAML.parse` or yaml's `parse` outside `src/utils/yaml.ts`. Use `parseYaml`, which returns JSON values instead of a Set, Buffer or Date for `!!set`, `!!binary` or `!!timestamp`. |
 | `teamai/package-boundaries` | A workspace package (`packages/<name>/`) importing `src/` or any repository file outside itself, a relative import into another package instead of its name (`'../../tool-core/src/definition.js'` → `'@teamai/tool-core/definition'`), `src/` importing a `packages/runtime-*` package, and a package whose `package.json` is missing `"private": true`. A new folder under `packages/` is checked with no change here. |
+| `teamai/uncached-entry` | An import of anything but a `node:` module or another file in `UNCACHED` from what `src/bin.ts` loads before the CLI bundle: every hook loads it, and the hook fast path exits on it alone (#1788). A new file there joins `UNCACHED` once it imports nothing else. Type-only imports are exempt. |
 | `teamai/no-low-value-comments` | A comment that only repeats the name below it (`// State` above `const state`), commented-out code, a `TODO` with no issue, or a JSDoc type in TypeScript. Issue numbers and `// ───` dividers stay allowed. |
 | `teamai/suppression-reason` | An `oxlint-disable` / `eslint-disable`, or a `@ts-expect-error` / `@ts-ignore` / `@ts-nocheck`, that says nothing about why. End it with `-- reason` (after a TypeScript directive, just the reason), or put the reason in a comment on the line above. |
 
@@ -46,12 +47,14 @@ import { ruleHarness } from '../test/harness.ts';
 
 const rule = ruleHarness('teamai/remove-delivered', { filename: 'src/pull.ts' });
 
+const bareRemove = `import { remove } from './utils/fs.js';\nawait remove(dir);`;
+
 describe('teamai/remove-delivered', () => {
-  rule.invalid('reports a bare remove(', `await remove(dir);`, (output) => {
+  rule.invalid('reports remove from src/utils/fs', bareRemove, (output) => {
     expect(output).toContain('removeDelivered');
   });
   rule.valid('allows removeDelivered', `await removeDelivered(ledger, dir);`);
-  rule.valid('only in pull\'s files', `await remove(dir);`, { filename: 'src/push.ts' });
+  rule.valid('only in pull\'s files', bareRemove, { filename: 'src/push.ts' });
 });
 ```
 

@@ -5,9 +5,13 @@
  */
 import type { AgentObservation } from '../agent-observation.js';
 import { isNativeModelAlias } from '../models/aliases.js';
+import type { ScoreLabel } from '../scorers/label.js';
+import type { PlannedJudge } from './plan.js';
 import type { BenchmarkRecord } from './result.js';
 
-export type Comparison = 'match' | 'deviation' | 'not_verified';
+export const COMPARISONS = ['match', 'deviation', 'not_verified'] as const;
+
+export type Comparison = (typeof COMPARISONS)[number];
 
 /**
  * How a trial's prompt ran against its arm, on the values that can be compared: the tool, the team revision, the role
@@ -35,9 +39,20 @@ export function compareAgent(arm: Pick<BenchmarkRecord['arms'][number], 'tool' |
 }
 
 /**
- * Whether the prompt ran on its arm's team assets: the arm's revision, or no team assets at all. A clone without some
+ * How the judge of a label ran against the one a benchmark plan pins its scorer to: its tool, and its model by the
+ * alias, else by the model it was launched with, none for the plan's `""`. Two machines that resolve one alias to two
+ * models do not deviate. A label whose tool reported no model is not verified; a deviation outweighs it.
+ */
+export function compareJudge(planned: PlannedJudge, judge: Extract<ScoreLabel['judge'], { kind: 'model' }>): Comparison {
+  if (judge.tool !== planned.tool || (judge.model?.alias ?? judge.model?.requested ?? '') !== planned.model) return 'deviation';
+
+  return judge.model?.reported === undefined ? 'not_verified' : 'match';
+}
+
+/**
+ * Whether the prompt ran on its arm's team resources: the arm's revision, or no team resources at all. A clone without some
  * paths pulls the commit teamai made of the arm's revision without them, and records the arm's revision. A trial of a
- * team arm whose record names no team is not verified; one of an arm without team assets that names one ran on them.
+ * team arm whose record names no team is not verified; one of an arm without team resources that names one ran on them.
  */
 function compareTeam(intended: BenchmarkRecord['arms'][number]['team'], recorded: AgentObservation['team']): Comparison {
   if (intended.kind === 'none') return recorded === undefined ? 'match' : 'deviation';

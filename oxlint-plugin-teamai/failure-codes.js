@@ -31,7 +31,7 @@ function literalStrings(file, name) {
   });
 }
 
-const diagnostics = ['unknown_key', 'missing_needs', 'false_if', 'bad_template', 'dotted_name', 'undeclared_output', 'undeclared_end', 'bad_loop', 'bad_workspace', 'bad_role', 'workflow_namespace_conflict', 'prompt_namespace_conflict', 'benchmark_namespace_conflict', 'bad_delivery', 'bad_invoke', 'bad_alias', 'alias_conflict',
+const diagnostics = ['unknown_key', 'missing_needs', 'false_if', 'bad_template', 'dotted_name', 'undeclared_output', 'undeclared_end', 'bad_loop', 'bad_workspace', 'bad_role', 'workflow_namespace_conflict', 'prompt_namespace_conflict', 'benchmark_namespace_conflict', 'bad_delivery', 'bad_invoke', 'bad_alias', 'alias_conflict', 'workflow_folder_invalid',
   // Why pull refuses a team file that would replace a default its contract guards.
   'default_override_alias', 'score_override_contract', 'score_override_command', 'score_override_workflow_step', 'score_override_prompt',
   'score_override_confined_dir', 'score_override_judge_prompt', 'score_override_step_missing', 'score_override_publish',
@@ -78,6 +78,7 @@ const answers = ['invalid_json', 'driver_running', 'invalid_run', 'repeated_resp
       // Refusals of teamai benchmark run and plan, before any run exists.
       'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable', 'check_files_unwritable',
       'arm_model_missing', 'arm_unpublishable', 'arm_team_unresolved', 'arm_team_unreadable', 'arm_team_unclean', 'arm_workflow_unrunnable',
+      'judge_unpublishable',
       // Refusals of teamai benchmark run and plan where a task's covers cannot be compared (#1605).
       'task_covers_ambiguous',
       // Refusals of teamai benchmark try, which tries one task file and creates no run.

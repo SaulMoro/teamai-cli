@@ -174,7 +174,7 @@ export const SESSION_PLATFORM_FACTS = {
   'cursor': {
     // The Cursor CLI's transcripts move with CURSOR_DATA_DIR, recorded under its own root (RELOCATABLE_TOOLS).
     store: { in: 'tool-home', home: 'cursor', dir: 'projects', root: 'cursor-data' },
-    resume: (id) => `cursor --resume ${id}`,
+    resume: (id) => `cursor-agent --resume ${id}`,
     thinking: false, images: false,
     nativeTools: new Set([
       'read_file', 'write_file', 'edit_file', 'bash', 'grep', 'glob', 'delete_file',
@@ -253,6 +253,19 @@ export const SESSION_PLATFORM_FACTS = {
     legacyIdWithoutWorkspace: false,
     sqliteRegistrationOnWindows: false,
     idFormat: 'hermes',
+    readOnly: true,
+  },
+  copilot: {
+    // Copilot CLI stores one append-only events.jsonl under <Copilot home>/session-state/<id>/.
+    store: { in: 'tool-home', home: 'copilot', dir: 'session-state' },
+    resume: (id) => `copilot --resume ${id}`,
+    thinking: false, images: false,
+    nativeTools: new Set([
+      'powershell', 'bash', 'view', 'edit', 'grep', 'glob', 'web_fetch', 'task',
+    ]),
+    legacyIdWithoutWorkspace: false,
+    sqliteRegistrationOnWindows: false,
+    idFormat: 'uuid',
     readOnly: true,
   },
 } satisfies Record<string, SessionPlatformFacts>;

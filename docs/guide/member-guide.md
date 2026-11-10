@@ -90,6 +90,8 @@ teamai pull
 
 `pull` then leaves that server out, and `teamai doctor` stops reporting it.
 
+The list holds names, not kinds: excluding `tracker` leaves out both a skill and an MCP server the team calls `tracker`.
+
 ### Push local resources
 
 ```bash
@@ -171,7 +173,7 @@ sharing:
 
 `teamai pull` lists the paths it delivered in this clone's `.git/info/exclude`. It does not change `.gitignore`. The tools still load the files. `git status` does not show them.
 
-In a single-repo team, these tools' committed hook settings keep only teamai's built-in hooks, so a fresh clone still has them. The team's own hooks go to the file beside them that the tool reads as yours:
+In a team in self mode, these tools' committed hook settings keep only teamai's built-in hooks, so a fresh clone still has them. The team's own hooks go to the file beside them that the tool reads as yours:
 
 | Tool | Committed | Team hooks |
 |---|---|---|

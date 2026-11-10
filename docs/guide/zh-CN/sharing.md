@@ -71,7 +71,7 @@ Return typed errors from API handlers.
 
 没有 `paths:` 的 rule 得到 `trigger: always_on`。
 
-rule 还可以在 frontmatter 的 `related:` 块中声明与其他团队资产的关系（doc 也可以；learning 在贡献时同样这样声明）：
+rule 还可以在 frontmatter 的 `related:` 块中声明与其他团队资源的关系（doc 也可以；learning 在贡献时同样这样声明）：
 
 ```markdown
 ---
@@ -81,7 +81,48 @@ related:
 ---
 ```
 
-`MAPS_TO` 指向 teamwiki 代码页面，`REFERENCES` 指向任意资产，`SUPERSEDES` / `CONFLICTS_WITH` 指向规则、文档或 learning。`teamai recall` 会把每条声明的关系、以及每条由 `paths:` glob 派生的关系（见知识指南），作为 `Related:` 行打印在命中结果上，会话拿到关系的一端时也就看到了另一端。`teamai review --branch` 会判定 `related:` 块使用了表格外关系的规则或文档为失败；指向分支上不存在资产的关系是警告，不会判定失败。
+`MAPS_TO` 指向 teamwiki 代码页面，`REFERENCES` 指向任意资源，`SUPERSEDES` / `CONFLICTS_WITH` 指向规则、文档或 learning。`teamai recall` 会把每条声明的关系、以及每条由 `paths:` glob 派生的关系（见知识指南），作为 `Related:` 行打印在命中结果上，会话拿到关系的一端时也就看到了另一端。`teamai review --branch` 会判定 `related:` 块使用了表格外关系的规则或文档为失败；指向分支上不存在资源的关系是警告，不会判定失败。
+
+### 目录型 rule：确定加载的 skill
+
+`rules/` 下包含 `RULE.md` 的目录是一个目录型 rule。`RULE.md` 就是这条 rule，其他文件是 rule 让 agent 去读的辅助文件：
+
+```text
+rules/api-style/
+├─ RULE.md
+├─ RULE.zh.md
+├─ checklist.md
+└─ examples/good-endpoint.ts
+```
+
+```markdown
+<!-- rules/api-style/RULE.md -->
+---
+paths: ["src/api/**"]
+---
+Follow the team API style. Before adding an endpoint, read
+${TEAMAI_RULE_DIR}/checklist.md and ${TEAMAI_RULE_DIR}/examples/good-endpoint.ts.
+```
+
+| | Skill | 目录型 rule |
+|---|---|---|
+| 由谁加载 | 模型，或 `/skill` / `$skill` | teamai：始终加载，或按 `paths:` |
+| 手动调用 | 可以 | 不可以；rule 可以指向一个 skill，确保它被用上 |
+| 辅助文件 | 有 | 有，需要时才读 |
+| 上下文开销 | 用到之前只占描述 | 每个会话都有正文；没有原生 rule 的工具在 SessionStart 时整段注入 |
+
+正文写短，细节放进目录。
+
+- 名字就是路径，和 rule 文件一样：`rules/api-style/` 是 `api-style`，`rules/fe/api-style/` 是 `fe/api-style`。每个工具的 rules 目录里得到 `api-style.md`。
+- `RULE.zh.md` 或 `RULE.en.md` 是对应 `language` 的正文。`RULE.md` 的 frontmatter 对所有语言生效；语言版本里的 frontmatter 会被忽略，pull 会给出警告。
+- 在工作区中，pull 把目录复制到每个 worktree 的 `.teamai/delivered/rules/api-style/`（git 会忽略它），并把 `${TEAMAI_RULE_DIR}` 换成它的路径（用正斜杠）。所有工具都从这里读取：Claude Code 得到绝对路径，不读取项目之外文件的工具得到从项目根目录算起的 `.teamai/delivered/rules/api-style`。在一个 worktree 里 pull，不会改动其他 worktree 的目录。
+- 用户范围的 rule 没有工作树，所以 pull 把它复制到 `~/.teamai/rules/api-style/` 并指向该路径。对 Claude Code，pull 会把该目录追加到 `~/.claude/settings.json` 的 `permissions.additionalDirectories`，排在你自己的条目之后，uninstall 时移除。对其他读取那里前可能需要确认的工具，pull 各警告一次。哪个工具得到哪种，见[工具支持](tool-support.md#用户范围)的「规则文件夹的文件」一列。
+- 目录型 rule 在团队仓库里修改。push 不会从它的交付副本提出任何改动。
+- 团队从目录里删掉的文件，会一直留在交付的副本里，直到这条 rule 被移除，因为你改过的 rule 副本可能还引用它。同一个路径不能既是文件又是目录：团队把 `details/` 改成文件 `details`（或反过来）时，新版本占用这个路径，pull 会说明哪个文件被移除了。
+
+提交目录型 rule 之前，让每位成员先升级。旧版 teamai 会把 `rules/api-style/` 里的每个文件各自当作一条始终生效的 rule（`api-style/RULE`、`api-style/RULE.zh`、`api-style/checklist`），或者跳过这个目录。
+
+teamai 的 recall rule 是目录 [`rules/teamai-recall/`](https://github.com/Tencent/teamai-cli/tree/main/rules/teamai-recall)。团队在团队仓库根目录放自己的 `rules/teamai-recall/` 即可替换它。目录里的 README 列出了各个文件以及每个文件必须保留的行。缺少这些行或包含链接的替换会被 pull 拒绝，pull 会指出是哪个文件，并继续使用 teamai 自带的。`teamai review --branch` 会在合并前把这样的替换判为失败。
 
 ## Agents
 
@@ -144,7 +185,7 @@ description: >-
 
 Antigravity 的副本不带团队的 `model`（agy 会跳过它不认识模型的 agent），只写别名为 agy 映射的模型；工具名换成 agy 自己的：`tools: [Bash, Read]` 变成 `run_command`、`view_file` 和 `read_file`。没有这些，agy 的 subagent 就没有 shell。项目里的 `.agents/agents` 归 agy，所以装了 agy 时 Muse Code 不在那里写副本。CLI 和 Antigravity 2.0 把 agent 当作 subagent 运行；Antigravity IDE 没有 subagent，装了 CLI 时它的模型只能把活交给 `agy --agent <name>`。
 
-单仓库模式下，已放入命名空间的 agent 的根目录副本会推送到放置后的文件。把它从 `.md` 转为 `.yaml` 会移除原文件，即使当前检出落后于自己已合并的 PR 也是如此。两种情况下，TeamAI 都会把放置后的文件与你上次合并的推送写入的 blob 对比。团队之后又编辑过该文件时，推送会停止并给出 `teamai push --carried <path>@<blob>` 命令。把这次修改带入根目录副本，再运行该命令。该选项只接受这一版本，直接重试或团队之后再次编辑都会再次停止推送。团队已删除的 agent 不会从根目录副本重新添加。没有 blob 的旧放置记录，只有在检出落后于团队修改时才能发现这次修改；你通过它推送的第一次编辑合并后，该记录会补上这次的 blob。
+self 模式下，已放入命名空间的 agent 的根目录副本会推送到放置后的文件。把它从 `.md` 转为 `.yaml` 会移除原文件，即使当前检出落后于自己已合并的 PR 也是如此。两种情况下，TeamAI 都会把放置后的文件与你上次合并的推送写入的 blob 对比。团队之后又编辑过该文件时，推送会停止并给出 `teamai push --carried <path>@<blob>` 命令。把这次修改带入根目录副本，再运行该命令。该选项只接受这一版本，直接重试或团队之后再次编辑都会再次停止推送。团队已删除的 agent 不会从根目录副本重新添加。没有 blob 的旧放置记录，只有在检出落后于团队修改时才能发现这次修改；你通过它推送的第一次编辑合并后，该记录会补上这次的 blob。
 
 ### 模型别名
 
@@ -237,9 +278,20 @@ shell 获得其启动目录的团队环境变量，因此同时打开的多个�
 | 事件 | 做什么 |
 |------|--------|
 | `SessionStart` | 拉取团队资源，并记下会话开始 |
-| `PostToolUse` | 记录 skill 使用 |
+| `PostToolUse` | 记录 skill 使用。recall 开着时，`TodoWrite` 调用之后提醒 agent 用 `teamai-recall` |
 | `UserPromptSubmit` | 记录输入 |
 | `Stop` | 检查 CLI 更新，并记下会话结束 |
+
+在 macOS 和 Linux 上，工具调用和输入提示只在可能有东西要输出时才等 teamai：`TodoWrite` 调用（要完整运行才知道该不该提醒；recall 关着时不提醒，什么也不输出），或者有提示留给它、或在通过 HTTP 同步的机器上的输入提示。其他时候 hook 启动一个后台进程就返回，由这个进程记下事件。`~/.teamai/debug.log` 里能看到走的是哪条路：
+
+```text
+2026-11-09T09:14:02.118Z [DEBUG] [hook-dispatch] post-tool-use/claude fast path
+2026-11-09T09:14:02.161Z [DEBUG] [hook-dispatch] post-tool-use/claude background: 16ms total, 5 handlers, slowest dashboard-report=15ms | dashboard-report=15ms(ok) local-agent-sync=13ms(ok) recall-attribution=12ms(ok) skill-use=9ms(ok) new-checkout=8ms(ok)
+2026-11-09T09:14:09.530Z [DEBUG] [hook-dispatch] prompt-submit/claude fast path
+2026-11-09T09:14:09.571Z [DEBUG] [hook-dispatch] prompt-submit/claude background: 13ms total, 2 handlers, slowest dashboard-report=13ms | dashboard-report=13ms(ok) skill-mention=12ms(ok)
+```
+
+在任何 teamai 作用域之外的目录里，后台进程停在 `[hook-dispatch] post-tool-use/claude no scope`。
 
 ```bash
 teamai hooks list
@@ -250,7 +302,41 @@ teamai hooks remove
 
 只处理已经安装的工具。
 
-团队自己的 hook 写在 `hooks/hooks.yaml`，自己 commit。`id` 只用小写字母、数字和 `-`。`builtin` 只放在根文件里，用来关掉某条内置 hook，或改它的超时。
+团队 hook 以目录形式 commit：`HOOK.yaml` 和它要运行的脚本放在一起。目录名就是 hook 的 id，只用小写字母、数字和 `-`。
+
+```text
+hooks/block-secrets/
+├─ HOOK.yaml
+└─ scan.sh
+```
+
+```yaml
+# hooks/block-secrets/HOOK.yaml
+description: Scan for secrets before a commit
+event: PreToolUse
+matcher: Bash
+command: bash "${TEAMAI_HOOK_DIR}/scan.sh"
+timeout: 15
+```
+
+pull 会复制这个目录，并把 `${TEAMAI_HOOK_DIR}` 换成它的路径（用正斜杠）。teamai 不加引号，命令需要时自己给变量加引号。目录名由 hook 的 id 和从目录里所有文件（包括 `HOOK.yaml`）得出的版本组成（下面的 `e246f037`），所以任何文件变了，目录就会变，同一个版本的文件永远不变。同一个 commit 的每个 checkout 得出的版本都一样：文件按 git 存储的内容计入，所以换行符、编码和磁盘上的可执行位都没有影响；git 忽略的文件（例如 `__pycache__/`）既不计入也不复制。新文件或改过的文件按磁盘上的内容计入。目录里有 git submodule 或独立的 git 仓库时，pull 会拒绝这个目录，因为那些文件不属于团队仓库：请把它们直接提交到团队仓库。pull 没能改写配置的工具，或成员排除的工具，会继续运行写入配置时的那些文件；等没有条目再运行那个目录，它就会被移除：
+
+| 团队在哪里 | 目录复制到 |
+|---|---|
+| 用户作用域 | `~/.teamai/hooks/block-secrets.e246f037/` |
+| 有团队仓库的工作区 | `~/.teamai/projects/<slug>/hooks/block-secrets.e246f037/`，所有 worktree 共用一份，因为它们运行同一组 hook 条目 |
+| self 模式 | 每个 worktree 的 `.teamai/delivered/hooks/block-secrets.e246f037/`，git 会忽略它 |
+
+self 模式下，Claude Code 的命令写成 `"$CLAUDE_PROJECT_DIR/.teamai/delivered/hooks/block-secrets.e246f037/scan.sh"`，所以每个 worktree 的 `.claude/settings.json` 都一样。只改一个脚本也会让目录换成新版本，pull 会改写 `.claude/settings.json` 里的这个路径：团队如果提交这个文件，也要一起提交这个改动。其他工具拿到的是 worktree 的绝对路径，所以它们的项目文件在每个 worktree 里都不一样。以 Cursor 的 `.cursor/hooks.json` 为例：
+
+```text
+~/work/shop/.cursor/hooks.json         bash "/Users/ana/work/shop/.teamai/delivered/hooks/block-secrets.e246f037/scan.sh"
+~/work/shop-hotfix/.cursor/hooks.json  bash "/Users/ana/work/shop-hotfix/.teamai/delivered/hooks/block-secrets.e246f037/scan.sh"
+```
+
+删除一个 worktree 后，下次在另一个 worktree 里 pull，或运行 `teamai doctor --fix`，会删掉它留在 HOME 里的条目。`HOOK.yaml` 的键和 `hooks.yaml` 的条目相同，只是没有 `id`、`roles` 和 `projects`。只给一个 namespace 的 hook 放在 `hooks/<ns>/<id>/`。
+
+简短的 hook 仍可写在 `hooks/hooks.yaml`，是带 `id` 的同样键的列表。`${TEAMAI_HOOK_DIR}` 只能用在目录里：写在 `hooks.yaml` 里，这次运行的团队 hook 会全部停下；同一个 id 既是 `hooks.yaml` 条目又是目录时也一样。分支上有这两种情况之一，或有解析不了的 `HOOK.yaml` 时，`teamai review --branch` 判定失败。`builtin` 只放在根文件里，用来关掉某条内置 hook，或改它的超时。
 
 ```yaml
 hooks:
@@ -261,7 +347,14 @@ hooks:
     command: bash ~/.teamai/team-scripts/scan-secret.sh
     timeout: 15
     tools: [claude, cursor]
+
+builtin:
+  disabled: [Hook dispatch post-tool-use TodoWrite]   # 不要 TodoWrite 提醒
+  overrides:
+    Hook dispatch stop: { timeout: 30 }
 ```
+
+每次工具调用只跑一条 `PostToolUse` 条目 `Hook dispatch post-tool-use wildcard`，`TodoWrite` 提醒也在里面跑。把 `Hook dispatch post-tool-use TodoWrite` 写进 `disabled` 仍然会关掉提醒。给这个 key 设超时不起作用，`teamai doctor` 会提示。
 
 只给一个项目时写到 `hooks/<ns>/hooks.yaml`。
 
@@ -340,8 +433,10 @@ OpenCode、Oh My Pi、Pi、OpenClaw、Kiro、Hermes 和 Antigravity 没有 Claud
 sharing:
   hooks:
     autoApply: false          # pull 只提示，要自己跑 teamai hooks inject
-    requireTeamScripts: true  # command 必须在 ~/.teamai/team-scripts/ 下
+    requireTeamScripts: true  # command 必须从它的 hook 目录或 ~/.teamai/team-scripts/ 运行
 ```
+
+`requireTeamScripts` 保留 `command` 原文里用到 `${TEAMAI_HOOK_DIR}` 的目录 hook，以及 `~/.teamai/team-scripts/` 下的命令，其余的（比如 `curl … | sh`）都丢掉。它检查脚本的来源是经过评审的团队仓库，不是沙箱：脚本以你的权限运行。
 
 本机全部停用团队 hook：`TEAMAI_HOOKS_DISABLED=1`。
 
@@ -359,9 +454,106 @@ hooks:
 
 agy 随后拒绝该命令：`tool call denied by pre-tool hook: rm -rf is blocked; run git clean -n first.`
 
+### 默认 hook
+
+teamai 自带提示的阈值和文案也放在 hook 目录里。在团队仓库根目录放一个同名目录，就能替换它。比如只在较长的会话后提醒，并换成团队自己的话：
+
+```bash
+cp -r "$(npm root -g)/teamai-cli/hooks/teamai-friction-reminder" hooks/
+```
+
+```yaml
+# hooks/teamai-friction-reminder/HOOK.yaml
+description: Remind after longer sessions only
+with:
+  min_tools: 30
+```
+
+```markdown
+<!-- hooks/teamai-friction-reminder/problem.md -->
+[acme] 这次会话卡住过。如果解决办法还不在 runbook 里，记下来。
+```
+
+`teamai pull` 之后，提醒要等到 30 次工具调用才出现，并以这一行开头。
+
+| 目录 | 放什么 |
+|---|---|
+| `teamai-friction-reminder` | 摩擦提醒：Stop 时提醒分享这次会话学到的东西，含阈值、评分权重、文案 |
+| `teamai-mr-hint` | 会话开始时提议导入最近合并的 MR：往回看多久、列几个、文案 |
+| `teamai-todowrite-hint` | 任务规划好后，建议先查一次团队知识 |
+| `teamai-env-hint` | 会话开始时说明这个作用域有哪些团队环境变量和密钥 |
+| `teamai-package-hint` | 会话开始时说明团队的包声明变了 |
+
+- `HOOK.yaml` 里有 `description` 和 `with:`。`with:` 里没写的键沿用 teamai 的值。
+- 文案是 `<text>.md`，用 `{{ name }}` 引用变量。设了 `language: en` 或 `zh` 时，目录里有 `<text>.en.md` 或 `<text>.zh.md` 就用它。
+- 每个目录的 `README.md` 列出参数及取值范围、每段文案提供的变量，以及关掉它的设置。这些设置还在原来的位置，比如 `sharing.contributeHint.enabled`。
+
+替换目录里的值超出范围、写了默认 hook 不认的键、引用了文案不提供的变量、少了某段文案，或带了 `command` 时，pull 会拒绝它，teamai 自带的目录继续生效：
+
+```text
+hooks/teamai-friction-reminder/ is refused, and teamai's default stays in force until it is fixed: HOOK.yaml: with.min_tools must be a whole number from 1 to 1000
+```
+
+替换对整个团队生效，所以放在 namespace 里的替换（比如 `hooks/payments/teamai-friction-reminder/`）会被 pull 拒绝。`teamai review --branch` 会在合并前把 pull 拒绝的替换判为失败。
+
 ## MCP Server
 
-Muse 保存 stdio server 时可能省略 `type`。pull 和移除操作会兼容这种格式；其他 server 发生变化时，个人 server 和未变更的受管条目保持原样。
+团队自己写的 server 以目录形式 commit：`MCP.yaml` 和它要运行的文件放在一起。目录名就是 server 的名字，只用字母、数字、`-` 和 `_`。
+
+```text
+mcp/jira-lite/
+├─ MCP.yaml
+├─ server.py
+└─ queries.sql
+```
+
+```yaml
+# mcp/jira-lite/MCP.yaml
+description: Read-only Jira lookups for the team
+transport: stdio
+command: uv
+args: ["run", "--script", "${TEAMAI_MCP_DIR}/server.py"]
+requires: [uv]
+```
+
+```python
+# mcp/jira-lite/server.py
+# /// script
+# dependencies = ["mcp==1.2.0", "httpx==0.27.2"]
+# ///
+```
+
+pull 会复制这个目录，并把 `command`、`args` 和 `env` 里的 `${TEAMAI_MCP_DIR}` 换成它的路径（用正斜杠）。teamai 不加引号。目录名由 server 名和从目录里所有文件（包括 `MCP.yaml`）得出的版本组成（下面的 `1702782c`），所以任何文件变了，目录就会变，同一个版本的文件永远不变。和 hook 一样，同一个 commit 的每个 checkout 得出的版本都一样。pull 没能改写 MCP 文件的工具，或成员排除的工具，会继续启动写入配置时的那些文件，即使 `args` 用到的团队变量变了也一样；等没有 MCP 文件再引用那个目录，它就会被移除：
+
+| 团队在哪里 | 目录复制到 |
+|---|---|
+| 用户作用域 | `~/.teamai/mcp/jira-lite.1702782c/` |
+| 工作区（有团队仓库或 self 模式） | 每个 worktree 的 `.teamai/delivered/mcp/jira-lite.1702782c/`，git 会忽略它 |
+
+Claude Code 不会展开 `.mcp.json` 里的 `$CLAUDE_PROJECT_DIR`，所以各工具的 MCP 文件写的是 worktree 的绝对路径，每个 worktree 都不一样。在一个 worktree 里 pull，不会改动其他 worktree 的 server。
+
+`MCP.yaml` 的键和 `mcp.yaml` 里的 server 相同，只是没有 `name`、`roles` 和 `projects`，而且只能是 `transport: stdio`：URL server 不带文件，所以 `http` 和 `sse` server 留在 `mcp.yaml`。只给一个 namespace 的 server 放在 `mcp/<ns>/<name>/`。`${TEAMAI_MCP_DIR}` 只能用在目录里：写在 `mcp.yaml` 里，这次运行的团队 MCP 会全部停下，已安装的保持不变；同一个名字既是 `mcp.yaml` 里的 server 又是目录时也一样。分支上有这两种情况之一，或有 pull 读不了的 `MCP.yaml` 时，`teamai review --branch` 判定失败。
+
+teamai 不安装依赖。目录可以用下面三种方式带上依赖：
+
+| 方式 | `command` 和 `args` | 目录里放什么 |
+|---|---|---|
+| PEP 723 脚本 | `uv`，`["run", "--script", "${TEAMAI_MCP_DIR}/server.py"]` | `server.py`，固定版本的依赖写在文件头里 |
+| 一个打包好的 `.mjs` | `node`，`["${TEAMAI_MCP_DIR}/server.mjs"]` | `server.mjs`，依赖已打包进去 |
+| 固定版本的 runner | `npx`，`["-y", "@acme/jira-mcp@1.4.0", "--config", "${TEAMAI_MCP_DIR}/config.json"]`，或用 `uvx` 加 `jira-mcp==1.4.0` | 只放配置和数据文件 |
+
+`requires` 写成员 PATH 上需要有的 runner。缺少其中一个的成员拿不到这个 server，`teamai mcp inject` 会说出缺的是哪个。设置了 `sharing.mcp.allowedCommands` 时，要把 runner 写进去，因为它就是 server 的 `command`：
+
+```yaml
+# teamai.yaml
+sharing:
+  mcp:
+    allowedCommands: [uv, node, npx]
+```
+
+commit server 目录之前，先让每位成员升级。读不了 MCP 目录的 teamai 会跳过它们，这些成员就拿不到这个 server。
+
+运行已发布的包或 URL 的 server 可以继续写在 `mcp/mcp.yaml`。Muse 保存 stdio server 时可能省略 `type`。pull 和移除操作会兼容这种格式；其他 server 发生变化时，个人 server 和未变更的受管条目保持原样。
 
 ```yaml
 # mcp/mcp.yaml
@@ -422,13 +614,13 @@ Antigravity 的用户级 server 写入 `~/.gemini/config/mcp_config.json`。项�
 
 agy 支持 stdio 和 HTTP server，不写 `type`；`sse` server 不会写给 agy，pull 会给出警告。`agy mcp list` 只显示用户文件里的 server，插件里的 server 在会话中可用。
 
-WorkBuddy 按顺序使用第一个已存在的用户文件：`~/.workbuddy/.mcp.json`、`~/.workbuddy/mcp.json`、`~/.codebuddy.json`。`CODEBUDDY_CONFIG_DIR` 会移动最后一个文件。项目使用 `.mcp.json`，仅有 `mcp.json` 时使用后者。开启 `sharing.gitExclude` 后，server 写入 `.codebuddy.json` 的 `projects[<项目路径>].mcpServers`。这些路径基于 CodeBuddy 2.168.0 引擎，尚未认证 WorkBuddy 启动器的主目录绑定。Pull 只从旧项目文件 `.workbuddy/mcp.json` 移除未被修改的 teamai 条目。
+WorkBuddy 按顺序使用第一个已存在的用户文件：活根下的 `.mcp.json`、`mcp.json`（活根是 `.workbuddy/` 还是 `.workbuddy-ai/`，见下），然后是 `~/.codebuddy.json`。`CODEBUDDY_CONFIG_DIR` 会移动最后一个文件。项目使用 `.mcp.json`，仅有 `mcp.json` 时使用后者。开启 `sharing.gitExclude` 后，server 写入 `.codebuddy.json` 的 `projects[<项目路径>].mcpServers`。这些路径基于 CodeBuddy 2.168.0 引擎，尚未认证 WorkBuddy 启动器的主目录绑定。Pull 只从旧项目文件 `.workbuddy/mcp.json` 移除未被修改的 teamai 条目。
 
-主目录或项目中存在 `.workbuddy-ai/` 时（WorkBuddy AI，即国际版），默认技能路径改为 `.workbuddy-ai/skills`。其他内容仍要等 `.workbuddy/` 存在才写入，所以只有 `.workbuddy-ai/` 的成员收不到规则、团队指令、agent、MCP server 和钩子，`teamai doctor` 会以 `workbuddy receives ...` 失败并列出被搁置的项。
+WorkBuddy 的用户文件写到**最后启动的那个 app** 的数据根 —— `.workbuddy/`，或 WorkBuddy AI（国际版）的 `.workbuddy-ai/` —— 依据两个根各自的 `last-launch.json`：技能、规则、团队指令、agent 和 MCP 文件都跟随。目录存在本身不作数，因为卸载任一 app 都会把自己的根留下；两边都没有记录时沿用旧规则，即存在 `.workbuddy-ai/` 就换路径。项目作用域只换技能，团队 `userScope` 覆盖保留它指定的目标，`settings.json` 与钩子仍留在 `.workbuddy/`，`teamai doctor` 以活根作为安装凭据。
 
 工具主目录或配置的 MCP 路径改变时，pull 保留旧副本并提示一次。确认没有工具读取后再删除。Doctor 会报告工具不读取的映射、已移动的文件，以及仅在项目根目录启动会话时才读取的项目 MCP。MCP 通道未知的内部版本只显示提示，不猜测配置路径。
 
-在包含已初始化仓库的 workspace 中，Claude Code、CodeBuddy 和 WorkBuddy 通过各自的 local scope 而不是项目 MCP 文件获得这些 server，所以在其中某个仓库里启动的会话不会加载它们。在单仓库模式下，或 tclaude、Muse Code 读取该文件时，Claude Code 的 server 仍留在其中，这样的会话会加载它们。
+在包含已初始化仓库的 workspace 中，Claude Code、CodeBuddy 和 WorkBuddy 通过各自的 local scope 而不是项目 MCP 文件获得这些 server，所以在其中某个仓库里启动的会话不会加载它们。在 self 模式下，或 tclaude、Muse Code 读取该文件时，Claude Code 的 server 仍留在其中，这样的会话会加载它们。
 
 ```bash
 teamai mcp list
@@ -555,3 +747,63 @@ projects:
 self 模式下，如果当前分支落后于默认分支，推送修改过的 skill 会在可能覆盖主干文件时以 exit 2 停止。检查覆盖整个 skill 目录，包括参考文件和删除操作，即使本地改的是另一个文件也会检查。先合并默认分支、解决 skill 差异，再重试；已包含主干修改的副本可以正常推送。
 
 团队在原命名空间重新加入退役 agent 后，应直接编辑该命名空间源文件，旧的平铺副本作为备份保留。删除退役的根目录副本不会把剩余工具副本变成新 agent。即使 checkout 已跟上默认分支，编辑或转换已放置的 agent 仍会检查上次投递的 blob。
+
+## 保留的目录标记文件名
+
+在类型目录下（任意深度）包含该类型标记文件的目录，就是一个目录型资源：它是一个资源，其中每个文件都属于它。技能也是这样，`skills/<name>/SKILL.md`。
+
+| 目录 | 标记文件 | 当前版本 |
+|---|---|---|
+| `workflows/` | `WORKFLOW.yaml` | 读取：[工作流文件夹](workflow.md#工作流文件夹) |
+| `hooks/` | `HOOK.yaml` | 读取：[Hooks](#hooks) |
+| `rules/` | `RULE.md` | 读取：[目录型 rule](#目录型-rule确定加载的-skill) |
+| `mcp/` | `MCP.yaml` | 读取：[MCP Server](#mcp-server) |
+| `benchmarks/` | `SUITE.yaml` | 读取：[套件](benchmarks.md#编写套件) |
+| `scorers/` | `SCORER.md` | 跳过 |
+| `agents/` | `AGENT.md` | 跳过 |
+
+scorer 或 agent 目录会被整体跳过，团队仓库的其他内容照常 pull：
+
+```text
+agents/
+├── code-reviewer.yaml          交付：agent "code-reviewer"
+└── reviewer/
+    ├── AGENT.md                跳过：agents/reviewer/ 是 agent 目录
+    └── checklist.md            跳过
+scorers/
+└── strict/
+    └── SCORER.md               跳过：scorers/strict/ 是 scorer 目录
+rules/
+├── style.md                    交付：规则 "style"
+└── api-style/
+    ├── RULE.md                 交付：规则 "api-style"
+    └── checklist.md            随目录一起交付
+```
+
+pull 对每个目录提示一次；由 hook 触发的 pull 会把同样的内容写进 `~/.teamai/debug.log`：
+
+```console
+$ teamai pull
+⚠ agents/reviewer/ is an agent folder, which this teamai cannot read yet; it was skipped. Run teamai update.
+⚠ scorers/strict/ is a scorer folder, which this teamai cannot read yet; it was skipped. Run teamai update.
+✔ [user] Synced 2 rule(s)
+```
+
+`teamai status`、`teamai doctor`、`teamai review --branch` 和 dashboard 都会列出这些目录。push 不会改动它们，团队也不需要声明任何东西。
+
+文件名必须完全一致：`rules/lint/rule.md` 仍然是规则 `lint/rule`，在 macOS 和 Windows 上也一样。
+
+仓库里已经有标记文件名的，例如 `rules/onboarding/RULE.md`，之前会被当作规则 `onboarding/RULE` 交付。从这个版本起 `rules/onboarding/` 是一个目录型 rule `onboarding`，其中其他 `.md` 文件都是它的文件。pull 会删除之前交付的这些文件的副本，并提示一次：
+
+```console
+⚠ rules/onboarding/ holds RULE.md, so it is one folder, and db.md in it is one of its files, no longer read on its own.
+```
+
+要让它们继续是各自独立的规则，改掉标记文件的名字：
+
+```bash
+git mv rules/onboarding/RULE.md rules/onboarding/overview.md
+git commit -m "rules: rename onboarding/RULE.md, a reserved folder marker"
+```
+
+团队提交目录型资源之前，每位成员都应升级。读不了某个类型的版本会跳过该类型的目录；比这些文件名更早的版本会把 `rules/api-style/` 里的每个文件各自当作一条始终生效的规则。

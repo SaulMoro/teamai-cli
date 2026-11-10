@@ -18,7 +18,6 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Readable } from 'node:stream';
 
 import { resolveCliEntry } from './builtin-hooks.js';
 import { captureTail } from './utils/exec.js';
@@ -31,69 +30,12 @@ import { clearGitHookRepositoryEnv, GIT_HOOK_TOOL } from './git-hook.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { claudeHookRunsInAnotherHost } from './claude-hook-host.js';
 import { claimCopilotHookEvent } from './copilot-hook-claim.js';
-import { launchedBy, SESSION_RUN_PAYLOAD_KEY, sessionRun } from './launch-context.js';
+import { launchedBy, LAUNCH_PAYLOAD_KEY, launchEnv, readLaunch, SESSION_RUN_PAYLOAD_KEY, sessionRun } from './launch-context.js';
+import { isHttpEnrolled } from './hook-fast-path.js';
+import { readStdin, takeHandedOffHookStdin } from './utils/hook-stdin.js';
 import { isSelfMode } from './types.js';
 
 export { claudeHookRunsInAnotherHost };
-
-/**
- * Max time to wait for STDIN EOF before proceeding with whatever was received.
- *
- * `for await (process.stdin)` only ends when the host closes the pipe (EOF). If
- * the host (e.g. CodeBuddy) writes the hook payload but never closes STDIN — or
- * opens the pipe without sending EOF — the read would hang until the host aborts
- * the hook with "Hook timed out after 10000ms" (error 3003), all *before* any
- * handler timeout can engage. Racing a short deadline lets us continue with the
- * payload we already buffered (a healthy host EOFs within milliseconds, so this
- * never triggers in normal use).
- */
-const STDIN_READ_TIMEOUT_MS = 1_000;
-
-/**
- * Read STDIN fully, but never block longer than STDIN_READ_TIMEOUT_MS waiting
- * for EOF. Returns empty string if STDIN is a TTY. On timeout, returns whatever
- * chunks were already received (typically the full payload minus a missing EOF).
- */
-export async function readStdin(
-  stream: Readable & { readonly isTTY?: boolean } = process.stdin,
-  timeoutMs = STDIN_READ_TIMEOUT_MS,
-): Promise<string> {
-  if (stream.isTTY) return '';
-  const chunks: Buffer[] = [];
-
-  const readAll = (async () => {
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-  })();
-
-  // The timeout path destroys the stream below. Attach a handler now so a late
-  // iterator rejection cannot become an unhandled rejection after the race.
-  void readAll.catch(() => {});
-  let timer: NodeJS.Timeout | undefined;
-  let timedOut = false;
-
-  const deadline = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      resolve();
-    }, timeoutMs);
-    // Don't let this timer itself keep the event loop alive.
-    timer.unref();
-  });
-
-  try {
-    await Promise.race([readAll, deadline]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-
-  // A pending async iterator keeps the pipe handle alive even after the hook
-  // has continued. Closing it releases the process when the host never sends EOF.
-  if (timedOut && !stream.destroyed) stream.destroy();
-
-  return Buffer.concat(chunks).toString('utf-8');
-}
 
 /**
  * Start the detached child that re-runs this same dispatch for background-only
@@ -212,6 +154,12 @@ export function salvageStdinFields(raw: string): Partial<Record<SalvageableStdin
   return salvaged;
 }
 
+/** Name a hook payload handed over as a temp file, so a sweep can tell it apart. */
+const PAYLOAD_FILE_PREFIX = 'teamai-hook-';
+
+/** Past this age a payload file has no live reader; well beyond any hook run. */
+const STALE_PAYLOAD_AGE_MS = 10 * 60 * 1000;
+
 /**
  * Create a detached child through the WMI service instead of CreateProcess.
  *
@@ -232,7 +180,8 @@ export function salvageStdinFields(raw: string): Partial<Record<SalvageableStdin
  *     even it flashes.
  *
  * WMI has no STDIN pipe, so `stdin` travels as a temp file named on the command
- * line (`--stdin-file`); the child reads and removes it (readStdinFile).
+ * line (`--stdin-file`); the child removes it as soon as it reads it, and on any
+ * other exit.
  *
  * @returns true when the child was created; false when WMI refused or failed —
  *   the caller then falls back to the plain detached spawn.
@@ -252,7 +201,7 @@ export async function trySpawnDetachedViaWmi(
   let payloadFile: string | undefined;
 
   if (stdin !== undefined) {
-    payloadFile = path.join(os.tmpdir(), `teamai-hook-${process.pid}-${Date.now()}.json`);
+    payloadFile = path.join(os.tmpdir(), `${PAYLOAD_FILE_PREFIX}${process.pid}-${Date.now()}.json`);
 
     try {
       fs.writeFileSync(payloadFile, stdin, 'utf8');
@@ -358,7 +307,7 @@ function quoteWindowsArg(arg: string): string {
 /**
  * Read the STDIN payload a parent could not pipe, and remove it. The Windows/WMI
  * spawn path has no STDIN pipe, so the parent hands the payload over as a temp
- * file.
+ * file; a dispatch that never reaches this read removes it on its own exit.
  */
 function readStdinFile(file: string): string {
   try {
@@ -368,8 +317,51 @@ function readStdinFile(file: string): string {
 
     return '';
   } finally {
-    fs.rmSync(file, { force: true });
+    removeStdinFile(file);
   }
+}
+
+/** Remove one payload file. A hook never fails over this, and a second removal is a no-op. */
+function removeStdinFile(file: string): void {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch (e) {
+    log.debug(`hook-dispatch: could not remove STDIN file ${file}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/**
+ * Remove payload files a killed hook left in the temp directory (#1812). A
+ * parent that dies before its child starts cannot remove its own file, and the
+ * child that would have is the only other process that knows the path, so the
+ * next background pass sweeps what is clearly stale. Windows-only: the plain
+ * spawn paths pipe the payload and create no file.
+ */
+export function sweepStalePayloads(dir = os.tmpdir(), now = Date.now(), platform = process.platform): number {
+  if (platform !== 'win32') return 0;
+
+  let removed = 0;
+
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith(PAYLOAD_FILE_PREFIX) || !name.endsWith('.json')) continue;
+
+      const file = path.join(dir, name);
+
+      try {
+        if (now - fs.statSync(file).mtimeMs < STALE_PAYLOAD_AGE_MS) continue;
+
+        fs.rmSync(file, { force: true });
+        removed += 1;
+      } catch {
+        // Another hook cleaned it up, or it is not ours to read any more.
+      }
+    }
+  } catch (e) {
+    log.debug(`hook-dispatch: could not sweep stale payloads in ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  return removed;
 }
 
 /** Parse STDIN JSON and normalize the event name for downstream handlers. */
@@ -426,6 +418,13 @@ export function parseStdin(raw: string, event: string): HookStdin {
   return stdin;
 }
 
+/** The workflow launch this process's environment carries, as the payload forwards it, or null for none. */
+function launchPayload(): ReturnType<typeof launchEnv> | null {
+  const launch = readLaunch(process.env);
+
+  return launch ? launchEnv(launch) : null;
+}
+
 /** Run one dispatch pass and log any handler errors (never to STDOUT). */
 async function runDispatch(
   dispatcher: Dispatcher,
@@ -446,6 +445,9 @@ async function runDispatch(
 
 export { deriveDispatchSessionId };
 
+/** The internal switches a detached child or its parent passes to a dispatch. */
+type HookDispatchOptions = { bgOnly?: boolean; copilotGlobal?: string; stdinFile?: string; hookArgs?: string[] };
+
 /**
  * Main CLI handler for hook-dispatch.
  *
@@ -458,7 +460,23 @@ export async function hookDispatchCli(
   event: string,
   tool: string,
   matcher: string,
-  options: { bgOnly?: boolean; copilotGlobal?: string; stdinFile?: string; hookArgs?: string[] } = {},
+  options: HookDispatchOptions = {},
+): Promise<void> {
+  try {
+    await runHookDispatch(event, tool, matcher, options);
+  } finally {
+    // The read path removed it already; this covers every exit that never got
+    // that far (#1812) — the file is this child's only, and it is the only
+    // process that knows its path.
+    if (options.stdinFile) removeStdinFile(options.stdinFile);
+  }
+}
+
+async function runHookDispatch(
+  event: string,
+  tool: string,
+  matcher: string,
+  options: HookDispatchOptions,
 ): Promise<void> {
   // A session teamai launched for itself, a judge or an AI call, is not the member's: only a workflow step's runs hooks.
   const launcher = launchedBy(process.env);
@@ -466,6 +484,10 @@ export async function hookDispatchCli(
   if (launcher && launcher !== 'workflow') return;
   const { bgOnly = false, stdinFile } = options;
   setStderrOnly(true);
+
+  // A parent killed before its child starts leaves its payload behind, and no
+  // process is left to remove it: this pass is that removal (#1812).
+  if (bgOnly) sweepStalePayloads();
 
   if (claudeHookRunsInAnotherHost(tool, process.env, false)) {
     log.debug('hook-dispatch: skipping claude hooks because Cursor or Copilot CLI has its own teamai hooks');
@@ -487,7 +509,7 @@ export async function hookDispatchCli(
     // payload. The detached child gets them back through the STDIN file.
     const raw = stdinFile ? readStdinFile(stdinFile)
       : fromGit ? JSON.stringify({ cwd: process.cwd(), git_args: options.hookArgs ?? [] })
-        : await readStdin();
+        : takeHandedOffHookStdin() ?? await readStdin();
 
     const parsed = parseStdin(raw, event);
     // Antigravity CLI speaks its own hook payload; the detached child gets it already translated.
@@ -581,12 +603,26 @@ export async function hookDispatchCli(
       if (!claimCopilotHookEvent(event, matcher, raw)) return;
     }
 
+    // Outside any scope, a tool call's or a prompt's background pass has no
+    // handler left but the HTTP local agent's (#1788).
+    if (bgOnly && !localConfig && (event === 'post-tool-use' || event === 'prompt-submit') && !isHttpEnrolled(process.env)) {
+      log.debug(`[hook-dispatch] ${event}/${tool} no scope`);
+
+      return;
+    }
+
     const handlers = filterHandlersForConfig(buildHandlerRegistry(), localConfig);
     const dispatcher = createDispatcher({ handlers, localConfig });
 
     // Detached child: run the fire-and-forget handlers, then exit. No output is
     // wired back to the host (the parent already returned).
     if (bgOnly) {
+      // The fast path forwards the payload as the host sent it (#1788), and
+      // a POSIX child inherits the session's environment, so the child reads
+      // the run and the launch from there. The full dispatch always sets both.
+      if (!(SESSION_RUN_PAYLOAD_KEY in stdin)) stdin[SESSION_RUN_PAYLOAD_KEY] = sessionRun(process.env);
+
+      if (!(LAUNCH_PAYLOAD_KEY in stdin)) stdin[LAUNCH_PAYLOAD_KEY] = launchPayload();
       await runDispatch(dispatcher, event, matcher, stdin, tool, 'background');
 
       return;
@@ -623,12 +659,8 @@ export async function hookDispatchCli(
       }
 
       // The background pass reads a workflow launch from the payload, never from its own environment, which a child
-      // started through WMI does not inherit. Only this process's environment can set it (#1176).
-      const { LAUNCH_PAYLOAD_KEY, launchEnv, readLaunch } = await import('./launch-context.js');
-      const launch = readLaunch(process.env);
-
-      if (launch) stdin[LAUNCH_PAYLOAD_KEY] = launchEnv(launch);
-      else delete stdin[LAUNCH_PAYLOAD_KEY];
+      // started through WMI does not inherit. Only this process's environment can set it (#1176); null says it has none.
+      stdin[LAUNCH_PAYLOAD_KEY] = launchPayload();
       settling = spawnBackground(event, tool, matcher, JSON.stringify(stdin), cwd);
     }
 
@@ -652,6 +684,9 @@ export async function hookDispatchCli(
     // launch — its exit is what takes the host's job object down.
     await settling;
   } catch (e) {
-    log.warn(`hook-dispatch: unexpected error: ${e instanceof Error ? e.message : String(e)}`);
+    const message = `hook-dispatch: unexpected error: ${e instanceof Error ? e.message : String(e)}`;
+    log.warn(message);
+    // A git hook is silent and a detached child discards its stderr: debug.log is their only trace.
+    log.persist(message);
   }
 }

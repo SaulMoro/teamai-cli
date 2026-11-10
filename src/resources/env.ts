@@ -216,6 +216,7 @@ function isExportedEnvKey(key: string): boolean {
  * write refused at the start (a read-only file) changed nothing.
  */
 async function putBack(file: string, before: string | null): Promise<void> {
+  // oxlint-disable-next-line teamai/remove-delivered -- a team env file a failed write created, which pull never records
   if (before === null) await remove(file);
   else if (await readFileIfExists(file) !== before) await writeFile(file, before);
 }
@@ -375,7 +376,7 @@ export class EnvHandler extends ResourceHandler {
     const listEnvFiles = async (root: string): Promise<EntryFile[]> =>
       [...await listEntryFiles(root, 'env'), ...await listEntryFiles(root, SECRETS_LAYOUT)];
 
-    // Single-repo mode: users edit team env directly at <repo>/.teamai/env/
+    // Self mode: users edit team env directly at <repo>/.teamai/env/
     // (it lives in their own repo). push runs in the knowledge worktree, so
     // localConfig.repo.localPath here is the origin/<default> checkout — diff the
     // ACTIVE tree's copies against it and surface genuine additions/edits. (Active
@@ -494,6 +495,7 @@ export class EnvHandler extends ResourceHandler {
         // because the placed env/<ns>/env.yaml already exists. In self mode the
         // source is the ACTIVE tree's .teamai/env file, outside the clone, and
         // must stay: that is the copy the author keeps editing.
+        // oxlint-disable-next-line teamai/remove-delivered -- the clone's own env file push placed elsewhere, which pull never records
         if (original.startsWith(repoRoot + path.sep)) await remove(original);
       }
     }

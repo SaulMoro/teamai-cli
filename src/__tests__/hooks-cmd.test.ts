@@ -73,7 +73,7 @@ function hooksYaml(hooks: (Record<string, unknown> | [Record<string, unknown>, s
     const entries = hooks.map((hook) => {
         const [entry, source, replaces] = Array.isArray(hook) ? hook : [hook, 'hooks/hooks.yaml', null];
         const namespace = source === 'hooks/hooks.yaml' ? null : source.split('/')[1];
-        return { entry, name: entry.id, source, namespace, replaces };
+        return { entry: { kind: 'entry', hook: entry }, name: entry.id, source, namespace, replaces };
     });
     return { resolution: { kind: 'resolved', entries, active: [], notices: notices ?? [], repeated: [] }, builtin: { known: true, override: builtin } };
 }
@@ -696,7 +696,7 @@ describe('hooksList', () => {
         const text = out.join('\n');
         const builtin = text.slice(text.indexOf('Built-in hooks (A)'), text.indexOf('Team hooks (B)'));
         const claude = builtinBlock(builtin, 'claude') ?? [];
-        expect(claude).toHaveLength(5);
+        expect(claude).toHaveLength(4);
         expect(claude.some((line) => line.startsWith('Stop  →'))).toBe(false);
     });
 
@@ -774,7 +774,7 @@ describe('hooksList', () => {
         const builtin = text.slice(text.indexOf('Built-in hooks (A)'), text.indexOf('Team hooks (B)'));
 
         // Claude is reconciled through its settings file: the whole set.
-        expect(builtinBlock(builtin, 'claude')).toHaveLength(6);
+        expect(builtinBlock(builtin, 'claude')).toHaveLength(5);
         // Hermes installs a single on_session_start script running the raw
         // dispatch command (hermes-hooks.ts).
         expect(builtinBlock(builtin, 'hermes')).toEqual([
@@ -863,7 +863,7 @@ describe('hooksRemove', () => {
         );
     });
 
-    it('self single-repo mode removes once, without a redundant legacy sweep (#370)', async () => {
+    it('self mode removes once, without a redundant legacy sweep (#370)', async () => {
         const restoreHome = mockHome('/home/testuser');
         mockedAutoDetectInit.mockResolvedValue({
             localConfig: {

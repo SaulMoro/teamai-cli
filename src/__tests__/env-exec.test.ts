@@ -13,7 +13,8 @@ import { envLoaderPath } from '../resources/env-loader.js';
 import { envShMarker } from '../env-sh-exports.js';
 import { getMachineSecretsPath, getTeamSecretsPath, writeSecretStore, type SecretStore } from '../secret-store.js';
 import { resolveAnchors } from '../utils/git.js';
-import { _resetState, _setLogFilePath, setStderrOnly } from '../utils/logger.js';
+import { setStderrOnly } from '../utils/logger.js';
+import { _resetState, _setLogFilePath } from '../utils/debug-log.js';
 import { projectDataHome } from '../utils/partition.js';
 import { getDataHome, type LocalConfig, type TeamaiConfig } from '../types.js';
 
@@ -66,7 +67,7 @@ describe('teamai env exec', () => {
     git(root, 'worktree', 'add', '-q', worktree, 'HEAD');
     const anchors = await resolveAnchors(root);
     if (!anchors) throw new Error('no git anchors for the fixture project');
-    const partition = projectDataHome(anchors.projectAnchor);
+    const partition = projectDataHome(anchors.repoAnchor);
     const config: LocalConfig = {
       repo: { localPath: repoPath, remote: 'https://example.com/work.git' }, username: 't', scope: 'project',
       projectRoot: root, additionalRoles: [],
@@ -410,7 +411,7 @@ describe('teamai env exec', () => {
         exec: (await childEnv(root))[key],
         mcp: (await buildVarTable(inheriting))[key],
         list: envListing(await resolveTeamEnv(inheriting), { reveal: true }).lines.map(({ text: lineText }) => lineText.trim()).filter((trimmed) => trimmed.startsWith(key)),
-        hint: (await hint.execute({}, 'claude', inheriting))?.includes(key) ?? false,
+        hint: String(await hint.execute({}, 'claude', inheriting) ?? '').includes(key),
       }).toEqual({ exec: expected, mcp: expected, list: [list], hint: expected !== undefined });
     });
 
@@ -446,7 +447,7 @@ describe('teamai env exec', () => {
         exec: (await childEnv(root)).USER_ONLY,
         mcp: (await buildVarTable(inheriting)).USER_ONLY,
         list: listing.lines.map(({ text: lineText }) => lineText.trim()).filter((trimmed) => trimmed.startsWith('USER_ONLY')),
-        hint: (await hint.execute({}, 'claude', inheriting))?.includes('USER_ONLY') ?? false,
+        hint: String(await hint.execute({}, 'claude', inheriting) ?? '').includes('USER_ONLY'),
       }).toEqual({ exec: expected, mcp: expected, list, hint: true });
       if (problem) {
         expect(listing.problems.some((message) => message.includes(problem))).toBe(true);
@@ -486,7 +487,7 @@ describe('teamai env exec', () => {
       expect({
         exec: [env.PROJ, env.USER_ONLY],
         mcp: [(await buildVarTable(detected)).PROJ, (await buildVarTable(detected)).USER_ONLY],
-        hint: (await hint.execute({}, 'claude', detected))?.includes('PROJ') ?? false,
+        hint: String(await hint.execute({}, 'claude', detected) ?? '').includes('PROJ'),
       }).toEqual({ exec: ['old', 'u'], mcp: ['old', 'u'], hint: true });
       expect(listing.problems.some((message) => message.includes(problem))).toBe(true);
       expect(listing.problems).toContain('Until it is fixed, shells, MCP servers and `teamai env exec` use the values the last pull wrote for PROJ.');
