@@ -107,6 +107,22 @@ steps:
       counted: number
 `;
 
+/** A workflow step whose first command requires this machine, so it runs where it stands rather than whole on a member. */
+const WHOLE_PINNED = `schemaVersion: v1alpha1
+name: wholepinned
+description: wholepinned
+outputs:
+  counted: steps.pair.outputs.counted
+steps:
+  - id: pair
+    workspace: new
+    workflow: pinnedpair
+    with:
+      mark: made.txt
+`;
+const PINNED_PAIR = PAIR.replace('name: pair\ndescription: pair', 'name: pinnedpair\ndescription: pinnedpair')
+  .replace('  - id: write\n    workspace: continue\n', '  - id: write\n    workspace: continue\n    requires: { host: true }\n');
+
 /** A workflow step a member takes whole, whose one command holds until stopped the first time, writing its pid where the test reads it. */
 const WHOLE_HOLD = flow('wholehold', `  - id: pair
     workspace: new
@@ -421,6 +437,8 @@ describe('the fleet', () => {
       'workflows/fan.yaml': FAN,
       'workflows/whole.yaml': WHOLE,
       'workflows/pair.yaml': PAIR,
+      'workflows/wholepinned.yaml': WHOLE_PINNED,
+      'workflows/pinnedpair.yaml': PINNED_PAIR,
       'workflows/wholehold.yaml': WHOLE_HOLD,
       'workflows/wholespend.yaml': WHOLE_SPEND,
       'workflows/spendone.yaml': SPEND_ONE,
@@ -670,6 +688,25 @@ describe('the fleet', () => {
     expect(originGit('show', `${finished?.result?.to ?? ''}:made.txt`)).toBe('W');
     // The member's nested run pushed nothing of its own to origin.
     expect(originGit('for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/').split('\n').filter((branch) => branch.endsWith('/_run'))).toEqual([]);
+  }, 240_000);
+
+  it('runs a workflow step whose child requires this machine where it stands: the pinned step here, the other on a member', async () => {
+    let alicePid = 0;
+    const before = new Set(offeredRuns());
+    const started = teamai('alice', ['workflow', 'start', 'wholepinned', '--driver', 'fan-fleet'], (pid) => { alicePid = pid; });
+    const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
+    await waitOn(() => fresh() !== undefined && records(fresh() ?? '').length > 0, 60_000, () => alicePid, started);
+    const run = fresh() ?? '';
+    // The member is offered the step that may leave this machine, never the workflow step whole.
+    expect(records(run)).toEqual([expect.objectContaining({ state: 'offered', lease: expect.objectContaining({ step: 'pair.count' }) })]);
+
+    const ran = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
+    expect(ran.envelope(), said(ran)).toMatchObject({ data: { ran: { run, step: 'pair.count', exit_code: 0 } } });
+    const done = await started;
+    expect(done.envelope(), said(done)).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { counted: 1 } } } });
+    expect(runStateOf('alice', run).steps.filter((step) => step.id !== 'pair').map((step) => [step.id, step.status, step.runtime])).toEqual([
+      ['pair.write', 'succeeded', 'host'], ['pair.count', 'succeeded', 'fleet'],
+    ]);
   }, 240_000);
 
   it('counts what a member\'s whole workflow step spent against the run\'s budget', async () => {
