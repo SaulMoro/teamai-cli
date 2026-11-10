@@ -1407,6 +1407,7 @@ steps:
       expect(sends()).toEqual([]);
     });
 
+    // Two prompts and a whole teamai-score run take about 40 s alone, past the 60 s limit beside other workers.
     it('reads a session from the home the runtime reports for it, for scoring and the next pass\'s resume, and names the tool in open', async () => {
       writeFlow('homed', `  - id: review
     prompt: Review the repository without changing it.
@@ -1442,7 +1443,7 @@ steps:
       const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
 
       expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
-    });
+    }, 120_000);
 
     it('reads a session of an instance from the home the runtime reports for it, for scoring, the next pass\'s resume and the session archive', async () => {
       acmeInstance();
@@ -1474,7 +1475,7 @@ steps:
       const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
 
       expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
-    });
+    }, 120_000);
 
     it('reads a session whose runtime reports no home in the tool\'s default home, not in the one the member moved theirs to', async () => {
       writeDefinition('agentdefaulthome', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
