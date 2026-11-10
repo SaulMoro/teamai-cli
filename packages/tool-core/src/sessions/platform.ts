@@ -36,12 +36,12 @@ export interface SessionPlatformFacts<TTool extends string = string> {
 }
 
 /**
- * What the host gives a session adapter: the processes it may start, and the Codex CLIs installed here, in the order
- * to try, which the Codex format runs to index a session it wrote.
+ * What the host gives a session adapter: the processes it may start, and the executables of a tool installed here, in
+ * the order to try, as the Codex format runs the Codex CLI to index a session it wrote.
  */
 export interface SessionHost {
   readonly processes: Processes;
-  codexCli(): readonly string[];
+  executablesOf(tool: string): readonly string[];
 }
 
 /** A platform whose store teamai resolves (`sessionStoreDir`) and hands to its adapter. */

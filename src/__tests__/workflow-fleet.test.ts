@@ -641,7 +641,10 @@ describe('a member taking an attempt', () => {
     expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
   });
 
-  it('keeps the folder of a step it holds through a sweep, however long the step has run', async () => {
+  it.each([
+    ['however long the step has run', false],
+    ['even when it cannot read which folders the step reads', true],
+  ])('keeps the folder of a step it holds through a sweep, %s', async (_case, isNoteUnreadable) => {
     const gate = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fleet-gate-')));
     const command = `while [ ! -f ${path.join(gate, 'go')} ]; do sleep 0.05; done; cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"`;
     const folder = { 'WORKFLOW.yaml': MARK.replace('echo written > "$MARK"', command), 'mark.txt': 'written\n' };
@@ -657,6 +660,14 @@ describe('a member taking an attempt', () => {
     await syncScorersThenWorkflows(bob.config);
     const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
     for (const name of folders()) fs.utimesSync(path.join(stored(), name), longAgo, longAgo);
+    if (isNoteUnreadable) {
+      const runs = path.join(getDataHome(bob.config), 'workflows', 'runs');
+      const notes = fs.readdirSync(runs, { recursive: true, encoding: 'utf8' }).filter((file) => path.basename(file) === 'fleet-folders.json');
+      expect(notes).toHaveLength(1);
+      const note = path.join(runs, notes[0] ?? '');
+      fs.rmSync(note);
+      fs.mkdirSync(note);
+    }
     await sweepLeftovers(bob.config, null, { now: Date.now(), checkout: bob.checkout });
     fs.writeFileSync(path.join(gate, 'go'), '');
 

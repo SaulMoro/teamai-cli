@@ -44,6 +44,13 @@ describe('a child brief', () => {
     expect((await brief(changes)).text).not.toContain('"changed"');
   });
 
+  it('names no path outside a confined step\'s directory, which is all it may read', async () => {
+    const { text, config } = await brief('confined', '/data/workflows/folders/f1');
+
+    expect(text).not.toContain(runScratchDir(config, run));
+    expect(text).not.toContain('/data/workflows/folders/f1');
+  });
+
   it('names the run\'s scratch directory and the workflow\'s folder, which the agent\'s shell is not given', async () => {
     const { text, config } = await brief('commit', '/data/workflows/folders/f1');
 

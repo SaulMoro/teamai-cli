@@ -22,8 +22,8 @@ import { instanceNames, instancePlatform } from '../../tool-registry.js';
  */
 export type AdapterFactory = (storeDir: string) => AgentAdapter;
 
-/** What every adapter this registry builds starts its processes through, and the Codex CLIs it may index with. */
-export const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () => executablesOf('codex') };
+/** What every adapter this registry builds starts its processes through, and the executables of each tool installed here. */
+export const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf };
 
 function stored(definition: StoredPlatformDefinition): AdapterFactory {
   return (storeDir) => definition.adapter(storeDir, SESSION_HOST);

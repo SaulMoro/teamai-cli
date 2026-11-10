@@ -21,7 +21,7 @@ import type { JsonValue } from '../types.js';
 import type { ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
 import type { ConfinedUsage } from '@teamai/tool-core/stdout';
 import { confinedVariables } from '@teamai/tool-launch/confined-launch';
-import { confinedIsolation, runConfined as launchConfined, type ConfinedDeps, type ConfinedFailure, type ConfinedFamily } from '@teamai/runtime-tools/confined';
+import { confinedIsolation, runConfined as launchConfined, type ConfinedDeps, type ConfinedFailure, type ConfinedFamily, type ConfinedRequest } from '@teamai/runtime-tools/confined';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../launch-registry.js';
 
 type ToolLookup = { resolveTool?: (tool: string) => string | null };
@@ -112,21 +112,8 @@ export async function confinedOffers(lookup: ToolLookup = {}): Promise<ConfinedO
   return offers;
 }
 
-export interface ConfinedInput {
-  tool: ConfinedTool;
-  model?: { name: string; effort?: string };
-  /** The tool's working directory and only readable root. Nothing is written into it. */
-  dir: string;
-  prompt: string;
-  /** The JSON Schema the reply must follow, which tools that take one enforce. */
-  schema?: JsonValue;
-  /** The least level the run must reach; a tool that cannot reach it does not run. */
-  level: ConfinedLevel;
-  timeoutMs: number;
-  /** The directory the tool's process group is recorded in, where `stopRecordedGroup` finds it if its caller dies. */
-  group?: string;
-  signal?: AbortSignal;
-}
+/** A confined run teamai asks for: the tool, and what the runtime's request carries of the work itself. */
+export type ConfinedInput = Pick<ConfinedRequest, 'model' | 'dir' | 'prompt' | 'schema' | 'level' | 'timeoutMs' | 'group' | 'signal'> & { tool: ConfinedTool };
 
 /** What ran: the tool, the model and effort observed, the level it reached, what it could do, and what it spent. */
 export interface ConfinedRun {

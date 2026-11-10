@@ -59,11 +59,17 @@ export function executableOf(tool: LaunchOrderTool): string {
   return adapter.executable ?? tool;
 }
 
-/** The executables of `tool` to try, in order: its command, then those a desktop app installs it as. */
-export function executablesOf(tool: LaunchOrderTool): string[] {
-  const adapter: LaunchAdapter = launchAdapterOf(tool);
+/**
+ * The executables of `tool` to try, in order: its command, then those a desktop app installs it as. A tool teamai
+ * launches none of is its own command.
+ */
+export function executablesOf(tool: string): string[] {
+  const launched = LAUNCH_ORDER.find((one) => one === tool);
 
-  return [executableOf(tool), ...(adapter.installs?.() ?? [])];
+  if (launched === undefined) return [tool];
+  const adapter: LaunchAdapter = launchAdapterOf(launched);
+
+  return [executableOf(launched), ...(adapter.installs?.() ?? [])];
 }
 
 type Profile = 'step' | 'confined';

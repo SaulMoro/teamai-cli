@@ -105,10 +105,10 @@ export async function writeChildBrief(input: {
       none: [`- Work in \`${dir}\`: every file the step reads is there. Do not change files here: the step only reads them, and TeamAI fails a step that leaves a change.`, '- Leave git to TeamAI.'],
       confined: [`- Read only the files in \`${dir}\`. Read nothing outside it, not the repository, nor anything from the session that started you: the step is answered from that directory alone.`, '- Change nothing there.'],
     }[changes],
-    // The agent's shell is the session's, which no step's env reaches.
-    folder === undefined
+    // The agent's shell is the session's, which no step's env reaches; a confined step reads only its directory.
+    ...changes === 'confined' ? [] : [folder === undefined
       ? `- Your shell has no ${RUN_DIR_ENV}: where the step names it, the run's scratch directory is \`${runScratchDir(config, run)}\`.`
-      : `- Your shell has no ${RUN_DIR_ENV} or ${WORKFLOW_DIR_ENV}: where the step names one, the run's scratch directory is \`${runScratchDir(config, run)}\`, and the workflow's folder \`${folder}\`.`,
+      : `- Your shell has no ${RUN_DIR_ENV} or ${WORKFLOW_DIR_ENV}: where the step names one, the run's scratch directory is \`${runScratchDir(config, run)}\`, and the workflow's folder \`${folder}\`.`],
     '- Run one teamai command, the report below, once, at the end.',
     '',
     '## Finish',

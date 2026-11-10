@@ -872,17 +872,39 @@ const FoldersNoteSchema = z.array(z.string());
 /**
  * The stored workflow folders the steps this install holds read: no run record here names a command or prompt step a
  * member takes, and its team's workflows may have moved on since it took it. Read from this install's teamai-reports
- * checkout as it stands, which holds every write of its own.
+ * checkout as it stands, which holds every write of its own. A note it cannot read answers why, so no folder goes.
  */
-export async function heldFolders(config: LocalConfig): Promise<string[]> {
+export async function heldFolders(config: LocalConfig): Promise<{ ok: true; folders: string[] } | { ok: false; why: string }> {
   const held = (await listRecords(config)).filter((record) => isHeld(record) || record.state === 'cancelling');
+  const folders: string[] = [];
 
-  // A claim noted no folder when its step reads none; the note is written whole (writeJsonAtomic) or not at all.
-  const notes = await Promise.all(held.map(async (record) => (
-    await isClaimedHere(config, record.run, record.attempt) ? readRegularFile(foldersNote(config, record.run, record.attempt), 'utf8').catch(() => undefined) : undefined
-  )));
+  for (const record of held) {
+    if (!await isClaimedHere(config, record.run, record.attempt)) continue;
+    const note = foldersNote(config, record.run, record.attempt);
+    let text: string;
 
-  return notes.flatMap((text) => (text === undefined ? [] : FoldersNoteSchema.parse(parseJson(text))));
+    try {
+      text = await readRegularFile(note, 'utf8');
+    } catch (error) {
+      // A claim whose step reads no folder notes none.
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
+
+      return { ok: false, why: `${note} could not be read (${error instanceof Error ? error.message : String(error)})` };
+    }
+
+    let parsed: string[] | undefined;
+
+    try {
+      parsed = FoldersNoteSchema.safeParse(parseJson(text)).data;
+    } catch {
+      parsed = undefined;
+    }
+
+    if (parsed === undefined) return { ok: false, why: `${note} is not a list of folders` };
+    folders.push(...parsed);
+  }
+
+  return { ok: true, folders };
 }
 
 /**

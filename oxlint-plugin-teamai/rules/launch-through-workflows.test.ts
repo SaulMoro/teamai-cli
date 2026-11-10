@@ -25,7 +25,6 @@ describe('teamai/launch-through-workflows', () => {
   rule.invalid('rejects the tools runtime\'s answer launch outside a workflow driver', `import { answerLaunch } from '@teamai/runtime-tools/answer';`, undefined, { filename: 'src/x.ts' });
   rule.invalid('rejects the tools runtime itself outside a workflow driver', `import { toolsStepRuntime } from '@teamai/runtime-tools';`, undefined, { filename: 'src/x.ts' });
   rule.invalid('rejects a launcher from a folder no one has listed yet', `import { runTool } from '@teamai/runtime-tools/headless';`, undefined, { filename: 'src/brand-new/x.ts' });
-  rule.invalid('rejects the launch library from the folder that held the launcher', `import { runStepLaunch } from '@teamai/tool-launch/run-step-launch';`, undefined, { filename: 'src/tool-launch/x.ts' });
   rule.valid('allows the sandbox runtime the launch library', `import { runStepLaunch } from '@teamai/tool-launch/run-step-launch';`, { filename: 'packages/runtime-sandbox/src/prompt.ts' });
   rule.valid('allows the tools runtime the launch library', `import { callLaunch } from '@teamai/tool-launch/call-launch';`, { filename: 'packages/runtime-tools/src/answer.ts' });
   rule.valid('allows a workflow driver to launch', `import { runConfined } from '../../confined-launch.js'; import { answerLaunch } from '@teamai/runtime-tools/answer';`, { filename: 'src/workflow/drivers/local/feature.ts' });

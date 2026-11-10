@@ -14,8 +14,8 @@ import type { TokenUsage } from '@teamai/tool-core/tokens';
 import { fakeCli } from './fake-cli.js';
 import { replayTranscript, type RecordedTranscript } from './replay-transcript.js';
 
-// A replayed transcript is only read, and only writing a Codex session runs a Codex CLI.
-const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () => ['codex'] };
+// A replayed transcript is only read, and only writing a session runs a tool's CLI.
+const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] };
 
 export type { RecordedTranscript, ReplayTarget } from './replay-transcript.js';
 

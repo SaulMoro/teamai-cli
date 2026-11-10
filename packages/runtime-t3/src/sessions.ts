@@ -15,8 +15,8 @@ import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 //  session-store lookup once it exists.
 //
 
-// The runtime only reads sessions, and only writing one runs a Codex CLI to index it.
-const READ_ONLY_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () => ['codex'] };
+// The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
+const SESSION_READER_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] };
 
 /**
  * The T3 provider drivers this runtime runs, each with the teamai tool it is, its name in T3, its tool's home under a
@@ -24,7 +24,7 @@ const READ_ONLY_HOST: SessionHost = { processes: HOST_PROCESSES, codexCli: () =>
  */
 export const DRIVERS = {
   claudeAgent: { tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')) },
-  codex: { tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), READ_ONLY_HOST) },
+  codex: { tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), SESSION_READER_HOST) },
 } as const satisfies Record<string, { tool: string; label: string; home: string; homeEnv: string; sessions(toolHome: string): AgentAdapter }>;
 
 export type Driver = keyof typeof DRIVERS;

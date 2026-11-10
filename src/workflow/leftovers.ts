@@ -744,8 +744,14 @@ export async function sweepLeftovers(config: LocalConfig, team: Pick<TeamaiConfi
   // pins its folders again.
   const cached = (await listCachedWorkflows(config)).flatMap((workflow) => (workflow.source === 'team' && workflow.files ? [workflow.sourceHash] : []));
   const using = (await readRuns(config)).filter((run) => !cleaned(run, 'retention'));
-  const referenced = new Set([...cached, ...await heldFolders(config), ...using.flatMap((run) => [...run.folder ? [run.folder] : [], ...Object.values(run.folders ?? {})])]);
-  await WorkflowFolder.prune(config, { referenced, now });
+  const held = await heldFolders(config);
+
+  if (held.ok) {
+    const referenced = new Set([...cached, ...held.folders, ...using.flatMap((run) => [...run.folder ? [run.folder] : [], ...Object.values(run.folders ?? {})])]);
+    await WorkflowFolder.prune(config, { referenced, now });
+  } else {
+    log.warn(`Kept every stored workflow folder: ${held.why}, so which of them a step this machine runs for the fleet reads is unknown. Fix or remove that file, then run teamai doctor --fix again.`);
+  }
 
   return { retention, swept };
 }

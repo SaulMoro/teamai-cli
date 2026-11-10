@@ -318,7 +318,7 @@ function pushItemCompleted(records: CodexWrittenLine[], args: ItemCompletedArgs)
  * plain PATH join and `spawn` miss.
  */
 async function findCodexCli(host: SessionHost): Promise<string | null> {
-  for (const candidate of host.codexCli()) {
+  for (const candidate of host.executablesOf('codex')) {
     if (await host.processes.probe(candidate)) return candidate;
   }
 

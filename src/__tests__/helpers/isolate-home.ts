@@ -35,7 +35,7 @@ vi.mock('../../launch-registry.js', async (importOriginal) => {
   const under = (dir: string | undefined, binary: string): boolean => !!dir && binary.startsWith(`${dir}${path.sep}`);
   const isTestOwned = (binary: string): boolean => !path.isAbsolute(binary) || under(process.env.HOME, binary)
     || (process.env.LOCALAPPDATA !== machineLocalAppData && under(process.env.LOCALAPPDATA, binary));
-  return { ...actual, executablesOf: (tool: Parameters<typeof actual.executablesOf>[0]) => actual.executablesOf(tool).filter(isTestOwned) };
+  return { ...actual, executablesOf: (tool: string) => actual.executablesOf(tool).filter(isTestOwned) };
 });
 
 afterAll(() => {

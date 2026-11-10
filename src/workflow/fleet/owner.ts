@@ -341,7 +341,8 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
       // A step's place is this host's, so the fleet offers the workspaces this machine does. A member runs a prompt on a
       // tool of its own, so the fleet takes a prompt step on any tool unless its entry names the tools its pool has. A
       // member drives a whole workflow's steps itself, so the fleet takes a workflow step whole when its steps fit. The
-      // member launches each prompt's agent on its own tool, so prompt steps reach the fleet as `prompt` (`launchesAgents`).
+      // member launches each prompt's agent on its own tool (`launchesAgents`), so the local driver keeps the fleet's tools
+      // rather than the ones a tool home holds.
       return { ok: true, can: { ...can, tools: can.tools ?? [...LAUNCH_TOOLS], remote: true, workspace: [...WORKSPACE_MODES], workflow: true, ...(labels && { labels }) }, launchesAgents: true };
     },
 
