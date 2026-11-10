@@ -17,7 +17,9 @@ export const LabelSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/, 'must be l
  * `requires:` on a step, and `defaults.requires` in a workflow file, which acts as if written on every step of it.
  * A step that needs a person says `interactive: true`. `env` lists team env keys by name; values never enter the run.
  * `strict: true` makes the block's `isolation` and `network` strict, and a floor for every level inside it. `labels`
- * names what the machine that runs the step must declare, in `workflows.labels` or a fleet entry's `labels`.
+ * names what the machine that runs the step must declare, in `workflows.labels` or a fleet entry's `labels`. `host: true`
+ * keeps the step on this machine (`isPinnedToHost`), a strict requirement: the host command slot runs a command, a
+ * runtime of the definition that runs here a prompt.
  */
 export const RequirementsSchema = z.object({
   network: z.boolean().optional(),
@@ -25,6 +27,7 @@ export const RequirementsSchema = z.object({
   env: z.array(EnvKeySchema).optional(),
   labels: z.array(LabelSchema).optional(),
   strict: z.boolean().optional(),
+  host: z.literal(true).optional(),
 });
 
 export type Requirements = z.infer<typeof RequirementsSchema>;
@@ -289,7 +292,8 @@ export const LeaseSetupSchema = z.object({ command: z.string(), envScope: EnvSco
 export type LeaseSetup = z.infer<typeof LeaseSetupSchema>;
 
 /**
- * The requirements in effect at a level: each level's keys replace the earlier ones, and `env` and `labels` lists add up. The
+ * The requirements in effect at a level: each level's keys replace the earlier ones, `env` and `labels` lists add up, and
+ * `host` holds once any level sets it. The
  * `isolation` and `network` of a strict level, or of a level's `floor`, join the floor, and a value below it is raised.
  */
 export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<InEffect, 'floor'>) | undefined>): InEffect {
@@ -297,7 +301,9 @@ export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<
   const merged: InEffect = {};
   let floor: Floor = {};
 
-  for (const { network, isolation, strict, floor: inner = {} } of given) {
+  for (const { host, network, isolation, strict, floor: inner = {} } of given) {
+    if (host) merged.host = true;
+
     if (network !== undefined) merged.network = network;
 
     if (isolation !== undefined) merged.isolation = isolation;
@@ -423,10 +429,12 @@ export interface Offer {
  * - an answer step, which the local loop answers with the member's tool here, whatever runtime takes its lease;
  * - a command step of a workflow teamai ships, which does its bookkeeping against the run's files, this machine's
  *   sessions and the team repo;
- * - a step that publishes to a teamai data branch.
+ * - a step that publishes to a teamai data branch;
+ * - a step that declares `requires.host`, as every command step of those workflows does, so a team copy of one under
+ *   another name keeps the pin. The pins above stay as a floor for a shipped step that forgets the key.
  */
-export function isPinnedToHost(step: { executor: Executor; answer: boolean; inShippedWorkflow: boolean; publishes: boolean }): boolean {
-  return step.answer || (step.executor === 'command' && step.inShippedWorkflow) || step.publishes;
+export function isPinnedToHost(step: { executor: Executor; answer: boolean; inShippedWorkflow: boolean; publishes: boolean; requires: Pick<InEffect, 'host'> }): boolean {
+  return step.answer || (step.executor === 'command' && step.inShippedWorkflow) || step.publishes || step.requires.host === true;
 }
 
 /** What a granted lease carries besides the step itself. */

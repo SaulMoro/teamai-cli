@@ -63,8 +63,8 @@ const CONFINED_STEP_KEYS = new Set(['id', 'needs', 'if', 'prompt', 'prompt_file'
  */
 const ANSWER_STEP_KEYS = new Set(['id', 'needs', 'if', 'answer', 'output', 'end', 'loop', 'break', 'for_each', 'timeout', 'continue_on_failure', 'workspace']);
 
-/** What a `finally` step may carry: it runs a command, read-only, in no workspace of its own. */
-const FINALLY_STEP_KEYS = new Set(['id', 'needs', 'if', 'command', 'env', 'output', 'timeout']);
+/** What a `finally` step may carry: it runs a command, read-only, in no workspace of its own, where its `requires` hold. */
+const FINALLY_STEP_KEYS = new Set(['id', 'needs', 'if', 'command', 'env', 'output', 'timeout', 'requires']);
 
 /** The actions as a sentence: `command, prompt, prompt_file, or workflow`. */
 const ACTION_LIST = `${ACTION_KEYS.slice(0, -1).join(', ')}, or ${ACTION_KEYS.at(-1)}`;
