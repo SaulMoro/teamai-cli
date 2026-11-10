@@ -738,6 +738,7 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
     // An answer kept from a failed write waits for the next poll, not for the person.
     const woken = AbortSignal.any([cancel, leave, ...(asked !== undefined && asked.answer === undefined ? [asked.answered.signal] : [])]);
+
     // A cancel not yet written is tried again at the shortest poll, so its deadline is kept.
     if (cancel.aborted && !isCancelWritten) pollMs = RECORD_POLL_MS;
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
