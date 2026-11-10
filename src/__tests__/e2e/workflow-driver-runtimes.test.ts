@@ -620,7 +620,7 @@ steps:
     expect(opens.map((op) => op.tool)).toEqual(['claude']);
   });
 
-  it('ends the failure of a judge whose runtime restarted under it with the retry to run', async () => {
+  it('ends the failure of a judge whose runtime restarted under it with the retry to run, its step path quoted for the shell', async () => {
     const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
     const runId = runOf(ran);
     writeDefinition('toyjudgerestart', [{ use: 'toy', options: { state, judge: { fail: { code: 'daemon_restarted', message: 'The daemon stopped while the claude agent answered the confined prompt.' } } } }]);
@@ -634,7 +634,7 @@ steps:
     const judge = readRunState(scoreRun).steps.find((step) => step.id.endsWith('.judge'));
     expect(judge, scored.stderr).toMatchObject({
       status: 'failed',
-      failure: { message: `Step runtime "toy" could not run the confined claude prompt (daemon_restarted): The daemon stopped while the claude agent answered the confined prompt. Then run: teamai workflow retry ${scoreRun} ${String(judge?.id)}` },
+      failure: { message: `Step runtime "toy" could not run the confined claude prompt (daemon_restarted): The daemon stopped while the claude agent answered the confined prompt. Then run: teamai workflow retry ${scoreRun} 'score[0].judge'` },
     });
   });
 
