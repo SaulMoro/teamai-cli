@@ -14,7 +14,8 @@ import { leaseNext, parseNextPayload, parseReport, reportable, reportAttempt, re
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { getCurrentVersion } from '../package-info.js';
 import { expectedOutput, outputMismatch, OutputSchemaSchema } from '../workflow/output.js';
-import { CAN_KEYS, type DriverCan } from '../workflow/requirements.js';
+import { CAN_KEYS, mergeRequirements, type DriverCan } from '../workflow/requirements.js';
+import { wholeFit } from '../workflow/whole-workflow.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
@@ -4789,6 +4790,29 @@ steps:
     const { facts } = describeWorkflow({ definition: parsed.definition, source: 'team', workflows: {}, ceiling: 1, can: { remote: true }, allow: {}, env: { declared: none, secrets: none, present: none } });
 
     expect(facts.held).toEqual([expect.objectContaining({ step: 'record', missing: ['host'] })]);
+  });
+
+  it('keeps a workflow step whole on no member when its child has an answer step, which runs only on this machine', () => {
+    const outer = parseWorkflow('outer.yaml', `schemaVersion: v1alpha1
+name: outer
+description: Runs ask.
+steps:
+  - id: pair
+    workflow: ask
+`);
+    const child = parseWorkflow('ask.yaml', `schemaVersion: v1alpha1
+name: ask
+description: Asks the member's tool.
+steps:
+  - id: ask
+    answer: Is the change done?
+    output: { text: string }
+`);
+    if (!outer.ok || !child.ok) throw new Error(JSON.stringify([outer, child].flatMap((parsed) => (parsed.ok ? [] : parsed.diagnostics.map((diagnostic) => diagnostic.message)))));
+    const [step] = outer.definition.steps;
+    if (step === undefined) throw new Error('no step');
+
+    expect(wholeFit(step, child.definition, { requires: mergeRequirements(), around: 'outer' })).toEqual({ unfit: 'step "ask" runs only on this machine' });
   });
 });
 

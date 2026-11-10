@@ -37,7 +37,8 @@ export function wholeFit(
   const runs = file.steps.flatMap((inner): WholeRun[] => {
     if (inner.command !== undefined) return [{ step: inner, executor: 'command', requires: inEffect(inner) }];
 
-    return inner.prompt === undefined ? [] : [{ step: inner, executor: 'prompt', requires: inEffect(inner) }];
+    // An answer is a prompt the member's tool answers on this host, so the pin below holds it here.
+    return inner.prompt === undefined && inner.answer === undefined ? [] : [{ step: inner, executor: 'prompt', requires: inEffect(inner) }];
   });
 
   // A step pinned to this machine (`isPinnedToHost`) runs on no member. An inline workflow's steps are steps of the file
@@ -106,7 +107,7 @@ function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow
     const what = `step "${inner.id}"`;
 
     // A gate the member asks the owner through the attempt's record, whose person answers it.
-    if (inner.command === undefined && inner.prompt === undefined && inner.hitl === undefined) return `${what} is neither a command, a prompt nor a gate`;
+    if (inner.command === undefined && inner.prompt === undefined && inner.answer === undefined && inner.hitl === undefined) return `${what} is neither a command, a prompt, an answer nor a gate`;
 
     if (stepWorkflow(inner) !== undefined) return `${what} runs a workflow`;
 
