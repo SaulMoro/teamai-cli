@@ -23,7 +23,7 @@ interface Adoption {
 /**
  * Why attempt `lease.attempt` cannot adopt `adopt`, as the message `adopt_mismatch` answers with, or undefined when it
  * can, or adopts nothing. A place recorded for the attempt answers for itself, so only that place may be adopted again.
- * A lease in the checkout adopts none, and a reader only `hosted`, the place the session host made for its branch.
+ * A lease in the checkout adopts none, and a reader only `sessionHostPlace`, the place the session host made for its branch.
  */
 export async function adoptRefusal(input: {
   /** The checkout the run started from. */
@@ -32,9 +32,9 @@ export async function adoptRefusal(input: {
   recorded: PlaceRecord | undefined;
   lease: { attempt: string; step: string; workspace?: WorkspaceContract };
   adopt: string | undefined;
-  hosted: string | undefined;
+  sessionHostPlace: string | undefined;
 }): Promise<string | undefined> {
-  const { root, run, recorded, lease, adopt, hosted } = input;
+  const { root, run, recorded, lease, adopt, sessionHostPlace } = input;
 
   if (adopt === undefined) return undefined;
 
@@ -50,7 +50,7 @@ export async function adoptRefusal(input: {
 
   if (workspace.mode === 'team') return `Step "${lease.step}" runs in a clone of the team repo TeamAI makes, so attempt ${lease.attempt} cannot adopt a place. Prepare it without --adopt.`;
 
-  if (workspace.mode === 'read-only' && adopt !== hosted) return `Step "${lease.step}" reads a copy TeamAI keeps, so attempt ${lease.attempt} cannot adopt a place. Prepare it without --adopt.`;
+  if (workspace.mode === 'read-only' && adopt !== sessionHostPlace) return `Step "${lease.step}" reads a copy TeamAI keeps, so attempt ${lease.attempt} cannot adopt a place. Prepare it without --adopt.`;
 
   return adoptedMismatch({ root, dir: adopt, run, attempt: lease.attempt, workspace });
 }

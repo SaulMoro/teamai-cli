@@ -70,8 +70,8 @@ export function placeOf(lease: { cwd?: string; workspace?: WorkspaceContract }, 
  */
 export async function placeHeldBy(input: { config: LocalConfig; run: RunId; root: string; lease: Pick<PlaceLease, 'workspace'>; others: AttemptId[]; adopt?: string }): Promise<{ behind: AttemptId; dir: string } | undefined> {
   const { config, run, lease, adopt } = input;
-  const hosted = lease.workspace ? await adoptedPlaceOf({ config, run, branch: lease.workspace.branch }) : undefined;
-  const places = new Set([placeOf(lease, path.resolve(input.root)), ...(hosted !== undefined ? [hosted] : []), ...(adopt !== undefined ? [path.resolve(adopt)] : [])]);
+  const sessionHostPlace = lease.workspace ? await adoptedPlaceOf({ config, run, branch: lease.workspace.branch }) : undefined;
+  const places = new Set([placeOf(lease, path.resolve(input.root)), ...(sessionHostPlace !== undefined ? [sessionHostPlace] : []), ...(adopt !== undefined ? [path.resolve(adopt)] : [])]);
 
   for (const other of input.others) {
     const read = await readPlaceRecord(config, run, other);
@@ -245,10 +245,10 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
   }
 
   const reopened = recorded?.phase === 'opening' ? recorded : undefined;
-  const hosted = workspace ? await adoptedPlaceOf({ config, run, branch: workspace.branch }) : undefined;
+  const sessionHostPlace = workspace ? await adoptedPlaceOf({ config, run, branch: workspace.branch }) : undefined;
   // A prepare killed while it adopted a place goes on in that place.
   const asked = input.adopt !== undefined ? path.resolve(input.adopt) : reopened?.adopted ? reopened.dir : undefined;
-  const refusal = await adoptRefusal({ root, run, recorded, lease, adopt: asked, hosted });
+  const refusal = await adoptRefusal({ root, run, recorded, lease, adopt: asked, sessionHostPlace });
 
   if (refusal !== undefined) return { kind: 'refused', failure: { code: 'adopt_mismatch', message: refusal } };
   const result = await recordedResult(config, recorded, lease);
@@ -271,15 +271,15 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
     return preparedOf(record, lease.prompt);
   }
 
-  const passedOver = !reopened && hosted !== undefined ? await adoptRefusal({ root, run, recorded, lease, adopt: hosted, hosted }) : undefined;
-  const goesOn = !reopened && hosted !== undefined && passedOver === undefined;
-  const adopt = asked ?? (goesOn ? hosted : undefined);
-  const opened = await openCopy({ config, base, lease, workspace, reopened, adopt, hosted });
+  const passedOver = !reopened && sessionHostPlace !== undefined ? await adoptRefusal({ root, run, recorded, lease, adopt: sessionHostPlace, sessionHostPlace }) : undefined;
+  const goesOn = !reopened && sessionHostPlace !== undefined && passedOver === undefined;
+  const adopt = asked ?? (goesOn ? sessionHostPlace : undefined);
+  const opened = await openCopy({ config, base, lease, workspace, reopened, adopt, sessionHostPlace });
 
   // While the host's place has the branch checked out, git refuses TeamAI's own worktree of it, so the failure leads with
   // why that place was passed over.
-  const explained = (opening: WorkflowFailure): WorkflowFailure => adopt === undefined && hosted !== undefined && passedOver !== undefined
-    ? { ...opening, message: `TeamAI did not go on in ${hosted}, the place the session host made for branch ${workspace.branch}: ${passedOver} Making its own worktree of the branch failed too: ${opening.message}` }
+  const explained = (opening: WorkflowFailure): WorkflowFailure => adopt === undefined && sessionHostPlace !== undefined && passedOver !== undefined
+    ? { ...opening, message: `TeamAI did not go on in ${sessionHostPlace}, the place the session host made for branch ${workspace.branch}: ${passedOver} Making its own worktree of the branch failed too: ${opening.message}` }
     : opening;
 
   const prepared: PlacePrepared = 'code' in opened ? { kind: 'failed', failure: explained(opened) } : await stageRole({ config, base, lease, workspace, ...opened });
@@ -439,13 +439,13 @@ async function recordedResult(config: LocalConfig, recorded: PlaceRecord | undef
 
 /**
  * Opens the copy of `workspace.branch`: `reopened`, the one a killed prepare recorded `opening`, else `adopt`, else the
- * worktree of the branch. `hosted` is the place the session host made that the branch's last attempt finished in. The
+ * worktree of the branch. `sessionHostPlace` is the place the session host made that the branch's last attempt finished in. The
  * `opening` record comes before git touches the copy.
  */
 async function openCopy(input: {
-  config: LocalConfig; base: OpeningBase; lease: PlaceLease; workspace: CopyContract; reopened: Opening | undefined; adopt: string | undefined; hosted: string | undefined;
+  config: LocalConfig; base: OpeningBase; lease: PlaceLease; workspace: CopyContract; reopened: Opening | undefined; adopt: string | undefined; sessionHostPlace: string | undefined;
 }): Promise<{ opening: Opening; dir: string; created: boolean } | WorkflowFailure> {
-  const { config, base, lease, workspace, reopened, adopt, hosted } = input;
+  const { config, base, lease, workspace, reopened, adopt, sessionHostPlace } = input;
   let opening: Opening;
 
   if (reopened) opening = reopened;
@@ -453,7 +453,7 @@ async function openCopy(input: {
     // A place an earlier attempt set up for the branch is not set up again, as a worktree TeamAI made is not.
     const adopting: Opening = { ...base, dir: adopt, phase: 'opening' };
 
-    if (adopt !== hosted) adopting.created = true;
+    if (adopt !== sessionHostPlace) adopting.created = true;
     adopting.adopted = true;
     opening = adopting;
     await writePlaceRecord(config, opening);
