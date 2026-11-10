@@ -68,7 +68,7 @@ const STDERR_KEPT = 4_000;
 type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime<DriverCan>; labels?: readonly string[]; tools?: string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
-type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true };
+type PromptRuntimePlace = RuntimePlace & { launchesAgents: boolean; logins: readonly LoginTool[]; credentials: Record<string, string>; found: readonly string[]; defaultTool?: string; isThrough?: true; runsOnToolHome?: true };
 
 /**
  * Where the member's driver runs each kind of step: a command step's command, a prompt step's tool, and a whole
@@ -113,7 +113,7 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
     if (entry.can.prompt !== false) {
       place.prompt ??= {
         ...runtime, launchesAgents: entry.launchesAgents, logins: entry.engine.logins, credentials: entry.credentials, found: entry.found,
-        ...(entry.can.default_tool !== undefined && { defaultTool: entry.can.default_tool }), ...(entry.isThrough && { isThrough: true }),
+        ...(entry.can.default_tool !== undefined && { defaultTool: entry.can.default_tool }), ...(entry.isThrough && { isThrough: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }),
       };
     }
   }
@@ -671,7 +671,7 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
       secrets: { ...teamEnv.secrets, ...secrets },
       ...(running && place.kind === 'runtime' && { onRuntime: {
         run: running, logins: place.logins, launchesAgents: place.launchesAgents, credentials: place.credentials, found: place.found, teamEnv,
-        ...(place.defaultTool !== undefined && { defaultTool: place.defaultTool }), ...(place.isThrough && { isThrough: true as const }),
+        ...(place.defaultTool !== undefined && { defaultTool: place.defaultTool }), ...(place.isThrough && { isThrough: true as const }), ...(place.runsOnToolHome && { runsOnToolHome: true as const }),
       } }),
     });
 

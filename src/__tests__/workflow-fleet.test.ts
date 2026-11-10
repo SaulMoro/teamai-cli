@@ -18,7 +18,7 @@ import type { DriverCan } from '../workflow/requirements.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import type { OpId } from '@teamai/runtime-protocol';
-import { attemptRuntimePath } from '../workflow/runtimes/attempt.js';
+import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attempt.js';
 import { readableReportsWorktree, reportsBranch, updateReports } from '../utils/reports-branch.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { REPORTS_LOCK_FILENAME } from '../types.js';
@@ -395,6 +395,33 @@ describe('a member taking a prompt attempt', () => {
     }, useClaude, PROMPTED);
 
     expect(record).toMatchObject({ state: 'finished', result: { tool: 'claude', failure: { code: 'usage_limited', message: expect.stringContaining('claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)') } } });
+  });
+
+  it('runs a prompt on a runtime of its driver that runs each tool on the attempt\'s tool home, in that home', async () => {
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'toy-tool-home-'));
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const opened: OpenedDriver = {
+      driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', file: 'bobs.yaml', config: (await team().member('bob')).config }, asked: 'bobs',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+    const place = memberPlace(opened);
+    if ('refused' in place) throw new Error(place.refused);
+
+    try {
+      const { record, bob } = await takeForged((forged) => {
+        forged.lease = { kind: 'prompt', step: 'write', prompt: 'Write made.txt.', env: {} };
+      }, useClaude, PROMPTED, place);
+
+      expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, outputs: { ok: true } } });
+      const views = fs.readdirSync(path.join(state, 'views'));
+      expect(views).toHaveLength(1);
+      const run = RunIdSchema.parse(record?.run);
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'views', views[0] ?? ''), 'utf8'))).toMatchObject({ toolHome: { CLAUDE_CONFIG_DIR: attemptToolHome(bob.config, run, ATTEMPT, 'claude') } });
+    } finally {
+      await runtime.dispose();
+    }
   });
 
   // The member gives its nested run only what its own copy of the inline workflow reads of the run's inputs.
